@@ -63,6 +63,9 @@ void testNoAutomaticEnableAndPwmRequiresEnable()
     expect(!controller.setServoPwm(rb::ServoId::Servo1, 1500),
            "PWM must be rejected until servo is enabled");
     expect(transport.writes().isEmpty(), "rejected PWM must not write a frame");
+    expect(!controller.setServoAngle(rb::ServoId::Servo1, 0),
+           "angle must be rejected until servo is enabled");
+    expect(transport.writes().isEmpty(), "rejected angle must not write a frame");
 
     expect(controller.enableServo(rb::ServoId::Servo1), "enable command should be sent");
     expect(lastPacket(transport).type == rb::MessageType::ServoEnable,
@@ -74,6 +77,68 @@ void testNoAutomaticEnableAndPwmRequiresEnable()
            "PWM should be sent after enable acknowledgement");
     expect(lastPacket(transport).type == rb::MessageType::SetServoPwm,
            "PWM must use SetServoPwm message");
+}
+
+void testAngleDegreesConvertToCentidegrees()
+{
+    expect(rb::angleDegreesToCentidegrees(-90.0) == -9000,
+           "-90.0 degrees must convert to -9000 cdeg");
+    expect(rb::angleDegreesToCentidegrees(-45.0) == -4500,
+           "-45.0 degrees must convert to -4500 cdeg");
+    expect(rb::angleDegreesToCentidegrees(0.0) == 0,
+           "0.0 degrees must convert to 0 cdeg");
+    expect(rb::angleDegreesToCentidegrees(45.0) == 4500,
+           "+45.0 degrees must convert to +4500 cdeg");
+    expect(rb::angleDegreesToCentidegrees(90.0) == 9000,
+           "+90.0 degrees must convert to +9000 cdeg");
+}
+
+void testSetAngleBlockedDuringDisableRequest()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+    controller.enableServo(rb::ServoId::Servo1);
+    acknowledgeLast(transport);
+
+    const qsizetype beforeDisable = transport.writes().size();
+    expect(controller.disableServo(rb::ServoId::Servo1),
+           "disable request should be sent for an enabled Servo1");
+    expect(!controller.setServoAngle(rb::ServoId::Servo1, 0),
+           "angle must be blocked while Servo1 disable is awaiting ACK");
+    expect(transport.writes().size() == beforeDisable + 1,
+           "blocked angle must not add a frame while disable is pending");
+}
+
+void testDisableAckNotifiesWhenAlreadyDisabled()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    int disableAckNotifications = 0;
+    int notifiedServo = -1;
+    QObject::connect(&controller, &rb::RobotController::servoDisableAcknowledged,
+                     [&disableAckNotifications, &notifiedServo](int index) {
+                         ++disableAckNotifications;
+                         notifiedServo = index;
+                     });
+
+    expect(controller.disableAll(), "Disable All should be sent while connected");
+    const rb::Packet request = lastPacket(transport);
+    expect(request.type == rb::MessageType::ServoDisable,
+           "Disable All must use ServoDisable message");
+    acknowledge(transport, request, rb::AckResult::Ok, rb::MessageType::ServoDisable);
+    expect(disableAckNotifications == 1 && notifiedServo == 0,
+           "successful Disable All ACK must notify Servo1 even when it was already disabled");
+
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "Servo1 should remain re-enableable after an already-disabled Disable All ACK");
+    acknowledgeLast(transport);
+    expect(controller.isServoEnabled(rb::ServoId::Servo1),
+           "Servo1 should be enabled after the subsequent ACK");
 }
 
 void testProvisionalPwmCalibrationAndBounds()
@@ -133,6 +198,16 @@ void testSetAngleEncodingAndBounds()
            "zero degrees must be accepted");
     expect(lastPacket(transport).payload == QByteArray::fromHex("01000000"),
            "zero cdeg must be encoded as int16 LE");
+
+    expect(controller.setServoAngle(rb::ServoId::Servo1, -4500),
+           "-45 degrees must be accepted");
+    expect(lastPacket(transport).payload == QByteArray::fromHex("01006cee"),
+           "-4500 cdeg must be encoded as int16 LE");
+
+    expect(controller.setServoAngle(rb::ServoId::Servo1, 4500),
+           "+45 degrees must be accepted");
+    expect(lastPacket(transport).payload == QByteArray::fromHex("01009411"),
+           "+4500 cdeg must be encoded as int16 LE");
 
     expect(controller.setServoAngle(rb::ServoId::Servo1, 9000),
            "+90 degrees must be accepted");
@@ -284,6 +359,9 @@ int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
     testNoAutomaticEnableAndPwmRequiresEnable();
+    testAngleDegreesConvertToCentidegrees();
+    testSetAngleBlockedDuringDisableRequest();
+    testDisableAckNotifiesWhenAlreadyDisabled();
     testProvisionalPwmCalibrationAndBounds();
     testSetAngleEncodingAndBounds();
     testDisconnectAttemptsDisableAll();

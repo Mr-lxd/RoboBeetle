@@ -68,6 +68,7 @@ signals:
     void serialPortsChanged(const QStringList &ports);
     void connectionStateChanged(rb::TransportState state);
     void servoStateChanged(int servoIndex, bool enabled);
+    void servoDisableAcknowledged(int servoIndex);
     void protocolMonitorChanged(const rb::ProtocolMonitor &monitor);
     void txHexChanged(const QString &hex);
     void rxHexChanged(const QString &hex);
@@ -103,6 +104,7 @@ private:
     TransportState state_{TransportState::Disconnected};
     quint16 nextSequence_{1};
     quint16 enabledMask_{0};
+    quint16 disablePendingMask_{0};
     QHash<quint16, PendingRequest> pending_;
     QTimer heartbeatTimer_;
     QTimer retryTimer_;

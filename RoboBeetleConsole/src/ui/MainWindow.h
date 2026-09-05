@@ -8,6 +8,7 @@
 
 class QCloseEvent;
 class QComboBox;
+class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
@@ -32,6 +33,7 @@ private:
     QWidget *createGlobalPanel();
     QWidget *createMonitorPanel();
     void setConnectedUi(bool connected);
+    void setAngleUiEnabled(int index, bool enabled);
     void appendLog(const QString &message);
     static QString stateText(TransportState state);
 
@@ -42,6 +44,9 @@ private:
     QLabel *connectionStatus_{nullptr};
     std::array<QSpinBox *, 2> pwmSpins_{};
     std::array<QSlider *, 2> pwmSliders_{};
+    std::array<QDoubleSpinBox *, 2> angleSpins_{};
+    std::array<QPushButton *, 2> angleButtons_{};
+    std::array<bool, 2> angleDisableLockout_{};
     std::array<QPushButton *, 2> enableButtons_{};
     std::array<QPushButton *, 2> neutralButtons_{};
     std::array<QPushButton *, 2> applyButtons_{};

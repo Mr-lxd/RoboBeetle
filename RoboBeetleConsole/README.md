@@ -1,6 +1,6 @@
 # RoboBeetleConsole
 
-RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the current direct Windows laptop → serial/APC220 → STM32 bring-up path. This document describes the implementation repaired and verified on 2026-09-05; historical papers, slides, and legacy code are references only.
+RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the current direct Windows laptop → serial/APC220 → STM32 bring-up path. This document describes the implementation repaired and verified on 2026-09-06; historical papers, slides, and legacy code are references only.
 
 ## Status labels
 
@@ -22,7 +22,7 @@ RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the curren
 - Shared ACK result meanings `0..6`, with named rejection status in the monitor.
 - `ITransport` abstraction with real `SerialTransport` and test-only `FakeTransport` implementations.
 - Protocol codec/stream tests and controller behavior tests.
-- Servo1 Set Angle packet construction in centidegrees; angle-to-pulse conversion remains authoritative in Firmware.
+- Servo1 Set Angle UI with a −90.0…+90.0° `QDoubleSpinBox` at 0.1° steps; the UI converts to centidegrees and angle-to-pulse conversion remains authoritative in Firmware.
 
 ### [Planned]
 
@@ -74,9 +74,9 @@ QApplication
 | ACK / retry / timeout | [Implemented] | Tracks by request sequence and type; retries the identical frame after 200 ms, at most three times. |
 | Servo Enable / Disable | [Implemented] | UI logical enable changes only after a matching successful ACK. |
 | Disable All | [Implemented] | Sends the current supported mask `0x0001`; it does not include the unimplemented Servo2 bit. |
-| Neutral | [Implemented] | Sends `0x14` with Servo1 mask `0x0001` after Enable ACK; Firmware maps this semantic request to Servo1 calibration neutral without disabling it. |
+| Neutral | [Hardware Verified] | Sends `0x14` with Servo1 mask `0x0001` after Enable ACK; the development record confirms Servo1 returns to mechanical zero near 1520 μs, while Firmware keeps PWM enabled. |
 | Apply PWM | [Implemented] | Explicit button; slider movement alone does not transmit. Requires successful Enable ACK and range validation. |
-| Set Angle | [Implemented in controller / UI disabled] | `RobotController::setServoAngle()` sends count 1, Servo1 ID, and signed `angle_cdeg` in little-endian. The interactive UI button remains disabled pending hardware verification. |
+| Set Angle | [Implemented] | Servo1 uses a −90.0…+90.0° input with 0.1° steps; the Qt UI converts to signed cdeg and calls `RobotController::setServoAngle()`. Both angle controls are enabled only while connected and after a successful Servo1 Enable ACK. |
 | Protocol monitor | [Implemented] | Displays latest TX/RX chunks, packet counts, CRC errors, timeouts, ACK state, and up to 1000 log blocks. |
 
 ## Servo model and calibration status
@@ -84,17 +84,22 @@ QApplication
 - `ServoId::Servo1 = 0`, `ServoId::Servo2 = 1`.
 - Masks are `1 << ServoId`: Servo1=`0x0001`; Servo2=`0x0002` is reserved but unsupported. The current supported mask is exactly `0x0001`.
 - **[Provisional]** Current Console limits are 520–2520 μs with neutral 1520 μs.
-- **[Provisional]** Servo1 angle command range is −9000…+9000 cdeg. The Console transmits this physical unit without converting it to PWM.
+- **[Provisional]** Servo1 angle command range is −9000…+9000 cdeg (−90.0…+90.0° in the Qt input). The Console transmits this physical unit without converting it to PWM.
 - Firmware owns the current piecewise linear mapping −9000→520 μs, 0→1520 μs, +9000→2520 μs. There is still no persisted or multi-servo calibration model.
 - `MainWindow` is hard-coded to two servo panels through fixed-size arrays and index checks. This is adequate for Phase 1 but is not a scalable actuator model.
 - Servo2 is visibly labelled **Unsupported / Planned**, and its enable control remains disabled.
 
-The disabled **Set Angle — UI Not Enabled** button is intentional. The command path and provisional Firmware calibration now exist, but no physical angle-path verification was performed in this software-only round.
+The Servo1 **Set Angle** control is implemented and is enabled only when the transport is connected and Servo1 has a successful Enable ACK. Disable, Disable All, and disconnect immediately disable the angle controls. Servo2 remains visibly **Unsupported / Planned** and cannot send angle commands.
+
+**Neutral — [Hardware Verified]**: the current development record confirms that Neutral returns Servo1 to mechanical zero near 1520 μs. The PWM input currently represents the user's debug input value; it is not guaranteed to mirror the last hardware-confirmed position after Neutral or another command.
+
+**Set Angle real servo motion — [Not yet hardware verified]**: the protocol/controller path and Qt UI are implemented and software-tested, but the angle command still requires controlled Servo1 bench acceptance.
 
 ## Safety behavior and limitations
 
 - Startup never enables a servo.
 - PWM and Neutral are rejected locally until Servo Enable has received a matching result-0 ACK.
+- Servo1 angle entry and Set Angle are enabled only while connected and after the matching Servo Enable result-0 ACK; Disable/Disable All/disconnect close that UI gate immediately.
 - Losing the transport clears pending requests and the Console's logical enable mask.
 - Disconnect/application close attempts Disable All, but deliberately does not wait for its ACK before closing. A successful local serial write is not proof that STM32 acted on it.
 - Unexpected link loss can only log that Disable All could not be delivered. The STM32 watchdog is the actual link-loss safety boundary.
@@ -163,7 +168,7 @@ Do not mix the MinGW Qt libraries with MSVC, LLVM-MinGW, the separately installe
 
 - A fresh MinGW/Qt CMake configure and build succeeds without changing the project CMake structure.
 - `protocol_tests`: **PASS**, including CRC/COBS regression, result enum values, Neutral, and −9000/0/+9000 cdeg golden vectors.
-- `robot_controller_tests`: **PASS**, including PWM boundaries, invalid PWM, Set Angle encoding/range, Servo1 enable, Servo2 rejection, Neutral ACK, ACK match/mismatch, and identical-frame retry.
+- `robot_controller_tests`: **PASS**, including −90/−45/0/+45/+90° to cdeg conversion, PWM boundaries, invalid PWM, Set Angle payload/range, Servo1 enable, Servo2 rejection, Neutral ACK, ACK match/mismatch, and identical-frame retry.
 - Firmware was separately clean-built with the STM32 GCC toolchain. No serial port, MCU flashing, PWM output, or physical Servo movement was performed in this round.
 
 ## Hardware milestones
