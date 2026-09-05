@@ -1,0 +1,114 @@
+#pragma once
+
+#include "protocol/StreamDecoder.h"
+#include "robot/RobotCommand.h"
+#include "transport/ITransport.h"
+
+#include <QHash>
+#include <QObject>
+#include <QStringList>
+#include <QTimer>
+
+#include <functional>
+
+namespace rb {
+
+struct RobotControllerConfig {
+    int heartbeatIntervalMs{100};
+    int ackTimeoutMs{200};
+    int maxRetries{3};
+    quint16 provisionalPwmMinUs{520};
+    quint16 provisionalPwmMaxUs{2520};
+    quint16 provisionalNeutralUs{1520};
+    qint16 provisionalAngleMinCdeg{-9000};
+    qint16 provisionalAngleMaxCdeg{9000};
+    quint16 supportedServoMask{SupportedServoMaskPhase1};
+
+    static RobotControllerConfig bringUpProvisional();
+};
+
+struct ProtocolMonitor {
+    quint64 txPacketCount{0};
+    quint64 rxPacketCount{0};
+    quint64 crcErrorCount{0};
+    quint64 timeoutCount{0};
+    QString ackStatus{QStringLiteral("Idle")};
+};
+
+class RobotController final : public QObject {
+    Q_OBJECT
+
+public:
+    using PortDiscovery = std::function<QStringList()>;
+
+    explicit RobotController(ITransport *transport,
+                             RobotControllerConfig config,
+                             PortDiscovery portDiscovery = {},
+                             QObject *parent = nullptr);
+
+    void refreshSerialPorts();
+    void connectTransport(const TransportConfiguration &configuration);
+    void disconnectTransport();
+    void shutdown();
+
+    bool enableServo(ServoId id);
+    bool disableServo(ServoId id);
+    bool disableAll();
+    bool setServoPwm(ServoId id, quint16 pulseUs);
+    bool setServoAngle(ServoId id, qint16 angleCentidegrees);
+    bool neutralServo(ServoId id);
+
+    [[nodiscard]] bool isConnected() const { return state_ == TransportState::Connected; }
+    [[nodiscard]] bool isServoSupported(ServoId id) const;
+    [[nodiscard]] bool isServoEnabled(ServoId id) const;
+    [[nodiscard]] RobotControllerConfig config() const { return config_; }
+    [[nodiscard]] ProtocolMonitor monitor() const { return monitor_; }
+
+signals:
+    void serialPortsChanged(const QStringList &ports);
+    void connectionStateChanged(rb::TransportState state);
+    void servoStateChanged(int servoIndex, bool enabled);
+    void protocolMonitorChanged(const rb::ProtocolMonitor &monitor);
+    void txHexChanged(const QString &hex);
+    void rxHexChanged(const QString &hex);
+    void logMessage(const QString &message);
+
+private:
+    struct PendingRequest {
+        QByteArray frame;
+        MessageType type;
+        quint16 servoMask{0};
+        qint64 sentAtMs{0};
+        int retries{0};
+    };
+
+    bool sendCommand(MessageType type, const QByteArray &payload, quint16 affectedMask = 0,
+                     bool expectAck = true);
+    void sendHeartbeat();
+    void processIncoming(const QByteArray &bytes);
+    void handlePacket(const Packet &packet);
+    void handleAck(const Packet &packet);
+    void checkTimeouts();
+    void updateMonitor();
+    void setEnabledMask(quint16 mask);
+    void noteWriteFailure(const QString &context);
+    bool rejectUnsupportedServo(ServoId id, const QString &command);
+    static QByteArray maskPayload(quint16 mask);
+    static qint64 nowMs();
+
+    ITransport *transport_;
+    RobotControllerConfig config_;
+    PortDiscovery portDiscovery_;
+    StreamDecoder decoder_;
+    TransportState state_{TransportState::Disconnected};
+    quint16 nextSequence_{1};
+    quint16 enabledMask_{0};
+    QHash<quint16, PendingRequest> pending_;
+    QTimer heartbeatTimer_;
+    QTimer retryTimer_;
+    ProtocolMonitor monitor_;
+};
+
+} // namespace rb
+
+Q_DECLARE_METATYPE(rb::ProtocolMonitor)
