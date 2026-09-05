@@ -46,7 +46,6 @@ private:
     std::array<QSlider *, 2> pwmSliders_{};
     std::array<QDoubleSpinBox *, 2> angleSpins_{};
     std::array<QPushButton *, 2> angleButtons_{};
-    std::array<bool, 2> angleDisableLockout_{};
     std::array<QPushButton *, 2> enableButtons_{};
     std::array<QPushButton *, 2> neutralButtons_{};
     std::array<QPushButton *, 2> applyButtons_{};

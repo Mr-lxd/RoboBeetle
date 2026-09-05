@@ -57,16 +57,13 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
         enableButtons_[index]->setText(enabled ? QStringLiteral("Disable") : QStringLiteral("Enable"));
         neutralButtons_[index]->setEnabled(enabled);
         applyButtons_[index]->setEnabled(enabled);
-        if (!enabled) {
-            angleDisableLockout_[index] = false;
-        }
         setAngleUiEnabled(index, enabled);
     });
-    connect(controller_, &RobotController::servoDisableAcknowledged, this, [this](int index) {
+    connect(controller_, &RobotController::servoDisablePendingChanged,
+            this, [this](int index, bool) {
         if (index < 0 || index >= 2) {
             return;
         }
-        angleDisableLockout_[index] = false;
         setAngleUiEnabled(index, controller_->isServoEnabled(static_cast<ServoId>(index)));
     });
     connect(controller_, &RobotController::txHexChanged, txHex_, &QLineEdit::setText);
@@ -181,9 +178,8 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
             pwmSpins_[index], &QSpinBox::setValue);
     connect(enableButtons_[index], &QPushButton::clicked, this, [this, id, index] {
         if (controller_->isServoEnabled(id)) {
-            angleDisableLockout_[index] = true;
             controller_->disableServo(id);
-            setAngleUiEnabled(index, false);
+            setAngleUiEnabled(index, controller_->isServoEnabled(id));
         } else {
             controller_->enableServo(id);
         }
@@ -196,8 +192,9 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     });
     connect(angleButtons_[index], &QPushButton::clicked, this, [this, id, index] {
         if (!controller_->isConnected() || !controller_->isServoSupported(id)
-            || !controller_->isServoEnabled(id)) {
-            setAngleUiEnabled(index, false);
+            || !controller_->isServoEnabled(id)
+            || controller_->isServoDisablePending(id)) {
+            setAngleUiEnabled(index, controller_->isServoEnabled(id));
             return;
         }
         controller_->setServoAngle(id, angleDegreesToCentidegrees(angleSpins_[index]->value()));
@@ -217,12 +214,9 @@ QWidget *MainWindow::createGlobalPanel()
     layout->addWidget(emergencyStop);
     layout->addStretch();
     connect(disableAll, &QPushButton::clicked, this, [this] {
-        for (int index = 0; index < 2; ++index) {
-            angleDisableLockout_[index] = true;
-        }
         controller_->disableAll();
         for (int index = 0; index < 2; ++index) {
-            setAngleUiEnabled(index, false);
+            setAngleUiEnabled(index, controller_->isServoEnabled(static_cast<ServoId>(index)));
         }
     });
     return box;
@@ -275,9 +269,6 @@ void MainWindow::setConnectedUi(bool connected)
     baudSpin_->setEnabled(!connected);
     for (int index = 0; index < 2; ++index) {
         const ServoId id = static_cast<ServoId>(index);
-        if (!connected) {
-            angleDisableLockout_[index] = false;
-        }
         enableButtons_[index]->setEnabled(connected && controller_->isServoSupported(id));
         applyButtons_[index]->setEnabled(connected && controller_->isServoEnabled(static_cast<ServoId>(index)));
         neutralButtons_[index]->setEnabled(connected && controller_->isServoEnabled(static_cast<ServoId>(index)));
@@ -293,7 +284,7 @@ void MainWindow::setAngleUiEnabled(int index, bool enabled)
     const ServoId id = static_cast<ServoId>(index);
     const bool actionable = enabled && controller_->isConnected()
         && controller_->isServoSupported(id) && controller_->isServoEnabled(id)
-        && !angleDisableLockout_[index];
+        && !controller_->isServoDisablePending(id);
     angleSpins_[index]->setEnabled(actionable);
     angleButtons_[index]->setEnabled(actionable);
 }

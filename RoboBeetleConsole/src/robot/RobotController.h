@@ -61,6 +61,7 @@ public:
     [[nodiscard]] bool isConnected() const { return state_ == TransportState::Connected; }
     [[nodiscard]] bool isServoSupported(ServoId id) const;
     [[nodiscard]] bool isServoEnabled(ServoId id) const;
+    [[nodiscard]] bool isServoDisablePending(ServoId id) const;
     [[nodiscard]] RobotControllerConfig config() const { return config_; }
     [[nodiscard]] ProtocolMonitor monitor() const { return monitor_; }
 
@@ -68,7 +69,7 @@ signals:
     void serialPortsChanged(const QStringList &ports);
     void connectionStateChanged(rb::TransportState state);
     void servoStateChanged(int servoIndex, bool enabled);
-    void servoDisableAcknowledged(int servoIndex);
+    void servoDisablePendingChanged(int servoIndex, bool pending);
     void protocolMonitorChanged(const rb::ProtocolMonitor &monitor);
     void txHexChanged(const QString &hex);
     void rxHexChanged(const QString &hex);
@@ -92,6 +93,7 @@ private:
     void checkTimeouts();
     void updateMonitor();
     void setEnabledMask(quint16 mask);
+    void setDisablePendingMask(quint16 mask);
     void noteWriteFailure(const QString &context);
     bool rejectUnsupportedServo(ServoId id, const QString &command);
     static QByteArray maskPayload(quint16 mask);

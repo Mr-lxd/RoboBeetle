@@ -72,7 +72,7 @@ RobotController::RobotController(ITransport *transport,
             pending_.clear();
             decoder_.reset();
             setEnabledMask(0);
-            disablePendingMask_ = 0;
+            setDisablePendingMask(0);
             monitor_.ackStatus = state == TransportState::Error
                 ? QStringLiteral("Transport error")
                 : QStringLiteral("Disconnected");
@@ -110,7 +110,7 @@ void RobotController::disconnectTransport()
         emit logMessage(QStringLiteral("Disable All could not be sent: transport is not connected"));
     }
     setEnabledMask(0);
-    disablePendingMask_ = 0;
+    setDisablePendingMask(0);
     transport_->close();
 }
 
@@ -141,7 +141,7 @@ bool RobotController::disableServo(ServoId id)
     if (!sendCommand(MessageType::ServoDisable, maskPayload(mask), mask)) {
         return false;
     }
-    disablePendingMask_ = static_cast<quint16>(disablePendingMask_ | mask);
+    setDisablePendingMask(static_cast<quint16>(disablePendingMask_ | mask));
     return true;
 }
 
@@ -155,7 +155,7 @@ bool RobotController::disableAll()
     if (!sendCommand(MessageType::ServoDisable, maskPayload(mask), mask)) {
         return false;
     }
-    disablePendingMask_ = static_cast<quint16>(disablePendingMask_ | mask);
+    setDisablePendingMask(static_cast<quint16>(disablePendingMask_ | mask));
     return true;
 }
 
@@ -192,7 +192,7 @@ bool RobotController::setServoAngle(ServoId id, qint16 angleCentidegrees)
         emit logMessage(QStringLiteral("Set Angle rejected: servo is not enabled and acknowledged"));
         return false;
     }
-    if ((disablePendingMask_ & servoMask(id)) != 0U) {
+    if (isServoDisablePending(id)) {
         emit logMessage(QStringLiteral("Set Angle rejected: servo disable is awaiting ACK"));
         return false;
     }
@@ -227,6 +227,11 @@ bool RobotController::neutralServo(ServoId id)
 bool RobotController::isServoEnabled(ServoId id) const
 {
     return (enabledMask_ & servoMask(id)) != 0U;
+}
+
+bool RobotController::isServoDisablePending(ServoId id) const
+{
+    return (disablePendingMask_ & servoMask(id)) != 0U;
 }
 
 bool RobotController::isServoSupported(ServoId id) const
@@ -305,7 +310,8 @@ void RobotController::handlePacket(const Packet &packet)
             const auto it = pending_.find(sequence);
             if (it != pending_.end()) {
                 if (it->type == MessageType::ServoDisable) {
-                    disablePendingMask_ = static_cast<quint16>(disablePendingMask_ & ~it->servoMask);
+                    setDisablePendingMask(
+                        static_cast<quint16>(disablePendingMask_ & ~it->servoMask));
                 }
                 pending_.erase(it);
             }
@@ -337,7 +343,8 @@ void RobotController::handleAck(const Packet &packet)
     const PendingRequest request = pending_.take(requestSequence);
     const auto clearDisablePending = [this, &request] {
         if (request.type == MessageType::ServoDisable) {
-            disablePendingMask_ = static_cast<quint16>(disablePendingMask_ & ~request.servoMask);
+            setDisablePendingMask(
+                static_cast<quint16>(disablePendingMask_ & ~request.servoMask));
         }
     };
     if (request.type != requestType) {
@@ -360,12 +367,6 @@ void RobotController::handleAck(const Packet &packet)
     } else if (request.type == MessageType::ServoDisable) {
         clearDisablePending();
         setEnabledMask(static_cast<quint16>(enabledMask_ & ~request.servoMask));
-        for (int index = 0; index < 2; ++index) {
-            const quint16 bit = static_cast<quint16>(1U << index);
-            if ((request.servoMask & bit) != 0U) {
-                emit servoDisableAcknowledged(index);
-            }
-        }
     }
     monitor_.ackStatus = QStringLiteral("ACK seq=%1").arg(requestSequence);
 }
@@ -382,7 +383,8 @@ void RobotController::checkTimeouts()
         if (it->retries >= config_.maxRetries) {
             const MessageType timedOutType = it->type;
             if (timedOutType == MessageType::ServoDisable) {
-                disablePendingMask_ = static_cast<quint16>(disablePendingMask_ & ~it->servoMask);
+                setDisablePendingMask(
+                    static_cast<quint16>(disablePendingMask_ & ~it->servoMask));
             }
             pending_.erase(it);
             ++monitor_.timeoutCount;
@@ -423,6 +425,18 @@ void RobotController::setEnabledMask(quint16 mask)
         const quint16 bit = static_cast<quint16>(1U << index);
         if ((changed & bit) != 0U) {
             emit servoStateChanged(index, (enabledMask_ & bit) != 0U);
+        }
+    }
+}
+
+void RobotController::setDisablePendingMask(quint16 mask)
+{
+    const quint16 changed = static_cast<quint16>(disablePendingMask_ ^ mask);
+    disablePendingMask_ = mask;
+    for (int index = 0; index < 2; ++index) {
+        const quint16 bit = static_cast<quint16>(1U << index);
+        if ((changed & bit) != 0U) {
+            emit servoDisablePendingChanged(index, (disablePendingMask_ & bit) != 0U);
         }
     }
 }
