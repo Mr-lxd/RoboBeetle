@@ -1,6 +1,6 @@
 # RoboBeetle Protocol V2 — Phase 1 Baseline
 
-This document describes the Console and Firmware sources repaired and clean-built on 2026-09-06. **[Implemented]** refers to code presence and software verification; it does not imply hardware coverage.
+This document describes the Console and Firmware sources repaired and clean-built on 2026-09-06. **[Implemented]** refers to code presence and software verification; the Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]**.
 
 Evidence labels used across the project are **[Implemented]** (current source), **[Hardware Verified]** (development-record hardware evidence), **[Provisional]** (bring-up value/incomplete contract), **[Planned]** (future work), and **[Historical Reference]** (old papers/code only). This protocol document relies primarily on Implemented evidence; hardware milestones and historical context are kept in the project READMEs and root handoff.
 
@@ -111,9 +111,16 @@ items[count]:
 
 The type and schema are implemented on both sides:
 
-- Console/controller: `setServoAngle()` requires supported/enabled Servo1, validates −9000…+9000 cdeg, and sends the signed `int16` value directly. It does not convert angle to PWM. The Qt UI provides a Servo1 `QDoubleSpinBox` from −90.0° to +90.0° in 0.1° steps, converts the value to cdeg, and is enabled only after connection plus a successful Enable ACK.
+- Console/controller: `setServoAngle()` requires supported/enabled Servo1, validates −9000…+9000 cdeg, and sends the signed `int16` value directly. It does not convert angle to PWM. The Qt UI provides a Servo1 `QDoubleSpinBox` from −90.0° to +90.0° in 0.1° steps, converts the value to cdeg, and is enabled only after connection plus a successful Enable ACK with no pending Disable request.
 - Firmware: validates `count=1`, live heartbeat, Servo1 ID, enabled state, and the same range. Out-of-range values return `OutOfRange`; they are not clamped.
 - Firmware performs a piecewise linear calibration with `int32_t` intermediates: −9000→520 μs, 0→1520 μs, +9000→2520 μs, then updates TIM3 CCR1.
+
+### Servo1 Set Angle hardware acceptance — [Hardware Verified] (2026-09-06)
+
+- Hardware: GDW IPX896HV, driven by `TIM3_CH1 / PA6` at approximately 333 Hz.
+- Protocol V2 Set Angle `0x13` passed at 0°, +10°, 0°, −10°, 0°, ±45°, and ±90°.
+- Observed correspondence remains approximate bring-up calibration: −90° ≈ 520 μs, 0° = 1520 μs, +90° ≈ 2520 μs.
+- Safety/UI behavior passed: Disable blocks Set Angle; Enable before ACK remains unavailable; Enable + ACK restores it; Disable All and Disconnect block it; Reconnect does not auto-enable; manual Enable + ACK restores it.
 
 ## Console ↔ Firmware consistency matrix
 
@@ -125,7 +132,7 @@ The type and schema are implemented on both sides:
 | Servo Enable | `0x10` | Sends Servo1 mask; marks it enabled after matching result 0 | Requires heartbeat/length 2/valid mask; starts Servo1 at 1520 μs | `uint16 mask` | Yes | **Consistent; unsupported bits fail atomically** |
 | Servo Disable | `0x11` | Sends only supported mask; clears it after matching result 0 | Requires length 2/valid mask; stops and clears Servo1 | `uint16 mask` | Yes | **Consistent; unsupported bits fail atomically** |
 | Set Servo PWM | `0x12` | Sends count 1, ServoId 0, pulse LE; local 520–2520 gate | Accepts exactly count 1 and ServoId 0; host-alive/enabled/range gates; writes TIM3 CCR1 | `uint8,uint8,uint16` | Yes | **Consistent for Servo1; Servo2 rejected** |
-| Set Servo Angle | `0x13` | Controller and Qt UI send count 1, ServoId 0, signed cdeg LE; UI is gated by connection and Enable ACK | Maps −9000/0/+9000 cdeg to 520/1520/2520 μs with `int32_t` arithmetic | `uint8,uint8,int16` | Yes | **Protocol/controller/UI implemented; real motion not hardware verified** |
+| Set Servo Angle | `0x13` | Controller and Qt UI send count 1, ServoId 0, signed cdeg LE; UI is gated by connection, Enable ACK, and no pending Disable | Maps −9000/0/+9000 cdeg to 520/1520/2520 μs with `int32_t` arithmetic | `uint8,uint8,int16` | Yes | **Consistent and [Hardware Verified]** at 0°, ±10°, ±45°, and ±90° |
 | Neutral | `0x14` | Sends Servo1 mask after local enable | Requires live host, valid mask, and enabled Servo1; writes 1520 μs without disabling | `uint16 mask` | Yes | **Consistent and [Hardware Verified]** |
 
 ## Sequence, ACK, retry, and duplicate behavior
@@ -193,6 +200,6 @@ The Set Servo PWM vector contains two codec items (Servo0=1500 μs, Servo1=1600 
 2. Firmware clean configure/build passes with STM32 GCC 14.3.1; the standalone pure-C codec golden-vector test passes with warnings treated as errors.
 3. Protocol failures in this baseline use the frozen nonzero ACK results above. `Error (0x03)` remains reserved and is not emitted by Firmware.
 4. Duplicate suppression is implemented in the HAL-coupled dispatcher and source-reviewed, but there is still no Firmware host unit-test framework for dispatcher/CCR side effects.
-5. Neutral is **[Hardware Verified]** near the mechanical 1520 μs center according to the development record. Set Angle protocol/controller/UI are **[Implemented]** and software-tested, but real Set Angle motion remains **[Not yet hardware verified]** until a controlled Servo1 bench test confirms it.
+5. Neutral is **[Hardware Verified]** near the mechanical 1520 μs center according to the development record. Protocol V2 Set Angle `0x13`, its Controller/Qt path, and real Servo1 motion are **[Hardware Verified]** at 0°, ±10°, ±45°, and ±90° on GDW IPX896HV (`TIM3_CH1 / PA6`, approximately 333 Hz); the corresponding Enable/Disable/ACK/Disable All/Disconnect/Reconnect safety states also passed.
 
 Magic, Version, base frame layout, CRC, COBS, baud rate, `.ioc`, and CMake structure were not changed.

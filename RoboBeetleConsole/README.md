@@ -76,8 +76,17 @@ QApplication
 | Disable All | [Implemented] | Sends the current supported mask `0x0001`; it does not include the unimplemented Servo2 bit. |
 | Neutral | [Hardware Verified] | Sends `0x14` with Servo1 mask `0x0001` after Enable ACK; the development record confirms Servo1 returns to mechanical zero near 1520 μs, while Firmware keeps PWM enabled. |
 | Apply PWM | [Implemented] | Explicit button; slider movement alone does not transmit. Requires successful Enable ACK and range validation. |
-| Set Angle | [Implemented] | Servo1 uses a −90.0…+90.0° input with 0.1° steps; the Qt UI converts to signed cdeg and calls `RobotController::setServoAngle()`. Both angle controls are enabled only while connected and after a successful Servo1 Enable ACK. |
+| Set Angle | [Hardware Verified] | Servo1 uses a −90.0…+90.0° input with 0.1° steps; the Qt UI converts to signed cdeg and calls `RobotController::setServoAngle()`. The control requires connection, Servo1 support, Enable ACK, and no pending Disable request. |
 | Protocol monitor | [Implemented] | Displays latest TX/RX chunks, packet counts, CRC errors, timeouts, ACK state, and up to 1000 log blocks. |
+
+## Servo1 hardware acceptance (2026-09-06)
+
+The merged Servo1 Set Angle path is **[Hardware Verified]** on the current bring-up hardware:
+
+- Actuator: GDW IPX896HV on `TIM3_CH1 / PA6`, approximately 333 Hz.
+- Protocol V2 Set Angle `0x13`: 0°, +10°, 0°, −10°, 0°, ±45°, and ±90° all passed the controlled acceptance.
+- Observed provisional correspondence: −90° ≈ 520 μs, 0° = 1520 μs, +90° ≈ 2520 μs.
+- Safety/UI acceptance passed: Disable blocks Set Angle; Enable before ACK does not restore it; Enable + ACK restores it; Disable All and Disconnect block it; Reconnect does not auto-enable; manual Enable + ACK restores it.
 
 ## Servo model and calibration status
 
@@ -85,21 +94,22 @@ QApplication
 - Masks are `1 << ServoId`: Servo1=`0x0001`; Servo2=`0x0002` is reserved but unsupported. The current supported mask is exactly `0x0001`.
 - **[Provisional]** Current Console limits are 520–2520 μs with neutral 1520 μs.
 - **[Provisional]** Servo1 angle command range is −9000…+9000 cdeg (−90.0…+90.0° in the Qt input). The Console transmits this physical unit without converting it to PWM.
-- Firmware owns the current piecewise linear mapping −9000→520 μs, 0→1520 μs, +9000→2520 μs. There is still no persisted or multi-servo calibration model.
+- **[Hardware Verified]** The current Servo1 hardware path is GDW IPX896HV on `TIM3_CH1 / PA6` at approximately 333 Hz; the piecewise mapping is still an approximate bring-up calibration: −9000→520 μs, 0→1520 μs, +9000→2520 μs.
+- Protocol V2 Set Angle `0x13`, its Controller path, and the Qt UI are **[Hardware Verified]** for the acceptance values above. There is still no persisted or multi-servo calibration model.
 - `MainWindow` is hard-coded to two servo panels through fixed-size arrays and index checks. This is adequate for Phase 1 but is not a scalable actuator model.
 - Servo2 is visibly labelled **Unsupported / Planned**, and its enable control remains disabled.
 
-The Servo1 **Set Angle** control is implemented and is enabled only when the transport is connected and Servo1 has a successful Enable ACK. Disable, Disable All, and disconnect immediately disable the angle controls. Servo2 remains visibly **Unsupported / Planned** and cannot send angle commands.
+The Servo1 **Set Angle** control is implemented and is enabled only when the transport is connected, Servo1 is supported, Servo1 has a successful Enable ACK, and no Disable request is pending. Disable, Disable All, and disconnect immediately disable the angle controls. Servo2 remains visibly **Unsupported / Planned** and cannot send angle commands.
 
 **Neutral — [Hardware Verified]**: the current development record confirms that Neutral returns Servo1 to mechanical zero near 1520 μs. The PWM input currently represents the user's debug input value; it is not guaranteed to mirror the last hardware-confirmed position after Neutral or another command.
 
-**Set Angle real servo motion — [Not yet hardware verified]**: the protocol/controller path and Qt UI are implemented and software-tested, but the angle command still requires controlled Servo1 bench acceptance.
+**Set Angle real servo motion — [Hardware Verified]**: the controlled Servo1 acceptance passed at 0°, ±10°, ±45°, and ±90°. The mapping remains provisional rather than a final precision calibration.
 
 ## Safety behavior and limitations
 
 - Startup never enables a servo.
 - PWM and Neutral are rejected locally until Servo Enable has received a matching result-0 ACK.
-- Servo1 angle entry and Set Angle are enabled only while connected and after the matching Servo Enable result-0 ACK; Disable/Disable All/disconnect close that UI gate immediately.
+- Servo1 angle entry and Set Angle are enabled only while connected, supported, after the matching Servo Enable result-0 ACK, and while no Disable request is pending; Disable/Disable All/disconnect close that UI gate immediately.
 - Losing the transport clears pending requests and the Console's logical enable mask.
 - Disconnect/application close attempts Disable All, but deliberately does not wait for its ACK before closing. A successful local serial write is not proof that STM32 acted on it.
 - Unexpected link loss can only log that Disable All could not be delivered. The STM32 watchdog is the actual link-loss safety boundary.
@@ -164,7 +174,7 @@ $env:PATH = "D:\Qt\Tools\mingw1310_64\bin;D:\Qt\Tools\Ninja;D:\Qt\6.11.2\mingw_6
 
 Do not mix the MinGW Qt libraries with MSVC, LLVM-MinGW, the separately installed WinLibs toolchain, or Anaconda Qt.
 
-## Repair verification status (2026-09-05)
+## Software verification status (2026-09-05 baseline)
 
 - A fresh MinGW/Qt CMake configure and build succeeds without changing the project CMake structure.
 - `protocol_tests`: **PASS**, including CRC/COBS regression, result enum values, Neutral, and −9000/0/+9000 cdeg golden vectors.
@@ -173,6 +183,6 @@ Do not mix the MinGW Qt libraries with MSVC, LLVM-MinGW, the separately installe
 
 ## Hardware milestones
 
-The current development record marks the following as **[Hardware Verified]**: Qt 6 Console startup; SerialTransport on COM10; USART1 bidirectional traffic; interrupt RX plus ring buffer; Protocol V2 COBS/CRC; heartbeat; STM32 ACK reception in Qt; normal TX/RX packets with CRC error count remaining zero during the recorded run; Servo Enable/Disable; heartbeat watchdog; Set Servo PWM updating TIM3 CCR; TIM3 PWM driving Servo1; real GDW IPX896HV motion; and mechanical centering near 1520 μs.
+The current development record marks the following as **[Hardware Verified]**: Qt 6 Console startup; SerialTransport on COM10; USART1 bidirectional traffic; interrupt RX plus ring buffer; Protocol V2 COBS/CRC; heartbeat; STM32 ACK reception in Qt; normal TX/RX packets with CRC error count remaining zero during the recorded run; Servo Enable/Disable; heartbeat watchdog; Set Servo PWM updating TIM3 CCR; TIM3 PWM driving Servo1; Neutral near 1520 μs; Protocol V2 Set Angle `0x13` and the Qt Set Angle UI at 0°, ±10°, ±45°, and ±90°; the corresponding Disable/Enable/ACK/Disable All/Disconnect/Reconnect safety-state behavior; and real GDW IPX896HV motion.
 
-These milestones are recorded from the development/handoff record, not inferred from source. The current provisional correspondence is approximately −90°=520 μs, 0°=1520 μs, +90°=2520 μs; it is not final precision calibration.
+These milestones are recorded from the development/handoff record, not inferred from source. The current provisional correspondence is approximately −90°=520 μs, 0°=1520 μs, +90°=2520 μs; it remains an approximate bring-up calibration, not final precision calibration.

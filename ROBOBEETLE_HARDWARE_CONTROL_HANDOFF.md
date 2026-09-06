@@ -1,17 +1,24 @@
 # RoboBeetle 硬件控制交接审计
 
-## 2026-09-06 Servo1 Set Angle Qt UI feature branch（当前）
+## 2026-09-06 Servo1 Set Angle Qt UI + hardware acceptance（已合并 main）
 
-> 本节记录从 `origin/main` 的 `v0.1.0-servo1-bringup` 基线创建的 `feature/set-angle-ui` 小型 Console 功能。仅修改 Console UI/helper/tests 与文档；未修改 Firmware、`.ioc`、Protocol V2 帧格式、Servo calibration 或 CMake 结构。
+> 本节记录从 `origin/main` 的 `v0.1.0-servo1-bringup` 基线创建、经 PR #1 合并到 `main` 的小型 Console 功能。仅修改 Console UI/helper/tests 与文档；未修改 Firmware、`.ioc`、Protocol V2 帧格式、Servo calibration 或 CMake 结构。
 
 ### 状态标签
 
 - **Neutral — [Hardware Verified]**：现有开发记录确认点击 Neutral 后 Servo1 回到机械零位附近（约 1520 μs）。
-- **Set Angle protocol/controller — [Implemented]**：`0x13` 使用 `count=1, servo_id=0, angle_cdeg:int16 LE`；Console 仍只发送 cdeg，Firmware 继续负责 cdeg→PWM。
-- **Set Angle Qt UI — [Implemented]**：Servo1 使用 −90.0…+90.0°、0.1° 步进、默认 0.0° 的 `QDoubleSpinBox`；仅在已连接且 Servo1 收到 Enable ACK 后可操作。Disable、Disable All 或断开会立即关闭角度控件；Servo2 仍为 `Unsupported / Planned`。
-- **Set Angle real servo motion — [Not yet hardware verified]**：本分支只有软件构建/测试证据，尚未进行角度命令的受控实机验收。
+- **Set Angle protocol/controller — [Hardware Verified]**：`0x13` 使用 `count=1, servo_id=0, angle_cdeg:int16 LE`；Console 只发送 cdeg，Firmware 继续负责 cdeg→PWM。
+- **Set Angle Qt UI — [Hardware Verified]**：Servo1 使用 −90.0…+90.0°、0.1° 步进、默认 0.0° 的 `QDoubleSpinBox`；仅在已连接、Servo1 supported、Enable ACK 且无 pending Disable 时可操作。Disable、Disable All 或断开会立即关闭角度控件；Servo2 仍为 `Unsupported / Planned`。
+- **Set Angle real servo motion — [Hardware Verified]**：受控实机验收在 0°、±10°、±45°、±90° 全部通过。
 
 PWM 输入框目前表示用户的调试输入值；Neutral ACK 后不会把它同步成“当前实际位置”，也不承诺始终等于硬件已确认位置。Commanded State / Telemetry UI 留待后续独立设计。
+
+### Servo1 hardware acceptance（[Hardware Verified]）
+
+- Hardware: GDW IPX896HV，`TIM3_CH1 / PA6`，约 333 Hz。
+- 角度验收：0°、+10°、0°、−10°、0°、±45°、±90° 全部 PASS。
+- 当前 bring-up 对应关系：−90° ≈ 520 μs、0° = 1520 μs、+90° ≈ 2520 μs；仍作为近似标定记录。
+- 安全/UI 验收：Disable 后 Set Angle 禁用；Enable 未 ACK 前仍不可用；Enable + ACK 后恢复；Disable All/Disconnect 后禁用；Reconnect 不自动 Enable；手动 Enable + ACK 后恢复。
 
 ### 本分支软件验证
 
