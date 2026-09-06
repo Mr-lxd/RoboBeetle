@@ -1,0 +1,109 @@
+#include "ring_buffer.h"
+
+#include <stdint.h>
+#include <stdio.h>
+
+static int failures = 0;
+
+static void expect(int condition, const char *message)
+{
+    if (!condition)
+    {
+        (void)fprintf(stderr, "FAIL: %s\n", message);
+        ++failures;
+    }
+}
+
+static void expect_pop(ring_buffer_t *buffer, uint8_t expected)
+{
+    uint8_t actual = 0U;
+
+    expect(ring_buffer_pop(buffer, &actual), "expected a queued byte");
+    expect(actual == expected, "ring-buffer ordering differs");
+}
+
+static void test_empty_pop(void)
+{
+    ring_buffer_t buffer;
+    uint8_t byte = 0xA5U;
+
+    ring_buffer_init(&buffer);
+
+    expect(!ring_buffer_pop(&buffer, &byte), "empty pop should fail");
+    expect(byte == 0xA5U, "empty pop should not modify output");
+}
+
+static void test_normal_ordering(void)
+{
+    ring_buffer_t buffer;
+
+    ring_buffer_init(&buffer);
+
+    expect(ring_buffer_push(&buffer, 0x11U), "first push should succeed");
+    expect(ring_buffer_push(&buffer, 0x22U), "second push should succeed");
+    expect_pop(&buffer, 0x11U);
+    expect_pop(&buffer, 0x22U);
+    expect(!ring_buffer_pop(&buffer, &(uint8_t){0U}),
+           "queue should be empty after normal pops");
+}
+
+static void test_wraparound_ordering(void)
+{
+    ring_buffer_t buffer;
+
+    ring_buffer_init(&buffer);
+
+    for (uint8_t value = 0U; value < 100U; ++value)
+    {
+        expect(ring_buffer_push(&buffer, value), "initial wraparound push failed");
+        expect_pop(&buffer, value);
+    }
+
+    for (uint8_t value = 0U; value < 127U; ++value)
+    {
+        expect(ring_buffer_push(&buffer, value), "post-wrap push failed");
+    }
+
+    for (uint8_t value = 0U; value < 127U; ++value)
+    {
+        expect_pop(&buffer, value);
+    }
+}
+
+static void test_full_capacity_and_drop(void)
+{
+    ring_buffer_t buffer;
+
+    ring_buffer_init(&buffer);
+
+    for (uint8_t value = 0U; value < 127U; ++value)
+    {
+        expect(ring_buffer_push(&buffer, value), "effective-capacity push failed");
+    }
+
+    expect(!ring_buffer_push(&buffer, 0xEEU),
+           "push while full should be rejected");
+
+    for (uint8_t value = 0U; value < 127U; ++value)
+    {
+        expect_pop(&buffer, value);
+    }
+
+    expect(!ring_buffer_pop(&buffer, &(uint8_t){0U}),
+           "queue should be empty after full drain");
+}
+
+int main(void)
+{
+    test_empty_pop();
+    test_normal_ordering();
+    test_wraparound_ordering();
+    test_full_capacity_and_drop();
+
+    if (failures == 0)
+    {
+        (void)puts("All firmware ring-buffer tests passed");
+    }
+
+    return failures == 0 ? 0 : 1;
+}
