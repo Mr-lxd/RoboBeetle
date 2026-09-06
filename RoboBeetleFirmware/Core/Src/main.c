@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "rb_protocol_v2.h"
+#include "uart_transport_stm32.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,15 +57,6 @@ TIM_HandleTypeDef htim3;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-#define UART_RX_BUFFER_SIZE 128
-
-static uint8_t uart_rx_byte;
-
-static uint8_t uart_rx_buffer[UART_RX_BUFFER_SIZE];
-
-static volatile uint16_t uart_rx_head = 0;
-static volatile uint16_t uart_rx_tail = 0;
-
 static uint8_t protocol_wire_buffer[
     RBP2_MAX_WIRE_SIZE];
 
@@ -124,33 +116,6 @@ static rbp2_result_t validate_servo_mask(uint16_t mask);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static void uart_rx_push(uint8_t byte)
-{
-    uint16_t next =
-        (uint16_t)((uart_rx_head + 1U) % UART_RX_BUFFER_SIZE);
-
-    if (next != uart_rx_tail)
-    {
-        uart_rx_buffer[uart_rx_head] = byte;
-        uart_rx_head = next;
-    }
-}
-
-static int uart_rx_pop(uint8_t *byte)
-{
-    if (uart_rx_head == uart_rx_tail)
-    {
-        return 0;
-    }
-
-    *byte = uart_rx_buffer[uart_rx_tail];
-
-    uart_rx_tail =
-        (uint16_t)((uart_rx_tail + 1U) % UART_RX_BUFFER_SIZE);
-
-    return 1;
-}
-
 static uint32_t read_le32(
     const uint8_t *data)
 {
@@ -721,11 +686,9 @@ static void protocol_send_ack(
 
     if (wire_length > 0U)
     {
-        HAL_UART_Transmit(
-            &huart1,
+        (void)uart_transport_stm32_transmit(
             wire,
-            (uint16_t)wire_length,
-            100U);
+            (uint16_t)wire_length);
     }
 }
 
@@ -790,11 +753,7 @@ int main(void)
   MX_TIM3_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  HAL_UART_Receive_IT(
-      &huart1,
-      &uart_rx_byte,
-      1
-  );
+  uart_transport_stm32_init(&huart1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -807,7 +766,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  while (uart_rx_pop(&byte))
+	  while (uart_transport_stm32_pop(&byte))
 	  {
 	      protocol_feed_byte(byte);
 	  }
@@ -993,16 +952,7 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-    if (huart->Instance == USART1)
-    {
-        uart_rx_push(uart_rx_byte);
-
-        HAL_UART_Receive_IT(
-            &huart1,
-            &uart_rx_byte,
-            1
-        );
-    }
+    uart_transport_stm32_on_rx_complete(huart);
 }
 /* USER CODE END 4 */
 
