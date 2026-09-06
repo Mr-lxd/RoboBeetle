@@ -137,7 +137,7 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 
 The current development record states that Qt → Set Servo PWM → TIM3 CCR was observed, TIM3_CH1 drove Servo1, the GDW IPX896HV produced real motion, and the horn was mechanically centered. These are development-record claims, not conclusions produced by static code inspection.
 
-The UART transport/ring-buffer extraction in this refactor has not been flashed or regression-tested on the physical board yet. The existing Servo1 and Set Angle hardware verification remains valid for the unchanged functional behavior; hardware regression of this refactor is **pending**.
+The UART transport/ring-buffer extraction in this refactor is now **[Hardware Verified]**. STM32CubeIDE target build passed, ST-LINK download completed with “Download verified successfully”, and physical UART/Servo regression passed for Connect + Heartbeat, Enable + ACK, Neutral, +10°, 0°, −10°, Disable, Disconnect, reconnect without automatic Enable, and manual Enable + ACK recovery. The existing Servo1 and Set Angle hardware verification remains valid.
 
 ## Current build and test status
 
@@ -230,4 +230,4 @@ Do not split the already isolated Protocol V2 codec further during Phase 1, add 
 - P2: debug LED is configured but unused.
 - P2: no Firmware-native codec/dispatcher/safety/calibration test target.
 
-The UART transport refactor adds only the two `Core/Communication` modules, their user-maintained top-level CMake source/include entries, the pure-C ring-buffer regression test, the `main.c` delegation points, and this documentation. `.ioc`, generated CubeMX CMake, pins, clocks, USART settings, base frame format, CRC, COBS rules, protocol dispatch, safety policy, and Servo calibration were not changed. No firmware was flashed and no Servo was moved during this refactor; hardware regression remains pending.
+The UART transport refactor adds only the two `Core/Communication` modules, their user-maintained top-level CMake source/include entries, the pure-C ring-buffer regression test, the `main.c` delegation points, and this documentation. `.ioc`, generated CubeMX CMake, pins, clocks, USART settings, base frame format, CRC, COBS rules, protocol dispatch, safety policy, and Servo calibration were not changed. STM32CubeIDE build, ST-LINK download verification, and physical UART/Servo regression all passed; no further code refactoring is included in this change.
