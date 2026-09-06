@@ -22,6 +22,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "rb_protocol_v2.h"
+#include "servo_driver_stm32.h"
+#include "servo_service.h"
 #include "uart_transport_stm32.h"
 /* USER CODE END Includes */
 
@@ -32,17 +34,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
-#define SERVO1_ID                0U
-#define SERVO1_MASK              0x0001U
-#define SERVO_SUPPORTED_MASK     SERVO1_MASK
-
-#define SERVO1_MIN_PULSE_US      520U
-#define SERVO1_NEUTRAL_PULSE_US  1520U
-#define SERVO1_MAX_PULSE_US      2520U
-
-#define SERVO1_MIN_ANGLE_CDEG       (-9000)
-#define SERVO1_MAX_ANGLE_CDEG        9000
 
 /* USER CODE END PD */
 
@@ -86,7 +77,8 @@ static volatile uint32_t last_heartbeat_rx_ms = 0U;
 
 static volatile uint8_t host_alive = 0U;
 
-static volatile uint16_t servo_enabled_mask = 0U;
+static servo_driver_stm32_t servo_driver;
+static servo_service_t servo_service;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -105,12 +97,6 @@ static void protocol_send_ack(
 static void protocol_complete_request(
     const rbp2_frame_t *frame,
     rbp2_result_t result);
-
-static HAL_StatusTypeDef servo1_pwm_start(void);
-static void servo1_pwm_stop(void);
-
-static uint16_t servo1_angle_to_pulse(int16_t angle_cdeg);
-static rbp2_result_t validate_servo_mask(uint16_t mask);
 
 /* USER CODE END PFP */
 
@@ -132,45 +118,6 @@ static uint16_t read_le16_main(
          | ((uint16_t)data[1] << 8U);
 }
 
-static HAL_StatusTypeDef servo1_pwm_start(void)
-{
-    /*
-     * 每次重新 Enable 时，
-     * 先回到 Bring-up 安全中位 1520 us。
-     */
-    __HAL_TIM_SET_COMPARE(
-        &htim3,
-        TIM_CHANNEL_1,
-        SERVO1_NEUTRAL_PULSE_US);
-
-    return HAL_TIM_PWM_Start(
-        &htim3,
-        TIM_CHANNEL_1);
-}
-
-
-static void servo1_pwm_stop(void)
-{
-    HAL_TIM_PWM_Stop(
-        &htim3,
-        TIM_CHANNEL_1);
-}
-
-static rbp2_result_t validate_servo_mask(uint16_t mask)
-{
-    if (mask == 0U)
-    {
-        return RBP2_RESULT_INVALID_PAYLOAD;
-    }
-
-    if ((mask & (uint16_t)(~SERVO_SUPPORTED_MASK)) != 0U)
-    {
-        return RBP2_RESULT_UNSUPPORTED_SERVO;
-    }
-
-    return RBP2_RESULT_OK;
-}
-
 static void protocol_complete_request(
     const rbp2_frame_t *frame,
     rbp2_result_t result)
@@ -187,6 +134,34 @@ static void protocol_complete_request(
         frame->sequence,
         frame->type,
         result);
+}
+
+static rbp2_result_t map_servo_service_result(
+    servo_service_result_t result)
+{
+    switch (result)
+    {
+        case SERVO_SERVICE_RESULT_OK:
+            return RBP2_RESULT_OK;
+
+        case SERVO_SERVICE_RESULT_INVALID_PAYLOAD:
+            return RBP2_RESULT_INVALID_PAYLOAD;
+
+        case SERVO_SERVICE_RESULT_UNSUPPORTED_SERVO:
+            return RBP2_RESULT_UNSUPPORTED_SERVO;
+
+        case SERVO_SERVICE_RESULT_SERVO_NOT_ENABLED:
+            return RBP2_RESULT_SERVO_NOT_ENABLED;
+
+        case SERVO_SERVICE_RESULT_OUT_OF_RANGE:
+            return RBP2_RESULT_OUT_OF_RANGE;
+
+        case SERVO_SERVICE_RESULT_HARDWARE_FAILURE:
+            return RBP2_RESULT_HARDWARE_FAILURE;
+
+        default:
+            return RBP2_RESULT_HARDWARE_FAILURE;
+    }
 }
 
 static void protocol_handle_frame(
@@ -269,39 +244,12 @@ static void protocol_handle_frame(
             uint16_t mask =
                 read_le16_main(frame->payload);
 
-            rbp2_result_t mask_result =
-                validate_servo_mask(mask);
-
-            if (mask_result != RBP2_RESULT_OK)
-            {
-                protocol_complete_request(
-                    frame,
-                    mask_result);
-
-                break;
-            }
-
-            /*
-             * Phase 1 目前只真正实现 Servo1。
-             */
-            if ((mask & SERVO1_MASK) != 0U)
-            {
-                if (servo1_pwm_start() != HAL_OK)
-                {
-                    protocol_complete_request(
-                        frame,
-                        RBP2_RESULT_HARDWARE_FAILURE);
-
-                    break;
-                }
-            }
-
-            servo_enabled_mask |=
-                (mask & SERVO1_MASK);
-
             protocol_complete_request(
                 frame,
-                RBP2_RESULT_OK);
+                map_servo_service_result(
+                    servo_service_enable(
+                        &servo_service,
+                        mask)));
 
             break;
         }
@@ -321,29 +269,12 @@ static void protocol_handle_frame(
             uint16_t mask =
                 read_le16_main(frame->payload);
 
-            rbp2_result_t mask_result =
-                validate_servo_mask(mask);
-
-            if (mask_result != RBP2_RESULT_OK)
-            {
-                protocol_complete_request(
-                    frame,
-                    mask_result);
-
-                break;
-            }
-
-            if ((mask & SERVO1_MASK) != 0U)
-            {
-                servo1_pwm_stop();
-            }
-
-            servo_enabled_mask &=
-                (uint16_t)(~mask);
-
             protocol_complete_request(
                 frame,
-                RBP2_RESULT_OK);
+                map_servo_service_result(
+                    servo_service_disable(
+                        &servo_service,
+                        mask)));
 
             break;
         }
@@ -398,43 +329,13 @@ static void protocol_handle_frame(
                 break;
             }
 
-            if (servo_id != SERVO1_ID)
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_UNSUPPORTED_SERVO);
-
-                break;
-            }
-
-            if ((servo_enabled_mask &
-                 SERVO1_MASK) == 0U)
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_SERVO_NOT_ENABLED);
-
-                break;
-            }
-
-            if ((pulse_us < SERVO1_MIN_PULSE_US) ||
-                (pulse_us > SERVO1_MAX_PULSE_US))
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_OUT_OF_RANGE);
-
-                break;
-            }
-
-            __HAL_TIM_SET_COMPARE(
-                &htim3,
-                TIM_CHANNEL_1,
-                pulse_us);
-
             protocol_complete_request(
                 frame,
-                RBP2_RESULT_OK);
+                map_servo_service_result(
+                    servo_service_set_pwm(
+                        &servo_service,
+                        servo_id,
+                        pulse_us)));
 
             break;
         }
@@ -462,35 +363,12 @@ static void protocol_handle_frame(
             uint16_t mask =
                 read_le16_main(frame->payload);
 
-            rbp2_result_t mask_result =
-                validate_servo_mask(mask);
-
-            if (mask_result != RBP2_RESULT_OK)
-            {
-                protocol_complete_request(
-                    frame,
-                    mask_result);
-
-                break;
-            }
-
-            if ((servo_enabled_mask & mask) != mask)
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_SERVO_NOT_ENABLED);
-
-                break;
-            }
-
-            __HAL_TIM_SET_COMPARE(
-                &htim3,
-                TIM_CHANNEL_1,
-                SERVO1_NEUTRAL_PULSE_US);
-
             protocol_complete_request(
                 frame,
-                RBP2_RESULT_OK);
+                map_servo_service_result(
+                    servo_service_neutral(
+                        &servo_service,
+                        mask)));
 
             break;
         }
@@ -534,45 +412,13 @@ static void protocol_handle_frame(
                 break;
             }
 
-            if (servo_id != SERVO1_ID)
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_UNSUPPORTED_SERVO);
-
-                break;
-            }
-
-            if ((servo_enabled_mask & SERVO1_MASK) == 0U)
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_SERVO_NOT_ENABLED);
-
-                break;
-            }
-
-            if ((angle_cdeg < SERVO1_MIN_ANGLE_CDEG) ||
-                (angle_cdeg > SERVO1_MAX_ANGLE_CDEG))
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_OUT_OF_RANGE);
-
-                break;
-            }
-
-            uint16_t pulse_us =
-                servo1_angle_to_pulse(angle_cdeg);
-
-            __HAL_TIM_SET_COMPARE(
-                &htim3,
-                TIM_CHANNEL_1,
-                pulse_us);
-
             protocol_complete_request(
                 frame,
-                RBP2_RESULT_OK);
+                map_servo_service_result(
+                    servo_service_set_angle(
+                        &servo_service,
+                        servo_id,
+                        angle_cdeg)));
 
             break;
         }
@@ -692,33 +538,6 @@ static void protocol_send_ack(
     }
 }
 
-static uint16_t servo1_angle_to_pulse(
-    int16_t angle_cdeg)
-{
-    if (angle_cdeg < 0)
-    {
-        int32_t pulse =
-            (int32_t)SERVO1_NEUTRAL_PULSE_US +
-            ((int32_t)angle_cdeg *
-             ((int32_t)SERVO1_NEUTRAL_PULSE_US -
-              (int32_t)SERVO1_MIN_PULSE_US))
-            / 9000;
-
-        return (uint16_t)pulse;
-    }
-    else
-    {
-        int32_t pulse =
-            (int32_t)SERVO1_NEUTRAL_PULSE_US +
-            ((int32_t)angle_cdeg *
-             ((int32_t)SERVO1_MAX_PULSE_US -
-              (int32_t)SERVO1_NEUTRAL_PULSE_US))
-            / 9000;
-
-        return (uint16_t)pulse;
-    }
-}
-
 /* USER CODE END 0 */
 
 /**
@@ -753,6 +572,13 @@ int main(void)
   MX_TIM3_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  servo_driver_stm32_init(
+      &servo_driver,
+      &htim3);
+  servo_service_init(
+      &servo_service,
+      servo_driver_stm32_ops(),
+      &servo_driver);
   uart_transport_stm32_init(&huart1);
   /* USER CODE END 2 */
 
@@ -781,12 +607,7 @@ int main(void)
 	           * Fail-safe:
 	           * 上位机失联，立即停止所有已实现执行器。
 	           */
-	          if ((servo_enabled_mask & SERVO1_MASK) != 0U)
-	          {
-	              servo1_pwm_stop();
-	          }
-
-	          servo_enabled_mask = 0U;
+	          servo_service_disable_all(&servo_service);
 
 	          last_request_valid = 0U;
 	      }

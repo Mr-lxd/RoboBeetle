@@ -60,7 +60,12 @@ The current communication split is:
 
 - **[Implemented]** `Core/Communication/ring_buffer.c/.h` owns the fixed 128-byte single-producer/single-consumer ring. It reserves one slot (127-byte effective capacity) and silently rejects a push while full, preserving the original behavior.
 - **[Implemented]** `Core/Communication/uart_transport_stm32.c/.h` owns the one-byte RX staging byte, USART1 receive interrupt arm/re-arm, ring interaction, main-loop byte retrieval, and the blocking `HAL_UART_Transmit(..., 100U)` wrapper.
-- **[Implemented]** `main.c` keeps the CubeMX entry/configuration, protocol wire accumulator/dispatch, safety policy, duplicate cache, and Servo/TIM3 behavior. Its UART callback is a small transport delegate.
+- **[Implemented]** `Core/Servo/servo_calibration.c/.h` owns the Servo1 calibration record and exact integer angle-to-pulse mapping.
+- **[Implemented]** `Core/Servo/servo_service.c/.h` owns supported-mask validation, enabled-state policy, command range checks, Neutral semantics, and driver-independent Servo results.
+- **[Implemented]** `Core/Servo/servo_driver_stm32.c/.h` owns the HAL/TIM3_CH1 start, stop, and CCR write adapter. It receives the timer handle explicitly and has no Protocol or heartbeat knowledge.
+- **[Implemented]** `main.c` keeps the CubeMX entry/configuration, protocol wire accumulator/dispatch, host-liveness/safety policy, duplicate cache, and ACK/result mapping. Its UART callback is a small transport delegate and its Servo cases call the service.
+
+The Servo service/calibration/driver extraction is **[Implemented / Software Verified]** in PR #3. It is a behavior-preserving code split; no new board regression has been performed for this refactor yet. STM32CubeIDE build, download, and physical regression for this PR remain pending user verification.
 
 ## UART receive and transmit audit
 
@@ -150,11 +155,11 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake now lists the communication modules and include directory. There is still no host-side dispatcher/HAL unit-test target; `tests/protocol_golden_vectors.c` and `tests/ring_buffer_tests.c` are standalone pure-C checks compiled manually with `-Wall -Wextra -Werror`.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake now lists the Communication and Servo modules and their include directories. The pure-C checks `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_calibration_tests.c`, and `tests/servo_service_tests.c` are compiled manually with `-Wall -Wextra -Werror`; there is still no host-side dispatcher/HAL unit-test target.
 
 ## `main.c` maintainability audit
 
-Current `main.c` contains both CubeMX-generated entry/configuration code and almost all application policy. Its responsibilities include:
+Current `main.c` contains both CubeMX-generated entry/configuration code and the remaining protocol/safety application loop. Its responsibilities include:
 
 1. HAL startup and SystemClock configuration.
 2. GPIO, USART1, and TIM3 initialization.
@@ -162,15 +167,13 @@ Current `main.c` contains both CubeMX-generated entry/configuration code and alm
 4. Protocol wire accumulation, delimiter resynchronization, and decode dispatch.
 5. ACK payload creation, Firmware TX sequence, wire encoding, and calls to the blocking transport transmit wrapper.
 6. Heartbeat diagnostics and host-liveness state.
-7. Command validation and ACK result selection.
-8. Servo ID/mask and enabled-state policy.
-9. PWM start, stop, CCR update, and safe-start position.
-10. Provisional angle bounds and angle-to-pulse mapping.
-11. 500 ms communication-loss safety action.
-12. Bring-up counters and debug LED initialization.
-13. Main-loop scheduling.
+7. Command payload shape checks, host-alive checks, and ACK result mapping.
+8. Duplicate-request cache and ACK replay.
+9. 500 ms communication-loss safety action through `servo_service_disable_all()`.
+10. Bring-up counters and debug LED initialization.
+11. Main-loop scheduling.
 
-This is already too many responsibilities for a generated entry file. The codec and UART transport are separated, but dispatch, actuator policy, calibration, and safety remain coupled.
+This remains more responsibility than a final application architecture should carry, but the Servo policy/calibration and TIM3 hardware access are now separated behind the service/driver boundary. Future work can extract protocol dispatch and the safety supervisor without changing this PR's behavior.
 
 ## [Planned] Remaining refactor
 
@@ -213,7 +216,7 @@ Recommended boundaries:
 
 1. Preserve this clean Protocol V2 / Servo1 baseline and perform a controlled hardware check of Neutral and Set Angle before expanding capability.
 2. **[Implemented in this refactor]** Extract ring buffer and UART transport, preserving exact ISR behavior.
-3. Extract the Servo HAL driver and pure Servo service/calibration.
+3. **[Implemented in this refactor]** Extract the Servo HAL driver and pure Servo service/calibration, preserving the existing policy and calibration values.
 4. Extract the Safety supervisor and make time injectable for host tests.
 5. Reduce `main.c` to initialization and `App_Init`/`App_Process` delegation.
 
@@ -221,7 +224,7 @@ Do not split the already isolated Protocol V2 codec further during Phase 1, add 
 
 ## Remaining technical debt
 
-- P1: dispatcher/Servo/safety behavior remains HAL-coupled in `main.c`, so duplicate and CCR side effects lack a host unit test.
+- P1: protocol dispatch and safety behavior remain in `main.c`, so end-to-end duplicate/recovery behavior lacks a host unit test even though Servo policy and calibration are now pure-C tested.
 - P1: the one-entry duplicate cache is deliberately minimal and is not a general replay window.
 - P1: ring overflow and RX re-arm failures are silent.
 - P1: blocking UART ACK transmit shares the watchdog/parser loop.
@@ -230,4 +233,4 @@ Do not split the already isolated Protocol V2 codec further during Phase 1, add 
 - P2: debug LED is configured but unused.
 - P2: no Firmware-native codec/dispatcher/safety/calibration test target.
 
-The UART transport refactor adds only the two `Core/Communication` modules, their user-maintained top-level CMake source/include entries, the pure-C ring-buffer regression test, the `main.c` delegation points, and this documentation. `.ioc`, generated CubeMX CMake, pins, clocks, USART settings, base frame format, CRC, COBS rules, protocol dispatch, safety policy, and Servo calibration were not changed. STM32CubeIDE build, ST-LINK download verification, and physical UART/Servo regression all passed; no further code refactoring is included in this change.
+PR #3 adds only the three `Core/Servo` modules, their user-maintained top-level CMake source/include entries, pure-C Servo regression tests, the `main.c` service/driver delegation points, and this documentation. `.ioc`, generated CubeMX CMake, pins, clocks, USART settings, base frame format, CRC, COBS rules, message IDs, heartbeat policy, and Servo calibration values were not changed. The prior UART/ring-buffer extraction remains hardware verified; this Servo extraction is software verified and awaits the user's STM32CubeIDE build/download and physical regression. No further code refactoring is included in this change.
