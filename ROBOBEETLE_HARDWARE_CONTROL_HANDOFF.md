@@ -1,8 +1,27 @@
 # RoboBeetle 硬件控制交接审计
 
-## 2026-09-05 第二轮 Protocol V2 / Servo1 clean baseline（最新）
+## 2026-09-06 Servo1 Set Angle Qt UI feature branch（当前）
 
-> 本节优先于下方同日“当前实现增补”和 2026-08-30 历史审计。第二轮只修复已确认的 Protocol V2 / Servo1 正确性问题；未连接串口、未烧录 MCU、未驱动舵机，也未开展 Servo2、Pi/TCP、Camera/FOMO、ROS2、CPG 或 STM32 模块化工作。
+> 本节记录从 `origin/main` 的 `v0.1.0-servo1-bringup` 基线创建的 `feature/set-angle-ui` 小型 Console 功能。仅修改 Console UI/helper/tests 与文档；未修改 Firmware、`.ioc`、Protocol V2 帧格式、Servo calibration 或 CMake 结构。
+
+### 状态标签
+
+- **Neutral — [Hardware Verified]**：现有开发记录确认点击 Neutral 后 Servo1 回到机械零位附近（约 1520 μs）。
+- **Set Angle protocol/controller — [Implemented]**：`0x13` 使用 `count=1, servo_id=0, angle_cdeg:int16 LE`；Console 仍只发送 cdeg，Firmware 继续负责 cdeg→PWM。
+- **Set Angle Qt UI — [Implemented]**：Servo1 使用 −90.0…+90.0°、0.1° 步进、默认 0.0° 的 `QDoubleSpinBox`；仅在已连接且 Servo1 收到 Enable ACK 后可操作。Disable、Disable All 或断开会立即关闭角度控件；Servo2 仍为 `Unsupported / Planned`。
+- **Set Angle real servo motion — [Not yet hardware verified]**：本分支只有软件构建/测试证据，尚未进行角度命令的受控实机验收。
+
+PWM 输入框目前表示用户的调试输入值；Neutral ACK 后不会把它同步成“当前实际位置”，也不承诺始终等于硬件已确认位置。Commanded State / Telemetry UI 留待后续独立设计。
+
+### 本分支软件验证
+
+- Console fresh MinGW/Qt configure/build 通过。
+- `protocol_tests` 通过。
+- `robot_controller_tests` 通过，覆盖 −90/−45/0/+45/+90°→cdeg、完整 Set Angle payload、越界/未 Enable/Servo2 不发送及既有重试/ACK 行为。
+
+## 2026-09-05 第二轮 Protocol V2 / Servo1 clean baseline（历史基线快照）
+
+> 本节记录 feature/set-angle-ui 之前的 2026-09-05 baseline；其中“本轮”仅指该 baseline 修复。当前 Set Angle UI 状态以上方 2026-09-06 节为准。该 baseline 未连接串口、未烧录 MCU、未驱动舵机，也未开展 Servo2、Pi/TCP、Camera/FOMO、ROS2、CPG 或 STM32 模块化工作。
 
 ### 本轮结果
 

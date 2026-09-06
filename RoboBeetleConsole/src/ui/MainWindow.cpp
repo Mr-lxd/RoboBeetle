@@ -2,6 +2,7 @@
 
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -56,6 +57,14 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
         enableButtons_[index]->setText(enabled ? QStringLiteral("Disable") : QStringLiteral("Enable"));
         neutralButtons_[index]->setEnabled(enabled);
         applyButtons_[index]->setEnabled(enabled);
+        setAngleUiEnabled(index, enabled);
+    });
+    connect(controller_, &RobotController::servoDisablePendingChanged,
+            this, [this](int index, bool) {
+        if (index < 0 || index >= 2) {
+            return;
+        }
+        setAngleUiEnabled(index, controller_->isServoEnabled(static_cast<ServoId>(index)));
     });
     connect(controller_, &RobotController::txHexChanged, txHex_, &QLineEdit::setText);
     connect(controller_, &RobotController::rxHexChanged, rxHex_, &QLineEdit::setText);
@@ -136,10 +145,21 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     enableButtons_[index] = new QPushButton(QStringLiteral("Enable"), box);
     neutralButtons_[index] = new QPushButton(QStringLiteral("Neutral"), box);
     applyButtons_[index] = new QPushButton(QStringLiteral("Apply PWM"), box);
-    auto *angle = new QPushButton(QStringLiteral("Set Angle — UI Not Enabled"), box);
-    angle->setEnabled(false);
-    angle->setToolTip(QStringLiteral(
-        "The Protocol V2 angle command is implemented; interactive UI control remains disabled in this round"));
+    angleSpins_[index] = new QDoubleSpinBox(box);
+    angleSpins_[index]->setRange(static_cast<double>(config.provisionalAngleMinCdeg) / 100.0,
+                                 static_cast<double>(config.provisionalAngleMaxCdeg) / 100.0);
+    angleSpins_[index]->setDecimals(1);
+    angleSpins_[index]->setSingleStep(0.1);
+    angleSpins_[index]->setValue(0.0);
+    angleSpins_[index]->setSuffix(QStringLiteral(" deg"));
+    angleSpins_[index]->setEnabled(false);
+    angleButtons_[index] = new QPushButton(
+        supported ? QStringLiteral("Set Angle") : QStringLiteral("Set Angle — Unsupported / Planned"), box);
+    angleButtons_[index]->setEnabled(false);
+    angleButtons_[index]->setToolTip(
+        supported
+            ? QStringLiteral("Send Servo1 angle as Protocol V2 centidegrees after Enable ACK")
+            : QStringLiteral("Servo2 is unsupported in Phase 1 and cannot receive angle commands"));
 
     layout->addWidget(warning, 0, 0, 1, 3);
     layout->addWidget(new QLabel(QStringLiteral("PWM"), box), 1, 0);
@@ -148,15 +168,18 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     layout->addWidget(enableButtons_[index], 3, 0);
     layout->addWidget(neutralButtons_[index], 3, 1);
     layout->addWidget(applyButtons_[index], 3, 2);
-    layout->addWidget(angle, 4, 0, 1, 3);
+    layout->addWidget(new QLabel(QStringLiteral("Angle"), box), 4, 0);
+    layout->addWidget(angleSpins_[index], 4, 1);
+    layout->addWidget(angleButtons_[index], 4, 2);
 
     connect(pwmSpins_[index], qOverload<int>(&QSpinBox::valueChanged),
             pwmSliders_[index], &QSlider::setValue);
     connect(pwmSliders_[index], &QSlider::valueChanged,
             pwmSpins_[index], &QSpinBox::setValue);
-    connect(enableButtons_[index], &QPushButton::clicked, this, [this, id] {
+    connect(enableButtons_[index], &QPushButton::clicked, this, [this, id, index] {
         if (controller_->isServoEnabled(id)) {
             controller_->disableServo(id);
+            setAngleUiEnabled(index, controller_->isServoEnabled(id));
         } else {
             controller_->enableServo(id);
         }
@@ -166,6 +189,15 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     });
     connect(applyButtons_[index], &QPushButton::clicked, this, [this, id, index] {
         controller_->setServoPwm(id, static_cast<quint16>(pwmSpins_[index]->value()));
+    });
+    connect(angleButtons_[index], &QPushButton::clicked, this, [this, id, index] {
+        if (!controller_->isConnected() || !controller_->isServoSupported(id)
+            || !controller_->isServoEnabled(id)
+            || controller_->isServoDisablePending(id)) {
+            setAngleUiEnabled(index, controller_->isServoEnabled(id));
+            return;
+        }
+        controller_->setServoAngle(id, angleDegreesToCentidegrees(angleSpins_[index]->value()));
     });
     return box;
 }
@@ -181,7 +213,12 @@ QWidget *MainWindow::createGlobalPanel()
     layout->addWidget(disableAll);
     layout->addWidget(emergencyStop);
     layout->addStretch();
-    connect(disableAll, &QPushButton::clicked, controller_, &RobotController::disableAll);
+    connect(disableAll, &QPushButton::clicked, this, [this] {
+        controller_->disableAll();
+        for (int index = 0; index < 2; ++index) {
+            setAngleUiEnabled(index, controller_->isServoEnabled(static_cast<ServoId>(index)));
+        }
+    });
     return box;
 }
 
@@ -235,7 +272,21 @@ void MainWindow::setConnectedUi(bool connected)
         enableButtons_[index]->setEnabled(connected && controller_->isServoSupported(id));
         applyButtons_[index]->setEnabled(connected && controller_->isServoEnabled(static_cast<ServoId>(index)));
         neutralButtons_[index]->setEnabled(connected && controller_->isServoEnabled(static_cast<ServoId>(index)));
+        setAngleUiEnabled(index, connected);
     }
+}
+
+void MainWindow::setAngleUiEnabled(int index, bool enabled)
+{
+    if (index < 0 || index >= 2) {
+        return;
+    }
+    const ServoId id = static_cast<ServoId>(index);
+    const bool actionable = enabled && controller_->isConnected()
+        && controller_->isServoSupported(id) && controller_->isServoEnabled(id)
+        && !controller_->isServoDisablePending(id);
+    angleSpins_[index]->setEnabled(actionable);
+    angleButtons_[index]->setEnabled(actionable);
 }
 
 void MainWindow::appendLog(const QString &message)

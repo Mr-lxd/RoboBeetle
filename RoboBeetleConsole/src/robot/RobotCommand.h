@@ -4,6 +4,8 @@
 
 #include <QtGlobal>
 
+#include <cmath>
+
 namespace rb {
 
 enum class ServoId : quint8 {
@@ -17,5 +19,10 @@ constexpr quint16 servoMask(ServoId id)
 }
 
 constexpr quint16 SupportedServoMaskPhase1 = servoMask(ServoId::Servo1);
+
+inline qint16 angleDegreesToCentidegrees(double degrees)
+{
+    return static_cast<qint16>(std::lround(degrees * 100.0));
+}
 
 } // namespace rb

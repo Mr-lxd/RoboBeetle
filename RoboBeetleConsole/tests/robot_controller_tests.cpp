@@ -9,10 +9,16 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <utility>
+#include <vector>
 
 namespace {
 
 int failures = 0;
+
+struct PendingSignalLog {
+    std::vector<std::pair<int, bool>> events;
+};
 
 void expect(bool condition, const char *message)
 {
@@ -52,6 +58,25 @@ void acknowledge(rb::FakeTransport &transport,
     transport.injectBytes(rb::PacketCodec::encodeWire({rb::MessageType::Ack, 0x8000, payload}));
 }
 
+void connectAndEnableServo1(rb::FakeTransport &transport, rb::RobotController &controller)
+{
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "Servo1 enable command should be sent");
+    acknowledgeLast(transport);
+    expect(controller.isServoEnabled(rb::ServoId::Servo1),
+           "Servo1 should be enabled after ACK");
+}
+
+void capturePendingSignals(rb::RobotController &controller, PendingSignalLog &log)
+{
+    QObject::connect(&controller, &rb::RobotController::servoDisablePendingChanged,
+                     [&log](int index, bool pending) {
+                         log.events.emplace_back(index, pending);
+                     });
+}
+
 void testNoAutomaticEnableAndPwmRequiresEnable()
 {
     rb::FakeTransport transport;
@@ -63,6 +88,9 @@ void testNoAutomaticEnableAndPwmRequiresEnable()
     expect(!controller.setServoPwm(rb::ServoId::Servo1, 1500),
            "PWM must be rejected until servo is enabled");
     expect(transport.writes().isEmpty(), "rejected PWM must not write a frame");
+    expect(!controller.setServoAngle(rb::ServoId::Servo1, 0),
+           "angle must be rejected until servo is enabled");
+    expect(transport.writes().isEmpty(), "rejected angle must not write a frame");
 
     expect(controller.enableServo(rb::ServoId::Servo1), "enable command should be sent");
     expect(lastPacket(transport).type == rb::MessageType::ServoEnable,
@@ -74,6 +102,240 @@ void testNoAutomaticEnableAndPwmRequiresEnable()
            "PWM should be sent after enable acknowledgement");
     expect(lastPacket(transport).type == rb::MessageType::SetServoPwm,
            "PWM must use SetServoPwm message");
+}
+
+void testAngleDegreesConvertToCentidegrees()
+{
+    expect(rb::angleDegreesToCentidegrees(-90.0) == -9000,
+           "-90.0 degrees must convert to -9000 cdeg");
+    expect(rb::angleDegreesToCentidegrees(-45.0) == -4500,
+           "-45.0 degrees must convert to -4500 cdeg");
+    expect(rb::angleDegreesToCentidegrees(0.0) == 0,
+           "0.0 degrees must convert to 0 cdeg");
+    expect(rb::angleDegreesToCentidegrees(45.0) == 4500,
+           "+45.0 degrees must convert to +4500 cdeg");
+    expect(rb::angleDegreesToCentidegrees(90.0) == 9000,
+           "+90.0 degrees must convert to +9000 cdeg");
+}
+
+void testSetAngleBlockedDuringDisableRequest()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+    controller.enableServo(rb::ServoId::Servo1);
+    acknowledgeLast(transport);
+
+    const qsizetype beforeDisable = transport.writes().size();
+    expect(controller.disableServo(rb::ServoId::Servo1),
+           "disable request should be sent for an enabled Servo1");
+    expect(!controller.setServoAngle(rb::ServoId::Servo1, 0),
+           "angle must be blocked while Servo1 disable is awaiting ACK");
+    expect(transport.writes().size() == beforeDisable + 1,
+           "blocked angle must not add a frame while disable is pending");
+}
+
+void testDisableAckClearsPendingWhenAlreadyDisabled()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    PendingSignalLog pending;
+    capturePendingSignals(controller, pending);
+
+    expect(controller.disableAll(), "Disable All should be sent while connected");
+    expect(controller.isServoDisablePending(rb::ServoId::Servo1),
+           "Disable All should mark Servo1 pending before ACK");
+    const rb::Packet request = lastPacket(transport);
+    expect(request.type == rb::MessageType::ServoDisable,
+           "Disable All must use ServoDisable message");
+    acknowledge(transport, request, rb::AckResult::Ok, rb::MessageType::ServoDisable);
+    expect(!controller.isServoDisablePending(rb::ServoId::Servo1),
+           "successful Disable All ACK should clear pending for already-disabled Servo1");
+    expect(pending.events == std::vector<std::pair<int, bool>>{{0, true}, {0, false}},
+           "Disable All should emit pending true then false even when Servo1 was already disabled");
+
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "Servo1 should remain re-enableable after an already-disabled Disable All ACK");
+    acknowledgeLast(transport);
+    expect(controller.isServoEnabled(rb::ServoId::Servo1),
+           "Servo1 should be enabled after the subsequent ACK");
+}
+
+void testDisablePendingWriteFailureDoesNotLockAngle()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
+    connectAndEnableServo1(transport, controller);
+
+    PendingSignalLog pending;
+    capturePendingSignals(controller, pending);
+    transport.setWriteSucceeds(false);
+    const qsizetype before = transport.writes().size();
+
+    expect(!controller.disableServo(rb::ServoId::Servo1),
+           "Disable write failure should be reported");
+    expect(!controller.isServoDisablePending(rb::ServoId::Servo1),
+           "failed Disable write must not leave Servo1 pending");
+    expect(transport.writes().size() == before,
+           "failed Disable write must not append a frame");
+    expect(pending.events.empty(),
+           "failed Disable write must not emit a pending transition");
+
+    transport.setWriteSucceeds(true);
+    expect(controller.setServoAngle(rb::ServoId::Servo1, 0),
+           "Set Angle should remain available after Disable write failure");
+}
+
+void testDisablePendingAckRejectedRestoresAngle()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
+    connectAndEnableServo1(transport, controller);
+
+    PendingSignalLog pending;
+    capturePendingSignals(controller, pending);
+    expect(controller.disableServo(rb::ServoId::Servo1),
+           "Disable command should be sent before rejected ACK");
+    const rb::Packet request = lastPacket(transport);
+    acknowledge(transport, request, rb::AckResult::HardwareFailure, rb::MessageType::ServoDisable);
+
+    expect(!controller.isServoDisablePending(rb::ServoId::Servo1),
+           "rejected Disable ACK should clear pending");
+    expect(controller.isServoEnabled(rb::ServoId::Servo1),
+           "rejected Disable ACK should leave Servo1 enabled");
+    expect(pending.events == std::vector<std::pair<int, bool>>{{0, true}, {0, false}},
+           "rejected Disable ACK should emit pending clear");
+    expect(controller.setServoAngle(rb::ServoId::Servo1, 0),
+           "Set Angle should recover after rejected Disable ACK");
+}
+
+void testDisablePendingAckTypeMismatchRestoresAngle()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
+    connectAndEnableServo1(transport, controller);
+
+    PendingSignalLog pending;
+    capturePendingSignals(controller, pending);
+    expect(controller.disableServo(rb::ServoId::Servo1),
+           "Disable command should be sent before mismatched ACK");
+    const rb::Packet request = lastPacket(transport);
+    acknowledge(transport, request, rb::AckResult::Ok, rb::MessageType::ServoEnable);
+
+    expect(!controller.isServoDisablePending(rb::ServoId::Servo1),
+           "mismatched ACK should clear pending");
+    expect(controller.isServoEnabled(rb::ServoId::Servo1),
+           "mismatched ACK should leave Servo1 enabled");
+    expect(pending.events == std::vector<std::pair<int, bool>>{{0, true}, {0, false}},
+           "mismatched ACK should emit pending clear");
+    expect(controller.setServoAngle(rb::ServoId::Servo1, 0),
+           "Set Angle should recover after mismatched ACK");
+}
+
+void testDisablePendingErrorRestoresAngle()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
+    connectAndEnableServo1(transport, controller);
+
+    PendingSignalLog pending;
+    capturePendingSignals(controller, pending);
+    expect(controller.disableServo(rb::ServoId::Servo1),
+           "Disable command should be sent before Error");
+    const rb::Packet request = lastPacket(transport);
+    QByteArray payload;
+    payload.append(static_cast<char>(request.sequence & 0xff));
+    payload.append(static_cast<char>((request.sequence >> 8) & 0xff));
+    payload.append(static_cast<char>(request.type));
+    payload.append(static_cast<char>(0x34));
+    payload.append(static_cast<char>(0x12));
+    transport.injectBytes(rb::PacketCodec::encodeWire(
+        {rb::MessageType::Error, 0x8000, payload}));
+
+    expect(!controller.isServoDisablePending(rb::ServoId::Servo1),
+           "Disable Error should clear pending");
+    expect(controller.isServoEnabled(rb::ServoId::Servo1),
+           "Disable Error should leave Servo1 enabled");
+    expect(pending.events == std::vector<std::pair<int, bool>>{{0, true}, {0, false}},
+           "Disable Error should emit pending clear");
+    expect(controller.setServoAngle(rb::ServoId::Servo1, 0),
+           "Set Angle should recover after Disable Error");
+}
+
+void testDisablePendingTimeoutRestoresAngle()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 1;
+    config.maxRetries = 0;
+    rb::RobotController controller(&transport, config);
+    connectAndEnableServo1(transport, controller);
+
+    PendingSignalLog pending;
+    capturePendingSignals(controller, pending);
+    expect(controller.disableServo(rb::ServoId::Servo1),
+           "Disable command should be sent before timeout");
+    QEventLoop loop;
+    QTimer::singleShot(50, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    expect(!controller.isServoDisablePending(rb::ServoId::Servo1),
+           "Disable timeout should clear pending");
+    expect(controller.isServoEnabled(rb::ServoId::Servo1),
+           "Disable timeout should leave Servo1 enabled");
+    expect(pending.events == std::vector<std::pair<int, bool>>{{0, true}, {0, false}},
+           "Disable timeout should emit pending clear");
+    expect(controller.setServoAngle(rb::ServoId::Servo1, 0),
+           "Set Angle should recover after Disable timeout");
+}
+
+void testDisablePendingDisconnectClearsState()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
+    connectAndEnableServo1(transport, controller);
+
+    PendingSignalLog pending;
+    capturePendingSignals(controller, pending);
+    expect(controller.disableServo(rb::ServoId::Servo1),
+           "Disable command should be sent before disconnect");
+    transport.simulateError(QStringLiteral("link lost"));
+
+    expect(!controller.isServoDisablePending(rb::ServoId::Servo1),
+           "disconnect/reset should clear pending");
+    expect(pending.events == std::vector<std::pair<int, bool>>{{0, true}, {0, false}},
+           "disconnect/reset should emit pending clear");
+}
+
+void testDisablePendingSuccessDisablesAngle()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
+    connectAndEnableServo1(transport, controller);
+
+    PendingSignalLog pending;
+    capturePendingSignals(controller, pending);
+    expect(controller.disableServo(rb::ServoId::Servo1),
+           "Disable command should be sent before successful ACK");
+    const rb::Packet request = lastPacket(transport);
+    acknowledge(transport, request, rb::AckResult::Ok, rb::MessageType::ServoDisable);
+
+    expect(!controller.isServoDisablePending(rb::ServoId::Servo1),
+           "successful Disable ACK should clear pending");
+    expect(!controller.isServoEnabled(rb::ServoId::Servo1),
+           "successful Disable ACK should disable Servo1");
+    expect(pending.events == std::vector<std::pair<int, bool>>{{0, true}, {0, false}},
+           "successful Disable ACK should emit pending clear");
+    const qsizetype before = transport.writes().size();
+    expect(!controller.setServoAngle(rb::ServoId::Servo1, 0),
+           "Set Angle must remain disabled after successful Disable ACK");
+    expect(transport.writes().size() == before,
+           "Set Angle after successful Disable ACK must not write a frame");
 }
 
 void testProvisionalPwmCalibrationAndBounds()
@@ -133,6 +395,16 @@ void testSetAngleEncodingAndBounds()
            "zero degrees must be accepted");
     expect(lastPacket(transport).payload == QByteArray::fromHex("01000000"),
            "zero cdeg must be encoded as int16 LE");
+
+    expect(controller.setServoAngle(rb::ServoId::Servo1, -4500),
+           "-45 degrees must be accepted");
+    expect(lastPacket(transport).payload == QByteArray::fromHex("01006cee"),
+           "-4500 cdeg must be encoded as int16 LE");
+
+    expect(controller.setServoAngle(rb::ServoId::Servo1, 4500),
+           "+45 degrees must be accepted");
+    expect(lastPacket(transport).payload == QByteArray::fromHex("01009411"),
+           "+4500 cdeg must be encoded as int16 LE");
 
     expect(controller.setServoAngle(rb::ServoId::Servo1, 9000),
            "+90 degrees must be accepted");
@@ -284,6 +556,16 @@ int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
     testNoAutomaticEnableAndPwmRequiresEnable();
+    testAngleDegreesConvertToCentidegrees();
+    testSetAngleBlockedDuringDisableRequest();
+    testDisableAckClearsPendingWhenAlreadyDisabled();
+    testDisablePendingWriteFailureDoesNotLockAngle();
+    testDisablePendingAckRejectedRestoresAngle();
+    testDisablePendingAckTypeMismatchRestoresAngle();
+    testDisablePendingErrorRestoresAngle();
+    testDisablePendingTimeoutRestoresAngle();
+    testDisablePendingDisconnectClearsState();
+    testDisablePendingSuccessDisablesAngle();
     testProvisionalPwmCalibrationAndBounds();
     testSetAngleEncodingAndBounds();
     testDisconnectAttemptsDisableAll();
