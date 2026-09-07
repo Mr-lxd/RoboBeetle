@@ -65,7 +65,7 @@ The current communication split is:
 - **[Implemented]** `Core/Servo/servo_driver_stm32.c/.h` owns the HAL/TIM3_CH1 start, stop, and CCR write adapter. It receives the timer handle explicitly and has no Protocol or heartbeat knowledge.
 - **[Implemented]** `main.c` keeps the CubeMX entry/configuration, protocol wire accumulator/dispatch, host-liveness/safety policy, duplicate cache, and ACK/result mapping. Its UART callback is a small transport delegate and its Servo cases call the service.
 
-The Servo service/calibration/driver extraction is **[Implemented / Software Verified]** in PR #3. It is a behavior-preserving code split; no new board regression has been performed for this refactor yet. STM32CubeIDE build, download, and physical regression for this PR remain pending user verification.
+The Servo service/calibration/driver extraction is now **[Hardware Verified]** in PR #3. STM32CubeIDE target build passed, ST-LINK download completed with “Download verified successfully”, and the physical Servo regression passed for Connect + Heartbeat, Enable + ACK, Neutral, 0°, ±10°, ±45°, ±90°, Disable, Disable All, Disconnect, reconnect without automatic Enable, and manual Enable + ACK recovery. This confirms the behavior-preserving extraction on the target hardware.
 
 ## UART receive and transmit audit
 
@@ -216,7 +216,7 @@ Recommended boundaries:
 
 1. Preserve this clean Protocol V2 / Servo1 baseline and perform a controlled hardware check of Neutral and Set Angle before expanding capability.
 2. **[Implemented in this refactor]** Extract ring buffer and UART transport, preserving exact ISR behavior.
-3. **[Implemented in this refactor]** Extract the Servo HAL driver and pure Servo service/calibration, preserving the existing policy and calibration values.
+3. **[Hardware Verified in this refactor]** Extract the Servo HAL driver and pure Servo service/calibration, preserving the existing policy and calibration values.
 4. Extract the Safety supervisor and make time injectable for host tests.
 5. Reduce `main.c` to initialization and `App_Init`/`App_Process` delegation.
 
@@ -233,4 +233,4 @@ Do not split the already isolated Protocol V2 codec further during Phase 1, add 
 - P2: debug LED is configured but unused.
 - P2: no Firmware-native codec/dispatcher/safety/calibration test target.
 
-PR #3 adds only the three `Core/Servo` modules, their user-maintained top-level CMake source/include entries, pure-C Servo regression tests, the `main.c` service/driver delegation points, and this documentation. `.ioc`, generated CubeMX CMake, pins, clocks, USART settings, base frame format, CRC, COBS rules, message IDs, heartbeat policy, and Servo calibration values were not changed. The prior UART/ring-buffer extraction remains hardware verified; this Servo extraction is software verified and awaits the user's STM32CubeIDE build/download and physical regression. No further code refactoring is included in this change.
+PR #3 adds only the three `Core/Servo` modules, their user-maintained top-level CMake source/include entries, pure-C Servo regression tests, the `main.c` service/driver delegation points, and this documentation. `.ioc`, generated CubeMX CMake, pins, clocks, USART settings, base frame format, CRC, COBS rules, message IDs, heartbeat policy, and Servo calibration values were not changed. The prior UART/ring-buffer extraction remains hardware verified, and the Servo service/calibration/driver extraction is now hardware verified: STM32CubeIDE build PASS, ST-LINK download PASS, and physical Servo regression PASS. No further code refactoring is included in this change.
