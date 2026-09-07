@@ -21,6 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "protocol_dispatcher.h"
 #include "rb_protocol_v2.h"
 #include "safety_supervisor.h"
 #include "servo_driver_stm32.h"
@@ -58,12 +59,6 @@ static uint8_t protocol_drop_until_delimiter = 0U;
 
 static uint16_t protocol_tx_sequence = 0U;
 
-static uint8_t last_request_valid = 0U;
-static uint16_t last_request_sequence = 0U;
-static uint8_t last_request_type = 0U;
-static rbp2_result_t last_request_result = RBP2_RESULT_OK;
-
-
 /* 下面几个主要用于 bring-up / debug */
 
 static volatile uint32_t protocol_good_frames = 0U;
@@ -74,6 +69,7 @@ static volatile uint32_t heartbeat_count = 0U;
 
 static volatile uint32_t last_host_uptime_ms = 0U;
 
+static protocol_dispatcher_t protocol_dispatcher;
 static safety_supervisor_t safety_supervisor;
 static servo_driver_stm32_t servo_driver;
 static servo_service_t servo_service;
@@ -92,349 +88,10 @@ static void protocol_send_ack(
     uint8_t request_type,
     rbp2_result_t result);
 
-static void protocol_complete_request(
-    const rbp2_frame_t *frame,
-    rbp2_result_t result);
-
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static uint32_t read_le32(
-    const uint8_t *data)
-{
-    return (uint32_t)data[0]
-         | ((uint32_t)data[1] << 8U)
-         | ((uint32_t)data[2] << 16U)
-         | ((uint32_t)data[3] << 24U);
-}
-
-static uint16_t read_le16_main(
-    const uint8_t *data)
-{
-    return (uint16_t)data[0]
-         | ((uint16_t)data[1] << 8U);
-}
-
-static void protocol_complete_request(
-    const rbp2_frame_t *frame,
-    rbp2_result_t result)
-{
-    if (result == RBP2_RESULT_OK)
-    {
-        last_request_valid = 1U;
-        last_request_sequence = frame->sequence;
-        last_request_type = frame->type;
-        last_request_result = result;
-    }
-
-    protocol_send_ack(
-        frame->sequence,
-        frame->type,
-        result);
-}
-
-static rbp2_result_t map_servo_service_result(
-    servo_service_result_t result)
-{
-    switch (result)
-    {
-        case SERVO_SERVICE_RESULT_OK:
-            return RBP2_RESULT_OK;
-
-        case SERVO_SERVICE_RESULT_INVALID_PAYLOAD:
-            return RBP2_RESULT_INVALID_PAYLOAD;
-
-        case SERVO_SERVICE_RESULT_UNSUPPORTED_SERVO:
-            return RBP2_RESULT_UNSUPPORTED_SERVO;
-
-        case SERVO_SERVICE_RESULT_SERVO_NOT_ENABLED:
-            return RBP2_RESULT_SERVO_NOT_ENABLED;
-
-        case SERVO_SERVICE_RESULT_OUT_OF_RANGE:
-            return RBP2_RESULT_OUT_OF_RANGE;
-
-        case SERVO_SERVICE_RESULT_HARDWARE_FAILURE:
-            return RBP2_RESULT_HARDWARE_FAILURE;
-
-        default:
-            return RBP2_RESULT_HARDWARE_FAILURE;
-    }
-}
-
-static void protocol_handle_frame(
-    const rbp2_frame_t *frame)
-{
-    /*
-     * Heartbeats are intentionally excluded from the action cache: every
-     * valid arrival refreshes liveness, while no Servo business action is
-     * repeated. This also prevents 100 ms heartbeats from evicting the last
-     * actuator command before its 200 ms Console retry.
-     */
-    if ((frame->type != RBP2_MSG_HEARTBEAT) &&
-        (last_request_valid != 0U) &&
-        (frame->sequence == last_request_sequence) &&
-        (frame->type == last_request_type))
-    {
-        protocol_send_ack(
-            frame->sequence,
-            frame->type,
-            last_request_result);
-
-        return;
-    }
-
-    switch (frame->type)
-    {
-        case RBP2_MSG_HEARTBEAT:
-        {
-            if (frame->payload_length != 4U)
-            {
-                ++protocol_bad_frames;
-
-                protocol_send_ack(
-                    frame->sequence,
-                    frame->type,
-                    RBP2_RESULT_INVALID_PAYLOAD);
-
-                break;
-            }
-
-            last_host_uptime_ms =
-                read_le32(frame->payload);
-
-            safety_supervisor_on_heartbeat(
-                &safety_supervisor,
-                HAL_GetTick());
-
-            ++heartbeat_count;
-
-            protocol_send_ack(
-                frame->sequence,
-                frame->type,
-                RBP2_RESULT_OK);
-
-            break;
-        }
-
-
-        case RBP2_MSG_SERVO_ENABLE:
-        {
-            if (frame->payload_length != 2U)
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_INVALID_PAYLOAD);
-
-                break;
-            }
-
-            if (!safety_supervisor_is_host_alive(
-                    &safety_supervisor))
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_HOST_NOT_ALIVE);
-
-                break;
-            }
-
-            uint16_t mask =
-                read_le16_main(frame->payload);
-
-            protocol_complete_request(
-                frame,
-                map_servo_service_result(
-                    servo_service_enable(
-                        &servo_service,
-                        mask)));
-
-            break;
-        }
-
-
-        case RBP2_MSG_SERVO_DISABLE:
-        {
-            if (frame->payload_length != 2U)
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_INVALID_PAYLOAD);
-
-                break;
-            }
-
-            uint16_t mask =
-                read_le16_main(frame->payload);
-
-            protocol_complete_request(
-                frame,
-                map_servo_service_result(
-                    servo_service_disable(
-                        &servo_service,
-                        mask)));
-
-            break;
-        }
-
-        case RBP2_MSG_SET_SERVO_PWM:
-        {
-            /*
-             * Phase 1 暂时只接受：
-             *
-             * count = 1
-             * servo_id = 0
-             * pulse_us = 520~2520
-             *
-             * Payload:
-             * [count][servo_id][pulse_low][pulse_high]
-             */
-
-            if (!safety_supervisor_is_host_alive(
-                    &safety_supervisor))
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_HOST_NOT_ALIVE);
-
-                break;
-            }
-
-            if (frame->payload_length != 4U)
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_INVALID_PAYLOAD);
-
-                break;
-            }
-
-            uint8_t count =
-                frame->payload[0];
-
-            uint8_t servo_id =
-                frame->payload[1];
-
-            uint16_t pulse_us =
-                read_le16_main(
-                    &frame->payload[2]);
-
-            if (count != 1U)
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_INVALID_PAYLOAD);
-
-                break;
-            }
-
-            protocol_complete_request(
-                frame,
-                map_servo_service_result(
-                    servo_service_set_pwm(
-                        &servo_service,
-                        servo_id,
-                        pulse_us)));
-
-            break;
-        }
-
-        case RBP2_MSG_NEUTRAL:
-        {
-            if (frame->payload_length != 2U)
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_INVALID_PAYLOAD);
-
-                break;
-            }
-
-            if (!safety_supervisor_is_host_alive(
-                    &safety_supervisor))
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_HOST_NOT_ALIVE);
-
-                break;
-            }
-
-            uint16_t mask =
-                read_le16_main(frame->payload);
-
-            protocol_complete_request(
-                frame,
-                map_servo_service_result(
-                    servo_service_neutral(
-                        &servo_service,
-                        mask)));
-
-            break;
-        }
-
-        case RBP2_MSG_SET_SERVO_ANGLE:
-        {
-            if (!safety_supervisor_is_host_alive(
-                    &safety_supervisor))
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_HOST_NOT_ALIVE);
-
-                break;
-            }
-
-            if (frame->payload_length != 4U)
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_INVALID_PAYLOAD);
-
-                break;
-            }
-
-            uint8_t count =
-                frame->payload[0];
-
-            uint8_t servo_id =
-                frame->payload[1];
-
-            int16_t angle_cdeg =
-                (int16_t)read_le16_main(
-                    &frame->payload[2]);
-
-            if (count != 1U)
-            {
-                protocol_complete_request(
-                    frame,
-                    RBP2_RESULT_INVALID_PAYLOAD);
-
-                break;
-            }
-
-            protocol_complete_request(
-                frame,
-                map_servo_service_result(
-                    servo_service_set_angle(
-                        &servo_service,
-                        servo_id,
-                        angle_cdeg)));
-
-            break;
-        }
-
-        default:
-        {
-            protocol_complete_request(
-                frame,
-                RBP2_RESULT_INVALID_PAYLOAD);
-
-            break;
-        }
-    }
-}
-
 static void protocol_feed_byte(
     uint8_t byte)
 {
@@ -456,10 +113,38 @@ static void protocol_feed_byte(
 
             if (status == RBP2_OK)
             {
+                protocol_dispatcher_outcome_t outcome;
+                uint32_t now_ms = 0U;
+
                 ++protocol_good_frames;
 
-                protocol_handle_frame(
-                    &frame);
+                if ((frame.type == RBP2_MSG_HEARTBEAT) &&
+                    (frame.payload_length == 4U))
+                {
+                    now_ms = HAL_GetTick();
+                }
+
+                outcome = protocol_dispatcher_handle(
+                    &protocol_dispatcher,
+                    &frame,
+                    now_ms);
+
+                if (outcome.count_bad_frame)
+                {
+                    ++protocol_bad_frames;
+                }
+
+                if (outcome.heartbeat_accepted)
+                {
+                    last_host_uptime_ms =
+                        outcome.heartbeat_uptime_ms;
+                    ++heartbeat_count;
+                }
+
+                protocol_send_ack(
+                    frame.sequence,
+                    frame.type,
+                    outcome.result);
             }
             else
             {
@@ -581,6 +266,10 @@ int main(void)
       &servo_service,
       servo_driver_stm32_ops(),
       &servo_driver);
+  protocol_dispatcher_init(
+      &protocol_dispatcher,
+      &servo_service,
+      &safety_supervisor);
   uart_transport_stm32_init(&huart1);
   /* USER CODE END 2 */
 
@@ -609,7 +298,8 @@ int main(void)
 	       */
 	      servo_service_disable_all(&servo_service);
 
-	      last_request_valid = 0U;
+	      protocol_dispatcher_invalidate_action_cache(
+	          &protocol_dispatcher);
 	  }
   }
   /* USER CODE END 3 */

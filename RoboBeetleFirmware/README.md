@@ -40,14 +40,15 @@ single-producer/single-consumer ring buffer
   ↓ main-loop uart_transport_stm32_pop
 Protocol V2 delimiter accumulator
   ↓ COBS + header/length + CRC decode
-protocol_handle_frame
-  ├─ Heartbeat / host liveness
-  ├─ ACK generation
+protocol_dispatcher_handle
+  ├─ Heartbeat / host liveness outcome
   ├─ Servo1 enable / disable
   ├─ Set Servo PWM
   ├─ Set Servo Angle calibration mapping
   ├─ Neutral semantic command
-  └─ one-entry duplicate suppression / ACK replay
+  └─ one-entry duplicate suppression / result replay
+        ↓
+main-loop ACK generation / UART TX
         ↓
 servo state + TIM3_CH1 CCR/start/stop
         ↓
@@ -64,7 +65,8 @@ The current communication split is:
 - **[Implemented]** `Core/Servo/servo_service.c/.h` owns supported-mask validation, enabled-state policy, command range checks, Neutral semantics, and driver-independent Servo results.
 - **[Implemented]** `Core/Servo/servo_driver_stm32.c/.h` owns the HAL/TIM3_CH1 start, stop, and CCR write adapter. It receives the timer handle explicitly and has no Protocol or heartbeat knowledge.
 - **[Hardware Verified]** `Core/Safety/safety_supervisor.c/.h` owns host liveness, the last valid Heartbeat timestamp, strict timeout evaluation, and one-shot timeout transition reporting. It has no HAL, Protocol, UART, or Servo dependency.
-- **[Implemented]** `main.c` keeps the CubeMX entry/configuration, protocol wire accumulator/dispatch, Safety Supervisor integration and safe-action wiring, duplicate cache, and ACK/result mapping. Its UART callback is a small transport delegate and its Servo cases call the service.
+- **[Hardware Verified]** `Core/Communication/protocol_dispatcher.c/.h` owns decoded command payload validation, HostAlive gating, Servo service invocation/result mapping, Heartbeat semantics, and the one-entry successful-command cache. It has no HAL, UART, TIM3, or Console dependency.
+- **[Implemented]** `main.c` keeps the CubeMX entry/configuration, protocol wire accumulator and decode integration, Safety Supervisor time injection and safe-action wiring, diagnostics, and ACK/result transmission. Its UART callback is a small transport delegate and its decoded frames are handled by the dispatcher.
 
 The Servo service/calibration/driver extraction is now **[Hardware Verified]** in PR #3. STM32CubeIDE target build passed, ST-LINK download completed with “Download verified successfully”, and the physical Servo regression passed for Connect + Heartbeat, Enable + ACK, Neutral, 0°, ±10°, ±45°, ±90°, Disable, Disable All, Disconnect, reconnect without automatic Enable, and manual Enable + ACK recovery. This confirms the behavior-preserving extraction on the target hardware.
 
@@ -103,10 +105,10 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 
 ### [Implemented]
 
-- `host_alive` becomes 1 only after a valid four-byte Heartbeat.
-- `last_heartbeat_rx_ms` uses local `HAL_GetTick()`, not the host timestamp.
-- Servo Enable, Set PWM, and Set Angle reject commands while `host_alive==0`.
-- If more than 500 ms elapse after the last Heartbeat, the main loop clears `host_alive`, stops Servo1 PWM if enabled, and clears the enabled mask.
+- The Safety Supervisor marks the host alive only after a valid four-byte Heartbeat.
+- The supervisor stores `last_heartbeat_rx_ms`; `main.c` injects local `HAL_GetTick()`, not the host timestamp.
+- Servo Enable, Set PWM, and Set Angle reject commands while the supervisor reports the host not alive.
+- If more than 500 ms elapse after the last Heartbeat, the supervisor reports one timeout transition; the main loop stops Servo1 PWM if enabled and clears the enabled mask.
 - Reconnection/recovery requires a new valid Heartbeat followed by a new Servo Enable.
 - Boot leaves PWM stopped. TIM3 is configured with CCR1=1520, but `HAL_TIM_PWM_Start()` is called only on accepted Servo1 Enable.
 - Each accepted enable writes CCR1=1520 before starting PWM.
@@ -156,7 +158,7 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake now lists the Communication, Servo, and Safety modules and their include directories. The pure-C checks `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, and `tests/safety_supervisor_tests.c` are compiled manually with `-Wall -Wextra -Werror`; there is still no host-side dispatcher/HAL unit-test target.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake now lists the Communication, Servo, and Safety modules and their include directories. The pure-C checks `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, and `tests/protocol_dispatcher_tests.c` are compiled manually with `-Wall -Wextra -Werror`; there is still no integrated host-side wire-parser/HAL test target.
 
 ## `main.c` maintainability audit
 
@@ -165,16 +167,16 @@ Current `main.c` contains both CubeMX-generated entry/configuration code and the
 1. HAL startup and SystemClock configuration.
 2. GPIO, USART1, and TIM3 initialization.
 3. CubeMX USART1 initialization and a tiny UART completion-callback delegate.
-4. Protocol wire accumulation, delimiter resynchronization, and decode dispatch.
+4. Protocol wire accumulation, delimiter resynchronization, and `rbp2_decode_wire()` integration.
 5. ACK payload creation, Firmware TX sequence, wire encoding, and calls to the blocking transport transmit wrapper.
-6. Heartbeat diagnostics and Safety Supervisor integration.
-7. Command payload shape checks, host-alive checks, and ACK result mapping.
-8. Duplicate-request cache and ACK replay.
+6. Heartbeat diagnostics, Safety Supervisor time injection, and dispatcher outcome handling.
+7. ACK dispatch for decoded frames and invalid-heartbeat bad-frame accounting.
+8. Safety timeout action and dispatcher cache invalidation.
 9. 500 ms communication-loss safety action through `servo_service_disable_all()`.
 10. Bring-up counters and debug LED initialization.
 11. Main-loop scheduling.
 
-This remains more responsibility than a final application architecture should carry, but the Servo policy/calibration, TIM3 hardware access, and host-liveness timing are now separated behind service/driver/safety boundaries. Future work can extract protocol dispatch without changing this PR's behavior.
+This remains more responsibility than a final application architecture should carry, but the Servo policy/calibration, TIM3 hardware access, host-liveness timing, and decoded command policy are now separated behind service/driver/safety/dispatcher boundaries. Future work can extract App/Main orchestration without changing the established wire behavior.
 
 ## [Planned] Remaining refactor
 
@@ -206,7 +208,7 @@ Recommended boundaries:
 - `uart_transport_stm32` remains HAL-aware and owns `UART_HandleTypeDef`, RX re-arm, and eventually a nonblocking TX queue.
 - `ring_buffer` is pure C and reusable; its silent full-buffer drop is preserved until a separately reviewed overflow policy is introduced.
 - `rb_protocol_v2` remains pure C and HAL-independent.
-- `protocol_dispatcher` parses command payloads and calls service interfaces; it must not write TIM registers directly.
+- `protocol_dispatcher` parses command payloads, enforces the existing validation order, and calls service interfaces; it must not write TIM registers directly.
 - `servo_driver_stm32` is the HAL-aware TIM3/channel adapter: start, stop, and write pulse ticks.
 - `servo_service` is pure C policy: supported IDs/masks, enabled state, bounds, and command semantics. It calls the driver through a narrow interface.
 - `servo_calibration` is pure C data/mapping: per-servo min/neutral/max angle and pulse, direction, and later nonlinear points if required.
@@ -219,21 +221,24 @@ Recommended boundaries:
 2. **[Implemented in this refactor]** Extract ring buffer and UART transport, preserving exact ISR behavior.
 3. **[Hardware Verified in this refactor]** Extract the Servo HAL driver and pure Servo service/calibration, preserving the existing policy and calibration values.
 4. **[Hardware Verified in this refactor]** Extract the Safety Supervisor with externally injected time and preserve the strict 500 ms timeout policy.
-5. Reduce `main.c` to initialization and `App_Init`/`App_Process` delegation.
+5. **[Hardware Verified in this refactor]** Extract the Protocol Dispatcher while preserving command validation order, Heartbeat semantics, and duplicate suppression.
+6. Reduce `main.c` to initialization and `App_Init`/`App_Process` delegation.
 
 Do not split the already isolated Protocol V2 codec further during Phase 1, add an RTOS, or introduce generic device frameworks before a second actuator/transport actually requires them.
 
 ## Remaining technical debt
 
-- P1: protocol dispatch and timeout-triggered safe-action wiring remain in `main.c`, so end-to-end duplicate/recovery behavior lacks a host unit test even though Servo policy, calibration, and liveness timing are now pure-C tested.
+- P1: timeout-triggered safe-action wiring and wire-parser orchestration remain in `main.c`; dispatcher command, duplicate, and Heartbeat semantics are now pure-C tested.
 - P1: the one-entry duplicate cache is deliberately minimal and is not a general replay window.
 - P1: ring overflow and RX re-arm failures are silent.
 - P1: blocking UART ACK transmit shares the watchdog/parser loop.
 - P2: Error `0x03` remains reserved; command failures currently use the frozen ACK result enum.
 - P2: diagnostics are volatile counters only and are not exposed as telemetry.
 - P2: debug LED is configured but unused.
-- P2: no Firmware-native codec/dispatcher/safety/calibration test target.
+- P2: no integrated Firmware-native codec/dispatcher/safety/calibration CTest target; current pure-C checks are manually compiled.
 
 PR #3 adds only the three `Core/Servo` modules, their user-maintained top-level CMake source/include entries, pure-C Servo regression tests, the `main.c` service/driver delegation points, and this documentation. `.ioc`, generated CubeMX CMake, pins, clocks, USART settings, base frame format, CRC, COBS rules, message IDs, heartbeat policy, and Servo calibration values were not changed. The prior UART/ring-buffer extraction remains hardware verified, and the Servo service/calibration/driver extraction is now hardware verified: STM32CubeIDE build PASS, ST-LINK download PASS, and physical Servo regression PASS. No further code refactoring is included in this change.
 
 PR #4 adds only the pure-C `Core/Safety` supervisor, its user-maintained top-level CMake source/include entries, the liveness regression test, the `main.c` time-injection/timeout delegation points, and this documentation. The strict `(now - last_heartbeat_rx_ms) > 500U` behavior, Protocol V2 parsing, ACKs, Servo behavior, UART, `.ioc`, and generated CubeMX CMake remain unchanged. The Safety Supervisor is now **[Hardware Verified]**: STM32CubeIDE build PASS, ST-LINK download PASS, and physical Safety regression PASS, covering Heartbeat loss, the strict timeout safe-disable transition, reconnect without automatic Enable, manual Enable + ACK recovery, and repeated disconnect/reconnect behavior.
+
+PR #5 adds only the pure-C `Core/Communication/protocol_dispatcher` module, its host regression test, the user-maintained CMake source entry, the `main.c` decoded-frame/outcome integration, and this documentation. Protocol V2 wire framing, ACK encoding/transmit, UART transport, Safety policy, Servo behavior/calibration, `.ioc`, and generated CubeMX CMake remain unchanged. The Protocol Dispatcher extraction is now **[Hardware Verified]**: STM32CubeIDE build PASS, ST-LINK download PASS, and physical Protocol regression PASS covering Connect + Heartbeat, Enable + ACK, Neutral, Set Angle 0/+10/-10 degrees, Set PWM 1520 us near Neutral, Disable/re-enable, Disconnect, the >500 ms safe-disable transition, reconnect without automatic Enable, and manual Enable + ACK recovery.
