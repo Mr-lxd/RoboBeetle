@@ -5,6 +5,7 @@ RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for Laptop/Qt �
 ## Status labels
 
 - **[Implemented]** Confirmed in current source or active `.ioc`.
+- **[Implemented / Software Verified]** Confirmed in current source and host-side software checks; this label does not claim target hardware execution.
 - **[Hardware Verified]** Reported in the current development record; source alone cannot prove physical execution.
 - **[Provisional]** Bring-up values or incomplete calibration.
 - **[Planned]** Recommended future work, not current behavior.
@@ -61,14 +62,17 @@ The current communication split is:
 
 - **[Implemented]** `Core/Communication/ring_buffer.c/.h` owns the fixed 128-byte single-producer/single-consumer ring. It reserves one slot (127-byte effective capacity) and silently rejects a push while full, preserving the original behavior.
 - **[Implemented]** `Core/Communication/uart_transport_stm32.c/.h` owns the one-byte RX staging byte, USART1 receive interrupt arm/re-arm, ring interaction, main-loop byte retrieval, and the blocking `HAL_UART_Transmit(..., 100U)` wrapper.
+- **[Implemented / Software Verified]** `Core/App/app_main.c/.h` owns the application orchestration: Protocol V2 wire accumulation and decode integration, ACK/result transmission, diagnostics, module instances, initialization order, RX draining, and post-drain Safety timeout action. It calls existing Protocol, UART, Safety, Servo, and dispatcher modules without implementing their policies or touching TIM registers directly.
 - **[Implemented]** `Core/Servo/servo_calibration.c/.h` owns the Servo1 calibration record and exact integer angle-to-pulse mapping.
 - **[Implemented]** `Core/Servo/servo_service.c/.h` owns supported-mask validation, enabled-state policy, command range checks, Neutral semantics, and driver-independent Servo results.
 - **[Implemented]** `Core/Servo/servo_driver_stm32.c/.h` owns the HAL/TIM3_CH1 start, stop, and CCR write adapter. It receives the timer handle explicitly and has no Protocol or heartbeat knowledge.
 - **[Hardware Verified]** `Core/Safety/safety_supervisor.c/.h` owns host liveness, the last valid Heartbeat timestamp, strict timeout evaluation, and one-shot timeout transition reporting. It has no HAL, Protocol, UART, or Servo dependency.
 - **[Hardware Verified]** `Core/Communication/protocol_dispatcher.c/.h` owns decoded command payload validation, HostAlive gating, Servo service invocation/result mapping, Heartbeat semantics, and the one-entry successful-command cache. It has no HAL, UART, TIM3, or Console dependency.
-- **[Implemented]** `main.c` keeps the CubeMX entry/configuration, protocol wire accumulator and decode integration, Safety Supervisor time injection and safe-action wiring, diagnostics, and ACK/result transmission. Its UART callback is a small transport delegate and its decoded frames are handled by the dispatcher.
+- **[Implemented / Software Verified]** `main.c` keeps the CubeMX entry/configuration, `app_main_init`/`app_main_process` calls, and a small UART callback transport delegate. Protocol, Safety, Servo, ACK, diagnostics, and RX-drain orchestration live in `Core/App/app_main.c`.
 
 The Servo service/calibration/driver extraction is now **[Hardware Verified]** in PR #3. STM32CubeIDE target build passed, ST-LINK download completed with “Download verified successfully”, and the physical Servo regression passed for Connect + Heartbeat, Enable + ACK, Neutral, 0°, ±10°, ±45°, ±90°, Disable, Disable All, Disconnect, reconnect without automatic Enable, and manual Enable + ACK recovery. This confirms the behavior-preserving extraction on the target hardware.
+
+The App/Main extraction in PR #6 is **[Implemented / Software Verified]**. The existing pure-C regression suite, source checks, and architecture checks cover the refactor; STM32CubeIDE target build and physical full regression have not yet been rerun for PR #6.
 
 ## UART receive and transmit audit
 
@@ -106,7 +110,7 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 ### [Implemented]
 
 - The Safety Supervisor marks the host alive only after a valid four-byte Heartbeat.
-- The supervisor stores `last_heartbeat_rx_ms`; `main.c` injects local `HAL_GetTick()`, not the host timestamp.
+- The supervisor stores `last_heartbeat_rx_ms`; `app_main` injects local `HAL_GetTick()`, not the host timestamp.
 - Servo Enable, Set PWM, and Set Angle reject commands while the supervisor reports the host not alive.
 - If more than 500 ms elapse after the last Heartbeat, the supervisor reports one timeout transition; the main loop stops Servo1 PWM if enabled and clears the enabled mask.
 - Reconnection/recovery requires a new valid Heartbeat followed by a new Servo Enable.
@@ -158,35 +162,19 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake now lists the Communication, Servo, and Safety modules and their include directories. The pure-C checks `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, and `tests/protocol_dispatcher_tests.c` are compiled manually with `-Wall -Wextra -Werror`; there is still no integrated host-side wire-parser/HAL test target.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake now lists the App, Communication, Servo, and Safety modules and their include directories. The pure-C checks `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, and `tests/protocol_dispatcher_tests.c` are compiled manually with `-Wall -Wextra -Werror`; there is still no integrated host-side wire-parser/HAL test target.
 
-## `main.c` maintainability audit
+## App/Main maintainability audit
 
-Current `main.c` contains both CubeMX-generated entry/configuration code and the remaining protocol/safety application loop. Its responsibilities include:
+The App/Main boundary is now **[Implemented / Software Verified]**. `main.c` is limited to the CubeMX-generated startup and peripheral initialization, `app_main_init`/`app_main_process` delegation, the thin UART completion callback, and the existing error/assert handlers. `Core/App/app_main.c` owns the cooperative application loop and glue code while delegating Protocol, UART, Safety, Servo, and dispatcher policy to their existing modules.
 
-1. HAL startup and SystemClock configuration.
-2. GPIO, USART1, and TIM3 initialization.
-3. CubeMX USART1 initialization and a tiny UART completion-callback delegate.
-4. Protocol wire accumulation, delimiter resynchronization, and `rbp2_decode_wire()` integration.
-5. ACK payload creation, Firmware TX sequence, wire encoding, and calls to the blocking transport transmit wrapper.
-6. Heartbeat diagnostics, Safety Supervisor time injection, and dispatcher outcome handling.
-7. ACK dispatch for decoded frames and invalid-heartbeat bad-frame accounting.
-8. Safety timeout action and dispatcher cache invalidation.
-9. 500 ms communication-loss safety action through `servo_service_disable_all()`.
-10. Bring-up counters and debug LED initialization.
-11. Main-loop scheduling.
-
-This remains more responsibility than a final application architecture should carry, but the Servo policy/calibration, TIM3 hardware access, host-liveness timing, and decoded command policy are now separated behind service/driver/safety/dispatcher boundaries. Future work can extract App/Main orchestration without changing the established wire behavior.
-
-## [Planned] Remaining refactor
-
-The split should follow dependency direction instead of mechanically creating folders:
+The split follows dependency direction instead of mechanically creating folders:
 
 ```text
 Core/
 ├─ App/
-│  ├─ app_main.c/h
-│  └─ app_config.h
+│  ├─ app_main.c
+│  └─ app_main.h
 ├─ Communication/
 │  ├─ uart_transport_stm32.c/h
 │  ├─ ring_buffer.c/h
@@ -204,7 +192,7 @@ Core/
 
 Recommended boundaries:
 
-- Keep `main.c` limited to `HAL_Init`, clock/MX initialization, `App_Init`, `App_Process`, and CubeMX-safe callbacks that immediately delegate.
+- Keep `main.c` limited to `HAL_Init`, clock/MX initialization, `app_main_init`, `app_main_process`, and CubeMX-safe callbacks that immediately delegate.
 - `uart_transport_stm32` remains HAL-aware and owns `UART_HandleTypeDef`, RX re-arm, and eventually a nonblocking TX queue.
 - `ring_buffer` is pure C and reusable; its silent full-buffer drop is preserved until a separately reviewed overflow policy is introduced.
 - `rb_protocol_v2` remains pure C and HAL-independent.
@@ -212,7 +200,7 @@ Recommended boundaries:
 - `servo_driver_stm32` is the HAL-aware TIM3/channel adapter: start, stop, and write pulse ticks.
 - `servo_service` is pure C policy: supported IDs/masks, enabled state, bounds, and command semantics. It calls the driver through a narrow interface.
 - `servo_calibration` is pure C data/mapping: per-servo min/neutral/max angle and pulse, direction, and later nonlinear points if required.
-- `safety_supervisor` is pure C state/timing policy: host liveness, deadline evaluation, and one-shot timeout transition reporting. It has no HAL or Servo dependency; `main.c` requests safe actions through `servo_service`.
+- `safety_supervisor` is pure C state/timing policy: host liveness, deadline evaluation, and one-shot timeout transition reporting. It has no HAL or Servo dependency; `app_main` requests safe actions through `servo_service`.
 - `app_main` wires modules together and owns cooperative scheduling.
 
 ### Recommended order
@@ -222,13 +210,13 @@ Recommended boundaries:
 3. **[Hardware Verified in this refactor]** Extract the Servo HAL driver and pure Servo service/calibration, preserving the existing policy and calibration values.
 4. **[Hardware Verified in this refactor]** Extract the Safety Supervisor with externally injected time and preserve the strict 500 ms timeout policy.
 5. **[Hardware Verified in this refactor]** Extract the Protocol Dispatcher while preserving command validation order, Heartbeat semantics, and duplicate suppression.
-6. Reduce `main.c` to initialization and `App_Init`/`App_Process` delegation.
+6. **[Implemented / Software Verified]** Reduce `main.c` to initialization and `app_main_init`/`app_main_process` delegation. Full STM32CubeIDE and physical regression for PR #6 remain pending.
 
 Do not split the already isolated Protocol V2 codec further during Phase 1, add an RTOS, or introduce generic device frameworks before a second actuator/transport actually requires them.
 
 ## Remaining technical debt
 
-- P1: timeout-triggered safe-action wiring and wire-parser orchestration remain in `main.c`; dispatcher command, duplicate, and Heartbeat semantics are now pure-C tested.
+- P1: the App/Main extraction is software verified, but its full STM32CubeIDE target build and physical regression remain pending for PR #6.
 - P1: the one-entry duplicate cache is deliberately minimal and is not a general replay window.
 - P1: ring overflow and RX re-arm failures are silent.
 - P1: blocking UART ACK transmit shares the watchdog/parser loop.
