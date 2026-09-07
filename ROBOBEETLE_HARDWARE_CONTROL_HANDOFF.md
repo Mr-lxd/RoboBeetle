@@ -1,5 +1,57 @@
 # RoboBeetle 硬件控制交接审计
 
+## 2026-09-07 Firmware modularization hardware acceptance
+
+本节是当前 Firmware 结构和验收状态的权威摘要。PR #2 至 PR #6 均已完成 STM32CubeIDE 构建、ST-LINK 下载和对应实机回归；下方更早的审计/基线章节保留作为 Historical Reference，不代表当前 `main.c` 架构或未完成状态。
+
+### 当前模块状态
+
+- UART Transport / Ring Buffer — **[Hardware Verified]**（PR #2）
+- Servo Service / Calibration / STM32 Driver — **[Hardware Verified]**（PR #3）
+- Safety Supervisor — **[Hardware Verified]**（PR #4）
+- Protocol Dispatcher — **[Hardware Verified]**（PR #5）
+- App/Main orchestration — **[Hardware Verified]**（PR #6）
+
+PR #6 的 STM32CubeIDE Build、ST-LINK Download 和 Full physical regression 均 PASS。验收覆盖 cold boot/reset 后 Servo 不自动 Enable、Heartbeat、Enable/ACK、Neutral、Set Angle 0°/±10°/±45°/±90°、Set PWM 1520 us、Disable/Disable All、重新 Enable、Disconnect、严格超过 500 ms 的 safe disable、Reconnect 不自动 Enable、手动 Enable + ACK 恢复及第二次 Disconnect/Reconnect。
+
+### 当前 Firmware 路径
+
+```text
+USART1 IRQ
+  → HAL callback
+  → uart_transport_stm32
+  → ring_buffer
+  → app_main_process
+  → Protocol V2 decode
+  → protocol_dispatcher
+  → servo_service
+  → servo_driver_stm32
+  → TIM3_CH1 / PA6
+```
+
+### 当前 Safety 路径
+
+```text
+Heartbeat
+  → protocol_dispatcher
+  → safety_supervisor
+  → strict >500 ms timeout
+  → app_main safe-action wiring
+  → servo_service_disable_all()
+  → duplicate cache invalidation
+```
+
+### 当前 `main.c` 责任
+
+- HAL/CubeMX startup
+- peripheral initialization
+- `app_main_init()`
+- `app_main_process()`
+- thin UART callback delegate
+- Error/assert handlers
+
+当前 `main.c` 不再拥有 Protocol wire glue、ACK glue、RX drain、Safety/Servo orchestration 或应用状态；这些职责由 `Core/App/app_main.c` 协调并委托给既有模块。
+
 ## 2026-09-06 Servo1 Set Angle Qt UI + hardware acceptance（已合并 main）
 
 > 本节记录从 `origin/main` 的 `v0.1.0-servo1-bringup` 基线创建、经 PR #1 合并到 `main` 的小型 Console 功能。仅修改 Console UI/helper/tests 与文档；未修改 Firmware、`.ioc`、Protocol V2 帧格式、Servo calibration 或 CMake 结构。
@@ -26,7 +78,7 @@ PWM 输入框目前表示用户的调试输入值；Neutral ACK 后不会把它�
 - `protocol_tests` 通过。
 - `robot_controller_tests` 通过，覆盖 −90/−45/0/+45/+90°→cdeg、完整 Set Angle payload、越界/未 Enable/Servo2 不发送及既有重试/ACK 行为。
 
-## 2026-09-05 第二轮 Protocol V2 / Servo1 clean baseline（历史基线快照）
+## 2026-09-05 第二轮 Protocol V2 / Servo1 clean baseline（历史基线快照 / Historical Reference）
 
 > 本节记录 feature/set-angle-ui 之前的 2026-09-05 baseline；其中“本轮”仅指该 baseline 修复。当前 Set Angle UI 状态以上方 2026-09-06 节为准。该 baseline 未连接串口、未烧录 MCU、未驱动舵机，也未开展 Servo2、Pi/TCP、Camera/FOMO、ROS2、CPG 或 STM32 模块化工作。
 
@@ -206,7 +258,7 @@ Console timeout 为 200 ms，原发送后最多重试 3 次，并复用相同 se
 
 因此，当前源码不能声称“全量构建和测试通过”。本轮按约束只记录问题，未修改实现或测试。
 
-### `main.c` 可维护性与后续拆分
+### `main.c` 可维护性与后续拆分（Historical Reference）
 
 当前 `main.c` 同时承担 HAL/CubeMX 初始化、UART RX 回调、ring buffer、Protocol feed/dispatch、ACK TX、heartbeat、servo state、PWM start/stop/CCR、临时 calibration、500 ms safety watchdog、debug counters、GPIO 和主循环调度，职责已经过多。
 
