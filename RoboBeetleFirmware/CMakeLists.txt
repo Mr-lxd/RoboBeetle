@@ -51,6 +51,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Servo/servo_calibration.c
     Core/Servo/servo_service.c
     Core/Servo/servo_driver_stm32.c
+    Core/Safety/safety_supervisor.c
 )
 
 # Add include paths
@@ -59,6 +60,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Communication
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Servo
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Safety
 )
 
 # Add project symbols (macros)

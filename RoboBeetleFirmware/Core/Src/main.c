@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "rb_protocol_v2.h"
+#include "safety_supervisor.h"
 #include "servo_driver_stm32.h"
 #include "servo_service.h"
 #include "uart_transport_stm32.h"
@@ -73,10 +74,7 @@ static volatile uint32_t heartbeat_count = 0U;
 
 static volatile uint32_t last_host_uptime_ms = 0U;
 
-static volatile uint32_t last_heartbeat_rx_ms = 0U;
-
-static volatile uint8_t host_alive = 0U;
-
+static safety_supervisor_t safety_supervisor;
 static servo_driver_stm32_t servo_driver;
 static servo_service_t servo_service;
 /* USER CODE END PV */
@@ -205,10 +203,9 @@ static void protocol_handle_frame(
             last_host_uptime_ms =
                 read_le32(frame->payload);
 
-            last_heartbeat_rx_ms =
-                HAL_GetTick();
-
-            host_alive = 1U;
+            safety_supervisor_on_heartbeat(
+                &safety_supervisor,
+                HAL_GetTick());
 
             ++heartbeat_count;
 
@@ -232,7 +229,8 @@ static void protocol_handle_frame(
                 break;
             }
 
-            if (host_alive == 0U)
+            if (!safety_supervisor_is_host_alive(
+                    &safety_supervisor))
             {
                 protocol_complete_request(
                     frame,
@@ -292,7 +290,8 @@ static void protocol_handle_frame(
              * [count][servo_id][pulse_low][pulse_high]
              */
 
-            if (host_alive == 0U)
+            if (!safety_supervisor_is_host_alive(
+                    &safety_supervisor))
             {
                 protocol_complete_request(
                     frame,
@@ -351,7 +350,8 @@ static void protocol_handle_frame(
                 break;
             }
 
-            if (host_alive == 0U)
+            if (!safety_supervisor_is_host_alive(
+                    &safety_supervisor))
             {
                 protocol_complete_request(
                     frame,
@@ -375,7 +375,8 @@ static void protocol_handle_frame(
 
         case RBP2_MSG_SET_SERVO_ANGLE:
         {
-            if (host_alive == 0U)
+            if (!safety_supervisor_is_host_alive(
+                    &safety_supervisor))
             {
                 protocol_complete_request(
                     frame,
@@ -572,6 +573,7 @@ int main(void)
   MX_TIM3_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  safety_supervisor_init(&safety_supervisor);
   servo_driver_stm32_init(
       &servo_driver,
       &htim3);
@@ -597,20 +599,17 @@ int main(void)
 	      protocol_feed_byte(byte);
 	  }
 
-	  if (host_alive != 0U)
+	  if (safety_supervisor_process(
+	          &safety_supervisor,
+	          HAL_GetTick()))
 	  {
-	      if ((HAL_GetTick() - last_heartbeat_rx_ms) > 500U)
-	      {
-	          host_alive = 0U;
+	      /*
+	       * Fail-safe:
+	       * 上位机失联，立即停止所有已实现执行器。
+	       */
+	      servo_service_disable_all(&servo_service);
 
-	          /*
-	           * Fail-safe:
-	           * 上位机失联，立即停止所有已实现执行器。
-	           */
-	          servo_service_disable_all(&servo_service);
-
-	          last_request_valid = 0U;
-	      }
+	      last_request_valid = 0U;
 	  }
   }
   /* USER CODE END 3 */
