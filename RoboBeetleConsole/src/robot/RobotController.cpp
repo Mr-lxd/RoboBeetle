@@ -804,6 +804,30 @@ void RobotController::checkTimeouts()
             return;
         }
 
+        if (it->type != MessageType::Heartbeat && !priorityCommandQueue_.isEmpty()) {
+            const PendingRequest request = it.value();
+            bool supersededByDisable = false;
+            if (isServoActuatorCommand(request.type)) {
+                for (const QueuedCommand &priority : priorityCommandQueue_) {
+                    if (priority.type == MessageType::ServoDisable
+                        && (priority.affectedMask & request.servoMask) != 0U) {
+                        supersededByDisable = true;
+                        break;
+                    }
+                }
+            }
+            pending_.erase(it);
+            if (!supersededByDisable) {
+                deferredRetry_ = request;
+            }
+            // A safety-priority Disable must not wait behind an ordinary
+            // retry.  If it affects this request, discard the retry entirely;
+            // otherwise preserve it for after the Disable exchange.
+            pumpApc220Scheduler();
+            updateMonitor();
+            return;
+        }
+
         if (it->type != MessageType::Heartbeat && heartbeatDue_) {
             deferredRetry_ = it.value();
             pending_.erase(it);

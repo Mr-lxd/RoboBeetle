@@ -1294,6 +1294,47 @@ void testApc220HeartbeatTerminalLossFailsClosedAndRequiresFreshEnable()
            "matching ACK for the new Enable should restore logical control");
 }
 
+void testApc220HeartbeatLossClearsDeferredRetry()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 30;
+    config.ackTimeoutMs = 10;
+    config.maxRetries = 1;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "deferred-retry liveness test should enable Servo1 first");
+    acknowledgeLast(transport);
+    expect(controller.setServoPwm(rb::ServoId::Servo1, 1500),
+           "deferred-retry liveness test should start an ordinary exchange");
+    const qsizetype beforeMotion = transport.writes().size() - 1;
+
+    // The ordinary PWM times out once before the heartbeat deadline, then its
+    // next retry is deferred behind a heartbeat.  The terminal heartbeat loss
+    // must clear that deferred retry rather than replaying it after recovery.
+    waitForMs(90);
+    expect(!controller.isServoEnabled(rb::ServoId::Servo1),
+           "terminal heartbeat loss must clear enabled state with a deferred retry present");
+    expect(controller.queuedCommandCount() == 0,
+           "terminal heartbeat loss must clear deferred and queued actuator work");
+    expect(!transport.writes().isEmpty()
+               && lastPacket(transport).type == rb::MessageType::Heartbeat,
+           "deferred-retry liveness loss should leave a fresh heartbeat in flight");
+    acknowledgeLast(transport);
+
+    int pwmWritesAfterStart = 0;
+    for (qsizetype index = beforeMotion; index < transport.writes().size(); ++index) {
+        pwmWritesAfterStart += packetAt(transport, index).type == rb::MessageType::SetServoPwm
+            ? 1
+            : 0;
+    }
+    expect(pwmWritesAfterStart <= 2,
+           "deferred retry must not replay the stale PWM after heartbeat recovery");
+    expect(!controller.setServoPwm(rb::ServoId::Servo1, 1500),
+           "stale PWM must remain blocked until a fresh Enable ACK");
+}
+
 void testApc220DisableAllPrioritizesAndClearsStaleMotionQueue()
 {
     rb::FakeTransport transport;
@@ -1337,6 +1378,38 @@ void testApc220DisableAllPrioritizesAndClearsStaleMotionQueue()
         expect(type != rb::MessageType::SetServoAngle && type != rb::MessageType::Neutral,
                "stale queued Angle/Neutral must not reach the wire after Disable All");
     }
+}
+
+void testApc220DisablePriorityPrecedesOrdinaryRetry()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 20;
+    config.maxRetries = 1;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "Disable retry-priority test should enable Servo1 first");
+    acknowledgeLast(transport);
+    expect(controller.setServoPwm(rb::ServoId::Servo1, 1500),
+           "ordinary PWM should be in flight before Disable retry-priority test");
+    expect(controller.disableAll(),
+           "Disable All should queue behind the uncancellable PWM exchange");
+    waitForMs(35);
+
+    int pwmWrites = 0;
+    for (qsizetype index = 0; index < transport.writes().size(); ++index) {
+        pwmWrites += packetAt(transport, index).type == rb::MessageType::SetServoPwm ? 1 : 0;
+    }
+    expect(pwmWrites == 1,
+           "a safety Disable must not be delayed by an ordinary PWM retry");
+    expect(!transport.writes().isEmpty()
+               && lastPacket(transport).type == rb::MessageType::ServoDisable,
+           "Disable All must dispatch after the timed-out exchange before ordinary retry");
+    acknowledgeLast(transport);
+    expect(!controller.isServoEnabled(rb::ServoId::Servo1),
+           "successful retry-priority Disable should leave Servo1 disabled");
 }
 
 void testApc220ErrorTypeMismatchKeepsPendingDisable()
@@ -1515,7 +1588,9 @@ int main(int argc, char **argv)
     testApc220HeartbeatAckDoesNotMoveHardDeadline();
     testApc220SustainedLoadPreservesHeartbeatSafetyMargin();
     testApc220HeartbeatTerminalLossFailsClosedAndRequiresFreshEnable();
+    testApc220HeartbeatLossClearsDeferredRetry();
     testApc220DisableAllPrioritizesAndClearsStaleMotionQueue();
+    testApc220DisablePriorityPrecedesOrdinaryRetry();
     testApc220ErrorTypeMismatchKeepsPendingDisable();
     testApc220ErrorOnlySignalResetsScheduler();
     testApc220RetryWriteFailureConsumesRetryBudget();
