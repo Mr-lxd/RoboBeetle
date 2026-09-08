@@ -29,6 +29,18 @@ The observed request/ACK round-trip time was approximately 167–173 ms. That is
 
 The Console keeps the original DirectUart 100 ms / 200 ms multi-pending behavior for regression compatibility, while the APC220 profile uses 250 ms heartbeat and 250 ms ACK timeout. APC220 scheduling is stop-and-wait: one ACK-requiring frame is active, heartbeat ticks collapse into one due intent, user commands use a bounded queue, heartbeat due work precedes an ordinary command retry, and retries preserve the original sequence and encoded frame. The latest matching ACK RTT is shown by the protocol monitor so future measurements can replace provisional values with evidence.
 
+## Soft targets are not hard safety deadlines
+
+The APC220 250 ms heartbeat value is a soft target for a high-latency link. The hard deadline is anchored when each heartbeat is dispatched, not when its ACK arrives; an ACK confirms liveness and measures RTT but cannot buy another interval. With the observed 167–173 ms RTT, the nominal budget is 250 + 170 ≈ 420 ms against the Firmware watchdog boundary of greater than 500 ms, leaving an approximately 80 ms nominal safety margin. Sustained-load tests must measure the actual wire gap and preserve that margin; widening the Firmware watchdog would only hide a Console scheduler defect.
+
+## Distributed state must converge fail-closed
+
+The Console and Firmware each keep enabled/liveness state. A terminal APC220 heartbeat timeout can therefore invalidate the Console's prior Enable ACK at the same time that Firmware's watchdog clears its own enabled bit. The Console now clears logical enabled and Disable-pending state, queued actuator commands, and deferred retries at that boundary. Heartbeat recovery only restores transport liveness; it never replays outage-era Enable/PWM/Angle/Neutral work. A new user Enable and matching ACK is required before motion commands are accepted.
+
+## Safety commands need explicit priority
+
+Disable and Disable All are safety actions, not ordinary FIFO work. When a Disable request is accepted, unsent Enable/PWM/Angle/Neutral commands for its affected servo are removed, and the Disable is placed ahead of ordinary retry/queue work after any uncancellable exchange and due heartbeat. This prevents stale motion from executing after the user has requested a stop while preserving the one-flight half-duplex rule.
+
 ## Timing budget and safety boundary
 
 Budget the complete exchange, not just MCU handler time: host serialization, APC220 buffering, half-duplex direction/turnaround, air/link latency, STM32 receive/dispatch/ACK transmission, and host scheduling jitter all contribute. The APC220 profile's 250 ms ACK timeout is a Console link budget; it does not change the Firmware watchdog. The Firmware watchdog remains greater than 500 ms after the last valid heartbeat, and a disconnect/error/reconnect clears Console in-flight work, queued commands, heartbeat intent, and logical enable state. Reconnect requires a fresh heartbeat and an explicit Enable ACK.

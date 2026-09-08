@@ -76,7 +76,10 @@ public:
     [[nodiscard]] bool isServoDisablePending(ServoId id) const;
     [[nodiscard]] RobotControllerConfig config() const { return config_; }
     [[nodiscard]] ProtocolMonitor monitor() const { return monitor_; }
-    [[nodiscard]] qsizetype queuedCommandCount() const { return commandQueue_.size(); }
+    [[nodiscard]] qsizetype queuedCommandCount() const
+    {
+        return commandQueue_.size() + priorityCommandQueue_.size();
+    }
 
 signals:
     void serialPortsChanged(const QStringList &ports);
@@ -117,6 +120,8 @@ private:
     void checkTimeouts();
     void updateMonitor();
     void resetSchedulerState();
+    void clearQueuedCommandsForDisable(quint16 affectedMask);
+    void handleApc220LivenessLoss();
     void setEnabledMask(quint16 mask);
     void setDisablePendingMask(quint16 mask);
     void noteWriteFailure(const QString &context);
@@ -133,6 +138,7 @@ private:
     quint16 enabledMask_{0};
     quint16 disablePendingMask_{0};
     QHash<quint16, PendingRequest> pending_;
+    QQueue<QueuedCommand> priorityCommandQueue_;
     QQueue<QueuedCommand> commandQueue_;
     std::optional<PendingRequest> deferredRetry_;
     bool heartbeatDue_{false};
