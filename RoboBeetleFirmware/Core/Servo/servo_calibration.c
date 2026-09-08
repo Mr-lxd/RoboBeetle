@@ -1,4 +1,5 @@
 #include "servo_calibration.h"
+#include <stddef.h>
 
 uint16_t servo_calibration_angle_to_pulse(
     const servo_calibration_t *calibration,
