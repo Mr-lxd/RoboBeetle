@@ -4,8 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SERVO_SERVICE_SERVO1_ID   0U
-#define SERVO_SERVICE_SERVO1_MASK 0x0001U
+#include "servo_descriptor.h"
 
 typedef enum
 {

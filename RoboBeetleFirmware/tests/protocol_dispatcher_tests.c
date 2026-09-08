@@ -302,7 +302,8 @@ static void test_servo_commands(void)
     fixture_init(&fixture);
     accept_heartbeat(&fixture, 1U, 0U, 0U);
 
-    write_le16(mask_payload, SERVO_SERVICE_SERVO1_MASK);
+    write_le16(mask_payload,
+               servo_descriptor_for_id(SERVO_ID_FRONT_RIGHT)->mask);
     frame = make_frame(
         RBP2_MSG_SERVO_ENABLE,
         2U,
@@ -333,7 +334,7 @@ static void test_servo_commands(void)
     outcome = handle(&fixture, &frame, 0U);
     expect(outcome.result == RBP2_RESULT_OK,
            "valid Set Angle should return OK");
-    expect(fixture.driver.last_pulse_us == 2020U,
+    expect(fixture.driver.last_pulse_us == 1950U,
            "Set Angle should pass cdeg to Servo service");
 
     frame = make_frame(
@@ -344,7 +345,7 @@ static void test_servo_commands(void)
     outcome = handle(&fixture, &frame, 0U);
     expect(outcome.result == RBP2_RESULT_OK,
            "negative Set Angle should return OK");
-    expect(fixture.driver.last_pulse_us == 1020U,
+    expect(fixture.driver.last_pulse_us == 1050U,
            "Set Angle should decode signed little-endian cdeg");
 
     frame = make_frame(
@@ -355,7 +356,7 @@ static void test_servo_commands(void)
     outcome = handle(&fixture, &frame, 0U);
     expect(outcome.result == RBP2_RESULT_OK,
            "valid Neutral should return OK");
-    expect(fixture.driver.last_pulse_us == 1520U,
+    expect(fixture.driver.last_pulse_us == 1500U,
            "Neutral should call Servo service");
 
     frame = make_frame(
@@ -382,7 +383,8 @@ static void test_duplicate_success_is_replayed(void)
 
     fixture_init(&fixture);
     accept_heartbeat(&fixture, 1U, 0U, 0U);
-    write_le16(mask_payload, SERVO_SERVICE_SERVO1_MASK);
+    write_le16(mask_payload,
+               servo_descriptor_for_id(SERVO_ID_FRONT_RIGHT)->mask);
     frame = make_frame(
         RBP2_MSG_SERVO_ENABLE,
         10U,
@@ -409,7 +411,8 @@ static void test_heartbeat_does_not_evict_action_cache(void)
 
     fixture_init(&fixture);
     accept_heartbeat(&fixture, 1U, 0U, 0U);
-    write_le16(mask_payload, SERVO_SERVICE_SERVO1_MASK);
+    write_le16(mask_payload,
+               servo_descriptor_for_id(SERVO_ID_FRONT_RIGHT)->mask);
     enable_frame = make_frame(
         RBP2_MSG_SERVO_ENABLE,
         20U,
@@ -441,7 +444,8 @@ static void test_failed_command_is_not_cached(void)
 
     fixture_init(&fixture);
     accept_heartbeat(&fixture, 1U, 0U, 0U);
-    write_le16(mask_payload, SERVO_SERVICE_SERVO1_MASK);
+    write_le16(mask_payload,
+               servo_descriptor_for_id(SERVO_ID_FRONT_RIGHT)->mask);
     frame = make_frame(
         RBP2_MSG_SERVO_ENABLE,
         2U,
@@ -481,7 +485,8 @@ static void test_same_sequence_different_type_executes(void)
 
     fixture_init(&fixture);
     accept_heartbeat(&fixture, 1U, 0U, 0U);
-    write_le16(mask_payload, SERVO_SERVICE_SERVO1_MASK);
+    write_le16(mask_payload,
+               servo_descriptor_for_id(SERVO_ID_FRONT_RIGHT)->mask);
 
     frame = make_frame(
         RBP2_MSG_SERVO_ENABLE,
@@ -513,7 +518,8 @@ static void test_cache_invalidation_allows_retry(void)
 
     fixture_init(&fixture);
     accept_heartbeat(&fixture, 1U, 0U, 0U);
-    write_le16(mask_payload, SERVO_SERVICE_SERVO1_MASK);
+    write_le16(mask_payload,
+               servo_descriptor_for_id(SERVO_ID_FRONT_RIGHT)->mask);
     frame = make_frame(
         RBP2_MSG_SERVO_ENABLE,
         50U,
@@ -535,7 +541,7 @@ static void test_cache_invalidation_allows_retry(void)
 static void test_result_mappings(void)
 {
     fixture_t fixture;
-    uint8_t unsupported_mask[2] = {0x02U, 0x00U};
+    uint8_t unsupported_mask[2] = {0x20U, 0x00U};
     uint8_t valid_pwm_payload[4] = {1U, 0U, 0xF0U, 0x05U};
     uint8_t out_of_range_angle[4] = {1U, 0U, 0x29U, 0x23U};
     uint8_t valid_mask[2];
@@ -563,7 +569,8 @@ static void test_result_mappings(void)
     expect(outcome.result == RBP2_RESULT_SERVO_NOT_ENABLED,
            "ServoNotEnabled result should map correctly");
 
-    write_le16(valid_mask, SERVO_SERVICE_SERVO1_MASK);
+    write_le16(valid_mask,
+               servo_descriptor_for_id(SERVO_ID_FRONT_RIGHT)->mask);
     frame = make_frame(
         RBP2_MSG_SERVO_ENABLE,
         4U,
