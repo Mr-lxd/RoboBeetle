@@ -13,7 +13,7 @@ int main(int argc, char *argv[])
     rb::SerialTransport transport;
     rb::RobotController controller(
         &transport,
-        rb::RobotControllerConfig::bringUpProvisional(),
+        rb::RobotControllerConfig::apc220Provisional(),
         [] { return rb::SerialTransport::availablePortNames(); });
     rb::MainWindow window(&controller);
     window.show();

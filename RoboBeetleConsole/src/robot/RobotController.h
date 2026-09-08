@@ -6,25 +6,40 @@
 
 #include <QHash>
 #include <QObject>
+#include <QQueue>
 #include <QStringList>
 #include <QTimer>
 
 #include <functional>
+#include <optional>
 
 namespace rb {
+
+enum class LinkProfile {
+    DirectUart,
+    Apc220HalfDuplex,
+};
+
+inline constexpr qsizetype kApc220CommandQueueCapacity = 8;
 
 struct RobotControllerConfig {
     int heartbeatIntervalMs{100};
     int ackTimeoutMs{200};
     int maxRetries{3};
+    // APC220-only hard liveness budget measured from heartbeat dispatch.  The
+    // provisional profile leaves an explicit margin below the Firmware
+    // watchdog; DirectUart ignores this field.
+    int heartbeatSafetyBudgetMs{490};
     quint16 provisionalPwmMinUs{520};
     quint16 provisionalPwmMaxUs{2520};
     quint16 provisionalNeutralUs{1520};
     qint16 provisionalAngleMinCdeg{-9000};
     qint16 provisionalAngleMaxCdeg{9000};
     quint16 supportedServoMask{SupportedServoMaskPhase1};
+    LinkProfile linkProfile{LinkProfile::DirectUart};
 
     static RobotControllerConfig bringUpProvisional();
+    static RobotControllerConfig apc220Provisional();
 };
 
 struct ProtocolMonitor {
@@ -32,6 +47,7 @@ struct ProtocolMonitor {
     quint64 rxPacketCount{0};
     quint64 crcErrorCount{0};
     quint64 timeoutCount{0};
+    qint64 lastAckRttMs{-1};
     QString ackStatus{QStringLiteral("Idle")};
 };
 
@@ -64,6 +80,10 @@ public:
     [[nodiscard]] bool isServoDisablePending(ServoId id) const;
     [[nodiscard]] RobotControllerConfig config() const { return config_; }
     [[nodiscard]] ProtocolMonitor monitor() const { return monitor_; }
+    [[nodiscard]] qsizetype queuedCommandCount() const
+    {
+        return commandQueue_.size() + priorityCommandQueue_.size();
+    }
 
 signals:
     void serialPortsChanged(const QStringList &ports);
@@ -77,6 +97,7 @@ signals:
 
 private:
     struct PendingRequest {
+        quint16 sequence{0};
         QByteArray frame;
         MessageType type;
         quint16 servoMask{0};
@@ -84,14 +105,29 @@ private:
         int retries{0};
     };
 
+    struct QueuedCommand {
+        MessageType type;
+        QByteArray payload;
+        quint16 affectedMask{0};
+    };
+
     bool sendCommand(MessageType type, const QByteArray &payload, quint16 affectedMask = 0,
                      bool expectAck = true);
     void sendHeartbeat();
+    bool dispatchApc220Command(const QueuedCommand &command);
+    bool dispatchApc220Retry(quint16 sequence);
+    void pumpApc220Scheduler();
+    void refreshApc220HeartbeatDue();
+    bool canStartApc220OrdinaryExchange() const;
+    void dispatchApc220Heartbeat();
     void processIncoming(const QByteArray &bytes);
     void handlePacket(const Packet &packet);
     void handleAck(const Packet &packet);
     void checkTimeouts();
     void updateMonitor();
+    void resetSchedulerState();
+    void clearQueuedCommandsForDisable(quint16 affectedMask);
+    void failClosedApc220Actuators();
     void setEnabledMask(quint16 mask);
     void setDisablePendingMask(quint16 mask);
     void noteWriteFailure(const QString &context);
@@ -108,6 +144,14 @@ private:
     quint16 enabledMask_{0};
     quint16 disablePendingMask_{0};
     QHash<quint16, PendingRequest> pending_;
+    QQueue<QueuedCommand> priorityCommandQueue_;
+    QQueue<QueuedCommand> commandQueue_;
+    std::optional<PendingRequest> deferredRetry_;
+    bool heartbeatDue_{false};
+    bool heartbeatReady_{false};
+    bool actuatorFailClosed_{false};
+    qint64 nextHeartbeatDueAtMs_{0};
+    qint64 nextHeartbeatSafetyDeadlineAtMs_{0};
     QTimer heartbeatTimer_;
     QTimer retryTimer_;
     ProtocolMonitor monitor_;

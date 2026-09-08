@@ -1,6 +1,6 @@
 # RoboBeetle Protocol V2 — Phase 1 Baseline
 
-This document describes the Console and Firmware sources repaired and clean-built on 2026-09-06. **[Implemented]** refers to code presence and software verification; the Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]**.
+This document describes the Console and Firmware sources repaired and clean-built on 2026-09-08, plus the Console APC220 scheduler adaptation. **[Implemented]** refers to code presence and software verification; the Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]**. PR #7 scheduler behavior is **[Hardware Verified - Bench]** on the tested desktop setup; its timing parameters remain **[Provisional]**.
 
 Evidence labels used across the project are **[Implemented]** (current source), **[Hardware Verified]** (development-record hardware evidence), **[Provisional]** (bring-up value/incomplete contract), **[Planned]** (future work), and **[Historical Reference]** (old papers/code only). This protocol document relies primarily on Implemented evidence; hardware milestones and historical context are kept in the project READMEs and root handoff.
 
@@ -41,7 +41,7 @@ The trailing `0x00` is a delimiter; it is not part of the COBS body or CRC input
 host_uptime_ms  uint32 LE
 ```
 
-The Console sends the low 32 bits of its wall-clock millisecond value every 100 ms. Firmware stores it only for diagnostics and uses local `HAL_GetTick()` arrival time for liveness.
+The Console sends the low 32 bits of its wall-clock millisecond value on the configured heartbeat cadence. The DirectUart baseline uses a 100 ms heartbeat and keeps its original multi-pending behavior. The APC220 scheduler is **[Hardware Verified - Bench]** on the tested desktop setup, while its timing values remain **[Provisional]**: 250 ms is a soft target, and an independent 490 ms **Console host-side/local safety admission budget** is anchored to each heartbeat dispatch/send time. That local scheduler budget intentionally reserves 10 ms below the Firmware's strict greater-than-500 ms watchdog boundary; it is not a Windows-plus-RF hard-real-time guarantee. Before starting ordinary work, the scheduler accounts for the configured ACK timeout plus one retry-timer polling interval; if that worst-case exchange would cross the local budget, it dispatches a heartbeat first. A matching ACK confirms liveness and records RTT, but never moves either deadline forward. Once a deadline is due, no new ordinary user command starts; an already in-flight exchange may finish, then the heartbeat is dispatched before retry or queued work. APC220 sends one fresh heartbeat immediately after `Connected`; user Servo commands may queue but cannot reach the wire until that heartbeat receives a matching successful ACK. Firmware stores the host value only for diagnostics and uses local `HAL_GetTick()` arrival time for liveness.
 
 ### ACK — `0x02`
 
@@ -73,7 +73,7 @@ request_type      uint8
 error_code        uint16 LE
 ```
 
-The Console can parse payloads of at least five bytes, removes the matching pending request, and displays the numeric code. Firmware declares `0x03` but does not emit or handle Error frames; it reports command failures as nonzero ACK results and silently counts framing failures.
+The Console can parse payloads of at least five bytes, validates both the request sequence and `request_type`, removes only a matching pending request, and displays the numeric code. A type-mismatched Error leaves the pending request and any Disable-pending state untouched. Firmware declares `0x03` but does not emit or handle Error frames; it reports command failures as nonzero ACK results and silently counts framing failures.
 
 ### Servo Enable / Servo Disable / Neutral — `0x10`, `0x11`, `0x14`
 
@@ -126,7 +126,7 @@ The type and schema are implemented on both sides:
 
 | Message | ID | Console encode / behavior | Firmware decode / behavior | Payload | ACK | Current status / notes |
 |---|---:|---|---|---|---|---|
-| Heartbeat | `0x01` | Sends uint32 LE every 100 ms; expects ACK | Requires length 4; records host value and local arrival; sets `host_alive` | `uint32` | Result 0/1 | **Consistent and [Implemented]** |
+| Heartbeat | `0x01` | DirectUart sends uint32 LE every 100 ms with multi-pending behavior; APC220 is **[Provisional]**, sends one immediately after connect, then targets 250 ms when the stop-and-wait slot is free; user commands are gated until a matching successful ACK | Requires length 4; records host value and local arrival; sets `host_alive` | `uint32` | Result 0/1 | **Consistent and [Implemented]**; APC220 cadence is a provisional link budget |
 | ACK | `0x02` | Does not originate; requires exactly 4 payload bytes and matches request sequence/type | Encodes four-byte payload; TX sequence starts at 0 | `uint16,uint8,uint8` | N/A | **Consistent in active direction** |
 | Error | `0x03` | Parses length ≥5; uses request sequence and code | Enum only; no producer/handler | `uint16,uint8,uint16` | N/A | **Incomplete Firmware side** |
 | Servo Enable | `0x10` | Sends Servo1 mask; marks it enabled after matching result 0 | Requires heartbeat/length 2/valid mask; starts Servo1 at 1520 μs | `uint16 mask` | Yes | **Consistent; unsupported bits fail atomically** |
@@ -139,13 +139,17 @@ The type and schema are implemented on both sides:
 
 - Console request sequences start at 1 and increment as `uint16`; wraparound is implicit.
 - Firmware ACK frame sequences start at 0 and increment independently.
-- Console keeps every ACK-requiring request in a sequence-keyed table, including heartbeats.
-- ACK timeout is 200 ms. The original frame is retransmitted unchanged up to three times; the same sequence is retained.
+- DirectUart keeps every ACK-requiring request in a sequence-keyed table, including heartbeats; this preserves the original multi-pending behavior.
+- Apc220HalfDuplex permits one ACK-requiring request in flight. User servo commands wait in a bounded queue of `kApc220CommandQueueCapacity` entries, and heartbeat ticks collapse into one pending/due bit rather than a queue.
+- APC220 Servo Disable/Disable All requests use a safety-priority queue. A new Disable clears unsent Servo Enable, Set Servo PWM, Set Servo Angle, and Neutral work for the affected mask (and any deferred retry), then runs after the uncancellable in-flight exchange and any due heartbeat but before ordinary retry/queue work.
+- ACK timeout is 200 ms for DirectUart and 250 ms for Apc220HalfDuplex. Retries reuse the original encoded frame and sequence, up to three retransmissions after the original send when the transport accepts the write; DirectUart retains its legacy handling of failed retry writes for regression compatibility.
+- When an APC220 heartbeat is due, or when the remaining safety budget cannot contain an ordinary exchange, the heartbeat is dispatched first. The command retry remains deferred with its original sequence/frame and is sent after the heartbeat exchange.
 - Firmware caches the most recent successful non-Heartbeat request using `Sequence + MessageType`. An immediate retry of that request replays the cached result-0 ACK and returns before dispatch, so Servo Enable/PWM/Angle/Neutral/Disable are not executed twice.
-- Valid Heartbeats always refresh `last_heartbeat_rx_ms` and host liveness, and do not evict the action cache. This matters because the 100 ms heartbeat interval is shorter than the 200 ms ACK timeout.
+- Valid Heartbeats always refresh `last_heartbeat_rx_ms` and host liveness, and do not evict the action cache. In DirectUart this matters because the 100 ms heartbeat interval is shorter than the 200 ms ACK timeout; APC220 stop-and-wait scheduling avoids overlapping those exchanges.
 - Heartbeat watchdog timeout clears host liveness, the enabled mask, PWM output, and the duplicate cache. A later connection cannot replay a stale successful action to bypass explicit re-enable.
+- On the first APC220 heartbeat ACK timeout, the Console converges actuator state fail-closed with the Firmware watchdog's impending state: it clears logical enabled/Disable-pending state, drops queued and deferred actuator work, and keeps heartbeat retry bookkeeping independent. Recovery Heartbeats restore link liveness only; they never replay outage-era Enable, PWM, Angle, or Neutral requests. A new user Servo Enable with a matching ACK is required after recovery. A later terminal timeout remains observable as a transport timeout but is not required for local actuator fail-close.
 - This is intentionally a one-entry Phase 1 cache, not a sequence window. A different successful non-Heartbeat request replaces it. With only the last entry retained, 16-bit wrap does not collide with an ancient request after intervening successful commands.
-- Console removes a pending request on a matching ACK even if type/result are invalid; a type mismatch or rejection is displayed and not retried.
+- Console removes a pending request on a matching ACK even if the result is invalid; an ACK type mismatch or rejection is displayed and not retried. A mismatched Error is not allowed to release a request. In APC220 mode a released non-Heartbeat request opens the single in-flight slot, while a heartbeat type mismatch/rejection keeps liveness false and schedules the next heartbeat without dispatching queued user commands.
 - Firmware does not acknowledge frames that fail COBS, size, Magic, Version, or CRC validation because a trustworthy request identity is unavailable.
 
 Duplicate handling is the most important protocol-level safety gap before adding a lossy two-hop Laptop ↔ Pi ↔ STM32 path.
@@ -170,12 +174,22 @@ Duplicate handling is the most important protocol-level safety gap before adding
 
 ## Timing and safety coupling
 
-- Console heartbeat period: 100 ms.
-- Console ACK timeout: 200 ms; three retries after the original transmission.
+- Console link profiles: DirectUart = 100 ms heartbeat / 200 ms ACK timeout with multiple pending requests; Apc220HalfDuplex scheduler behavior is **[Hardware Verified - Bench]** at a 250 ms soft heartbeat target / 250 ms ACK timeout with one ACK-requiring request in flight. The timing values remain **[Provisional]**. APC also has a 490 ms **Console host-side/local safety admission budget**, measured from each heartbeat dispatch (not from its ACK), with a 10 ms margin below the Firmware watchdog boundary. This is a local admission policy, not a Windows-plus-RF hard-real-time guarantee; RF jitter and host scheduling still require hardware regression.
+- The APC220 scheduler's bounded user-command queue is `kApc220CommandQueueCapacity` entries. A full queue rejects new user commands locally; a matching ACK, Error, timeout, or reset releases/clears the associated state.
+- APC220 emits a first heartbeat immediately after `Connected`. Until its matching successful ACK, Servo Enable/PWM/Angle/Neutral/Disable requests remain queued. Heartbeat ACK rejection, type mismatch, timeout, or matching Error keeps liveness false and marks the next heartbeat due; it never turns a queued command into a `HostNotAlive` wire request. After a heartbeat timeout fail-closes the actuator state, a new Servo Enable is rejected locally while liveness is recovering and is never queued; heartbeat recovery restores link liveness only, so a fresh user Enable and matching ACK are required. Timer ticks while a heartbeat is in flight are ignored/coalesced, and the next available slot is used for the deferred retry or queued command after the heartbeat exchange. A deadline that becomes due while a command is in flight remains due after that command's ACK, so a second ordinary command cannot slip ahead of the heartbeat.
 - Firmware host watchdog: greater than 500 ms since the last valid Heartbeat.
 - Watchdog timeout clears `host_alive`, stops Servo1 PWM if enabled, and clears the enabled mask.
-- After timeout/reconnect, a new valid Heartbeat and a new Servo Enable are required before PWM/Angle commands can succeed.
+- The measured APC220 RTT of approximately 167–173 ms is an input to test scenarios, not a formal guarantee: 250 + 170 = 420 ms is only an illustrative nominal observation. The local admission boundary is the 490 ms dispatch-anchored **Console host-side/local safety admission budget**; ordinary work is admitted only when its configured worst-case timeout plus retry polling still fits, leaving 10 ms below the 500 ms watchdog boundary. This policy is not a Windows-plus-RF hard-real-time guarantee, and actual radio/host jitter still requires hardware validation.
+- On the first missed APC220 Heartbeat ACK, the Console clears its logical enabled state and stale actuator queue before Firmware can diverge at its watchdog boundary. Heartbeat retries may continue, but recovery does not replay old actions; after recovery a new valid Heartbeat and a new Servo Enable ACK are required before PWM/Angle commands can succeed.
 - PWM is not started at boot. TIM3 CCR is initialized to 1520, but the waveform starts only on accepted Servo Enable.
+
+The APC220 250 ms/250 ms values are a **[Provisional]** link adaptation target, not a Firmware watchdog change. The Console uses a stop-and-wait exchange to avoid overlapping frames on the half-duplex/high-latency path; heartbeat intent is coalesced while a command or retry is active and the actual wire cadence depends on ACK turnaround. Every matching ACK records the latest measured round-trip time in `ProtocolMonitor::lastAckRttMs` and the Qt monitor.
+
+## PR #7 APC220 bench hardware verification
+
+The APC220 Half-Duplex Scheduler is **[Hardware Verified - Bench]** for the user-tested desktop setup. The regression covered the 440 MHz two-module link, the complete Qt → APC220 → STM32 → ACK → APC220 → Qt path, 60 s idle Heartbeat, Servo1 Enable/ACK, Neutral, 0°/±10°/±45°/±90°, rapid queued Set Angle traffic, Disable/Disable All priority, robot-side disconnect, Heartbeat retry/watchdog safe-disable, and recovery without automatic re-arm. CRC errors were 0 during the normal run, and normal desktop ACK RTT was approximately 160–170 ms (approximately 160–173 ms across recorded observations). Deliberately injected Retry/Timeout events are expected fault-injection behavior and are not normal-link timeout statistics.
+
+The 250 ms Heartbeat target, 250 ms ACK timeout, and 490 ms Console host-side/local safety admission budget remain **[Provisional]** pending lab/poolside distance, antenna-orientation, and outdoor RF characterization. The 490 ms value is a host-side/local admission policy, not a Windows-plus-RF hard-real-time guarantee.
 
 ## Golden vectors
 

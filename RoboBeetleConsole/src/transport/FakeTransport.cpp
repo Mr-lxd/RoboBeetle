@@ -1,5 +1,7 @@
 #include "transport/FakeTransport.h"
 
+#include <utility>
+
 namespace rb {
 
 FakeTransport::FakeTransport(QObject *parent) : ITransport(parent) {}
@@ -20,10 +22,15 @@ void FakeTransport::close()
 bool FakeTransport::write(const QByteArray &bytes)
 {
     if (!writeSucceeds_) {
-        emit errorOccurred(QStringLiteral("Fake transport write failure"));
+        if (writeErrorSignals_) {
+            emit errorOccurred(QStringLiteral("Fake transport write failure"));
+        }
         return false;
     }
     writes_.append(bytes);
+    if (writeCallback_) {
+        writeCallback_(bytes);
+    }
     return true;
 }
 
@@ -46,6 +53,16 @@ void FakeTransport::injectBytes(const QByteArray &bytes)
 void FakeTransport::setWriteSucceeds(bool succeeds)
 {
     writeSucceeds_ = succeeds;
+}
+
+void FakeTransport::setWriteErrorSignals(bool emitsError)
+{
+    writeErrorSignals_ = emitsError;
+}
+
+void FakeTransport::setWriteCallback(std::function<void(const QByteArray &)> callback)
+{
+    writeCallback_ = std::move(callback);
 }
 
 } // namespace rb
