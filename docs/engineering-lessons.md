@@ -12,6 +12,10 @@ If OpenOCD reports a target-side Flash algorithm failure, treat that as a progra
 
 Host-side pure-C tests and syntax checks can pass while the STM32CubeIDE `arm-none-eabi-gcc` build fails. Transitive includes differ between toolchains and can hide a missing direct standard-header dependency; each translation unit must include the standard header that defines the symbols it uses. The STM32CubeIDE target build captured the missing `<stddef.h>` dependency for `NULL` in `servo_calibration.c`, which host checks had not exposed.
 
+## Do not use HAL enum values as invalid sentinels
+
+Third-party HAL enum/raw constant values are part of the valid domain and must not double as invalid markers. STM32 HAL defines `TIM_CHANNEL_1` as `0x00000000U`; channel validity is therefore represented independently by the STM32 driver mapping result (`channel_valid`), and every write/start/stop operation checks that explicit validity. The FrontRight and RearRight CH1 bindings must remain valid even though their HAL channel value is zero; an unmapped symbolic channel must fail closed.
+
 ## Treat APC220 power and logic levels as an explicit interface
 
 An APC220 installation must document its supply rail, UART I/O voltage, common ground, and direction-control assumptions. A module advertised or wired around 5 V power is not automatically proof that its UART pins are 5 V tolerant. Measure the actual rails and idle/high levels, use level translation where the selected module requires it, and keep the MCU's 3.3 V GPIO limits authoritative. Do not use a servo-power rail as an implicit logic reference.

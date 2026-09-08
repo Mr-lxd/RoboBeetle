@@ -4,11 +4,14 @@
 #include "servo_service.h"
 #include "stm32f4xx_hal.h"
 
+#include <stdbool.h>
+
 typedef struct
 {
     const servo_descriptor_t *descriptor;
     TIM_HandleTypeDef *timer;
     uint32_t hal_channel;
+    bool channel_valid;
 } servo_driver_stm32_binding_t;
 
 typedef struct

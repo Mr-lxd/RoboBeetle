@@ -203,7 +203,7 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Servo, and Safety modules and their include directories. The seven pure-C checks `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_descriptor_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, and `tests/protocol_dispatcher_tests.c` are compiled manually with `-Wall -Wextra -Werror`; there is still no integrated host-side wire-parser/HAL test target.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Servo, and Safety modules and their include directories. The seven pure-C checks `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_descriptor_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, and `tests/protocol_dispatcher_tests.c` are compiled manually with `-Wall -Wextra -Werror`. The HAL-adapter mapping regression in `tests/servo_driver_stm32_tests.c` uses host stubs for PWM start/stop and explicitly verifies that HAL `TIM_CHANNEL_1 == 0` remains valid; it complements, but does not replace, the real ARM target build.
 
 ## App/Main maintainability audit
 
