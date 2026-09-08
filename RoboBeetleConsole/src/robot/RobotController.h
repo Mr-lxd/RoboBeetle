@@ -108,7 +108,7 @@ private:
                      bool expectAck = true);
     void sendHeartbeat();
     bool dispatchApc220Command(const QueuedCommand &command);
-    bool dispatchApc220Retry(PendingRequest &request);
+    bool dispatchApc220Retry(quint16 sequence);
     void pumpApc220Scheduler();
     void processIncoming(const QByteArray &bytes);
     void handlePacket(const Packet &packet);
@@ -135,6 +135,7 @@ private:
     QQueue<QueuedCommand> commandQueue_;
     std::optional<PendingRequest> deferredRetry_;
     bool heartbeatDue_{false};
+    bool heartbeatReady_{false};
     QTimer heartbeatTimer_;
     QTimer retryTimer_;
     ProtocolMonitor monitor_;

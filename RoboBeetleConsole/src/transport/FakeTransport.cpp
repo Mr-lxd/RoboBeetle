@@ -20,7 +20,9 @@ void FakeTransport::close()
 bool FakeTransport::write(const QByteArray &bytes)
 {
     if (!writeSucceeds_) {
-        emit errorOccurred(QStringLiteral("Fake transport write failure"));
+        if (writeErrorSignals_) {
+            emit errorOccurred(QStringLiteral("Fake transport write failure"));
+        }
         return false;
     }
     writes_.append(bytes);
@@ -46,6 +48,11 @@ void FakeTransport::injectBytes(const QByteArray &bytes)
 void FakeTransport::setWriteSucceeds(bool succeeds)
 {
     writeSucceeds_ = succeeds;
+}
+
+void FakeTransport::setWriteErrorSignals(bool emitsError)
+{
+    writeErrorSignals_ = emitsError;
 }
 
 } // namespace rb
