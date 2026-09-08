@@ -12,7 +12,8 @@ typedef struct
     int16_t max_angle_cdeg;
 } servo_calibration_t;
 
-const servo_calibration_t *servo_calibration_servo1(void);
-uint16_t servo_calibration_angle_to_pulse(int16_t angle_cdeg);
+uint16_t servo_calibration_angle_to_pulse(
+    const servo_calibration_t *calibration,
+    int16_t angle_cdeg);
 
 #endif /* SERVO_CALIBRATION_H */
