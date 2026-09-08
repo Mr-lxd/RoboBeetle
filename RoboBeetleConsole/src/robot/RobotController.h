@@ -110,6 +110,7 @@ private:
     bool dispatchApc220Command(const QueuedCommand &command);
     bool dispatchApc220Retry(quint16 sequence);
     void pumpApc220Scheduler();
+    void refreshApc220HeartbeatDue();
     void processIncoming(const QByteArray &bytes);
     void handlePacket(const Packet &packet);
     void handleAck(const Packet &packet);

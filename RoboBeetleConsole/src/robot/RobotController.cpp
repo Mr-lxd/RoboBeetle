@@ -179,10 +179,19 @@ bool RobotController::disableServo(ServoId id)
                             .arg(static_cast<quint8>(id)));
         return false;
     }
+    const bool markPendingBeforeSend = config_.linkProfile == LinkProfile::Apc220HalfDuplex;
+    if (markPendingBeforeSend) {
+        setDisablePendingMask(static_cast<quint16>(disablePendingMask_ | mask));
+    }
     if (!sendCommand(MessageType::ServoDisable, maskPayload(mask), mask)) {
+        if (markPendingBeforeSend) {
+            setDisablePendingMask(static_cast<quint16>(disablePendingMask_ & ~mask));
+        }
         return false;
     }
-    setDisablePendingMask(static_cast<quint16>(disablePendingMask_ | mask));
+    if (!markPendingBeforeSend) {
+        setDisablePendingMask(static_cast<quint16>(disablePendingMask_ | mask));
+    }
     return true;
 }
 
@@ -193,10 +202,19 @@ bool RobotController::disableAll()
         emit logMessage(QStringLiteral("Disable All already awaiting ACK"));
         return false;
     }
+    const bool markPendingBeforeSend = config_.linkProfile == LinkProfile::Apc220HalfDuplex;
+    if (markPendingBeforeSend) {
+        setDisablePendingMask(static_cast<quint16>(disablePendingMask_ | mask));
+    }
     if (!sendCommand(MessageType::ServoDisable, maskPayload(mask), mask)) {
+        if (markPendingBeforeSend) {
+            setDisablePendingMask(static_cast<quint16>(disablePendingMask_ & ~mask));
+        }
         return false;
     }
-    setDisablePendingMask(static_cast<quint16>(disablePendingMask_ | mask));
+    if (!markPendingBeforeSend) {
+        setDisablePendingMask(static_cast<quint16>(disablePendingMask_ | mask));
+    }
     return true;
 }
 
@@ -291,6 +309,7 @@ bool RobotController::sendCommand(MessageType type,
     }
 
     if (config_.linkProfile == LinkProfile::Apc220HalfDuplex && expectAck) {
+        refreshApc220HeartbeatDue();
         const QueuedCommand command{type, payload, affectedMask};
         if (!heartbeatReady_ || !pending_.isEmpty() || heartbeatDue_ || deferredRetry_.has_value()
             || !commandQueue_.isEmpty()) {
@@ -409,7 +428,11 @@ bool RobotController::dispatchApc220Retry(quint16 sequence)
 
 void RobotController::pumpApc220Scheduler()
 {
-    if (config_.linkProfile != LinkProfile::Apc220HalfDuplex || !isConnected()
+    if (config_.linkProfile != LinkProfile::Apc220HalfDuplex) {
+        return;
+    }
+    refreshApc220HeartbeatDue();
+    if (!isConnected()
         || !pending_.isEmpty()) {
         return;
     }
@@ -501,6 +524,14 @@ void RobotController::sendHeartbeat()
     payload.append(static_cast<char>((uptime >> 16U) & 0xffU));
     payload.append(static_cast<char>((uptime >> 24U) & 0xffU));
     sendCommand(MessageType::Heartbeat, payload);
+}
+
+void RobotController::refreshApc220HeartbeatDue()
+{
+    if (config_.linkProfile == LinkProfile::Apc220HalfDuplex
+        && nextHeartbeatDueAtMs_ > 0 && nowMs() >= nextHeartbeatDueAtMs_) {
+        heartbeatDue_ = true;
+    }
 }
 
 void RobotController::processIncoming(const QByteArray &bytes)

@@ -8,7 +8,9 @@
 #include <QTimer>
 
 #include <cstdlib>
+#include <chrono>
 #include <iostream>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -84,6 +86,44 @@ void acknowledge(rb::FakeTransport &transport,
     payload.append(static_cast<char>(acknowledgedType));
     payload.append(static_cast<char>(result));
     transport.injectBytes(rb::PacketCodec::encodeWire({rb::MessageType::Ack, 0x8000, payload}));
+}
+
+void installSynchronousAcks(rb::FakeTransport &transport,
+                            rb::AckResult disableResult,
+                            bool mismatchDisableType)
+{
+    transport.setWriteCallback([&transport, disableResult, mismatchDisableType](
+                                    const QByteArray &wire) {
+        const rb::DecodeResult decoded = rb::PacketCodec::decodeWire(
+            wire.first(wire.size() - 1));
+        if (!decoded.ok()) {
+            return;
+        }
+        const rb::MessageType requestType = decoded.packet.type;
+        const bool expectsAck = requestType == rb::MessageType::ServoDisable
+            || requestType == rb::MessageType::Heartbeat
+            || requestType == rb::MessageType::ServoEnable
+            || requestType == rb::MessageType::SetServoPwm
+            || requestType == rb::MessageType::SetServoAngle
+            || requestType == rb::MessageType::Neutral;
+        if (!expectsAck) {
+            return;
+        }
+        const rb::MessageType acknowledgedType = requestType == rb::MessageType::ServoDisable
+            && mismatchDisableType
+            ? rb::MessageType::ServoEnable
+            : requestType;
+        const rb::AckResult result = requestType == rb::MessageType::ServoDisable
+            ? disableResult
+            : rb::AckResult::Ok;
+        QByteArray payload;
+        payload.append(static_cast<char>(decoded.packet.sequence & 0xffU));
+        payload.append(static_cast<char>((decoded.packet.sequence >> 8U) & 0xffU));
+        payload.append(static_cast<char>(acknowledgedType));
+        payload.append(static_cast<char>(result));
+        transport.injectBytes(rb::PacketCodec::encodeWire(
+            {rb::MessageType::Ack, 0x8000, payload}));
+    });
 }
 
 void connectAndEnableServo1(rb::FakeTransport &transport, rb::RobotController &controller)
@@ -718,6 +758,35 @@ void testApc220HeartbeatDeadlineWinsRetryBoundary()
     }
 }
 
+void testApc220HeartbeatDeadlineRefreshesBeforeAckReleasesSlot()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 5;
+    config.ackTimeoutMs = 1000;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "APC220 command should be sent before the ACK deadline refresh test");
+    const rb::Packet enable = lastPacket(transport);
+    expect(controller.disableAll(),
+           "APC220 command should queue behind Enable for the ACK deadline refresh test");
+    const qsizetype beforeAck = transport.writes().size();
+
+    // Block the test thread so the heartbeat QTimer cannot run, while the
+    // monotonic deadline advances beyond its target.
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    acknowledge(transport, enable, rb::AckResult::Ok, rb::MessageType::ServoEnable);
+
+    expect(transport.writes().size() == beforeAck + 1,
+           "an ACK at an elapsed heartbeat deadline should release one scheduler action");
+    if (transport.writes().size() > beforeAck) {
+        expect(lastPacket(transport).type == rb::MessageType::Heartbeat,
+               "an elapsed heartbeat deadline must win before a queued command on ACK release");
+    }
+}
+
 void testApc220CommandQueueHasBoundedCapacity()
 {
     rb::FakeTransport transport;
@@ -815,29 +884,7 @@ void testApc220SynchronousAckDuringInitialDispatchIsHandled()
     rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
     config.heartbeatIntervalMs = 10000;
     rb::RobotController controller(&transport, config);
-    transport.setWriteCallback([&transport](const QByteArray &wire) {
-        const rb::DecodeResult decoded = rb::PacketCodec::decodeWire(
-            wire.first(wire.size() - 1));
-        if (!decoded.ok()) {
-            return;
-        }
-        const bool expectsAck = decoded.packet.type == rb::MessageType::ServoDisable
-            || decoded.packet.type == rb::MessageType::Heartbeat
-            || decoded.packet.type == rb::MessageType::ServoEnable
-            || decoded.packet.type == rb::MessageType::SetServoPwm
-            || decoded.packet.type == rb::MessageType::SetServoAngle
-            || decoded.packet.type == rb::MessageType::Neutral;
-        if (!expectsAck) {
-            return;
-        }
-        QByteArray payload;
-        payload.append(static_cast<char>(decoded.packet.sequence & 0xffU));
-        payload.append(static_cast<char>((decoded.packet.sequence >> 8U) & 0xffU));
-        payload.append(static_cast<char>(decoded.packet.type));
-        payload.append(static_cast<char>(rb::AckResult::Ok));
-        transport.injectBytes(rb::PacketCodec::encodeWire(
-            {rb::MessageType::Ack, 0x8000, payload}));
-    });
+    installSynchronousAcks(transport, rb::AckResult::Ok, false);
 
     controller.connectTransport({"COM_TEST", 9600});
     transport.simulateConnected();
@@ -852,6 +899,49 @@ void testApc220SynchronousAckDuringInitialDispatchIsHandled()
            "synchronous Enable ACK must not leave the command queued");
     expect(controller.isServoEnabled(rb::ServoId::Servo1),
            "synchronous Enable ACK should update the enabled state");
+}
+
+void runApc220SynchronousDisableCase(rb::AckResult result,
+                                     bool mismatchType,
+                                     bool expectedEnabled,
+                                     const char *description)
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    installSynchronousAcks(transport, result, mismatchType);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "synchronous Disable case should enable Servo1 first");
+    expect(controller.isServoEnabled(rb::ServoId::Servo1),
+           "synchronous Enable ACK should establish the precondition for Disable");
+
+    expect(controller.disableServo(rb::ServoId::Servo1), description);
+    expect(!controller.isServoDisablePending(rb::ServoId::Servo1),
+           "synchronous Disable ACK, rejection, or mismatch must not leave pending state set");
+    expect(controller.isServoEnabled(rb::ServoId::Servo1) == expectedEnabled,
+           "synchronous Disable result must preserve the expected logical enabled state");
+}
+
+void testApc220SynchronousDisableAckCasesDoNotRelockPending()
+{
+    runApc220SynchronousDisableCase(
+        rb::AckResult::Ok,
+        false,
+        false,
+        "synchronous successful Disable ACK should be accepted");
+    runApc220SynchronousDisableCase(
+        rb::AckResult::HostNotAlive,
+        false,
+        true,
+        "synchronous rejected Disable ACK should be accepted as a completed response");
+    runApc220SynchronousDisableCase(
+        rb::AckResult::Ok,
+        true,
+        true,
+        "synchronous Disable ACK type mismatch should be handled without relocking");
 }
 
 void testApc220ConnectGatesCommandsUntilHeartbeatAck()
@@ -1165,11 +1255,13 @@ int main(int argc, char **argv)
     testApc220HeartbeatTicksCoalesceWhileCommandIsInFlight();
     testApc220HeartbeatDuePrecedesCommandRetry();
     testApc220HeartbeatDeadlineWinsRetryBoundary();
+    testApc220HeartbeatDeadlineRefreshesBeforeAckReleasesSlot();
     testApc220CommandQueueHasBoundedCapacity();
     testApc220RetryUsesOriginalSequenceAndFrame();
     testApc220TransportResetClearsSchedulerAndDoesNotAutoEnable();
     testApc220RecordsMatchingAckRtt();
     testApc220SynchronousAckDuringInitialDispatchIsHandled();
+    testApc220SynchronousDisableAckCasesDoNotRelockPending();
     testApc220ConnectGatesCommandsUntilHeartbeatAck();
     testApc220HeartbeatRejectionKeepsUserCommandsGated();
     testApc220HeartbeatTimeoutKeepsUserCommandsGated();
