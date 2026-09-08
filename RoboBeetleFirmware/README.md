@@ -1,6 +1,6 @@
 # RoboBeetleFirmware
 
-RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for Laptop/Qt ↔ USART1 ↔ STM32 Protocol V2 bring-up and Servo1 PWM/angle control. This README records the repaired and clean-built baseline verified on 2026-09-05.
+RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for Laptop/Qt ↔ USART1 ↔ STM32 Protocol V2 bring-up and the five-servo semantic descriptor path. This README records the merged hardware-verified modularization baseline and the PR #8 five-servo implementation; the new five-servo layout remains pending target hardware regression.
 
 ## Status labels
 
@@ -10,6 +10,28 @@ RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for Laptop/Qt �
 - **[Provisional]** Bring-up values or incomplete calibration.
 - **[Planned]** Recommended future work, not current behavior.
 - **[Historical Reference]** Old F407ZE, STM32, Simulink, CPG, paper, slide, or resource-tree material that is not the current firmware.
+
+## Current PR #8 five-servo bring-up
+
+The current implementation freezes five semantic IDs and the supported mask at `0x001F` (bits 0–4). Firmware and Qt maintain independent descriptor tables; host tests and pure-C tests assert the same IDs, masks, capabilities, and calibration envelopes so descriptor drift is detected without crossing the C/C++ boundary.
+
+| ID / mask | Semantic actuator | Hardware / timer channel | Capability and command envelope |
+|---:|---|---|---|
+| `0` / `0x0001` | `FrontRight` / 前足右 | SAVOX SW-0250MG+, TIM3_CH1 / PA6 | PWM 1050–1950 μs; angle −45…+45°; electrical 1000/1500/2000 μs |
+| `1` / `0x0002` | `FrontLeft` / 前足左 | SAVOX SW-0250MG+, TIM3_CH2 / PA7 | PWM 1050–1950 μs; angle −45…+45°; electrical 1000/1500/2000 μs |
+| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D, TIM3_CH3 / PB0 | PWM-only 1450–1550 μs; angle disabled; 1500 μs is a provisional startup/center candidate |
+| `3` / `0x0008` | `RearRight` / 后足右 | GDW IPX896HV, TIM4_CH1 / PD12 | PWM 1020–2020 μs; angle −45…+45°; electrical 520/1520/2520 μs |
+| `4` / `0x0010` | `RearLeft` / 后足左 | GDW IPX896HV, TIM4_CH2 / PD13 | PWM 1020–2020 μs; angle −45…+45°; electrical 520/1520/2520 μs |
+
+TIM3 and TIM4 run at approximately 333 Hz with a 1 μs tick (PSC=15, ARR=3002). `servo_descriptor` is pure C and HAL-independent: it stores abstract timer/channel selectors, never `TIM_CHANNEL_x` constants. `servo_driver_stm32` is the only layer that maps those selectors to `TIM_HandleTypeDef *` and HAL channel values.
+
+`FrontAxis` calibration is **[Calibration Pending]**. Its 1450–1550 μs clamp is a bring-up safety envelope, not a calibrated neutral and not a Hardware Verified claim. The first target check must be performed with the mechanism unloaded and horn/linkage detached: `1500 → 1450 → 1500 → 1550 → 1500`. Set Angle is intentionally rejected for this actuator.
+
+Enable accepts a multi-bit mask only with all-or-nothing semantics: if any requested channel fails to start, already-started channels from that call are stopped and the pre-call enabled mask is restored. Disable and Disable All retain fail-closed/best-effort stop behavior.
+
+This is a hardware-layout compatibility break. Historical v0.4 `Servo1`/PA6 bring-up referred to `RearLeft`; PR #8 formally assigns PA6/ID 0 to `FrontRight` and assigns `RearLeft` to PD13/TIM4_CH2. Do not mix a pre-PR8 Console/Firmware binary with the PR8 five-servo wiring. The Qt `Servo1` name is only a deprecated source-compatibility alias for `FrontRight`; new firmware code uses semantic names.
+
+PR #8 software descriptor, service, and dispatch regressions are the implementation gate. Five-servo target build/download and physical motion verification are still **[Pending Hardware Verification]**; the earlier Servo1-only hardware milestones remain historical evidence for the old layout.
 
 ## Active target and CubeMX configuration
 
@@ -23,8 +45,10 @@ The active configuration file is `RoboBeetleFirmware/RoboBeetleFirmware.ioc`. A 
 | System clock | HSI 16 MHz, PLL off; SYSCLK/HCLK/PCLK1/PCLK2 all 16 MHz |
 | USART1 | PA9 TX, PA10 RX; 9600 baud, 8 data bits, no parity, 1 stop bit, no flow control, oversampling 16 |
 | USART1 NVIC | Enabled; preemption/subpriority 0/0 |
-| TIM3 PWM | TIM3_CH1 on PA6, AF2, PWM mode 1, active high |
-| TIM3 timing | PSC=15, ARR=3002, CCR1 initial=1520 |
+| TIM3 PWM | TIM3_CH1/PA6, TIM3_CH2/PA7, TIM3_CH3/PB0, AF2, PWM mode 1, active high |
+| TIM3 timing | PSC=15, ARR=3002, CCR1/CCR2/CCR3 initial=1500 |
+| TIM4 PWM | TIM4_CH1 on PD12 and TIM4_CH2 on PD13, AF2, PWM mode 1, active high |
+| TIM4 timing | PSC=15, ARR=3002, CCR1/CCR2 initial=1520 |
 | PWM result | 16 MHz / (15+1) = 1 MHz counter (1 μs/tick); 1 MHz / (3002+1) ≈ **333.0 Hz** |
 | Debug GPIO | PB2 push-pull output labelled `DBG_LED`; initialized low, no runtime toggling in current code |
 
@@ -43,7 +67,7 @@ Protocol V2 delimiter accumulator
   ↓ COBS + header/length + CRC decode
 protocol_dispatcher_handle
   ├─ Heartbeat / host liveness outcome
-  ├─ Servo1 enable / disable
+  ├─ semantic five-servo enable / disable
   ├─ Set Servo PWM
   ├─ Set Servo Angle calibration mapping
   ├─ Neutral semantic command
@@ -51,9 +75,12 @@ protocol_dispatcher_handle
         ↓
 main-loop ACK generation / UART TX
         ↓
-servo state + TIM3_CH1 CCR/start/stop
-        ↓
-PA6 → Servo1
+servo_service → servo_driver_stm32
+        ├─ TIM3_CH1 / PA6 → FrontRight
+        ├─ TIM3_CH2 / PA7 → FrontLeft
+        ├─ TIM3_CH3 / PB0 → FrontAxis (PWM-only)
+        ├─ TIM4_CH1 / PD12 → RearRight
+        └─ TIM4_CH2 / PD13 → RearLeft
 ```
 
 The interrupt handler delegates to the HAL. The HAL completion callback performs only a ring-buffer push and re-arms the next one-byte interrupt receive. Protocol parsing, command dispatch, ACK encoding, blocking UART transmit, and PWM control occur in the main-loop context, not in the UART ISR.
@@ -63,9 +90,10 @@ The current communication split is:
 - **[Implemented]** `Core/Communication/ring_buffer.c/.h` owns the fixed 128-byte single-producer/single-consumer ring. It reserves one slot (127-byte effective capacity) and silently rejects a push while full, preserving the original behavior.
 - **[Implemented]** `Core/Communication/uart_transport_stm32.c/.h` owns the one-byte RX staging byte, USART1 receive interrupt arm/re-arm, ring interaction, main-loop byte retrieval, and the blocking `HAL_UART_Transmit(..., 100U)` wrapper.
 - **[Hardware Verified]** `Core/App/app_main.c/.h` owns the application orchestration: Protocol V2 wire accumulation and decode integration, ACK/result transmission, diagnostics, module instances, initialization order, RX draining, and post-drain Safety timeout action. It calls existing Protocol, UART, Safety, Servo, and dispatcher modules without implementing their policies or touching TIM registers directly.
-- **[Implemented]** `Core/Servo/servo_calibration.c/.h` owns the Servo1 calibration record and exact integer angle-to-pulse mapping.
-- **[Implemented]** `Core/Servo/servo_service.c/.h` owns supported-mask validation, enabled-state policy, command range checks, Neutral semantics, and driver-independent Servo results.
-- **[Implemented]** `Core/Servo/servo_driver_stm32.c/.h` owns the HAL/TIM3_CH1 start, stop, and CCR write adapter. It receives the timer handle explicitly and has no Protocol or heartbeat knowledge.
+- **[Implemented]** `Core/Servo/servo_descriptor.c/.h` owns the pure-C semantic ID, capability, calibration-envelope, and abstract timer/channel table.
+- **[Implemented]** `Core/Servo/servo_calibration.c/.h` owns per-descriptor integer angle-to-pulse mapping.
+- **[Implemented]** `Core/Servo/servo_service.c/.h` owns supported-mask validation, enabled-state policy, command range checks, Neutral semantics, multi-bit Enable rollback, and driver-independent Servo results.
+- **[Implemented]** `Core/Servo/servo_driver_stm32.c/.h` owns the HAL/TIM3/TIM4 channel adapter. It maps abstract descriptor selectors to timer handles and HAL channels and has no Protocol or heartbeat knowledge.
 - **[Hardware Verified]** `Core/Safety/safety_supervisor.c/.h` owns host liveness, the last valid Heartbeat timestamp, strict timeout evaluation, and one-shot timeout transition reporting. It has no HAL, Protocol, UART, or Servo dependency.
 - **[Hardware Verified]** `Core/Communication/protocol_dispatcher.c/.h` owns decoded command payload validation, HostAlive gating, Servo service invocation/result mapping, Heartbeat semantics, and the one-entry successful-command cache. It has no HAL, UART, TIM3, or Console dependency.
 - **[Hardware Verified]** `main.c` keeps the CubeMX entry/configuration, `app_main_init`/`app_main_process` calls, and a small UART callback transport delegate. Protocol, Safety, Servo, ACK, diagnostics, and RX-drain orchestration live in `Core/App/app_main.c`.
@@ -97,12 +125,12 @@ Current constants:
 
 See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmware matrix. Important current behavior is:
 
-- Heartbeat, ACK, Servo1 Enable/Disable, and Servo1 Set PWM agree with the Console.
+- Heartbeat, ACK, semantic five-servo Enable/Disable, and per-descriptor Set PWM agree with the Console.
 - Error is declared but never sent by Firmware.
-- Neutral validates liveness/mask/enabled state, writes the calibrated 1520 μs neutral, and leaves Servo1 enabled.
-- Set Angle validates −9000…+9000 cdeg and maps −9000/0/+9000 to 520/1520/2520 μs with `int32_t` intermediates.
+- Neutral validates liveness/mask/enabled state, writes each descriptor's neutral pulse, and leaves the selected channels enabled.
+- Set Angle is available only for the four calibrated SAVOX/GDW angle-capable descriptors; FrontAxis is PWM-only. Each angle is range-checked and mapped with `int32_t` intermediates.
 - ACK result values are frozen as `OK=0`, `InvalidPayload=1`, `HostNotAlive=2`, `UnsupportedServo=3`, `ServoNotEnabled=4`, `OutOfRange=5`, and `HardwareFailure=6`.
-- Only mask `0x0001` is supported. Zero mask is invalid; any Servo2/unknown bit fails atomically with `UnsupportedServo`.
+- Supported mask is exactly `0x001F`. Zero mask is invalid; any unknown bit fails with `UnsupportedServo`. Multi-bit Enable is all-or-nothing with rollback on a channel-start failure.
 - The most recent successful non-Heartbeat request is cached by sequence and type. Its retry replays the ACK without executing the Servo action again. Heartbeats refresh liveness but do not evict this cache.
 
 ## Heartbeat and safety state
@@ -112,10 +140,10 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 - The Safety Supervisor marks the host alive only after a valid four-byte Heartbeat.
 - The supervisor stores `last_heartbeat_rx_ms`; `app_main` injects local `HAL_GetTick()`, not the host timestamp.
 - Servo Enable, Set PWM, and Set Angle reject commands while the supervisor reports the host not alive.
-- If more than 500 ms elapse after the last Heartbeat, the supervisor reports one timeout transition; the main loop stops Servo1 PWM if enabled and clears the enabled mask.
+- If more than 500 ms elapse after the last Heartbeat, the supervisor reports one timeout transition; the main loop stops all enabled PWM channels and clears the enabled mask.
 - Reconnection/recovery requires a new valid Heartbeat followed by a new Servo Enable.
-- Boot leaves PWM stopped. TIM3 is configured with CCR1=1520, but `HAL_TIM_PWM_Start()` is called only on accepted Servo1 Enable.
-- Each accepted enable writes CCR1=1520 before starting PWM.
+- Boot leaves PWM stopped. TIM3/TIM4 are configured with descriptor-specific initial CCR values, but `HAL_TIM_PWM_Start()` is called only on accepted Enable.
+- Each accepted Enable writes its descriptor's neutral pulse before starting the requested channels.
 - Watchdog timeout also invalidates the duplicate cache, preventing an old successful action ACK from bypassing re-enable after recovery.
 
 ### Limitations
@@ -125,7 +153,9 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 - Duplicate suppression intentionally retains one successful non-Heartbeat request rather than a multi-entry replay window. A later distinct successful actuator request replaces it.
 - Disconnect safety relies on the host's best-effort Disable All plus the 500 ms Firmware heartbeat timeout.
 
-## Servo1 state
+## Legacy Servo1-only state (Historical Reference)
+
+The following Servo1-only notes describe the pre-PR #8 PA6/RearLeft layout and are retained for traceability. They do not describe the current five-servo ID map above; use the PR #8 section and active `.ioc` for current behavior.
 
 ### [Implemented]
 
@@ -151,9 +181,20 @@ The current development record states that Qt → Set Servo PWM → TIM3 CCR was
 
 The UART transport/ring-buffer extraction in this refactor is now **[Hardware Verified]**. STM32CubeIDE target build passed, ST-LINK download completed with “Download verified successfully”, and physical UART/Servo regression passed for Connect + Heartbeat, Enable + ACK, Neutral, +10°, 0°, −10°, Disable, Disconnect, reconnect without automatic Enable, and manual Enable + ACK recovery. The existing Servo1 and Set Angle hardware verification remains valid.
 
-## Current build and test status
+## PR #8 software verification status
 
-The undefined angle calibration constants from the previous audit were replaced by one consistent Servo1 calibration set. A new-directory Debug configure/build using STM32CubeIDE's bundled CMake 4.3.1, Ninja 1.13.2, and GNU Tools for STM32 14.3.1 succeeds and links `RoboBeetleFirmware.elf` with no compiler warnings.
+- Pure-C descriptor, calibration, Servo service, ring-buffer, safety, and Protocol Dispatcher regressions pass with warnings treated as errors.
+- The five-servo descriptor/service/dispatcher changes are software-verified; STM32CubeIDE target build, ST-LINK download, and physical five-servo regression remain **[Pending Hardware Verification]** for the PR8 wiring.
+- The target commands remain:
+
+```powershell
+cmake --preset Debug
+cmake --build --preset Debug
+```
+
+## Historical target build snapshots (Historical Reference)
+
+The following records refer to pre-PR8 or earlier modularization snapshots and are retained for traceability; they are not evidence that the current five-servo image has passed target build or hardware regression. The undefined angle calibration constants from the previous audit were replaced by one consistent Servo1 calibration set. A new-directory Debug configure/build using STM32CubeIDE's bundled CMake 4.3.1, Ninja 1.13.2, and GNU Tools for STM32 14.3.1 succeeded for that earlier snapshot.
 
 Normal project commands remain:
 
@@ -162,7 +203,7 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake now lists the App, Communication, Servo, and Safety modules and their include directories. The pure-C checks `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, and `tests/protocol_dispatcher_tests.c` are compiled manually with `-Wall -Wextra -Werror`; there is still no integrated host-side wire-parser/HAL test target.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Servo, and Safety modules and their include directories. The pure-C checks `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, and `tests/protocol_dispatcher_tests.c` are compiled manually with `-Wall -Wextra -Werror`; there is still no integrated host-side wire-parser/HAL test target.
 
 ## App/Main maintainability audit
 
@@ -197,7 +238,7 @@ Recommended boundaries:
 - `ring_buffer` is pure C and reusable; its silent full-buffer drop is preserved until a separately reviewed overflow policy is introduced.
 - `rb_protocol_v2` remains pure C and HAL-independent.
 - `protocol_dispatcher` parses command payloads, enforces the existing validation order, and calls service interfaces; it must not write TIM registers directly.
-- `servo_driver_stm32` is the HAL-aware TIM3/channel adapter: start, stop, and write pulse ticks.
+- `servo_driver_stm32` is the HAL-aware TIM3/TIM4 channel adapter: start, stop, and write descriptor pulse ticks.
 - `servo_service` is pure C policy: supported IDs/masks, enabled state, bounds, and command semantics. It calls the driver through a narrow interface.
 - `servo_calibration` is pure C data/mapping: per-servo min/neutral/max angle and pulse, direction, and later nonlinear points if required.
 - `safety_supervisor` is pure C state/timing policy: host liveness, deadline evaluation, and one-shot timeout transition reporting. It has no HAL or Servo dependency; `app_main` requests safe actions through `servo_service`.

@@ -1,6 +1,6 @@
 # RoboBeetle Protocol V2 — Phase 1 Baseline
 
-This document describes the Console and Firmware sources repaired and clean-built on 2026-09-08, plus the Console APC220 scheduler adaptation. **[Implemented]** refers to code presence and software verification; the Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]**. PR #7 scheduler behavior is **[Hardware Verified - Bench]** on the tested desktop setup; its timing parameters remain **[Provisional]**.
+This document describes the Console and Firmware sources repaired and clean-built on 2026-09-08, plus the Console APC220 scheduler adaptation. **[Implemented]** refers to code presence and software verification; the pre-PR8 Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]** for its historical layout. PR #7 scheduler behavior is **[Hardware Verified - Bench]** on the tested desktop setup; its timing parameters remain **[Provisional]**. The PR #8 five-servo implementation is software-verified, while its target hardware regression remains pending.
 
 Evidence labels used across the project are **[Implemented]** (current source), **[Hardware Verified]** (development-record hardware evidence), **[Provisional]** (bring-up value/incomplete contract), **[Planned]** (future work), and **[Historical Reference]** (old papers/code only). This protocol document relies primarily on Implemented evidence; hardware milestones and historical context are kept in the project READMEs and root handoff.
 
@@ -32,6 +32,22 @@ CRC is CRC-16/CCITT-FALSE:
 - Coverage from the first Magic byte through the final Payload byte
 
 The trailing `0x00` is a delimiter; it is not part of the COBS body or CRC input. The Console caps an accumulated encoded frame at 96 bytes. Firmware derives a 76-byte maximum wire buffer from its 64-byte payload limit.
+
+## Current PR #8 semantic descriptor contract
+
+PR #8 does not change the Protocol V2 wire format, message IDs, CRC, or COBS rules. It freezes the semantic servo IDs and supported mask independently in the C++ Console and pure-C Firmware descriptor tables. Separate descriptor tests assert the same IDs, masks, capabilities, calibration envelopes, and timer/channel assignments so drift is detected without sharing a C/C++ header.
+
+| ID / mask | Semantic name | Hardware / STM32 output | Capability and command envelope |
+|---:|---|---|---|
+| `0` / `0x0001` | `FrontRight` / 前足右 | SAVOX SW-0250MG+, TIM3_CH1 / PA6 | PWM 1050–1950 μs; angle −45…+45° |
+| `1` / `0x0002` | `FrontLeft` / 前足左 | SAVOX SW-0250MG+, TIM3_CH2 / PA7 | PWM 1050–1950 μs; angle −45…+45° |
+| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D, TIM3_CH3 / PB0 | PWM-only 1450–1550 μs; Set Angle rejected; calibration pending |
+| `3` / `0x0008` | `RearRight` / 后足右 | GDW IPX896HV, TIM4_CH1 / PD12 | PWM 1020–2020 μs; angle −45…+45° |
+| `4` / `0x0010` | `RearLeft` / 后足左 | GDW IPX896HV, TIM4_CH2 / PD13 | PWM 1020–2020 μs; angle −45…+45° |
+
+`SUPPORTED_SERVO_MASK` is exactly `0x001F`. SAVOX electrical limits are 1000/1500/2000 μs with an accepted command envelope of 1050–1950 μs; GDW electrical limits are 520/1520/2520 μs with an accepted command envelope of 1020–2020 μs. FrontAxis uses the provisional 1450–1550 μs bring-up clamp and 1500 μs startup/center candidate; it is not a calibrated or Hardware Verified neutral. Its first hardware check is unloaded with the horn/linkage detached: `1500 → 1450 → 1500 → 1550 → 1500`.
+
+This semantic map is a hardware-layout compatibility break. Historical v0.4 `Servo1`/PA6 bring-up referred to `RearLeft`; PR #8 assigns PA6/ID0 to `FrontRight` and PD13/TIM4_CH2 to `RearLeft`. Do not mix pre-PR8 Console/Firmware binaries with PR8 five-servo wiring. Qt's `ServoId::Servo1` is only a deprecated source alias for `FrontRight`; there is no `Servo2` alias, and new UI/logs/docs use semantic names.
 
 ## Payload definitions
 
@@ -81,13 +97,7 @@ The Console can parse payloads of at least five bytes, validates both the reques
 servo_mask  uint16 LE
 ```
 
-Mask assignments are:
-
-- Bit 0 / `0x0001`: Servo1 (`ServoId=0`)
-- Bit 1 / `0x0002`: reserved Servo2 (`ServoId=1`), not implemented
-- Current `SUPPORTED_SERVO_MASK = 0x0001`
-
-Firmware and Console currently permit only Servo1/bit 0. A zero mask returns `InvalidPayload`; any mask containing an unsupported bit, including `0x0002`, `0x0003`, or `0xFFFF`, returns `UnsupportedServo` and performs no partial action. Neutral requires a live host and enabled Servo1, writes the Firmware calibration neutral 1520 μs, keeps PWM enabled, and returns `OK`.
+Mask assignments are the frozen five semantic bits from the PR #8 descriptor contract above. Firmware and Console use `SUPPORTED_SERVO_MASK = 0x001F`. A zero mask returns `InvalidPayload`; any bit outside `0x001F` returns `UnsupportedServo` and performs no partial action. Multi-bit Enable is all-or-nothing: if a requested channel fails to start, channels started by that call are rolled back and the pre-call enabled state is restored. Disable and Disable All retain fail-closed/best-effort stop semantics. Neutral requires a live host and enabled selected channels, writes each descriptor's neutral pulse, and returns `OK`; FrontAxis remains PWM-only with calibration pending.
 
 ### Set Servo PWM — `0x12`
 
@@ -98,7 +108,7 @@ items[count]:
     pulse_us  uint16 LE
 ```
 
-The wire schema is variable-length, but both current command paths use exactly one item (`payload_length=4`, `count=1`). Console can encode ServoId 0 or 1; Firmware accepts only ServoId 0. Both currently gate Servo1 PWM to the **[Provisional]** range 520–2520 μs. Console additionally requires its local Enable ACK state; Firmware requires both a live heartbeat and its own enabled bit.
+The wire schema is variable-length, but both current command paths use exactly one item (`payload_length=4`, `count=1`). Console and Firmware accept the five semantic IDs and apply the descriptor-specific command envelopes: SAVOX 1050–1950 μs, FrontAxis 1450–1550 μs, and GDW 1020–2020 μs. Console additionally requires its local Enable ACK state; Firmware requires both a live heartbeat and its own enabled bit.
 
 ### Set Servo Angle — `0x13`
 
@@ -111,11 +121,13 @@ items[count]:
 
 The type and schema are implemented on both sides:
 
-- Console/controller: `setServoAngle()` requires supported/enabled Servo1, validates −9000…+9000 cdeg, and sends the signed `int16` value directly. It does not convert angle to PWM. The Qt UI provides a Servo1 `QDoubleSpinBox` from −90.0° to +90.0° in 0.1° steps, converts the value to cdeg, and is enabled only after connection plus a successful Enable ACK with no pending Disable request.
-- Firmware: validates `count=1`, live heartbeat, Servo1 ID, enabled state, and the same range. Out-of-range values return `OutOfRange`; they are not clamped.
-- Firmware performs a piecewise linear calibration with `int32_t` intermediates: −9000→520 μs, 0→1520 μs, +9000→2520 μs, then updates TIM3 CCR1.
+- Console/controller: `setServoAngle()` requires a supported, enabled, angle-capable semantic servo, validates its descriptor range (−45…+45° for current SAVOX/GDW channels), and sends the signed `int16` value directly. It does not convert angle to PWM. The Qt UI uses descriptor-specific controls at 0.1° steps and enables them only after connection plus a successful Enable ACK with no pending Disable request.
+- Firmware: validates `count=1`, live heartbeat, an angle-capable semantic ID, enabled state, and the descriptor range. FrontAxis is rejected as unsupported for Set Angle; out-of-range values return `OutOfRange` and are not clamped.
+- Firmware performs the descriptor-specific piecewise linear calibration with `int32_t` intermediates (SAVOX electrical 1000/1500/2000 μs; GDW 520/1520/2520 μs), then updates the mapped STM32 timer channel.
 
-### Servo1 Set Angle hardware acceptance — [Hardware Verified] (2026-09-06)
+### Historical Servo1 Set Angle hardware acceptance — [Hardware Verified] (2026-09-06)
+
+This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware verification of the new five-servo wiring.
 
 - Hardware: GDW IPX896HV, driven by `TIM3_CH1 / PA6` at approximately 333 Hz.
 - Protocol V2 Set Angle `0x13` passed at 0°, +10°, 0°, −10°, 0°, ±45°, and ±90°.
@@ -129,11 +141,11 @@ The type and schema are implemented on both sides:
 | Heartbeat | `0x01` | DirectUart sends uint32 LE every 100 ms with multi-pending behavior; APC220 is **[Provisional]**, sends one immediately after connect, then targets 250 ms when the stop-and-wait slot is free; user commands are gated until a matching successful ACK | Requires length 4; records host value and local arrival; sets `host_alive` | `uint32` | Result 0/1 | **Consistent and [Implemented]**; APC220 cadence is a provisional link budget |
 | ACK | `0x02` | Does not originate; requires exactly 4 payload bytes and matches request sequence/type | Encodes four-byte payload; TX sequence starts at 0 | `uint16,uint8,uint8` | N/A | **Consistent in active direction** |
 | Error | `0x03` | Parses length ≥5; uses request sequence and code | Enum only; no producer/handler | `uint16,uint8,uint16` | N/A | **Incomplete Firmware side** |
-| Servo Enable | `0x10` | Sends Servo1 mask; marks it enabled after matching result 0 | Requires heartbeat/length 2/valid mask; starts Servo1 at 1520 μs | `uint16 mask` | Yes | **Consistent; unsupported bits fail atomically** |
-| Servo Disable | `0x11` | Sends only supported mask; clears it after matching result 0 | Requires length 2/valid mask; stops and clears Servo1 | `uint16 mask` | Yes | **Consistent; unsupported bits fail atomically** |
-| Set Servo PWM | `0x12` | Sends count 1, ServoId 0, pulse LE; local 520–2520 gate | Accepts exactly count 1 and ServoId 0; host-alive/enabled/range gates; writes TIM3 CCR1 | `uint8,uint8,uint16` | Yes | **Consistent for Servo1; Servo2 rejected** |
-| Set Servo Angle | `0x13` | Controller and Qt UI send count 1, ServoId 0, signed cdeg LE; UI is gated by connection, Enable ACK, and no pending Disable | Maps −9000/0/+9000 cdeg to 520/1520/2520 μs with `int32_t` arithmetic | `uint8,uint8,int16` | Yes | **Consistent and [Hardware Verified]** at 0°, ±10°, ±45°, and ±90° |
-| Neutral | `0x14` | Sends Servo1 mask after local enable | Requires live host, valid mask, and enabled Servo1; writes 1520 μs without disabling | `uint16 mask` | Yes | **Consistent and [Hardware Verified]** |
+| Servo Enable | `0x10` | Sends a supported semantic mask; marks requested IDs enabled after matching result 0 | Requires heartbeat/length 2/valid mask; starts each requested channel at its descriptor neutral; multi-bit start is atomic with rollback | `uint16 mask` | Yes | **Consistent for `0x001F`; unsupported bits fail atomically** |
+| Servo Disable | `0x11` | Sends a supported semantic mask; clears requested IDs after matching result 0 | Requires length 2/valid mask; stops each requested channel | `uint16 mask` | Yes | **Consistent for `0x001F`; fail-closed/best-effort stop** |
+| Set Servo PWM | `0x12` | Sends count 1, semantic ID, pulse LE; applies descriptor command envelope | Accepts exactly count 1 and a supported semantic ID; host-alive/enabled/range gates; writes mapped timer CCR | `uint8,uint8,uint16` | Yes | **Consistent for all five IDs; FrontAxis is PWM-only** |
+| Set Servo Angle | `0x13` | Controller and Qt UI send count 1, angle-capable semantic ID, signed cdeg LE; UI is gated by connection, Enable ACK, and no pending Disable | Maps each accepted descriptor angle with `int32_t` arithmetic; FrontAxis is rejected | `uint8,uint8,int16` | Yes | **Implemented; new five-servo hardware verification pending** |
+| Neutral | `0x14` | Sends the selected semantic mask after local enable | Requires live host, valid mask, and enabled selected channels; writes descriptor neutral pulses without disabling | `uint16 mask` | Yes | **Implemented; FrontAxis neutral remains provisional** |
 
 ## Sequence, ACK, retry, and duplicate behavior
 
@@ -178,10 +190,10 @@ Duplicate handling is the most important protocol-level safety gap before adding
 - The APC220 scheduler's bounded user-command queue is `kApc220CommandQueueCapacity` entries. A full queue rejects new user commands locally; a matching ACK, Error, timeout, or reset releases/clears the associated state.
 - APC220 emits a first heartbeat immediately after `Connected`. Until its matching successful ACK, Servo Enable/PWM/Angle/Neutral/Disable requests remain queued. Heartbeat ACK rejection, type mismatch, timeout, or matching Error keeps liveness false and marks the next heartbeat due; it never turns a queued command into a `HostNotAlive` wire request. After a heartbeat timeout fail-closes the actuator state, a new Servo Enable is rejected locally while liveness is recovering and is never queued; heartbeat recovery restores link liveness only, so a fresh user Enable and matching ACK are required. Timer ticks while a heartbeat is in flight are ignored/coalesced, and the next available slot is used for the deferred retry or queued command after the heartbeat exchange. A deadline that becomes due while a command is in flight remains due after that command's ACK, so a second ordinary command cannot slip ahead of the heartbeat.
 - Firmware host watchdog: greater than 500 ms since the last valid Heartbeat.
-- Watchdog timeout clears `host_alive`, stops Servo1 PWM if enabled, and clears the enabled mask.
+- Watchdog timeout clears `host_alive`, stops all enabled descriptor PWM channels, and clears the enabled mask.
 - The measured APC220 RTT of approximately 167–173 ms is an input to test scenarios, not a formal guarantee: 250 + 170 = 420 ms is only an illustrative nominal observation. The local admission boundary is the 490 ms dispatch-anchored **Console host-side/local safety admission budget**; ordinary work is admitted only when its configured worst-case timeout plus retry polling still fits, leaving 10 ms below the 500 ms watchdog boundary. This policy is not a Windows-plus-RF hard-real-time guarantee, and actual radio/host jitter still requires hardware validation.
 - On the first missed APC220 Heartbeat ACK, the Console clears its logical enabled state and stale actuator queue before Firmware can diverge at its watchdog boundary. Heartbeat retries may continue, but recovery does not replay old actions; after recovery a new valid Heartbeat and a new Servo Enable ACK are required before PWM/Angle commands can succeed.
-- PWM is not started at boot. TIM3 CCR is initialized to 1520, but the waveform starts only on accepted Servo Enable.
+- PWM is not started at boot. TIM3/TIM4 CCRs are initialized from the descriptor table, but waveforms start only on accepted Servo Enable.
 
 The APC220 250 ms/250 ms values are a **[Provisional]** link adaptation target, not a Firmware watchdog change. The Console uses a stop-and-wait exchange to avoid overlapping frames on the half-duplex/high-latency path; heartbeat intent is coalesced while a command or retry is active and the actual wire cadence depends on ACK turnaround. Every matching ACK records the latest measured round-trip time in `ProtocolMonitor::lastAckRttMs` and the Qt monitor.
 
@@ -191,7 +203,9 @@ The APC220 Half-Duplex Scheduler is **[Hardware Verified - Bench]** for the user
 
 The 250 ms Heartbeat target, 250 ms ACK timeout, and 490 ms Console host-side/local safety admission budget remain **[Provisional]** pending lab/poolside distance, antenna-orientation, and outdoor RF characterization. The 490 ms value is a host-side/local admission policy, not a Windows-plus-RF hard-real-time guarantee.
 
-## Golden vectors
+## Golden vectors (wire-codec examples)
+
+These frames remain codec regression fixtures. They are not a statement that every payload is inside the current descriptor command envelope (for example, the legacy ID 0 ±90° examples are outside the PR #8 FrontRight ±45° command range).
 
 Complete wire frames below include the trailing `00` delimiter.
 
@@ -208,12 +222,14 @@ Complete wire frames below include the trailing `00` delimiter.
 
 The Set Servo PWM vector contains two codec items (Servo0=1500 μs, Servo1=1600 μs). It verifies only the generic codec. Neither current Console command construction nor Firmware dispatch accepts `count=2`.
 
-## Verified software baseline and remaining limits
+## Historical software baseline and remaining limits (Historical Reference)
+
+The following snapshot predates the PR #8 five-servo layout and is retained for traceability; current descriptor semantics and verification status are defined above.
 
 1. Console clean configure/build and both test executables pass with Qt 6.11.2 / MinGW 13.1.0.
 2. Firmware clean configure/build passes with STM32 GCC 14.3.1; the standalone pure-C codec golden-vector test passes with warnings treated as errors.
 3. Protocol failures in this baseline use the frozen nonzero ACK results above. `Error (0x03)` remains reserved and is not emitted by Firmware.
 4. Duplicate suppression is implemented in the HAL-coupled dispatcher and source-reviewed, but there is still no Firmware host unit-test framework for dispatcher/CCR side effects.
-5. Neutral is **[Hardware Verified]** near the mechanical 1520 μs center according to the development record. Protocol V2 Set Angle `0x13`, its Controller/Qt path, and real Servo1 motion are **[Hardware Verified]** at 0°, ±10°, ±45°, and ±90° on GDW IPX896HV (`TIM3_CH1 / PA6`, approximately 333 Hz); the corresponding Enable/Disable/ACK/Disable All/Disconnect/Reconnect safety states also passed.
+5. Historical Neutral is **[Hardware Verified]** near the mechanical 1520 μs center. Historical Protocol V2 Set Angle `0x13`, its Controller/Qt path, and real Servo1 motion were **[Hardware Verified]** at 0°, ±10°, ±45°, and ±90° on the pre-PR8 GDW IPX896HV (`TIM3_CH1 / PA6`); this does not verify the PR8 five-servo wiring.
 
 Magic, Version, base frame layout, CRC, COBS, baud rate, `.ioc`, and CMake structure were not changed.

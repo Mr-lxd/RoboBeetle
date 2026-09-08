@@ -1,5 +1,38 @@
 # RoboBeetle 硬件控制交接审计
 
+## 2026-09-08 五舵机语义 descriptor bring-up（PR #8，待实机验收）
+
+### 当前状态
+
+PR #8 将 Firmware 与 Qt 各自维护的 descriptor table 冻结为同一组五舵机语义 ID，supported mask 固定为 `0x001F`。descriptor drift 由两端独立测试分别拦截；Firmware 的 `servo_descriptor` 保持 pure C / HAL-independent，抽象 timer/channel 由 `servo_driver_stm32` 映射为 HAL handle 和 channel 常量。
+
+| ID / mask | 语义 | 硬件与 STM32 输出 | 能力 / bring-up 范围 |
+|---:|---|---|---|
+| `0` / `0x0001` | `FrontRight` / 前足右 | SAVOX SW-0250MG+，TIM3_CH1 / PA6 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
+| `1` / `0x0002` | `FrontLeft` / 前足左 | SAVOX SW-0250MG+，TIM3_CH2 / PA7 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
+| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D，TIM3_CH3 / PB0 | PWM-only 1450–1550 μs；Set Angle disabled；`Calibration Pending` |
+| `3` / `0x0008` | `RearRight` / 后足右 | GDW IPX896HV，TIM4_CH1 / PD12 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
+| `4` / `0x0010` | `RearLeft` / 后足左 | GDW IPX896HV，TIM4_CH2 / PD13 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
+
+TIM3/TIM4 当前均约 333 Hz、1 μs tick（PSC=15、ARR=3002）。FrontAxis 的 1500 μs 只是 provisional startup/center candidate，不是 calibrated neutral，也不是 Hardware Verified；首次验收必须机构卸载、舵盘/连杆脱开，执行 `1500 → 1450 → 1500 → 1550 → 1500`。多 bit Enable 采用 all-or-nothing：任一 channel start 失败时回滚本次已 start 的其它 channel，并恢复调用前 enabled state；Disable/Disable All 继续 fail-closed/best-effort stop。
+
+### 当前 Firmware 路径（PR #8）
+
+```text
+USART1 IRQ → HAL callback → uart_transport_stm32 → ring_buffer
+  → app_main_process → Protocol V2 decode → protocol_dispatcher
+  → servo_service → servo_driver_stm32
+  → TIM3_CH1/PA6 FrontRight | TIM3_CH2/PA7 FrontLeft
+  → TIM3_CH3/PB0 FrontAxis | TIM4_CH1/PD12 RearRight
+  → TIM4_CH2/PD13 RearLeft
+```
+
+本 PR 的 descriptor/service/driver/dispatcher 软件验证是实现门槛；五舵机 target build/download 与 physical regression 在用户验收前保持 **[Pending Hardware Verification]**。历史 PR #1、PR #3/6 的 Servo1/PA6 硬件证据不自动覆盖新布局。
+
+### Layout compatibility break（必须显式隔离）
+
+历史 v0.4 的 Servo1/PA6 bring-up 对象是 `RearLeft`；PR #8 后 PA6/ID0 正式为 `FrontRight`，`RearLeft` 改为 PD13/TIM4_CH2。五舵机重新布线后，禁止旧 v0.4 Console/Firmware 与 PR #8 layout 交叉使用。Qt 的 `ServoId::Servo1` 若存在，仅是 deprecated source alias 指向 `FrontRight`；新 UI、日志、实现和文档必须使用 semantic name，且不保留 `Servo2` alias。
+
 ## 2026-09-08 APC220 half-duplex scheduler hardware acceptance（PR #7）
 
 ### 当前状态

@@ -1,6 +1,6 @@
-# APC220 Bring-up Engineering Lessons
+# RoboBeetle Engineering Lessons
 
-This note records the evidence and boundaries behind the Console PR #7 scheduler adaptation. The scheduler is **[Hardware Verified - Bench]** on the tested desktop setup, but this is not a claim that the wireless path is fully characterized in every installation.
+This note records the evidence and boundaries behind the Console PR #7 scheduler adaptation and the PR #8 five-servo semantic bring-up. The scheduler is **[Hardware Verified - Bench]** on the tested desktop setup, while the PR #8 five-servo layout remains pending target hardware regression.
 
 ## Keep programming and runtime links separate
 
@@ -50,3 +50,19 @@ Disable and Disable All are safety actions, not ordinary FIFO work. When a Disab
 ## Timing budget and safety boundary
 
 Budget the complete exchange, not just MCU handler time: host serialization, APC220 buffering, half-duplex direction/turnaround, air/link latency, STM32 receive/dispatch/ACK transmission, and host scheduling jitter all contribute. The APC220 profile's 250 ms ACK timeout is a Console link budget; it does not change the Firmware watchdog. The Firmware watchdog remains greater than 500 ms after the last valid heartbeat, and a disconnect/error/reconnect clears Console in-flight work, queued commands, heartbeat intent, and logical enable state. Reconnect requires a fresh heartbeat and an explicit Enable ACK.
+
+## Keep descriptor tables independent at a C/C++ boundary
+
+The five-servo bring-up keeps a pure-C Firmware `servo_descriptor` table and an independent Qt/C++ table. Both freeze `FrontRight=0`, `FrontLeft=1`, `FrontAxis=2`, `RearRight=3`, `RearLeft=4`, and supported mask `0x001F`, while separate tests compare the capability and calibration contract. This avoids coupling HAL headers to Qt and makes descriptor drift a visible test failure. HAL timer/channel constants belong only in `servo_driver_stm32`, which maps abstract selectors to `TIM_HandleTypeDef *` and HAL channels.
+
+## Multi-servo Enable must be transactional
+
+When a multi-bit Enable request is accepted, every requested channel must start or the operation must roll back. If one fake/real driver start fails, channels already started by that call are stopped and the enabled mask returns to its pre-call value; partial arm is unsafe and must not be reported as success. Disable and Disable All intentionally remain fail-closed/best-effort stop operations.
+
+## Treat FrontAxis center as a bring-up candidate, not calibration
+
+The HDKJ S3150D FrontAxis channel uses a deliberately narrow 1450–1550 μs PWM clamp and remains SetAngle-disabled. Its 1500 μs value is only a provisional startup/center candidate. First hardware verification must be unloaded with the horn or linkage detached, using `1500 → 1450 → 1500 → 1550 → 1500`; only measured mechanical behavior can promote a neutral calibration.
+
+## Record layout compatibility breaks explicitly
+
+Semantic renaming can also change the physical wiring contract. The historical v0.4 Servo1/PA6 bring-up object was RearLeft; the five-servo layout assigns PA6/ID0 to FrontRight and PD13/TIM4_CH2 to RearLeft. Old and new Console/Firmware binaries must not be mixed with the rewired harness. A compatibility alias can preserve source builds, but it must be deprecated and never used as the current UI or log identity.
