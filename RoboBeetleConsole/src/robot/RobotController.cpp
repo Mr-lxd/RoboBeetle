@@ -40,6 +40,15 @@ RobotControllerConfig RobotControllerConfig::bringUpProvisional()
     return {};
 }
 
+RobotControllerConfig RobotControllerConfig::apc220Provisional()
+{
+    RobotControllerConfig config = bringUpProvisional();
+    config.linkProfile = LinkProfile::Apc220HalfDuplex;
+    config.heartbeatIntervalMs = 250;
+    config.ackTimeoutMs = 250;
+    return config;
+}
+
 RobotController::RobotController(ITransport *transport,
                                  RobotControllerConfig config,
                                  PortDiscovery portDiscovery,
@@ -63,16 +72,15 @@ RobotController::RobotController(ITransport *transport,
         const bool wasConnected = state_ == TransportState::Connected;
         state_ = state;
         if (state == TransportState::Connected) {
+            resetSchedulerState();
             heartbeatTimer_.start();
             retryTimer_.start();
             monitor_.ackStatus = QStringLiteral("Connected; awaiting commands");
-        } else if (state == TransportState::Disconnected || state == TransportState::Error) {
+        } else if (state == TransportState::Closing
+                   || state == TransportState::Disconnected || state == TransportState::Error) {
             heartbeatTimer_.stop();
             retryTimer_.stop();
-            pending_.clear();
-            decoder_.reset();
-            setEnabledMask(0);
-            setDisablePendingMask(0);
+            resetSchedulerState();
             monitor_.ackStatus = state == TransportState::Error
                 ? QStringLiteral("Transport error")
                 : QStringLiteral("Disconnected");
@@ -109,8 +117,7 @@ void RobotController::disconnectTransport()
     } else {
         emit logMessage(QStringLiteral("Disable All could not be sent: transport is not connected"));
     }
-    setEnabledMask(0);
-    setDisablePendingMask(0);
+    resetSchedulerState();
     transport_->close();
 }
 
@@ -249,6 +256,27 @@ bool RobotController::sendCommand(MessageType type,
         return false;
     }
 
+    if (config_.linkProfile == LinkProfile::Apc220HalfDuplex && expectAck) {
+        const QueuedCommand command{type, payload, affectedMask};
+        if (!pending_.isEmpty() || heartbeatDue_ || deferredRetry_.has_value()
+            || !commandQueue_.isEmpty()) {
+            if (commandQueue_.size() >= kApc220CommandQueueCapacity) {
+                emit logMessage(QStringLiteral(
+                    "Command rejected: APC220 command queue is full (%1)")
+                                    .arg(kApc220CommandQueueCapacity));
+                return false;
+            }
+            commandQueue_.enqueue(command);
+            monitor_.ackStatus = QStringLiteral("Queued message 0x%1 (%2/%3)")
+                                     .arg(static_cast<quint8>(type), 2, 16, QLatin1Char('0'))
+                                     .arg(commandQueue_.size())
+                                     .arg(kApc220CommandQueueCapacity);
+            updateMonitor();
+            return true;
+        }
+        return dispatchApc220Command(command);
+    }
+
     const quint16 sequence = nextSequence_++;
     const QByteArray frame = PacketCodec::encodeWire({type, sequence, payload});
     if (frame.isEmpty() || !transport_->write(frame)) {
@@ -261,15 +289,100 @@ bool RobotController::sendCommand(MessageType type,
     ++monitor_.txPacketCount;
     emit txHexChanged(QString::fromLatin1(frame.toHex(' ').toUpper()));
     if (expectAck) {
-        pending_.insert(sequence, {frame, type, affectedMask, nowMs(), 0});
+        pending_.insert(sequence, {sequence, frame, type, affectedMask, nowMs(), 0});
         monitor_.ackStatus = QStringLiteral("Waiting for ACK seq=%1").arg(sequence);
     }
     updateMonitor();
     return true;
 }
 
+bool RobotController::dispatchApc220Command(const QueuedCommand &command)
+{
+    const quint16 sequence = nextSequence_++;
+    const QByteArray frame = PacketCodec::encodeWire({command.type, sequence, command.payload});
+    if (frame.isEmpty() || !transport_->write(frame)) {
+        noteWriteFailure(QStringLiteral("message 0x%1 sequence %2")
+                             .arg(static_cast<quint8>(command.type), 2, 16, QLatin1Char('0'))
+                             .arg(sequence));
+        return false;
+    }
+
+    ++monitor_.txPacketCount;
+    emit txHexChanged(QString::fromLatin1(frame.toHex(' ').toUpper()));
+    pending_.insert(sequence,
+                    {sequence, frame, command.type, command.affectedMask, nowMs(), 0});
+    monitor_.ackStatus = QStringLiteral("Waiting for ACK seq=%1").arg(sequence);
+    updateMonitor();
+    return true;
+}
+
+bool RobotController::dispatchApc220Retry(PendingRequest &request)
+{
+    if (!transport_->write(request.frame)) {
+        noteWriteFailure(QStringLiteral("retry seq=%1")
+                             .arg(request.sequence));
+        request.sentAtMs = nowMs();
+        return false;
+    }
+
+    ++request.retries;
+    request.sentAtMs = nowMs();
+    ++monitor_.txPacketCount;
+    emit txHexChanged(QString::fromLatin1(request.frame.toHex(' ').toUpper()));
+    emit logMessage(QStringLiteral("Retry %1/%2 type=0x%3")
+                        .arg(request.retries)
+                        .arg(config_.maxRetries)
+                        .arg(static_cast<quint8>(request.type), 2, 16, QLatin1Char('0')));
+    updateMonitor();
+    return true;
+}
+
+void RobotController::pumpApc220Scheduler()
+{
+    if (config_.linkProfile != LinkProfile::Apc220HalfDuplex || !isConnected()
+        || !pending_.isEmpty()) {
+        return;
+    }
+
+    if (heartbeatDue_) {
+        QByteArray payload;
+        const quint32 uptime = static_cast<quint32>(QDateTime::currentMSecsSinceEpoch()
+                                                     & 0xffffffffU);
+        payload.append(static_cast<char>(uptime & 0xffU));
+        payload.append(static_cast<char>((uptime >> 8U) & 0xffU));
+        payload.append(static_cast<char>((uptime >> 16U) & 0xffU));
+        payload.append(static_cast<char>((uptime >> 24U) & 0xffU));
+        if (dispatchApc220Command({MessageType::Heartbeat, payload, 0})) {
+            heartbeatDue_ = false;
+        }
+        return;
+    }
+
+    if (deferredRetry_.has_value()) {
+        PendingRequest request = *deferredRetry_;
+        deferredRetry_.reset();
+        pending_.insert(request.sequence, request);
+        if (!dispatchApc220Retry(pending_[request.sequence])) {
+            deferredRetry_ = pending_.take(request.sequence);
+        }
+        return;
+    }
+
+    if (!commandQueue_.isEmpty()) {
+        const QueuedCommand command = commandQueue_.dequeue();
+        if (!dispatchApc220Command(command)) {
+            commandQueue_.prepend(command);
+        }
+    }
+}
+
 void RobotController::sendHeartbeat()
 {
+    if (config_.linkProfile == LinkProfile::Apc220HalfDuplex) {
+        heartbeatDue_ = true;
+        pumpApc220Scheduler();
+        return;
+    }
     const quint32 uptime = static_cast<quint32>(QDateTime::currentMSecsSinceEpoch() & 0xffffffffU);
     QByteArray payload;
     payload.append(static_cast<char>(uptime & 0xffU));
@@ -307,16 +420,25 @@ void RobotController::handlePacket(const Packet &packet)
     if (packet.type == MessageType::Error) {
         if (packet.payload.size() >= 5) {
             const quint16 sequence = readLe16(packet.payload, 0);
+            std::optional<PendingRequest> request;
             const auto it = pending_.find(sequence);
             if (it != pending_.end()) {
-                if (it->type == MessageType::ServoDisable) {
-                    setDisablePendingMask(
-                        static_cast<quint16>(disablePendingMask_ & ~it->servoMask));
-                }
+                request = it.value();
                 pending_.erase(it);
+            } else if (deferredRetry_.has_value()
+                       && deferredRetry_->sequence == sequence) {
+                request = *deferredRetry_;
+                deferredRetry_.reset();
+            }
+            if (request.has_value()) {
+                if (request->type == MessageType::ServoDisable) {
+                    setDisablePendingMask(
+                        static_cast<quint16>(disablePendingMask_ & ~request->servoMask));
+                }
             }
             const quint16 errorCode = readLe16(packet.payload, 3);
             monitor_.ackStatus = QStringLiteral("Error seq=%1 code=%2").arg(sequence).arg(errorCode);
+            pumpApc220Scheduler();
         } else {
             emit logMessage(QStringLiteral("Malformed Error payload"));
         }
@@ -335,45 +457,108 @@ void RobotController::handleAck(const Packet &packet)
     const quint16 requestSequence = readLe16(packet.payload, 0);
     const auto requestType = static_cast<MessageType>(static_cast<quint8>(packet.payload[2]));
     const quint8 result = static_cast<quint8>(packet.payload[3]);
-    if (!pending_.contains(requestSequence)) {
+    std::optional<PendingRequest> request;
+    const auto pendingIt = pending_.find(requestSequence);
+    if (pendingIt != pending_.end()) {
+        request = pendingIt.value();
+        pending_.erase(pendingIt);
+    } else if (deferredRetry_.has_value()
+               && deferredRetry_->sequence == requestSequence) {
+        request = *deferredRetry_;
+        deferredRetry_.reset();
+    }
+    if (!request.has_value()) {
         emit logMessage(QStringLiteral("Unmatched ACK seq=%1").arg(requestSequence));
         return;
     }
 
-    const PendingRequest request = pending_.take(requestSequence);
+    const qint64 ackRttMs = qMax<qint64>(0, nowMs() - request->sentAtMs);
     const auto clearDisablePending = [this, &request] {
-        if (request.type == MessageType::ServoDisable) {
+        if (request->type == MessageType::ServoDisable) {
             setDisablePendingMask(
-                static_cast<quint16>(disablePendingMask_ & ~request.servoMask));
+                static_cast<quint16>(disablePendingMask_ & ~request->servoMask));
         }
     };
-    if (request.type != requestType) {
+    if (request->type != requestType) {
         clearDisablePending();
         monitor_.ackStatus = QStringLiteral("ACK type mismatch seq=%1").arg(requestSequence);
         emit logMessage(monitor_.ackStatus);
+        pumpApc220Scheduler();
         return;
     }
+    monitor_.lastAckRttMs = ackRttMs;
     if (result != static_cast<quint8>(AckResult::Ok)) {
         clearDisablePending();
         monitor_.ackStatus = QStringLiteral("ACK rejected seq=%1 result=%2 (%3)")
                                  .arg(requestSequence)
                                  .arg(result)
                                  .arg(ackResultText(result));
+        if (config_.linkProfile == LinkProfile::Apc220HalfDuplex) {
+            monitor_.ackStatus += QStringLiteral(" RTT=%1 ms").arg(monitor_.lastAckRttMs);
+        }
+        pumpApc220Scheduler();
         return;
     }
 
-    if (request.type == MessageType::ServoEnable) {
-        setEnabledMask(static_cast<quint16>(enabledMask_ | request.servoMask));
-    } else if (request.type == MessageType::ServoDisable) {
+    if (request->type == MessageType::ServoEnable) {
+        setEnabledMask(static_cast<quint16>(enabledMask_ | request->servoMask));
+    } else if (request->type == MessageType::ServoDisable) {
         clearDisablePending();
-        setEnabledMask(static_cast<quint16>(enabledMask_ & ~request.servoMask));
+        setEnabledMask(static_cast<quint16>(enabledMask_ & ~request->servoMask));
     }
     monitor_.ackStatus = QStringLiteral("ACK seq=%1").arg(requestSequence);
+    if (config_.linkProfile == LinkProfile::Apc220HalfDuplex) {
+        monitor_.ackStatus += QStringLiteral(" RTT=%1 ms").arg(monitor_.lastAckRttMs);
+    }
+    pumpApc220Scheduler();
 }
 
 void RobotController::checkTimeouts()
 {
     const qint64 now = nowMs();
+    if (config_.linkProfile == LinkProfile::Apc220HalfDuplex) {
+        if (pending_.isEmpty()) {
+            pumpApc220Scheduler();
+            updateMonitor();
+            return;
+        }
+
+        auto it = pending_.begin();
+        if (now - it->sentAtMs < config_.ackTimeoutMs) {
+            return;
+        }
+        if (it->retries >= config_.maxRetries) {
+            const MessageType timedOutType = it->type;
+            const quint16 sequence = it->sequence;
+            if (timedOutType == MessageType::ServoDisable) {
+                setDisablePendingMask(
+                    static_cast<quint16>(disablePendingMask_ & ~it->servoMask));
+            }
+            pending_.erase(it);
+            ++monitor_.timeoutCount;
+            monitor_.ackStatus = QStringLiteral("ACK timeout seq=%1").arg(sequence);
+            emit logMessage(QStringLiteral("ACK timeout after %1 retries for message 0x%2 seq=%3")
+                                .arg(config_.maxRetries)
+                                .arg(static_cast<quint8>(timedOutType), 2, 16, QLatin1Char('0'))
+                                .arg(sequence));
+            pumpApc220Scheduler();
+            updateMonitor();
+            return;
+        }
+
+        if (it->type != MessageType::Heartbeat && heartbeatDue_) {
+            deferredRetry_ = it.value();
+            pending_.erase(it);
+            pumpApc220Scheduler();
+            updateMonitor();
+            return;
+        }
+
+        dispatchApc220Retry(it.value());
+        updateMonitor();
+        return;
+    }
+
     const QList<quint16> sequences = pending_.keys();
     for (quint16 sequence : sequences) {
         auto it = pending_.find(sequence);
@@ -415,6 +600,17 @@ void RobotController::checkTimeouts()
 void RobotController::updateMonitor()
 {
     emit protocolMonitorChanged(monitor_);
+}
+
+void RobotController::resetSchedulerState()
+{
+    pending_.clear();
+    commandQueue_.clear();
+    deferredRetry_.reset();
+    heartbeatDue_ = false;
+    decoder_.reset();
+    setEnabledMask(0);
+    setDisablePendingMask(0);
 }
 
 void RobotController::setEnabledMask(quint16 mask)

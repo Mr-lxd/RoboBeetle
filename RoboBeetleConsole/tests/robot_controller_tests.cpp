@@ -34,6 +34,19 @@ rb::Packet lastPacket(const rb::FakeTransport &transport)
     return rb::PacketCodec::decodeWire(wire.first(wire.size() - 1)).packet;
 }
 
+rb::Packet packetAt(const rb::FakeTransport &transport, qsizetype index)
+{
+    const QByteArray wire = transport.writes().at(index);
+    return rb::PacketCodec::decodeWire(wire.first(wire.size() - 1)).packet;
+}
+
+void waitForMs(int milliseconds)
+{
+    QEventLoop loop;
+    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
 void acknowledgeLast(rb::FakeTransport &transport)
 {
     const rb::Packet request = lastPacket(transport);
@@ -550,6 +563,183 @@ void testUnexpectedTransportLossRecordsDisableFailure()
     expect(found, "unexpected disconnect must explicitly log that Disable All could not be delivered");
 }
 
+void testApc220ProfileUsesHalfDuplexTiming()
+{
+    const rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    expect(config.linkProfile == rb::LinkProfile::Apc220HalfDuplex,
+           "APC220 factory must select the half-duplex link profile");
+    expect(config.heartbeatIntervalMs == 250,
+           "APC220 profile must use a 250 ms heartbeat interval");
+    expect(config.ackTimeoutMs == 250,
+           "APC220 profile must use a 250 ms ACK timeout");
+}
+
+void testApc220AllowsOnlyOneAckRequiringFrameInFlight()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "APC220 enable should be accepted");
+    const rb::Packet enable = lastPacket(transport);
+    expect(controller.disableAll(),
+           "APC220 Disable All should be queued while enable is in flight");
+    expect(transport.writes().size() == 1,
+           "APC220 must not write a second ACK-requiring frame before the first ACK");
+    expect(controller.queuedCommandCount() == 1,
+           "APC220 queued command count should include the waiting Disable All");
+
+    acknowledge(transport, enable, rb::AckResult::Ok, rb::MessageType::ServoEnable);
+    expect(transport.writes().size() == 2,
+           "ACK should release the APC220 queue and dispatch the next command");
+    expect(lastPacket(transport).type == rb::MessageType::ServoDisable,
+           "the queued command should dispatch after the matching ACK");
+    expect(controller.queuedCommandCount() == 0,
+           "dispatched APC220 command should leave the bounded queue");
+}
+
+void testApc220HeartbeatTicksCoalesceWhileCommandIsInFlight()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 5;
+    config.ackTimeoutMs = 1000;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "APC220 command should be sent before heartbeat coalescing test");
+    waitForMs(30);
+    expect(transport.writes().size() == 1,
+           "heartbeat ticks must coalesce instead of writing beside an in-flight command");
+
+    acknowledgeLast(transport);
+    expect(transport.writes().size() == 2,
+           "one coalesced heartbeat should dispatch when the command ACK frees the slot");
+    expect(lastPacket(transport).type == rb::MessageType::Heartbeat,
+           "coalesced heartbeat should have priority when the slot becomes free");
+    waitForMs(30);
+    expect(transport.writes().size() == 2,
+           "additional heartbeat ticks must not create another in-flight heartbeat");
+}
+
+void testApc220HeartbeatDuePrecedesCommandRetry()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 5;
+    config.ackTimeoutMs = 20;
+    config.maxRetries = 1;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "APC220 command should be sent before retry priority test");
+    waitForMs(30);
+    expect(transport.writes().size() >= 2,
+           "a heartbeat should be dispatched once its due intent outranks a command retry");
+    expect(packetAt(transport, 1).type == rb::MessageType::Heartbeat,
+           "heartbeat due must be dispatched before an ordinary command retry");
+}
+
+void testApc220CommandQueueHasBoundedCapacity()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "first APC220 command should occupy the in-flight slot");
+    for (qsizetype index = 0; index < rb::kApc220CommandQueueCapacity; ++index) {
+        expect(controller.enableServo(rb::ServoId::Servo1),
+               "commands up to the APC220 queue capacity should be accepted");
+    }
+    expect(controller.queuedCommandCount() == rb::kApc220CommandQueueCapacity,
+           "APC220 queue must report its bounded capacity");
+    expect(!controller.enableServo(rb::ServoId::Servo1),
+           "commands beyond APC220 queue capacity must be rejected");
+    expect(controller.queuedCommandCount() == rb::kApc220CommandQueueCapacity,
+           "a rejected APC220 command must not grow the queue");
+}
+
+void testApc220RetryUsesOriginalSequenceAndFrame()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 1;
+    config.maxRetries = 1;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "APC220 command should be sent before retry identity test");
+    const QByteArray originalFrame = transport.writes().last();
+    waitForMs(30);
+    expect(transport.writes().size() == 2,
+           "one APC220 timeout must produce exactly one retry");
+    expect(transport.writes().last() == originalFrame,
+           "APC220 retry must preserve the original sequence and encoded frame");
+}
+
+void testApc220TransportResetClearsSchedulerAndDoesNotAutoEnable()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 5;
+    config.ackTimeoutMs = 1000;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "APC220 enable should be sent before reset test");
+    expect(controller.disableAll(),
+           "APC220 command should queue before reset test");
+    waitForMs(20);
+    transport.simulateError(QStringLiteral("link lost"));
+    expect(controller.queuedCommandCount() == 0,
+           "transport error must clear queued APC220 commands");
+    expect(!controller.isServoEnabled(rb::ServoId::Servo1),
+           "transport error must clear the logical enabled mask");
+    expect(!controller.isServoDisablePending(rb::ServoId::Servo1),
+           "transport error must clear Disable pending state");
+
+    const qsizetype beforeReconnect = transport.writes().size();
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+    expect(transport.writes().size() == beforeReconnect,
+           "reconnect must not automatically replay stale APC220 commands");
+    expect(!controller.isServoEnabled(rb::ServoId::Servo1),
+           "reconnect must not automatically enable a servo");
+}
+
+void testApc220RecordsMatchingAckRtt()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "APC220 command should be sent before RTT test");
+    acknowledgeLast(transport);
+    expect(controller.monitor().lastAckRttMs >= 0,
+           "matching ACK should record a non-negative RTT in the monitor");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -574,6 +764,14 @@ int main(int argc, char **argv)
     testAckRejectionAndMatching();
     testRetryReusesIdenticalSequenceAndFrame();
     testUnexpectedTransportLossRecordsDisableFailure();
+    testApc220ProfileUsesHalfDuplexTiming();
+    testApc220AllowsOnlyOneAckRequiringFrameInFlight();
+    testApc220HeartbeatTicksCoalesceWhileCommandIsInFlight();
+    testApc220HeartbeatDuePrecedesCommandRetry();
+    testApc220CommandQueueHasBoundedCapacity();
+    testApc220RetryUsesOriginalSequenceAndFrame();
+    testApc220TransportResetClearsSchedulerAndDoesNotAutoEnable();
+    testApc220RecordsMatchingAckRtt();
     if (failures == 0) {
         std::cout << "All robot controller tests passed\n";
     }

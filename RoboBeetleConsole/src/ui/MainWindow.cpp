@@ -73,6 +73,9 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
         rxCount_->setText(QString::number(monitor.rxPacketCount));
         crcCount_->setText(QString::number(monitor.crcErrorCount));
         timeoutCount_->setText(QString::number(monitor.timeoutCount));
+        ackRtt_->setText(monitor.lastAckRttMs < 0
+                             ? QStringLiteral("—")
+                             : QStringLiteral("%1 ms").arg(monitor.lastAckRttMs));
         ackStatus_->setText(monitor.ackStatus);
     });
     connect(controller_, &RobotController::logMessage, this, &MainWindow::appendLog);
@@ -235,6 +238,7 @@ QWidget *MainWindow::createMonitorPanel()
     rxCount_ = new QLabel(QStringLiteral("0"), box);
     crcCount_ = new QLabel(QStringLiteral("0"), box);
     timeoutCount_ = new QLabel(QStringLiteral("0"), box);
+    ackRtt_ = new QLabel(QStringLiteral("—"), box);
     ackStatus_ = new QLabel(QStringLiteral("Idle"), box);
     form->addRow(QStringLiteral("TX Hex"), txHex_);
     form->addRow(QStringLiteral("RX Hex"), rxHex_);
@@ -248,6 +252,8 @@ QWidget *MainWindow::createMonitorPanel()
     counts->addWidget(crcCount_);
     counts->addWidget(new QLabel(QStringLiteral("Timeouts:"), box));
     counts->addWidget(timeoutCount_);
+    counts->addWidget(new QLabel(QStringLiteral("Last ACK RTT:"), box));
+    counts->addWidget(ackRtt_);
     counts->addStretch();
 
     log_ = new QPlainTextEdit(box);

@@ -55,6 +55,7 @@ private:
     QLabel *rxCount_{nullptr};
     QLabel *crcCount_{nullptr};
     QLabel *timeoutCount_{nullptr};
+    QLabel *ackRtt_{nullptr};
     QLabel *ackStatus_{nullptr};
     QPlainTextEdit *log_{nullptr};
 };

@@ -17,7 +17,8 @@ RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the curren
 - Qt Widgets UI with serial-port discovery, editable port selection, configurable baud rate, and a default of 9600 baud.
 - Connect, Disconnect, Refresh, per-servo Enable/Disable, Disable All, Neutral, and explicit Apply PWM controls.
 - Protocol V2 with COBS framing, `0x00` delimiter, CRC-16/CCITT-FALSE, little-endian fields, and a 64-byte maximum payload.
-- A 100 ms heartbeat, 200 ms ACK timeout, and up to three retransmissions after the original send.
+- Explicit DirectUart and Apc220HalfDuplex link profiles. DirectUart retains the 100 ms heartbeat / 200 ms ACK timeout and multi-pending behavior; Apc220HalfDuplex uses 250 ms / 250 ms stop-and-wait scheduling for the APC220 path.
+- Up to three retransmissions after the original send, always reusing the original sequence and encoded frame.
 - ACK/Error reception, request-sequence matching, TX/RX hex display, packet/CRC/timeout counters, ACK status, and an event log.
 - Shared ACK result meanings `0..6`, with named rejection status in the monitor.
 - `ITransport` abstraction with real `SerialTransport` and test-only `FakeTransport` implementations.
@@ -40,8 +41,9 @@ QApplication
       ├─ SerialTransport : ITransport
       ├─ RobotController
       │   ├─ PacketCodec / StreamDecoder / CRC16
-      │   ├─ heartbeat timer
-      │   ├─ pending ACK/retry table
+      │   ├─ profile-aware heartbeat timer
+      │   ├─ pending ACK/retry scheduler
+      │   ├─ bounded APC220 command queue
       │   └─ logical enabled-mask state
       └─ MainWindow
           ├─ connection controls
@@ -53,7 +55,7 @@ QApplication
 |---|---|
 | `main.cpp` | Creates the application, `SerialTransport`, `RobotController`, and `MainWindow`; injects serial-port discovery. |
 | `MainWindow` | Converts UI actions into controller calls and displays controller signals. It does not access `QSerialPort` or construct packets. |
-| `RobotController` | Owns command payload construction, sequence allocation, heartbeats, ACK/retry state, logical servo enable state, range gates, and monitor data. |
+| `RobotController` | Owns command payload construction, sequence allocation, profile-aware heartbeat/ACK scheduling, APC220 queue state, logical servo enable state, range gates, and monitor data. |
 | `ITransport` | Byte-stream open/close/write contract plus received-byte, state, and error signals. |
 | `SerialTransport` | Qt SerialPort adapter: port scan, 8-N-1, no flow control, async receive, buffered writes, and close-time flush attempt. |
 | `FakeTransport` | Deterministic byte transport used by controller tests. It is not a simulator of STM32 behavior. |
@@ -70,8 +72,8 @@ QApplication
 | COM scan | [Implemented] | `QSerialPortInfo::availablePorts()` returns sorted port names; Refresh reruns discovery. |
 | Baud rate | [Implemented] | Editable 1200–3,000,000; default 9600; connection uses 8 data bits, no parity, 1 stop bit, no flow control. |
 | Connect / Disconnect | [Implemented] | Connect opens the selected serial port. Disconnect first sends unacknowledged Disable All, then flushes/closes the port. |
-| Heartbeat | [Implemented] | Starts only after transport state becomes Connected; sends every 100 ms and expects ACK. |
-| ACK / retry / timeout | [Implemented] | Tracks by request sequence and type; retries the identical frame after 200 ms, at most three times. |
+| Heartbeat | [Implemented] | Starts only after transport state becomes Connected; DirectUart sends every 100 ms, while Apc220HalfDuplex coalesces due ticks and sends one heartbeat at a time every 250 ms. |
+| ACK / retry / timeout | [Implemented] | DirectUart tracks multiple requests; Apc220HalfDuplex allows one ACK-requiring request in flight, queues up to `kApc220CommandQueueCapacity` user commands, prioritizes due heartbeat over ordinary command retry, and retries the identical frame at the profile timeout. |
 | Servo Enable / Disable | [Implemented] | UI logical enable changes only after a matching successful ACK. |
 | Disable All | [Implemented] | Sends the current supported mask `0x0001`; it does not include the unimplemented Servo2 bit. |
 | Neutral | [Hardware Verified] | Sends `0x14` with Servo1 mask `0x0001` after Enable ACK; the development record confirms Servo1 returns to mechanical zero near 1520 μs, while Firmware keeps PWM enabled. |
@@ -110,7 +112,7 @@ The Servo1 **Set Angle** control is implemented and is enabled only when the tra
 - Startup never enables a servo.
 - PWM and Neutral are rejected locally until Servo Enable has received a matching result-0 ACK.
 - Servo1 angle entry and Set Angle are enabled only while connected, supported, after the matching Servo Enable result-0 ACK, and while no Disable request is pending; Disable/Disable All/disconnect close that UI gate immediately.
-- Losing the transport clears pending requests and the Console's logical enable mask.
+- Losing the transport clears in-flight requests, queued commands, heartbeat intent, decoder state, and the Console's logical enable mask. Reconnect starts from a disabled state and never auto-enables a servo.
 - Disconnect/application close attempts Disable All, but deliberately does not wait for its ACK before closing. A successful local serial write is not proof that STM32 acted on it.
 - Unexpected link loss can only log that Disable All could not be delivered. The STM32 watchdog is the actual link-loss safety boundary.
 - Retries reuse the same sequence and frame. Firmware caches the most recent successful non-Heartbeat request by sequence and type and replays its ACK without repeating the Servo action; Heartbeats refresh liveness without evicting that action cache.
@@ -141,6 +143,16 @@ STM32 Protocol V2 dispatcher
   → servo service/calibration
   → TIM HAL driver
 ```
+
+## Link profiles and APC220 scheduling
+
+`RobotControllerConfig::bringUpProvisional()` remains the DirectUart baseline used by existing controller tests and direct serial integrations. The application selects `RobotControllerConfig::apc220Provisional()` so the physical laptop → APC220 → STM32 path uses a 250 ms heartbeat and 250 ms ACK timeout.
+
+In Apc220HalfDuplex mode, only one ACK-requiring frame is active. Servo user commands that arrive while it is active wait in the bounded `kApc220CommandQueueCapacity` queue. Heartbeat timer ticks set a single due flag; they never accumulate. When a heartbeat is due alongside a command retry, the heartbeat goes first and the command retry retains its original sequence and encoded frame. Any transport reset clears the in-flight request, queue, heartbeat due flag, and logical enable/pending state.
+
+The monitor exposes `ProtocolMonitor::lastAckRttMs`, and the UI displays the latest matching-ACK RTT for diagnosing the high-latency link.
+
+The bring-up evidence and link-isolation lessons are recorded in the root [engineering lessons](../docs/engineering-lessons.md).
 
 ## Protocol
 
@@ -179,7 +191,7 @@ Do not mix the MinGW Qt libraries with MSVC, LLVM-MinGW, the separately installe
 - A fresh MinGW/Qt CMake configure and build succeeds without changing the project CMake structure.
 - `protocol_tests`: **PASS**, including CRC/COBS regression, result enum values, Neutral, and −9000/0/+9000 cdeg golden vectors.
 - `robot_controller_tests`: **PASS**, including −90/−45/0/+45/+90° to cdeg conversion, PWM boundaries, invalid PWM, Set Angle payload/range, Servo1 enable, Servo2 rejection, Neutral ACK, ACK match/mismatch, and identical-frame retry.
-- Firmware was separately clean-built with the STM32 GCC toolchain. No serial port, MCU flashing, PWM output, or physical Servo movement was performed in this round.
+- Firmware was separately clean-built with the STM32 GCC toolchain. No serial port, MCU flashing, PWM output, or physical Servo movement was performed in this round. APC220 timing values are a Console-side adaptation; the Firmware watchdog remains unchanged.
 
 ## Hardware milestones
 
