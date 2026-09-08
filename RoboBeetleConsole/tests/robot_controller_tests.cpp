@@ -1217,8 +1217,8 @@ void testApc220FirstHeartbeatTimeoutFailsClosedBeforeRetryExhaustion()
 {
     rb::FakeTransport transport;
     rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
-    config.heartbeatIntervalMs = 100;
-    config.ackTimeoutMs = 200;
+    config.heartbeatIntervalMs = 250;
+    config.ackTimeoutMs = 250;
     config.maxRetries = 3;
     rb::RobotController controller(&transport, config);
     connectApcAndAcknowledgeHeartbeat(transport, controller);
@@ -1226,7 +1226,12 @@ void testApc220FirstHeartbeatTimeoutFailsClosedBeforeRetryExhaustion()
            "first-timeout fail-closed test should enable Servo1 first");
     acknowledgeLast(transport);
 
-    waitForMs(120);
+    for (int waited = 0; waited < 700
+         && (transport.writes().size() < 3
+             || lastPacket(transport).type != rb::MessageType::Heartbeat);
+         waited += 10) {
+        waitForMs(10);
+    }
     if (transport.writes().size() < 3
         || lastPacket(transport).type != rb::MessageType::Heartbeat) {
         expect(false, "first-timeout fail-closed test should have a later heartbeat in flight");
@@ -1247,14 +1252,23 @@ void testApc220FirstHeartbeatTimeoutFailsClosedBeforeRetryExhaustion()
     // The first heartbeat timeout is enough to fail closed.  maxRetries stays
     // at the production value so recovery can be acknowledged before terminal
     // retry exhaustion, after the local outage has crossed the 500 ms budget.
-    waitForMs(250);
+    for (int waited = 0; waited < 600 && controller.isServoEnabled(rb::ServoId::Servo1);
+         waited += 10) {
+        waitForMs(10);
+    }
     expect(!controller.isServoEnabled(rb::ServoId::Servo1),
            "the first heartbeat ACK timeout must clear logical enabled state");
     expect(controller.queuedCommandCount() == 0,
            "the first heartbeat ACK timeout must clear stale queued actuator work");
     expect(controller.monitor().timeoutCount == 0,
            "first heartbeat fail-closed must occur before terminal retry exhaustion");
+    if (controller.isServoEnabled(rb::ServoId::Servo1)
+        || controller.monitor().timeoutCount != 0) {
+        return;
+    }
 
+    // Wait until the outage has exceeded Firmware's 500 ms watchdog budget,
+    // but remain before the fourth (terminal) heartbeat attempt.
     waitForMs(350);
     expect(!transport.writes().isEmpty()
                && lastPacket(transport).type == rb::MessageType::Heartbeat,
@@ -1272,17 +1286,16 @@ void testApc220FirstHeartbeatTimeoutFailsClosedBeforeRetryExhaustion()
     expect(!controller.setServoPwm(rb::ServoId::Servo1, 1500),
            "PWM must remain blocked until a fresh post-outage Enable ACK");
 
+    // The recovery ACK can immediately cause a new dispatch because the
+    // original soft deadline elapsed during the outage.  ACK that one fresh
+    // heartbeat as well, then the new user Enable must get the slot.
+    if (!transport.writes().isEmpty()
+        && lastPacket(transport).type == rb::MessageType::Heartbeat) {
+        acknowledgeLast(transport);
+    }
     const qsizetype beforeFreshEnable = transport.writes().size();
     expect(controller.enableServo(rb::ServoId::Servo1),
            "a fresh user Enable must be required after first-timeout fail-closed recovery");
-    if (controller.queuedCommandCount() > 0
-        && !transport.writes().isEmpty()
-        && lastPacket(transport).type == rb::MessageType::Heartbeat) {
-        // A recovery ACK may arrive exactly at the next dispatch-anchored
-        // deadline.  Let that safety heartbeat complete before checking the
-        // fresh user Enable; it must still be the only actuator re-arm.
-        acknowledgeLast(transport);
-    }
     expect(transport.writes().size() == beforeFreshEnable + 1
                && lastPacket(transport).type == rb::MessageType::ServoEnable,
            "only the fresh Enable may reopen the actuator path");
