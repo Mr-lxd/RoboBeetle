@@ -695,6 +695,29 @@ void testApc220HeartbeatDuePrecedesCommandRetry()
            "heartbeat due must be dispatched before an ordinary command retry");
 }
 
+void testApc220HeartbeatDeadlineWinsRetryBoundary()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10;
+    config.ackTimeoutMs = 10;
+    config.maxRetries = 1;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "APC220 command should be sent before the equal-deadline test");
+    const qsizetype commandIndex = transport.writes().size() - 1;
+    waitForMs(25);
+
+    expect(transport.writes().size() > commandIndex + 1,
+           "equal heartbeat/retry deadlines should produce follow-up traffic");
+    if (transport.writes().size() > commandIndex + 1) {
+        expect(packetAt(transport, commandIndex + 1).type == rb::MessageType::Heartbeat,
+               "heartbeat must win when its deadline equals a command retry deadline");
+    }
+}
+
 void testApc220CommandQueueHasBoundedCapacity()
 {
     rb::FakeTransport transport;
@@ -784,6 +807,51 @@ void testApc220RecordsMatchingAckRtt()
     acknowledgeLast(transport);
     expect(controller.monitor().lastAckRttMs >= 0,
            "matching ACK should record a non-negative RTT in the monitor");
+}
+
+void testApc220SynchronousAckDuringInitialDispatchIsHandled()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    transport.setWriteCallback([&transport](const QByteArray &wire) {
+        const rb::DecodeResult decoded = rb::PacketCodec::decodeWire(
+            wire.first(wire.size() - 1));
+        if (!decoded.ok()) {
+            return;
+        }
+        const bool expectsAck = decoded.packet.type == rb::MessageType::ServoDisable
+            || decoded.packet.type == rb::MessageType::Heartbeat
+            || decoded.packet.type == rb::MessageType::ServoEnable
+            || decoded.packet.type == rb::MessageType::SetServoPwm
+            || decoded.packet.type == rb::MessageType::SetServoAngle
+            || decoded.packet.type == rb::MessageType::Neutral;
+        if (!expectsAck) {
+            return;
+        }
+        QByteArray payload;
+        payload.append(static_cast<char>(decoded.packet.sequence & 0xffU));
+        payload.append(static_cast<char>((decoded.packet.sequence >> 8U) & 0xffU));
+        payload.append(static_cast<char>(decoded.packet.type));
+        payload.append(static_cast<char>(rb::AckResult::Ok));
+        transport.injectBytes(rb::PacketCodec::encodeWire(
+            {rb::MessageType::Ack, 0x8000, payload}));
+    });
+
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+    expect(transport.writes().size() == 1,
+           "synchronous APC220 transport should write the initial heartbeat once");
+    expect(controller.queuedCommandCount() == 0,
+           "synchronous heartbeat ACK must not leave a stale pending command");
+
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "synchronous ACK should release the APC220 slot for Enable");
+    expect(controller.queuedCommandCount() == 0,
+           "synchronous Enable ACK must not leave the command queued");
+    expect(controller.isServoEnabled(rb::ServoId::Servo1),
+           "synchronous Enable ACK should update the enabled state");
 }
 
 void testApc220ConnectGatesCommandsUntilHeartbeatAck()
@@ -1096,10 +1164,12 @@ int main(int argc, char **argv)
     testApc220AllowsOnlyOneAckRequiringFrameInFlight();
     testApc220HeartbeatTicksCoalesceWhileCommandIsInFlight();
     testApc220HeartbeatDuePrecedesCommandRetry();
+    testApc220HeartbeatDeadlineWinsRetryBoundary();
     testApc220CommandQueueHasBoundedCapacity();
     testApc220RetryUsesOriginalSequenceAndFrame();
     testApc220TransportResetClearsSchedulerAndDoesNotAutoEnable();
     testApc220RecordsMatchingAckRtt();
+    testApc220SynchronousAckDuringInitialDispatchIsHandled();
     testApc220ConnectGatesCommandsUntilHeartbeatAck();
     testApc220HeartbeatRejectionKeepsUserCommandsGated();
     testApc220HeartbeatTimeoutKeepsUserCommandsGated();

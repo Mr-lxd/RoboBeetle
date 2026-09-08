@@ -1,6 +1,6 @@
 # RoboBeetle Protocol V2 — Phase 1 Baseline
 
-This document describes the Console and Firmware sources repaired and clean-built on 2026-09-06, plus the Console APC220 scheduler adaptation. **[Implemented]** refers to code presence and software verification; the Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]**.
+This document describes the Console and Firmware sources repaired and clean-built on 2026-09-08, plus the Console APC220 scheduler adaptation. **[Implemented]** refers to code presence and software verification; the Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]**.
 
 Evidence labels used across the project are **[Implemented]** (current source), **[Hardware Verified]** (development-record hardware evidence), **[Provisional]** (bring-up value/incomplete contract), **[Planned]** (future work), and **[Historical Reference]** (old papers/code only). This protocol document relies primarily on Implemented evidence; hardware milestones and historical context are kept in the project READMEs and root handoff.
 
@@ -141,7 +141,7 @@ The type and schema are implemented on both sides:
 - Firmware ACK frame sequences start at 0 and increment independently.
 - DirectUart keeps every ACK-requiring request in a sequence-keyed table, including heartbeats; this preserves the original multi-pending behavior.
 - Apc220HalfDuplex permits one ACK-requiring request in flight. User servo commands wait in a bounded queue of `kApc220CommandQueueCapacity` entries, and heartbeat ticks collapse into one pending/due bit rather than a queue.
-- ACK timeout is 200 ms for DirectUart and 250 ms for Apc220HalfDuplex. Retries reuse the original encoded frame and sequence, up to three retransmissions after the original send.
+- ACK timeout is 200 ms for DirectUart and 250 ms for Apc220HalfDuplex. Retries reuse the original encoded frame and sequence, up to three retransmissions after the original send when the transport accepts the write; DirectUart retains its legacy handling of failed retry writes for regression compatibility.
 - When an APC220 heartbeat is due at the same time as a normal command retry, the heartbeat is dispatched first. The command retry remains deferred with its original sequence/frame and is sent after the heartbeat exchange.
 - Firmware caches the most recent successful non-Heartbeat request using `Sequence + MessageType`. An immediate retry of that request replays the cached result-0 ACK and returns before dispatch, so Servo Enable/PWM/Angle/Neutral/Disable are not executed twice.
 - Valid Heartbeats always refresh `last_heartbeat_rx_ms` and host liveness, and do not evict the action cache. In DirectUart this matters because the 100 ms heartbeat interval is shorter than the 200 ms ACK timeout; APC220 stop-and-wait scheduling avoids overlapping those exchanges.

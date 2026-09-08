@@ -4,6 +4,8 @@
 
 #include <QDateTime>
 
+#include <chrono>
+
 namespace rb {
 namespace {
 
@@ -94,6 +96,9 @@ RobotController::RobotController(ITransport *transport,
             resetSchedulerState();
             heartbeatReady_ = config_.linkProfile != LinkProfile::Apc220HalfDuplex;
             heartbeatDue_ = config_.linkProfile == LinkProfile::Apc220HalfDuplex;
+            nextHeartbeatDueAtMs_ = config_.linkProfile == LinkProfile::Apc220HalfDuplex
+                ? nowMs()
+                : 0;
             heartbeatTimer_.start();
             retryTimer_.start();
             monitor_.ackStatus = QStringLiteral("Connected; awaiting commands");
@@ -329,7 +334,7 @@ bool RobotController::dispatchApc220Command(const QueuedCommand &command)
 {
     const quint16 sequence = nextSequence_++;
     const QByteArray frame = PacketCodec::encodeWire({command.type, sequence, command.payload});
-    if (frame.isEmpty() || !transport_->write(frame)) {
+    if (frame.isEmpty()) {
         noteWriteFailure(QStringLiteral("message 0x%1 sequence %2")
                              .arg(static_cast<quint8>(command.type), 2, 16, QLatin1Char('0'))
                              .arg(sequence));
@@ -338,7 +343,22 @@ bool RobotController::dispatchApc220Command(const QueuedCommand &command)
 
     pending_.insert(sequence,
                     {sequence, frame, command.type, command.affectedMask, nowMs(), 0});
-    monitor_.ackStatus = QStringLiteral("Waiting for ACK seq=%1").arg(sequence);
+    const bool writeSucceeded = transport_->write(frame);
+    const bool stillConnected = isConnected();
+    if (!writeSucceeded || !stillConnected) {
+        if (pending_.contains(sequence)) {
+            pending_.remove(sequence);
+        }
+        noteWriteFailure(QStringLiteral("message 0x%1 sequence %2")
+                             .arg(static_cast<quint8>(command.type), 2, 16, QLatin1Char('0'))
+                             .arg(sequence));
+        return false;
+    }
+
+    if (pending_.contains(sequence)) {
+        pending_[sequence].sentAtMs = nowMs();
+        monitor_.ackStatus = QStringLiteral("Waiting for ACK seq=%1").arg(sequence);
+    }
     ++monitor_.txPacketCount;
     emit txHexChanged(QString::fromLatin1(frame.toHex(' ').toUpper()));
     updateMonitor();
@@ -354,7 +374,6 @@ bool RobotController::dispatchApc220Retry(quint16 sequence)
 
     const PendingRequest request = it.value();
     const int nextRetry = request.retries + 1;
-    const qint64 sentAtMs = nowMs();
     const bool writeSucceeded = transport_->write(request.frame);
     auto current = pending_.find(sequence);
     if (current == pending_.end()) {
@@ -364,7 +383,7 @@ bool RobotController::dispatchApc220Retry(quint16 sequence)
     }
 
     current->retries = nextRetry;
-    current->sentAtMs = sentAtMs;
+    current->sentAtMs = nowMs();
     if (!writeSucceeded) {
         const int retryCount = current->retries;
         noteWriteFailure(QStringLiteral("retry seq=%1").arg(sequence));
@@ -407,7 +426,15 @@ void RobotController::pumpApc220Scheduler()
         payload.append(static_cast<char>((uptime >> 16U) & 0xffU));
         payload.append(static_cast<char>((uptime >> 24U) & 0xffU));
         if (dispatchApc220Command({MessageType::Heartbeat, payload, 0})) {
-            heartbeatDue_ = false;
+            if (heartbeatReady_ || !pending_.isEmpty()) {
+                heartbeatDue_ = false;
+                nextHeartbeatDueAtMs_ = nowMs() + config_.heartbeatIntervalMs;
+            } else {
+                // A synchronous rejected/mismatched ACK consumed the request
+                // during write(); keep the liveness heartbeat due.
+                heartbeatDue_ = true;
+                nextHeartbeatDueAtMs_ = nowMs();
+            }
         }
         return;
     }
@@ -421,7 +448,15 @@ void RobotController::pumpApc220Scheduler()
         payload.append(static_cast<char>((uptime >> 16U) & 0xffU));
         payload.append(static_cast<char>((uptime >> 24U) & 0xffU));
         if (dispatchApc220Command({MessageType::Heartbeat, payload, 0})) {
-            heartbeatDue_ = false;
+            if (heartbeatReady_ || !pending_.isEmpty()) {
+                heartbeatDue_ = false;
+                nextHeartbeatDueAtMs_ = nowMs() + config_.heartbeatIntervalMs;
+            } else {
+                // A synchronous rejected/mismatched ACK consumed the request
+                // during write(); keep the liveness heartbeat due.
+                heartbeatDue_ = true;
+                nextHeartbeatDueAtMs_ = nowMs();
+            }
         }
         return;
     }
@@ -615,6 +650,7 @@ void RobotController::handleAck(const Packet &packet)
     if (isApc220 && isHeartbeat) {
         heartbeatReady_ = true;
         heartbeatDue_ = false;
+        nextHeartbeatDueAtMs_ = nowMs() + config_.heartbeatIntervalMs;
     } else if (request->type == MessageType::ServoEnable) {
         setEnabledMask(static_cast<quint16>(enabledMask_ | request->servoMask));
     } else if (request->type == MessageType::ServoDisable) {
@@ -634,6 +670,9 @@ void RobotController::checkTimeouts()
 {
     const qint64 now = nowMs();
     if (config_.linkProfile == LinkProfile::Apc220HalfDuplex) {
+        if (nextHeartbeatDueAtMs_ > 0 && now >= nextHeartbeatDueAtMs_) {
+            heartbeatDue_ = true;
+        }
         if (pending_.isEmpty()) {
             if (heartbeatReady_) {
                 pumpApc220Scheduler();
@@ -666,6 +705,8 @@ void RobotController::checkTimeouts()
             if (timedOutType == MessageType::Heartbeat) {
                 heartbeatReady_ = false;
                 heartbeatDue_ = true;
+                nextHeartbeatDueAtMs_ = now;
+                pumpApc220Scheduler();
                 updateMonitor();
                 return;
             }
@@ -738,6 +779,7 @@ void RobotController::resetSchedulerState()
     deferredRetry_.reset();
     heartbeatDue_ = false;
     heartbeatReady_ = false;
+    nextHeartbeatDueAtMs_ = 0;
     decoder_.reset();
     setEnabledMask(0);
     setDisablePendingMask(0);
@@ -792,7 +834,9 @@ QByteArray RobotController::maskPayload(quint16 mask)
 
 qint64 RobotController::nowMs()
 {
-    return QDateTime::currentMSecsSinceEpoch();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
 }
 
 } // namespace rb

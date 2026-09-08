@@ -136,6 +136,7 @@ private:
     std::optional<PendingRequest> deferredRetry_;
     bool heartbeatDue_{false};
     bool heartbeatReady_{false};
+    qint64 nextHeartbeatDueAtMs_{0};
     QTimer heartbeatTimer_;
     QTimer retryTimer_;
     ProtocolMonitor monitor_;

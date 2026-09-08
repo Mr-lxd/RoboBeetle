@@ -1,5 +1,7 @@
 #include "transport/FakeTransport.h"
 
+#include <utility>
+
 namespace rb {
 
 FakeTransport::FakeTransport(QObject *parent) : ITransport(parent) {}
@@ -26,6 +28,9 @@ bool FakeTransport::write(const QByteArray &bytes)
         return false;
     }
     writes_.append(bytes);
+    if (writeCallback_) {
+        writeCallback_(bytes);
+    }
     return true;
 }
 
@@ -53,6 +58,11 @@ void FakeTransport::setWriteSucceeds(bool succeeds)
 void FakeTransport::setWriteErrorSignals(bool emitsError)
 {
     writeErrorSignals_ = emitsError;
+}
+
+void FakeTransport::setWriteCallback(std::function<void(const QByteArray &)> callback)
+{
+    writeCallback_ = std::move(callback);
 }
 
 } // namespace rb
