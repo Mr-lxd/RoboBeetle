@@ -10,11 +10,13 @@ PR #8 将 Firmware 与 Qt 各自维护的 descriptor table 冻结为同一组五
 |---:|---|---|---|
 | `0` / `0x0001` | `FrontRight` / 前足右 | SAVOX SW-0250MG+，TIM3_CH1 / PA6 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
 | `1` / `0x0002` | `FrontLeft` / 前足左 | SAVOX SW-0250MG+，TIM3_CH2 / PA7 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
-| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D，TIM3_CH3 / PB0 | PWM-only 1450–1550 μs；Set Angle disabled；`Calibration Pending` |
+| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D，TIM3_CH3 / PB0 | 电气 500/1500/2500 μs；命令仅 1450–1550 μs；Set Angle disabled；`Calibration Pending` |
 | `3` / `0x0008` | `RearRight` / 后足右 | GDW IPX896HV，TIM4_CH1 / PD12 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
 | `4` / `0x0010` | `RearLeft` / 后足左 | GDW IPX896HV，TIM4_CH2 / PD13 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
 
-TIM3/TIM4 当前均约 333 Hz、1 μs tick（PSC=15、ARR=3002）。FrontAxis 的 1500 μs 只是 provisional startup/center candidate，不是 calibrated neutral，也不是 Hardware Verified；首次验收必须机构卸载、舵盘/连杆脱开，执行 `1500 → 1450 → 1500 → 1550 → 1500`。多 bit Enable 采用 all-or-nothing：任一 channel start 失败时回滚本次已 start 的其它 channel，并恢复调用前 enabled state；Disable/Disable All 继续 fail-closed/best-effort stop。
+TIM3/TIM4 当前均约 333 Hz、1 μs tick（PSC=15、ARR=3002）。FrontAxis 卖家参数记录为 500–2500 μs、中心候选 1500 μs、工作电压 4.8–7.4 V、可控行程 0–270°、死区 4 μs；但当前命令仍严格限制在 1450–1550 μs。1500 μs 只是 provisional startup/center candidate，不是 calibrated Neutral，也不是 Hardware Verified；首次验收必须机构卸载、舵盘/连杆脱开，执行 `1500 → 1450 → 1500 → 1550 → 1500`。卖家参数页写“是否防水：否”，商品照片/壳体却标示“Water proof Robot Servo”，因此 Waterproof capability = **[Unverified]**，在获得可靠 IP/密封证据前不得声明或安排直接浸水。
+
+多 bit Enable 采用 all-or-nothing：调用前已 enabled 的 requested channel 完全跳过，不产生 write/start/stop；任一新 channel start 失败时只 stop 本次 newly started channel，并保持调用前 logical/physical state。Console 中 pending Disable 是 motion-command barrier：受影响舵机的 PWM、Neutral、Set Angle 在 Controller 层即被拒绝，不写帧、不进入 APC220 queue；Disable Error/timeout 不会释放 Disable 之后的 stale motion。
 
 ### 当前 Firmware 路径（PR #8）
 

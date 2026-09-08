@@ -19,11 +19,13 @@ The Qt Console now uses an independent descriptor table for the five semantic ID
 |---:|---|---|---|
 | `0` / `0x0001` | `FrontRight` / 前足右 | SAVOX SW-0250MG+, TIM3_CH1 / PA6 | PWM 1050–1950 μs; angle −45…+45° |
 | `1` / `0x0002` | `FrontLeft` / 前足左 | SAVOX SW-0250MG+, TIM3_CH2 / PA7 | PWM 1050–1950 μs; angle −45…+45° |
-| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D, TIM3_CH3 / PB0 | PWM-only 1450–1550 μs; **Calibration Pending**; Set Angle disabled |
+| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D, TIM3_CH3 / PB0 | Electrical 500/1500/2500 μs; PWM command 1450–1550 μs; **Calibration Pending**; Set Angle disabled |
 | `3` / `0x0008` | `RearRight` / 后足右 | GDW IPX896HV, TIM4_CH1 / PD12 | PWM 1020–2020 μs; angle −45…+45° |
 | `4` / `0x0010` | `RearLeft` / 后足左 | GDW IPX896HV, TIM4_CH2 / PD13 | PWM 1020–2020 μs; angle −45…+45° |
 
-`ServoId::Servo1` remains only as a deprecated historical source-compatibility alias for `FrontRight`; there is deliberately no `Servo2` alias. New UI text, logs, tests, and implementation use semantic names. FrontAxis's 1500 μs value is a provisional startup/center candidate, not a calibrated or Hardware Verified neutral. The first hardware check is unloaded with the horn/linkage detached: `1500 → 1450 → 1500 → 1550 → 1500`.
+`ServoId::Servo1` remains only as a deprecated historical source-compatibility alias for `FrontRight`; there is deliberately no `Servo2` alias. New UI text, logs, tests, and implementation use semantic names. FrontAxis's seller-provided electrical metadata is 500–2500 μs with a 1500 μs center candidate, but Qt continues to enforce only the provisional 1450–1550 μs bring-up command envelope. Its button is labelled `Center 1500 us — Provisional`; this reuses the Neutral protocol command without claiming a calibrated or Hardware Verified neutral. The first hardware check is unloaded with the horn/linkage detached: `1500 → 1450 → 1500 → 1550 → 1500`.
+
+FrontAxis waterproof capability is **[Unverified]**. The seller parameter page says it is not waterproof, while the product photo/shell says “Water proof Robot Servo.” Until reliable IP/sealing evidence exists, the project must not describe the actuator as suitable for direct immersion.
 
 This is a hardware-layout compatibility break: the historical v0.4 Servo1/PA6 bring-up object was `RearLeft`, while PR #8 formally assigns PA6/ID0 to `FrontRight` and `RearLeft` to PD13/TIM4_CH2. Do not mix pre-PR8 Console/Firmware binaries with the PR8 five-servo wiring. PR #8 software verification is complete when the descriptor and controller tests pass; target hardware regression for the new layout remains pending.
 
@@ -93,8 +95,8 @@ QApplication
 | ACK / retry / timeout | [Hardware Verified - Bench] / timing [Provisional] | DirectUart tracks multiple requests; Apc220HalfDuplex allows one ACK-requiring request in flight, queues up to `kApc220CommandQueueCapacity` user commands, prioritizes due heartbeat over ordinary command retry, and retries the identical frame at the profile timeout. |
 | Servo Enable / Disable | [Implemented] | UI logical enable changes only after a matching successful ACK. |
 | Disable All | [Implemented] | Sends the current supported mask `0x001F` for all five semantic channels. |
-| Neutral | [Implemented] | Sends `0x14` with the selected semantic servo mask after Enable ACK; FrontAxis remains a provisional PWM-only bring-up channel. |
-| Apply PWM | [Implemented] | Explicit button; slider movement alone does not transmit. Requires successful Enable ACK and range validation. |
+| Neutral | [Implemented] | Sends `0x14` with the selected semantic servo mask after Enable ACK and with no pending Disable; FrontAxis exposes this as `Center 1500 us — Provisional`, not calibrated Neutral. |
+| Apply PWM | [Implemented] | Explicit button; slider movement alone does not transmit. Requires successful Enable ACK, no pending Disable, and descriptor command-range validation. |
 | Set Angle | [Implemented] | Angle-capable semantic servos use descriptor-specific input ranges and 0.1° steps; Qt converts to signed cdeg and calls `RobotController::setServoAngle()`. The control requires connection, support, Enable ACK, and no pending Disable request. FrontAxis is disabled. |
 | Protocol monitor | [Implemented] | Displays latest TX/RX chunks, packet counts, CRC errors, timeouts, latest matching-ACK RTT, ACK state, and up to 1000 log blocks. |
 
@@ -232,7 +234,7 @@ Do not mix the MinGW Qt libraries with MSVC, LLVM-MinGW, the separately installe
 
 - A fresh MinGW/Qt CMake configure and build succeeds without changing the project CMake structure.
 - `protocol_tests`: **PASS**, including CRC/COBS regression, result enum values, Neutral, and −9000/0/+9000 cdeg golden vectors.
-- `robot_controller_tests`: **PASS**, including semantic five-servo descriptor boundaries, PWM boundaries, angle-capability/range gates, FrontAxis rejection, Neutral ACK, ACK match/mismatch, identical-frame retry, APC220 first-heartbeat ACK gate, heartbeat coalescing and retry priority, bounded queue release, heartbeat rejection/timeout liveness, Error type validation, error-only/write-failure reset, and DirectUart multi-pending regression.
+- `robot_controller_tests`: **PASS**, including semantic five-servo descriptor boundaries, PWM boundaries, angle-capability/range gates, FrontAxis rejection, pending-Disable PWM/Neutral/Angle barriers across APC Error/timeout, Neutral ACK, ACK match/mismatch, identical-frame retry, APC220 first-heartbeat ACK gate, heartbeat coalescing and retry priority, bounded queue release, heartbeat rejection/timeout liveness, Error type validation, error-only/write-failure reset, and DirectUart multi-pending regression.
 - Firmware was separately clean-built with the STM32 GCC toolchain. PR #7 user hardware regression passed on the desktop APC220 bench; the timing values remain a Console-side adaptation and the Firmware watchdog remains unchanged.
 
 ## Historical Servo1 hardware milestones (pre-PR #8)

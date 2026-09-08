@@ -57,11 +57,15 @@ The five-servo bring-up keeps a pure-C Firmware `servo_descriptor` table and an 
 
 ## Multi-servo Enable must be transactional
 
-When a multi-bit Enable request is accepted, every requested channel must start or the operation must roll back. If one fake/real driver start fails, channels already started by that call are stopped and the enabled mask returns to its pre-call value; partial arm is unsafe and must not be reported as success. Disable and Disable All intentionally remain fail-closed/best-effort stop operations.
+When a multi-bit Enable request is accepted, every newly requested channel must start or the operation must roll back. A requested channel that was already enabled is an idempotent no-op: rewriting its pulse to center would alter physical state even if the logical mask were restored later. If one fake/real driver start fails, only channels newly started by that call are stopped, the enabled mask returns to its pre-call value, and already-running channels receive no write/start/stop event. Partial arm is unsafe and must not be reported as success. Disable and Disable All intentionally remain fail-closed/best-effort stop operations.
+
+## Treat pending Disable as a motion-command barrier
+
+Once Disable is accepted and awaiting ACK, new PWM, Neutral, and Set Angle commands for the affected servo must be rejected at the Controller boundary—not merely disabled in the UI. This prevents DirectUart writes and APC220 queue entries from being created behind a safety command, so a later Disable Error or timeout cannot release stale post-disable motion.
 
 ## Treat FrontAxis center as a bring-up candidate, not calibration
 
-The HDKJ S3150D FrontAxis channel uses a deliberately narrow 1450–1550 μs PWM clamp and remains SetAngle-disabled. Its 1500 μs value is only a provisional startup/center candidate. First hardware verification must be unloaded with the horn or linkage detached, using `1500 → 1450 → 1500 → 1550 → 1500`; only measured mechanical behavior can promote a neutral calibration.
+The HDKJ S3150D FrontAxis descriptor separates seller-provided electrical capability (500/1500/2500 μs, 4.8–7.4 V, 0–270° travel, 4 μs dead band) from the deliberately narrow 1450–1550 μs bring-up command envelope. It remains SetAngle-disabled, and 1500 μs is only a provisional startup/center candidate. First hardware verification must be unloaded with the horn or linkage detached, using `1500 → 1450 → 1500 → 1550 → 1500`; only measured mechanical behavior can promote a neutral calibration. The seller page also conflicts with the product shell/photo on waterproofing, so waterproof capability remains **[Unverified]** and direct immersion is prohibited until reliable IP/sealing evidence is available.
 
 ## Record layout compatibility breaks explicitly
 

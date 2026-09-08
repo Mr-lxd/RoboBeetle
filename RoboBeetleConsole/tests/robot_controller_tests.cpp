@@ -211,6 +211,86 @@ void testSetAngleBlockedDuringDisableRequest()
            "blocked angle must not add a frame while disable is pending");
 }
 
+void testApc220DisablePendingBlocksAllMotionAndErrorReleasesNoStaleWork()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 1000;
+    config.heartbeatSafetyBudgetMs = 5000;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+    expect(controller.enableServo(rb::ServoId::FrontRight),
+           "APC disable barrier setup should enable FrontRight");
+    acknowledgeLast(transport);
+
+    expect(controller.disableServo(rb::ServoId::FrontRight),
+           "APC disable barrier should send Disable");
+    const rb::Packet disable = lastPacket(transport);
+    const qsizetype writesAfterDisable = transport.writes().size();
+    const int queuedAfterDisable = controller.queuedCommandCount();
+    expect(controller.isServoDisablePending(rb::ServoId::FrontRight),
+           "FrontRight must be pending while Disable awaits ACK");
+    expect(!controller.setServoPwm(rb::ServoId::FrontRight, 1500),
+           "Set PWM must be rejected while Disable is pending");
+    expect(!controller.neutralServo(rb::ServoId::FrontRight),
+           "Neutral must be rejected while Disable is pending");
+    expect(!controller.setServoAngle(rb::ServoId::FrontRight, 0),
+           "Set Angle must be rejected while Disable is pending");
+    expect(transport.writes().size() == writesAfterDisable,
+           "pending-Disable motion rejection must not add wire frames");
+    expect(controller.queuedCommandCount() == queuedAfterDisable,
+           "pending-Disable motion rejection must not add APC queue entries");
+
+    QByteArray payload;
+    payload.append(static_cast<char>(disable.sequence & 0xff));
+    payload.append(static_cast<char>((disable.sequence >> 8) & 0xff));
+    payload.append(static_cast<char>(disable.type));
+    payload.append(static_cast<char>(0x34));
+    payload.append(static_cast<char>(0x12));
+    transport.injectBytes(rb::PacketCodec::encodeWire(
+        {rb::MessageType::Error, 0x8000, payload}));
+    expect(!controller.isServoDisablePending(rb::ServoId::FrontRight),
+           "matching Disable Error must clear pending state");
+    expect(transport.writes().size() == writesAfterDisable,
+           "Disable Error must not release rejected stale motion onto the wire");
+    expect(controller.queuedCommandCount() == 0,
+           "Disable Error must not leave rejected stale motion queued");
+}
+
+void testApc220DisableTimeoutReleasesNoStaleMotion()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 5;
+    config.maxRetries = 0;
+    config.heartbeatSafetyBudgetMs = 5000;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+    expect(controller.enableServo(rb::ServoId::FrontRight),
+           "APC timeout barrier setup should enable FrontRight");
+    acknowledgeLast(transport);
+    expect(controller.disableServo(rb::ServoId::FrontRight),
+           "APC timeout barrier should send Disable");
+    const qsizetype writesAfterDisable = transport.writes().size();
+
+    expect(!controller.setServoPwm(rb::ServoId::FrontRight, 1500),
+           "Set PWM must not queue behind a pending Disable timeout");
+    expect(!controller.neutralServo(rb::ServoId::FrontRight),
+           "Neutral must not queue behind a pending Disable timeout");
+    expect(!controller.setServoAngle(rb::ServoId::FrontRight, 0),
+           "Set Angle must not queue behind a pending Disable timeout");
+    waitForMs(40);
+
+    expect(!controller.isServoDisablePending(rb::ServoId::FrontRight),
+           "terminal Disable timeout must clear pending state");
+    expect(controller.queuedCommandCount() == 0,
+           "terminal Disable timeout must not release stale motion from the queue");
+    expect(transport.writes().size() == writesAfterDisable,
+           "terminal Disable timeout must not send rejected stale motion");
+}
+
 void testDisableAckClearsPendingWhenAlreadyDisabled()
 {
     rb::FakeTransport transport;
@@ -1896,6 +1976,8 @@ int main(int argc, char **argv)
     testNoAutomaticEnableAndPwmRequiresEnable();
     testAngleDegreesConvertToCentidegrees();
     testSetAngleBlockedDuringDisableRequest();
+    testApc220DisablePendingBlocksAllMotionAndErrorReleasesNoStaleWork();
+    testApc220DisableTimeoutReleasesNoStaleMotion();
     testDisableAckClearsPendingWhenAlreadyDisabled();
     testDisablePendingWriteFailureDoesNotLockAngle();
     testDisablePendingAckRejectedRestoresAngle();

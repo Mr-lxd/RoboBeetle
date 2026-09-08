@@ -72,6 +72,11 @@ servo_service_result_t servo_service_enable(
             continue;
         }
 
+        if ((original_mask & descriptor->mask) != 0U)
+        {
+            continue;
+        }
+
         service->driver_ops->write_pulse_us(
             service->driver_context,
             descriptor->id,
@@ -100,10 +105,7 @@ servo_service_result_t servo_service_enable(
             return SERVO_SERVICE_RESULT_HARDWARE_FAILURE;
         }
 
-        if ((original_mask & descriptor->mask) == 0U)
-        {
-            newly_started_mask |= descriptor->mask;
-        }
+        newly_started_mask |= descriptor->mask;
     }
 
     service->enabled_mask = (uint16_t)(original_mask | mask);

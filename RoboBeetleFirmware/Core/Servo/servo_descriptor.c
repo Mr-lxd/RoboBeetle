@@ -54,9 +54,9 @@ static const servo_descriptor_t descriptors[SERVO_DESCRIPTOR_COUNT] = {
         .supported = true,
         .angle_supported = false,
         .calibration = {
-            .min_pulse_us = 1450U,
+            .min_pulse_us = 500U,
             .neutral_pulse_us = 1500U,
-            .max_pulse_us = 1550U,
+            .max_pulse_us = 2500U,
             .min_angle_cdeg = 0,
             .max_angle_cdeg = 0,
         },

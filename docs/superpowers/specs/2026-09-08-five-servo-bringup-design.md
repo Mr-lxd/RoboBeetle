@@ -64,8 +64,10 @@ The SAVOX calibration is provisional 1000/1500/2000 us and -50/+50 degrees;
 its mechanical command envelope is 1050/1500/1950 us and -45/+45 degrees.
 The GDW calibration remains the historical 520/1520/2520 us and -90/+90
 degrees, while normal mechanical commands are limited to 1020/1520/2020 us
-and -45/+45 degrees. FrontAxis is PWM-only with a provisional 1450/1500/1550
-us clamp and no angle capability.
+and -45/+45 degrees. FrontAxis records seller-provided electrical metadata of
+500/1500/2500 us but remains PWM-only with a provisional 1450--1550 us command
+envelope and no angle capability. The seller's waterproof statements conflict,
+so direct-immersion capability remains unverified.
 
 `servo_calibration` becomes a generic mapping helper over a supplied
 calibration record; it contains no Servo1-only global state.
@@ -78,6 +80,9 @@ mechanical command limits before electrical limits, and iterates descriptors
 for multi-servo Enable/Neutral/Disable/Disable All. FrontAxis SetAngle returns
 UnsupportedServo. Invalid IDs never reach driver operations. Enable/Disable
 state is a five-bit mask and Disable All stops every currently enabled channel.
+Enable skips requested bits that were already enabled without writing, starting,
+or stopping them; rollback stops only channels newly started by that call so the
+pre-existing physical pulse state is preserved.
 
 `servo_driver_stm32` owns a small runtime binding table derived from the pure-C
 descriptor table. It resolves each symbolic timer/channel to the `TIM_HandleTypeDef`
@@ -106,12 +111,15 @@ and mechanical command ranges. `RobotControllerConfig` defaults to the five-bit
 supported mask. Controller validation and enabled/pending signal loops iterate
 the descriptor collection rather than assuming two indices. Existing APC220
 scheduler state transitions are preserved; only the actuator IDs and per-servo
-ranges become descriptor-driven.
+ranges become descriptor-driven. A pending Disable is a Controller-level barrier
+for PWM, Neutral, and Set Angle, so rejected motion cannot reach either the wire
+or the APC220 queue.
 
 `MainWindow` builds five panels by iterating the descriptor collection. Each card
-has independent Enable/Disable, Neutral, PWM, Apply PWM, angle input, Set Angle,
-and status controls. FrontAxis visibly reports Calibration Pending / PWM
-Bring-up Only and has Set Angle disabled. All other cards use their descriptor
+has independent Enable/Disable, center/Neutral, PWM, Apply PWM, angle input,
+Set Angle, and status controls. FrontAxis visibly reports Calibration Pending /
+PWM Bring-up Only, labels its 1500 us action as provisional rather than calibrated
+Neutral, and has Set Angle disabled. All other cards use their descriptor
 limits. The old Servo2 Unsupported/Planned card is removed. The global Disable
 All action remains; there is no Enable All action. No commanded/actual telemetry
 model is introduced.

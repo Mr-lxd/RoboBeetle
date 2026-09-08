@@ -41,11 +41,11 @@ PR #8 does not change the Protocol V2 wire format, message IDs, CRC, or COBS rul
 |---:|---|---|---|
 | `0` / `0x0001` | `FrontRight` / 前足右 | SAVOX SW-0250MG+, TIM3_CH1 / PA6 | PWM 1050–1950 μs; angle −45…+45° |
 | `1` / `0x0002` | `FrontLeft` / 前足左 | SAVOX SW-0250MG+, TIM3_CH2 / PA7 | PWM 1050–1950 μs; angle −45…+45° |
-| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D, TIM3_CH3 / PB0 | PWM-only 1450–1550 μs; Set Angle rejected; calibration pending |
+| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D, TIM3_CH3 / PB0 | Electrical 500/1500/2500 μs; command 1450–1550 μs; Set Angle rejected; calibration pending |
 | `3` / `0x0008` | `RearRight` / 后足右 | GDW IPX896HV, TIM4_CH1 / PD12 | PWM 1020–2020 μs; angle −45…+45° |
 | `4` / `0x0010` | `RearLeft` / 后足左 | GDW IPX896HV, TIM4_CH2 / PD13 | PWM 1020–2020 μs; angle −45…+45° |
 
-`SUPPORTED_SERVO_MASK` is exactly `0x001F`. SAVOX electrical limits are 1000/1500/2000 μs with an accepted command envelope of 1050–1950 μs; GDW electrical limits are 520/1520/2520 μs with an accepted command envelope of 1020–2020 μs. FrontAxis uses the provisional 1450–1550 μs bring-up clamp and 1500 μs startup/center candidate; it is not a calibrated or Hardware Verified neutral. Its first hardware check is unloaded with the horn/linkage detached: `1500 → 1450 → 1500 → 1550 → 1500`.
+`SUPPORTED_SERVO_MASK` is exactly `0x001F`. SAVOX electrical limits are 1000/1500/2000 μs with an accepted command envelope of 1050–1950 μs; GDW electrical limits are 520/1520/2520 μs with an accepted command envelope of 1020–2020 μs. FrontAxis seller metadata records electrical 500/1500/2500 μs, 4.8–7.4 V, 0–270° travel, and 4 μs dead band, while its accepted command envelope remains the much narrower provisional 1450–1550 μs. The 1500 μs value is a startup/center candidate, not a calibrated or Hardware Verified Neutral. Its first hardware check is unloaded with the horn/linkage detached: `1500 → 1450 → 1500 → 1550 → 1500`. Waterproof capability is **[Unverified]** because the seller parameter page says “not waterproof” while the product photo/shell says “Water proof Robot Servo”; no direct-immersion suitability may be claimed without reliable IP/sealing evidence.
 
 This semantic map is a hardware-layout compatibility break. Historical v0.4 `Servo1`/PA6 bring-up referred to `RearLeft`; PR #8 assigns PA6/ID0 to `FrontRight` and PD13/TIM4_CH2 to `RearLeft`. Do not mix pre-PR8 Console/Firmware binaries with PR8 five-servo wiring. Qt's `ServoId::Servo1` is only a deprecated source alias for `FrontRight`; there is no `Servo2` alias, and new UI/logs/docs use semantic names.
 
@@ -97,7 +97,7 @@ The Console can parse payloads of at least five bytes, validates both the reques
 servo_mask  uint16 LE
 ```
 
-Mask assignments are the frozen five semantic bits from the PR #8 descriptor contract above. Firmware and Console use `SUPPORTED_SERVO_MASK = 0x001F`. A zero mask returns `InvalidPayload`; any bit outside `0x001F` returns `UnsupportedServo` and performs no partial action. Multi-bit Enable is all-or-nothing: if a requested channel fails to start, channels started by that call are rolled back and the pre-call enabled state is restored. Disable and Disable All retain fail-closed/best-effort stop semantics. Neutral requires a live host and enabled selected channels, writes each descriptor's neutral pulse, and returns `OK`; FrontAxis remains PWM-only with calibration pending.
+Mask assignments are the frozen five semantic bits from the PR #8 descriptor contract above. Firmware and Console use `SUPPORTED_SERVO_MASK = 0x001F`. A zero mask returns `InvalidPayload`; any bit outside `0x001F` returns `UnsupportedServo` and performs no partial action. Multi-bit Enable is all-or-nothing: requested channels that were already enabled are skipped without pulse write/start/stop, and if a newly requested channel fails to start, only channels newly started by that call are rolled back while the pre-call logical and physical state is preserved. Disable and Disable All retain fail-closed/best-effort stop semantics. While a Disable is pending for a servo, the Console Controller rejects PWM, Neutral, and Set Angle before wire encoding or APC queueing. Neutral otherwise requires a live host and enabled selected channels, writes each descriptor's center/neutral pulse, and returns `OK`; FrontAxis remains PWM-only with calibration pending and its 1500 μs action is provisional.
 
 ### Set Servo PWM — `0x12`
 
@@ -108,7 +108,7 @@ items[count]:
     pulse_us  uint16 LE
 ```
 
-The wire schema is variable-length, but both current command paths use exactly one item (`payload_length=4`, `count=1`). Console and Firmware accept the five semantic IDs and apply the descriptor-specific command envelopes: SAVOX 1050–1950 μs, FrontAxis 1450–1550 μs, and GDW 1020–2020 μs. Console additionally requires its local Enable ACK state; Firmware requires both a live heartbeat and its own enabled bit.
+The wire schema is variable-length, but both current command paths use exactly one item (`payload_length=4`, `count=1`). Console and Firmware accept the five semantic IDs and apply the descriptor-specific command envelopes: SAVOX 1050–1950 μs, FrontAxis 1450–1550 μs, and GDW 1020–2020 μs. FrontAxis's 500–2500 μs electrical metadata does not widen this command envelope. Console additionally requires its local Enable ACK state and no pending Disable for that ID; Firmware requires both a live heartbeat and its own enabled bit.
 
 ### Set Servo Angle — `0x13`
 
@@ -121,7 +121,7 @@ items[count]:
 
 The type and schema are implemented on both sides:
 
-- Console/controller: `setServoAngle()` requires a supported, enabled, angle-capable semantic servo, validates its descriptor range (−45…+45° for current SAVOX/GDW channels), and sends the signed `int16` value directly. It does not convert angle to PWM. The Qt UI uses descriptor-specific controls at 0.1° steps and enables them only after connection plus a successful Enable ACK with no pending Disable request.
+- Console/controller: PWM, Neutral, and `setServoAngle()` require a supported, enabled semantic servo with no pending Disable; Set Angle also requires angle capability and validates the descriptor range (−45…+45° for current SAVOX/GDW channels). Rejected commands are neither written nor placed in the APC220 queue. Angle is sent as signed `int16` cdeg; Qt does not convert angle to PWM.
 - Firmware: validates `count=1`, live heartbeat, an angle-capable semantic ID, enabled state, and the descriptor range. FrontAxis is rejected as unsupported for Set Angle; out-of-range values return `OutOfRange` and are not clamped.
 - Firmware performs the descriptor-specific piecewise linear calibration with `int32_t` intermediates (SAVOX electrical 1000/1500/2000 μs; GDW 520/1520/2520 μs), then updates the mapped STM32 timer channel.
 

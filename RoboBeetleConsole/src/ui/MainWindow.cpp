@@ -154,7 +154,16 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     pwmSpins_[index]->setEnabled(supported);
     pwmSliders_[index]->setEnabled(supported);
     enableButtons_[index] = new QPushButton(QStringLiteral("Enable"), box);
-    neutralButtons_[index] = new QPushButton(QStringLiteral("Neutral"), box);
+    neutralButtons_[index] = new QPushButton(
+        descriptor != nullptr && descriptor->calibrationPending
+            ? QStringLiteral("Center %1 us — Provisional").arg(descriptor->neutralPwmUs)
+            : QStringLiteral("Neutral"),
+        box);
+    if (descriptor != nullptr && descriptor->calibrationPending) {
+        neutralButtons_[index]->setToolTip(QStringLiteral(
+            "Provisional center candidate only; not a calibrated Neutral. "
+            "This action reuses the Protocol V2 Neutral command."));
+    }
     applyButtons_[index] = new QPushButton(QStringLiteral("Apply PWM"), box);
     angleSpins_[index] = new QDoubleSpinBox(box);
     angleSpins_[index]->setRange(descriptor == nullptr ? 0.0
@@ -315,8 +324,8 @@ void MainWindow::refreshServoUi(int index)
     const bool pendingDisable = controller_->isServoDisablePending(id);
     enableButtons_[index]->setText(enabled ? QStringLiteral("Disable") : QStringLiteral("Enable"));
     enableButtons_[index]->setEnabled(connected && supported);
-    neutralButtons_[index]->setEnabled(connected && supported && enabled);
-    applyButtons_[index]->setEnabled(connected && supported && enabled);
+    neutralButtons_[index]->setEnabled(connected && supported && enabled && !pendingDisable);
+    applyButtons_[index]->setEnabled(connected && supported && enabled && !pendingDisable);
     if (!connected) {
         statusLabels_[index]->setText(QStringLiteral("Disconnected"));
     } else if (!supported) {

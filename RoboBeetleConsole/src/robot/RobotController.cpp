@@ -253,6 +253,11 @@ bool RobotController::setServoPwm(ServoId id, quint16 pulseUs)
                             .arg(QString::fromLatin1(descriptor->semanticName)));
         return false;
     }
+    if (isServoDisablePending(id)) {
+        emit logMessage(QStringLiteral("Set PWM rejected: %1 disable is awaiting ACK")
+                            .arg(QString::fromLatin1(descriptor->semanticName)));
+        return false;
+    }
     if (pulseUs < descriptor->commandMinPwmUs || pulseUs > descriptor->commandMaxPwmUs) {
         emit logMessage(QStringLiteral("Set PWM rejected: %1 us is outside %2 command range %3-%4 us")
                             .arg(pulseUs)
@@ -314,8 +319,18 @@ bool RobotController::neutralServo(ServoId id)
     if (rejectUnsupportedServo(id, QStringLiteral("Neutral"))) {
         return false;
     }
+    const ServoDescriptor *descriptor = servoDescriptor(id);
+    if (descriptor == nullptr) {
+        return false;
+    }
     if (!isServoEnabled(id)) {
-        emit logMessage(QStringLiteral("Neutral rejected: servo is not enabled and acknowledged"));
+        emit logMessage(QStringLiteral("Neutral rejected: %1 is not enabled and acknowledged")
+                            .arg(QString::fromLatin1(descriptor->semanticName)));
+        return false;
+    }
+    if (isServoDisablePending(id)) {
+        emit logMessage(QStringLiteral("Neutral rejected: %1 disable is awaiting ACK")
+                            .arg(QString::fromLatin1(descriptor->semanticName)));
         return false;
     }
     return sendCommand(MessageType::Neutral, maskPayload(servoMask(id)), servoMask(id));

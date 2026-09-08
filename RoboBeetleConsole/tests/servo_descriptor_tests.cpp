@@ -77,6 +77,9 @@ int main()
            "FrontAxis hardware name must match");
     expect(!table[2].angleSupported && table[2].calibrationPending,
            "FrontAxis must remain PWM-only and calibration pending");
+    expect(table[2].electricalMinPwmUs == 500 && table[2].neutralPwmUs == 1500
+               && table[2].electricalMaxPwmUs == 2500,
+           "FrontAxis electrical metadata must remain 500/1500/2500 us");
     expect(table[2].commandMinPwmUs == 1450 && table[2].commandMaxPwmUs == 1550
                && table[2].neutralPwmUs == 1500,
            "FrontAxis PWM bring-up envelope must match");

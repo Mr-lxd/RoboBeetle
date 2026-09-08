@@ -19,15 +19,15 @@ The current implementation freezes five semantic IDs and the supported mask at `
 |---:|---|---|---|
 | `0` / `0x0001` | `FrontRight` / 前足右 | SAVOX SW-0250MG+, TIM3_CH1 / PA6 | PWM 1050–1950 μs; angle −45…+45°; electrical 1000/1500/2000 μs |
 | `1` / `0x0002` | `FrontLeft` / 前足左 | SAVOX SW-0250MG+, TIM3_CH2 / PA7 | PWM 1050–1950 μs; angle −45…+45°; electrical 1000/1500/2000 μs |
-| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D, TIM3_CH3 / PB0 | PWM-only 1450–1550 μs; angle disabled; 1500 μs is a provisional startup/center candidate |
+| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D, TIM3_CH3 / PB0 | Electrical metadata 500/1500/2500 μs; PWM command envelope 1450–1550 μs; angle disabled; 1500 μs is provisional |
 | `3` / `0x0008` | `RearRight` / 后足右 | GDW IPX896HV, TIM4_CH1 / PD12 | PWM 1020–2020 μs; angle −45…+45°; electrical 520/1520/2520 μs |
 | `4` / `0x0010` | `RearLeft` / 后足左 | GDW IPX896HV, TIM4_CH2 / PD13 | PWM 1020–2020 μs; angle −45…+45°; electrical 520/1520/2520 μs |
 
 TIM3 and TIM4 run at approximately 333 Hz with a 1 μs tick (PSC=15, ARR=3002). `servo_descriptor` is pure C and HAL-independent: it stores abstract timer/channel selectors, never `TIM_CHANNEL_x` constants. `servo_driver_stm32` is the only layer that maps those selectors to `TIM_HandleTypeDef *` and HAL channel values.
 
-`FrontAxis` calibration is **[Calibration Pending]**. Its 1450–1550 μs clamp is a bring-up safety envelope, not a calibrated neutral and not a Hardware Verified claim. The first target check must be performed with the mechanism unloaded and horn/linkage detached: `1500 → 1450 → 1500 → 1550 → 1500`. Set Angle is intentionally rejected for this actuator.
+`FrontAxis` calibration is **[Calibration Pending]**. Seller-provided electrical metadata is 500–2500 μs pulse width, 1500 μs center candidate, 4.8–7.4 V operating voltage, 0–270° controllable travel, and 4 μs dead band. The narrower 1450–1550 μs command clamp is the only allowed bring-up envelope; 1500 μs is not a calibrated Neutral or Hardware Verified claim. The first target check must be performed with the mechanism unloaded and horn/linkage detached: `1500 → 1450 → 1500 → 1550 → 1500`. Set Angle is intentionally rejected for this actuator. Waterproof capability is **[Unverified]**: the seller parameter page says “not waterproof,” while the product photo/shell says “Water proof Robot Servo.” Do not claim or test direct immersion without reliable IP/sealing evidence.
 
-Enable accepts a multi-bit mask only with all-or-nothing semantics: if any requested channel fails to start, already-started channels from that call are stopped and the pre-call enabled mask is restored. Disable and Disable All retain fail-closed/best-effort stop behavior.
+Enable accepts a multi-bit mask only with all-or-nothing semantics. Requested channels already present in the pre-call enabled mask are idempotent and receive no pulse write, start, or stop. If any newly requested channel fails to start, only channels newly started by that call are stopped and the pre-call enabled state—including the physical pulse of an already-running channel—is preserved. Disable and Disable All retain fail-closed/best-effort stop behavior.
 
 This is a hardware-layout compatibility break. Historical v0.4 `Servo1`/PA6 bring-up referred to `RearLeft`; PR #8 formally assigns PA6/ID 0 to `FrontRight` and assigns `RearLeft` to PD13/TIM4_CH2. Do not mix a pre-PR8 Console/Firmware binary with the PR8 five-servo wiring. The Qt `Servo1` name is only a deprecated source-compatibility alias for `FrontRight`; new firmware code uses semantic names.
 
@@ -203,7 +203,7 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Servo, and Safety modules and their include directories. The pure-C checks `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, and `tests/protocol_dispatcher_tests.c` are compiled manually with `-Wall -Wextra -Werror`; there is still no integrated host-side wire-parser/HAL test target.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Servo, and Safety modules and their include directories. The seven pure-C checks `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_descriptor_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, and `tests/protocol_dispatcher_tests.c` are compiled manually with `-Wall -Wextra -Werror`; there is still no integrated host-side wire-parser/HAL test target.
 
 ## App/Main maintainability audit
 

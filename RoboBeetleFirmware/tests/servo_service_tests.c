@@ -29,6 +29,7 @@ typedef struct
     unsigned int stop_calls;
     unsigned int write_calls;
     uint16_t last_pulse;
+    uint16_t current_pulse[SERVO_DESCRIPTOR_COUNT];
 } fake_driver_t;
 
 static void record_event(
@@ -55,6 +56,7 @@ static void fake_write_pulse(
 
     ++driver->write_calls;
     driver->last_pulse = pulse_us;
+    driver->current_pulse[servo_id] = pulse_us;
     record_event(driver, 'W', servo_id, pulse_us);
 }
 
@@ -177,12 +179,21 @@ static void test_multi_enable_rolls_back_on_start_failure(void)
     fake_driver_t driver;
     servo_service_t service;
     const uint16_t original_mask = 0x0001U;
-    const uint16_t request_mask = 0x000EU;
+    const uint16_t request_mask = 0x0007U;
 
     init_service(&service, &driver);
     expect(servo_service_enable(&service, original_mask) ==
                SERVO_SERVICE_RESULT_OK,
            "rollback setup servo should enable");
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_RIGHT, 1600U) ==
+               SERVO_SERVICE_RESULT_OK,
+           "rollback setup should place FrontRight away from neutral");
+    const unsigned int front_right_writes_before =
+        count_event(&driver, 'W', SERVO_ID_FRONT_RIGHT);
+    const unsigned int front_right_starts_before =
+        count_event(&driver, 'S', SERVO_ID_FRONT_RIGHT);
+    const unsigned int front_right_stops_before =
+        count_event(&driver, 'T', SERVO_ID_FRONT_RIGHT);
     const unsigned int stops_before = driver.stop_calls;
     driver.start_fail_mask = 0x0004U;
 
@@ -193,8 +204,17 @@ static void test_multi_enable_rolls_back_on_start_failure(void)
            "failed multi-bit enable must restore the original enabled mask");
     expect(driver.stop_calls == stops_before + 1U,
            "failed multi-bit enable must stop only the newly started channel");
-    expect(count_event(&driver, 'T', SERVO_ID_FRONT_RIGHT) == 0U,
+    expect(count_event(&driver, 'W', SERVO_ID_FRONT_RIGHT) ==
+               front_right_writes_before,
+           "idempotent multi-enable must not rewrite an already-enabled servo");
+    expect(count_event(&driver, 'S', SERVO_ID_FRONT_RIGHT) ==
+               front_right_starts_before,
+           "idempotent multi-enable must not restart an already-enabled servo");
+    expect(count_event(&driver, 'T', SERVO_ID_FRONT_RIGHT) ==
+               front_right_stops_before,
            "rollback must not stop a servo enabled before the call");
+    expect(driver.current_pulse[SERVO_ID_FRONT_RIGHT] == 1600U,
+           "rollback must preserve the pre-existing FrontRight pulse");
     expect(count_event(&driver, 'T', SERVO_ID_FRONT_LEFT) == 1U,
            "rollback must stop FrontLeft after it started");
 }

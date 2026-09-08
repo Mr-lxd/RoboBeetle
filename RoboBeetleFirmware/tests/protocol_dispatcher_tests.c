@@ -589,6 +589,7 @@ static void test_cache_invalidation_allows_retry(void)
 {
     fixture_t fixture;
     uint8_t mask_payload[2];
+    uint8_t pwm_payload[4];
     rbp2_frame_t frame;
     protocol_dispatcher_outcome_t outcome;
 
@@ -598,20 +599,37 @@ static void test_cache_invalidation_allows_retry(void)
                servo_descriptor_for_id(SERVO_ID_FRONT_RIGHT)->mask);
     frame = make_frame(
         RBP2_MSG_SERVO_ENABLE,
-        50U,
+        49U,
         mask_payload,
         sizeof(mask_payload));
 
     outcome = handle(&fixture, &frame, 0U);
     expect(outcome.result == RBP2_RESULT_OK,
            "cache invalidation setup Enable should succeed");
+
+    pwm_payload[0] = 1U;
+    pwm_payload[1] = SERVO_ID_FRONT_RIGHT;
+    write_le16(&pwm_payload[2], 1600U);
+    frame = make_frame(
+        RBP2_MSG_SET_SERVO_PWM,
+        50U,
+        pwm_payload,
+        sizeof(pwm_payload));
+    const unsigned int writes_before = fixture.driver.write_calls;
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "cache invalidation setup PWM should succeed");
+    outcome = handle(&fixture, &frame, 0U);
+    expect(fixture.driver.write_calls == writes_before + 1U,
+           "cached PWM retry must not repeat the Servo side effect");
+
     protocol_dispatcher_invalidate_action_cache(&fixture.dispatcher);
     outcome = handle(&fixture, &frame, 0U);
 
     expect(outcome.result == RBP2_RESULT_OK,
            "command after cache invalidation should execute");
-    expect(fixture.driver.start_calls == 2U,
-           "cache invalidation must permit the Servo side effect again");
+    expect(fixture.driver.write_calls == writes_before + 2U,
+           "cache invalidation must permit the PWM side effect again");
 }
 
 static void test_result_mappings(void)
