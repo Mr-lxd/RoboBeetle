@@ -330,6 +330,14 @@ bool RobotController::sendCommand(MessageType type,
     }
 
     if (config_.linkProfile == LinkProfile::Apc220HalfDuplex && expectAck) {
+        if (type == MessageType::ServoEnable && actuatorFailClosed_ && !heartbeatReady_) {
+            monitor_.ackStatus = QStringLiteral(
+                "APC220 liveness recovering; Enable rejected");
+            emit logMessage(monitor_.ackStatus);
+            updateMonitor();
+            return false;
+        }
+
         refreshApc220HeartbeatDue();
         const QueuedCommand command{type, payload, affectedMask};
         const bool isSafetyDisable = type == MessageType::ServoDisable;

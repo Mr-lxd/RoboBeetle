@@ -1304,6 +1304,77 @@ void testApc220FirstHeartbeatTimeoutFailsClosedBeforeRetryExhaustion()
            "matching ACK for the fresh Enable should restore logical control");
 }
 
+void testApc220FailClosedRejectsEnableUntilHeartbeatRecovery()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 250;
+    config.ackTimeoutMs = 250;
+    config.maxRetries = 3;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "Enable gate test should establish Servo1 enabled state");
+    acknowledgeLast(transport);
+    expect(controller.isServoEnabled(rb::ServoId::Servo1),
+           "Enable ACK should establish the Enable gate precondition");
+
+    for (int waited = 0; waited < 700
+         && (transport.writes().size() < 3
+             || lastPacket(transport).type != rb::MessageType::Heartbeat);
+         waited += 10) {
+        waitForMs(10);
+    }
+    if (transport.writes().size() < 3
+        || lastPacket(transport).type != rb::MessageType::Heartbeat) {
+        expect(false, "Enable gate test should have a heartbeat in flight");
+        return;
+    }
+
+    // The first missed heartbeat ACK fail-closes actuators while the
+    // production maxRetries=3 retry bookkeeping remains active.
+    for (int waited = 0; waited < 600 && controller.isServoEnabled(rb::ServoId::Servo1);
+         waited += 10) {
+        waitForMs(10);
+    }
+    expect(!controller.isServoEnabled(rb::ServoId::Servo1),
+           "first heartbeat timeout must fail close the logical Servo state");
+    expect(!transport.writes().isEmpty()
+               && lastPacket(transport).type == rb::MessageType::Heartbeat,
+           "first heartbeat timeout must leave a heartbeat retry in flight");
+
+    const qsizetype beforeRejectedEnable = transport.writes().size();
+    expect(!controller.enableServo(rb::ServoId::Servo1),
+           "Enable must be rejected while APC220 liveness is recovering");
+    expect(controller.queuedCommandCount() == 0,
+           "rejected recovery Enable must not enter the command queue");
+    expect(transport.writes().size() == beforeRejectedEnable,
+           "rejected recovery Enable must not write a frame");
+
+    const qsizetype beforeRecoveryAck = transport.writes().size();
+    acknowledgeLast(transport);
+    // The dispatch-anchored soft deadline may already be due when the retry
+    // ACK arrives, causing one fresh heartbeat before user work is admitted.
+    if (transport.writes().size() > beforeRecoveryAck
+        && lastPacket(transport).type == rb::MessageType::Heartbeat) {
+        acknowledgeLast(transport);
+    }
+    expect(!controller.isServoEnabled(rb::ServoId::Servo1),
+           "heartbeat recovery must not implicitly re-enable Servo1");
+    expect(controller.queuedCommandCount() == 0,
+           "heartbeat recovery must not recreate a rejected Enable");
+
+    const qsizetype beforeFreshEnable = transport.writes().size();
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "a fresh Enable must be accepted after heartbeat recovery");
+    expect(transport.writes().size() == beforeFreshEnable + 1
+               && lastPacket(transport).type == rb::MessageType::ServoEnable,
+           "fresh post-recovery Enable must be the next actuator frame");
+    acknowledgeLast(transport);
+    expect(controller.isServoEnabled(rb::ServoId::Servo1),
+           "matching ACK for fresh Enable must restore Servo1 control");
+}
+
 void testApc220HeartbeatAckDoesNotMoveHardDeadline()
 {
     rb::FakeTransport transport;
@@ -1790,6 +1861,7 @@ int main(int argc, char **argv)
     testApc220HeartbeatTicksDoNotBurstAndQueueGetsChanceAfterAck();
     testApc220SafetyAdmissionProtectsNearTimeoutHeartbeat();
     testApc220FirstHeartbeatTimeoutFailsClosedBeforeRetryExhaustion();
+    testApc220FailClosedRejectsEnableUntilHeartbeatRecovery();
     testApc220HeartbeatAckDoesNotMoveHardDeadline();
     testApc220SustainedLoadPreservesHeartbeatSafetyMargin();
     testApc220HeartbeatTerminalLossFailsClosedAndRequiresFreshEnable();
