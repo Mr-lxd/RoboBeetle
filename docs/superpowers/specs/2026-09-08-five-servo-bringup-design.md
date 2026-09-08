@@ -1,7 +1,7 @@
 # PR #8 Design: Five-Servo End-to-End Bring-Up
 
-Date: 2026-09-08  
-Base: `main` at `54a8631194645a83e65afa21660be0adb38e27de`  
+Date: 2026-09-08
+Base: `main` at `54a8631194645a83e65afa21660be0adb38e27de`
 Branch: `feature/five-servo-bringup`
 
 ## Scope and invariants
