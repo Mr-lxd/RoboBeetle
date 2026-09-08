@@ -373,6 +373,82 @@ static void test_servo_commands(void)
            "Disable should clear Servo enabled state");
 }
 
+static void test_all_semantic_servo_ids_route(void)
+{
+    fixture_t fixture;
+    uint8_t payload[4];
+
+    fixture_init(&fixture);
+    accept_heartbeat(&fixture, 1U, 0U, 0U);
+
+    for (uint8_t servo_id = SERVO_ID_FRONT_RIGHT;
+         servo_id <= SERVO_ID_REAR_LEFT;
+         ++servo_id)
+    {
+        const servo_descriptor_t *descriptor =
+            servo_descriptor_for_id(servo_id);
+        rbp2_frame_t frame;
+        protocol_dispatcher_outcome_t outcome;
+
+        expect(descriptor != NULL,
+               "every semantic servo ID must have a descriptor");
+        if (descriptor == NULL)
+        {
+            continue;
+        }
+
+        write_le16(payload, descriptor->mask);
+        frame = make_frame(
+            RBP2_MSG_SERVO_ENABLE,
+            (uint16_t)(100U + servo_id),
+            payload,
+            2U);
+        outcome = handle(&fixture, &frame, 0U);
+        expect(outcome.result == RBP2_RESULT_OK,
+               "every semantic servo ID must accept Enable");
+
+        payload[0] = 1U;
+        payload[1] = servo_id;
+        write_le16(&payload[2], descriptor->command_min_pulse_us);
+        frame = make_frame(
+            RBP2_MSG_SET_SERVO_PWM,
+            (uint16_t)(200U + servo_id),
+            payload,
+            sizeof(payload));
+        outcome = handle(&fixture, &frame, 0U);
+        expect(outcome.result == RBP2_RESULT_OK,
+               "every semantic servo ID must route Set PWM");
+        expect(fixture.driver.last_servo_id == servo_id
+                   && fixture.driver.last_pulse_us
+                          == descriptor->command_min_pulse_us,
+               "Set PWM must reach the descriptor-selected servo");
+
+        payload[0] = 1U;
+        payload[1] = servo_id;
+        write_le16(&payload[2], 4500U);
+        frame = make_frame(
+            RBP2_MSG_SET_SERVO_ANGLE,
+            (uint16_t)(300U + servo_id),
+            payload,
+            sizeof(payload));
+        outcome = handle(&fixture, &frame, 0U);
+        if (descriptor->angle_supported)
+        {
+            expect(outcome.result == RBP2_RESULT_OK,
+                   "angle-capable semantic servo must route Set Angle");
+        }
+        else
+        {
+            expect(outcome.result == RBP2_RESULT_UNSUPPORTED_SERVO,
+                   "FrontAxis Set Angle must remain unsupported");
+        }
+    }
+
+    expect(servo_service_enabled_mask(&fixture.servo_service)
+               == SERVO_DESCRIPTOR_SUPPORTED_MASK,
+           "all five semantic Enable requests must set the fixed mask");
+}
+
 static void test_duplicate_success_is_replayed(void)
 {
     fixture_t fixture;
@@ -627,6 +703,7 @@ int main(void)
     test_invalid_heartbeat_does_not_refresh_safety();
     test_host_alive_validation_order();
     test_servo_commands();
+    test_all_semantic_servo_ids_route();
     test_duplicate_success_is_replayed();
     test_heartbeat_does_not_evict_action_cache();
     test_failed_command_is_not_cached();
