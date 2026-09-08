@@ -1,6 +1,6 @@
 # APC220 Bring-up Engineering Lessons
 
-This note records the evidence and boundaries behind the Console PR #7 scheduler adaptation. It is an engineering record, not a claim that the wireless path is fully hardware-validated in every installation.
+This note records the evidence and boundaries behind the Console PR #7 scheduler adaptation. The scheduler is **[Hardware Verified - Bench]** on the tested desktop setup, but this is not a claim that the wireless path is fully characterized in every installation.
 
 ## Keep programming and runtime links separate
 
@@ -25,9 +25,15 @@ Inject one fault at a time (wrong baud, disconnected ground, reversed TX/RX, fra
 
 ## RTT measurements must drive scheduler budgets
 
-The observed request/ACK round-trip time was approximately 167–173 ms. That is longer than the original 100 ms heartbeat cadence and leaves little margin under the original 200 ms ACK timeout. With independent heartbeat and command sends, a half-duplex link can therefore accumulate overlapping ACK-requiring traffic or time out a valid exchange during module turnaround.
+The normal desktop request/ACK round-trip time was approximately 160–170 ms (approximately 160–173 ms across the recorded observations). That is longer than the original 100 ms heartbeat cadence and leaves little margin under the original 200 ms ACK timeout. With independent heartbeat and command sends, a half-duplex link can therefore accumulate overlapping ACK-requiring traffic or time out a valid exchange during module turnaround. Deliberately injected Retry/Timeout events are expected fault-injection behavior and must not be counted as normal-link timeout statistics.
 
 The Console keeps the original DirectUart 100 ms / 200 ms multi-pending behavior for regression compatibility, while the APC220 profile uses 250 ms heartbeat and 250 ms ACK timeout. APC220 scheduling is stop-and-wait: one ACK-requiring frame is active, heartbeat ticks collapse into one due intent, user commands use a bounded queue, heartbeat due work precedes an ordinary command retry, and retries preserve the original sequence and encoded frame. The latest matching ACK RTT is shown by the protocol monitor so future measurements can replace provisional values with evidence.
+
+## PR #7 desktop-bench hardware verification
+
+The APC220 Half-Duplex Scheduler is **[Hardware Verified - Bench]** for the tested 440 MHz two-module desktop setup. User regression passed the complete Qt → APC220 → STM32 → ACK → APC220 → Qt path, 60 s idle Heartbeat, Servo1 Enable/ACK, Neutral, 0°/±10°/±45°/±90°, rapid queued Set Angle traffic, Disable/Disable All priority, robot-side disconnect, Heartbeat retry and Firmware watchdog safe-disable, recovery without automatic re-arm, and fresh Enable + matching ACK recovery. CRC errors were 0 during the normal run.
+
+The 250 ms Heartbeat target, 250 ms ACK timeout, and 490 ms Console host-side/local safety admission budget remain **[Provisional]** until lab/poolside distance, antenna-orientation, and outdoor RF characterization are complete. The 490 ms value is a host-side/local admission policy, not a Windows-plus-RF hard-real-time guarantee; RF jitter and host scheduling still require characterization.
 
 ## Soft targets are not hard safety deadlines
 

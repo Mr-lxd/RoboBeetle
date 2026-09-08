@@ -6,6 +6,7 @@ RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the curren
 
 - **[Implemented]** Confirmed in the current source tree.
 - **[Hardware Verified]** Reported by the current development record and handoff notes; this is stronger than a plan but is not derivable from source alone.
+- **[Hardware Verified - Bench]** Hardware evidence collected on the current desktop bench; it does not imply distance, antenna-orientation, poolside, or outdoor RF characterization.
 - **[Provisional]** Temporary bring-up values or incomplete interfaces that must not be treated as final calibration.
 - **[Planned]** Intended future work that is not implemented.
 - **[Historical Reference]** Information from old papers, slides, Simulink, CPG, or STM32 projects; it does not describe the current runtime unless independently reconfirmed.
@@ -17,7 +18,7 @@ RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the curren
 - Qt Widgets UI with serial-port discovery, editable port selection, configurable baud rate, and a default of 9600 baud.
 - Connect, Disconnect, Refresh, per-servo Enable/Disable, Disable All, Neutral, and explicit Apply PWM controls.
 - Protocol V2 with COBS framing, `0x00` delimiter, CRC-16/CCITT-FALSE, little-endian fields, and a 64-byte maximum payload.
-- Explicit DirectUart and Apc220HalfDuplex link profiles. DirectUart retains the 100 ms heartbeat / 200 ms ACK timeout and multi-pending behavior; Apc220HalfDuplex uses **[Provisional]** 250 ms / 250 ms stop-and-wait scheduling for the APC220 path.
+- Explicit DirectUart and Apc220HalfDuplex link profiles. DirectUart retains the 100 ms heartbeat / 200 ms ACK timeout and multi-pending behavior; the APC220 stop-and-wait scheduler is **[Hardware Verified - Bench]**, while its 250 ms / 250 ms timing values remain **[Provisional]**.
 - Up to three retransmissions after the original send, always reusing the original sequence and encoded frame.
 - ACK/Error reception, request-sequence matching, TX/RX hex display, packet/CRC/timeout counters, ACK status, and an event log.
 - Shared ACK result meanings `0..6`, with named rejection status in the monitor.
@@ -72,8 +73,8 @@ QApplication
 | COM scan | [Implemented] | `QSerialPortInfo::availablePorts()` returns sorted port names; Refresh reruns discovery. |
 | Baud rate | [Implemented] | Editable 1200–3,000,000; default 9600; connection uses 8 data bits, no parity, 1 stop bit, no flow control. |
 | Connect / Disconnect | [Implemented] | Connect opens the selected serial port. Disconnect first sends unacknowledged Disable All, then flushes/closes the port. |
-| Heartbeat | [Implemented] / APC target [Provisional] | DirectUart sends every 100 ms. Apc220HalfDuplex sends a fresh heartbeat immediately after `Connected`, gates user commands until a matching successful ACK, then targets a 250 ms cadence when the stop-and-wait slot is free; due ticks coalesce while a heartbeat is in flight. |
-| ACK / retry / timeout | [Implemented] | DirectUart tracks multiple requests; Apc220HalfDuplex allows one ACK-requiring request in flight, queues up to `kApc220CommandQueueCapacity` user commands, prioritizes due heartbeat over ordinary command retry, and retries the identical frame at the profile timeout. |
+| Heartbeat | [Hardware Verified - Bench] / target [Provisional] | DirectUart sends every 100 ms. Apc220HalfDuplex sends a fresh heartbeat immediately after `Connected`, gates user commands until a matching successful ACK, then targets a 250 ms cadence when the stop-and-wait slot is free; due ticks coalesce while a heartbeat is in flight. |
+| ACK / retry / timeout | [Hardware Verified - Bench] / timing [Provisional] | DirectUart tracks multiple requests; Apc220HalfDuplex allows one ACK-requiring request in flight, queues up to `kApc220CommandQueueCapacity` user commands, prioritizes due heartbeat over ordinary command retry, and retries the identical frame at the profile timeout. |
 | Servo Enable / Disable | [Implemented] | UI logical enable changes only after a matching successful ACK. |
 | Disable All | [Implemented] | Sends the current supported mask `0x0001`; it does not include the unimplemented Servo2 bit. |
 | Neutral | [Hardware Verified] | Sends `0x14` with Servo1 mask `0x0001` after Enable ACK; the development record confirms Servo1 returns to mechanical zero near 1520 μs, while Firmware keeps PWM enabled. |
@@ -146,13 +147,35 @@ STM32 Protocol V2 dispatcher
 
 ## Link profiles and APC220 scheduling
 
-`RobotControllerConfig::bringUpProvisional()` remains the DirectUart baseline used by existing controller tests and direct serial integrations. The application selects `RobotControllerConfig::apc220Provisional()` so the physical laptop → APC220 → STM32 path uses a 250 ms heartbeat and 250 ms ACK timeout.
+`RobotControllerConfig::bringUpProvisional()` remains the DirectUart baseline used by existing controller tests and direct serial integrations. The application selects `RobotControllerConfig::apc220Provisional()` so the physical laptop → APC220 → STM32 path uses the **[Hardware Verified - Bench]** stop-and-wait scheduler. Its 250 ms heartbeat target and 250 ms ACK timeout remain **[Provisional]** link parameters.
 
 In Apc220HalfDuplex mode, only one ACK-requiring frame is active. Servo user commands that arrive while it is active wait in the bounded `kApc220CommandQueueCapacity` queue. Heartbeat timer ticks set a single due flag; they never accumulate. When a heartbeat is due alongside a command retry, the heartbeat goes first and the command retry retains its original sequence and encoded frame. Any transport reset clears the in-flight request, queue, heartbeat due flag, and logical enable/pending state.
 
 The monitor exposes `ProtocolMonitor::lastAckRttMs`, and the UI displays the latest matching-ACK RTT for diagnosing the high-latency link. APC220 matching heartbeat rejection/mismatch/timeout keeps the liveness gate closed until a later heartbeat succeeds.
 
 The bring-up evidence and link-isolation lessons are recorded in the root [engineering lessons](../docs/engineering-lessons.md).
+
+## APC220 scheduler hardware acceptance (2026-09-08)
+
+**APC220 Half-Duplex Scheduler: [Hardware Verified - Bench]**
+
+The user-accepted desktop-bench regression covered the 440 MHz two-module link and the complete Qt → APC220 → STM32 → ACK → APC220 → Qt path:
+
+- 60 s idle Heartbeat, Servo1 Enable + ACK, Neutral, 0° → +10° → 0° → −10° → 0°, ±45°, ±90°.
+- Rapid repeated Set Angle traffic exercising the bounded scheduler queue.
+- Disable / Disable All safety priority.
+- Robot-side APC220 disconnect, Heartbeat loss/retry, Firmware watchdog safe-disable, and APC220 recovery.
+- Recovery never auto-rearmed Servo1; a fresh user Enable plus matching ACK was required.
+- CRC errors remained 0 during the normal link run. Normal desktop ACK RTT was approximately 160–170 ms (approximately 160–173 ms across the recorded observations).
+- Retry/Timeout events injected deliberately for fault isolation were expected safety behavior and are not normal-link timeout statistics.
+
+The following remain **[Provisional]** pending poolside/lab distance, antenna-orientation, and outdoor RF characterization:
+
+- APC220 heartbeat target: 250 ms.
+- ACK timeout: 250 ms.
+- Console host-side/local safety admission budget: 490 ms.
+
+This bench result verifies the scheduler behavior on the tested setup; it is not a Windows-plus-RF hard-real-time guarantee.
 
 ## Protocol
 
@@ -191,7 +214,7 @@ Do not mix the MinGW Qt libraries with MSVC, LLVM-MinGW, the separately installe
 - A fresh MinGW/Qt CMake configure and build succeeds without changing the project CMake structure.
 - `protocol_tests`: **PASS**, including CRC/COBS regression, result enum values, Neutral, and −9000/0/+9000 cdeg golden vectors.
 - `robot_controller_tests`: **PASS**, including −90/−45/0/+45/+90° to cdeg conversion, PWM boundaries, invalid PWM, Set Angle payload/range, Servo1 enable, Servo2 rejection, Neutral ACK, ACK match/mismatch, identical-frame retry, APC220 first-heartbeat ACK gate, heartbeat coalescing and retry priority, bounded queue release, heartbeat rejection/timeout liveness, Error type validation, error-only/write-failure reset, and DirectUart multi-pending regression.
-- Firmware was separately clean-built with the STM32 GCC toolchain. No serial port, MCU flashing, PWM output, or physical Servo movement was performed in this round. APC220 timing values are a Console-side adaptation; the Firmware watchdog remains unchanged.
+- Firmware was separately clean-built with the STM32 GCC toolchain. PR #7 user hardware regression passed on the desktop APC220 bench; the timing values remain a Console-side adaptation and the Firmware watchdog remains unchanged.
 
 ## Hardware milestones
 

@@ -1,5 +1,41 @@
 # RoboBeetle 硬件控制交接审计
 
+## 2026-09-08 APC220 half-duplex scheduler hardware acceptance（PR #7）
+
+### 当前状态
+
+APC220 Half-Duplex Scheduler：**[Hardware Verified - Bench]**
+
+用户已完成当前桌面台架的完整实机验收：
+
+- APC220 440 MHz 双端链路，以及 Qt → APC220 → STM32 → ACK → APC220 → Qt 完整闭环；
+- 60 s idle Heartbeat、Servo1 Enable + ACK、Neutral、0° → +10° → 0° → −10° → 0°、±45°、±90°；
+- 连续快速 Set Angle / scheduler queue；
+- Disable / Disable All safety priority；
+- 主动断开机器人端 APC220、Heartbeat loss/retry、Firmware watchdog safe-disable；
+- APC220 恢复后不自动 Enable，必须 fresh Enable + matching ACK 才恢复控制。
+
+正常桌面链路 CRC errors = 0，ACK RTT 约 160–170 ms（全部记录约 160–173 ms）。故障注入期间出现的 Retry / Timeout 属预期安全测试行为，不计入正常链路 timeout 统计；现场未观察到 stale command replay 或自动 re-arm。
+
+### APC220 当前实现边界
+
+- stop-and-wait：同一时刻最多一个 ACK-requiring request in flight；
+- Heartbeat coalescing；
+- dispatch-anchored Heartbeat safety admission；
+- Heartbeat loss fail-closed；
+- stale actuator queue purge；
+- Disable / Disable All priority；
+- liveness recovery 不自动恢复 Servo enabled state；
+- fresh Enable + matching ACK 才能重新 armed。
+
+以下参数仍为 **[Provisional]**，不应解读为最终 RF 参数：
+
+- APC220 Heartbeat target = 250 ms；
+- ACK timeout = 250 ms；
+- Console host-side/local safety admission budget = 490 ms。
+
+本轮仅完成当前桌面环境的 Hardware Verification；实验室水池边、距离、天线姿态和户外 RF characterization 尚未完成。490 ms 是 Console host-side/local safety admission budget，是本地调度准入策略，不是 Windows + RF hard-real-time guarantee。
+
 ## 2026-09-07 Firmware modularization hardware acceptance
 
 本节是当前 Firmware 结构和验收状态的权威摘要。PR #2 至 PR #6 均已完成 STM32CubeIDE 构建、ST-LINK 下载和对应实机回归；下方更早的审计/基线章节保留作为 Historical Reference，不代表当前 `main.c` 架构或未完成状态。
