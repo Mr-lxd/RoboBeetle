@@ -31,11 +31,11 @@ The Console keeps the original DirectUart 100 ms / 200 ms multi-pending behavior
 
 ## Soft targets are not hard safety deadlines
 
-The APC220 250 ms heartbeat value is a soft target for a high-latency link. The hard deadline is anchored when each heartbeat is dispatched, not when its ACK arrives; an ACK confirms liveness and measures RTT but cannot buy another interval. With the observed 167–173 ms RTT, the nominal budget is 250 + 170 ≈ 420 ms against the Firmware watchdog boundary of greater than 500 ms, leaving an approximately 80 ms nominal safety margin. Sustained-load tests must measure the actual wire gap and preserve that margin; widening the Firmware watchdog would only hide a Console scheduler defect.
+The APC220 250 ms heartbeat value is a soft target for a high-latency link. A separate 490 ms hard safety deadline is anchored when each heartbeat is dispatched, not when its ACK arrives; an ACK confirms liveness and measures RTT but cannot buy another interval. The scheduler admits an ordinary command or retry only when its configured ACK timeout plus one retry-timer polling interval fits before that boundary. This reserves an explicit 10 ms below the Firmware watchdog boundary of greater than 500 ms. The observed 167–173 ms RTT makes `250 + 170 ≈ 420 ms` a useful illustrative nominal observation, not a formal guarantee. Sustained-load and near-timeout tests measure the actual wire gap; widening the Firmware watchdog would only hide a Console scheduler defect.
 
 ## Distributed state must converge fail-closed
 
-The Console and Firmware each keep enabled/liveness state. A terminal APC220 heartbeat timeout can therefore invalidate the Console's prior Enable ACK at the same time that Firmware's watchdog clears its own enabled bit. The Console now clears logical enabled and Disable-pending state, queued actuator commands, and deferred retries at that boundary. Heartbeat recovery only restores transport liveness; it never replays outage-era Enable/PWM/Angle/Neutral work. A new user Enable and matching ACK is required before motion commands are accepted.
+The Console and Firmware each keep enabled/liveness state. Firmware can clear its enabled bit at the watchdog boundary before a Console's retry budget is exhausted. The Console therefore fail-closes actuator state on the first missed APC220 Heartbeat ACK: it clears logical enabled and Disable-pending state, queued actuator commands, and deferred retries while allowing heartbeat retry bookkeeping to continue. Heartbeat recovery only restores transport liveness; it never replays outage-era Enable/PWM/Angle/Neutral work. A new user Enable and matching ACK is required before motion commands are accepted.
 
 ## Safety commands need explicit priority
 
