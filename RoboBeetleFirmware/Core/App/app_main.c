@@ -170,12 +170,14 @@ static void protocol_send_ack(
 
 void app_main_init(
     UART_HandleTypeDef *uart,
-    TIM_HandleTypeDef *servo_timer)
+    TIM_HandleTypeDef *tim3,
+    TIM_HandleTypeDef *tim4)
 {
     safety_supervisor_init(&safety_supervisor);
     servo_driver_stm32_init(
         &servo_driver,
-        servo_timer);
+        tim3,
+        tim4);
     servo_service_init(
         &servo_service,
         servo_driver_stm32_ops(),

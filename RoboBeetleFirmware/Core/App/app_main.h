@@ -5,7 +5,8 @@
 
 void app_main_init(
     UART_HandleTypeDef *uart,
-    TIM_HandleTypeDef *servo_timer);
+    TIM_HandleTypeDef *tim3,
+    TIM_HandleTypeDef *tim4);
 
 void app_main_process(void);
 

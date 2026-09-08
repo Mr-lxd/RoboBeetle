@@ -6,12 +6,24 @@
 
 typedef struct
 {
+    const servo_descriptor_t *descriptor;
     TIM_HandleTypeDef *timer;
+    uint32_t hal_channel;
+} servo_driver_stm32_binding_t;
+
+typedef struct
+{
+    servo_driver_stm32_binding_t bindings[SERVO_DESCRIPTOR_COUNT];
 } servo_driver_stm32_t;
 
 void servo_driver_stm32_init(
     servo_driver_stm32_t *driver,
-    TIM_HandleTypeDef *timer);
+    TIM_HandleTypeDef *tim3,
+    TIM_HandleTypeDef *tim4);
+
+const servo_driver_stm32_binding_t *servo_driver_stm32_binding_for_id(
+    const servo_driver_stm32_t *driver,
+    uint8_t servo_id);
 
 const servo_service_driver_ops_t *servo_driver_stm32_ops(void);
 
