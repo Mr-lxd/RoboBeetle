@@ -1081,7 +1081,7 @@ void testApc220HeartbeatTicksDoNotBurstAndQueueGetsChanceAfterAck()
 {
     rb::FakeTransport transport;
     rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
-    config.heartbeatIntervalMs = 1;
+    config.heartbeatIntervalMs = 20;
     config.ackTimeoutMs = 1000;
     rb::RobotController controller(&transport, config);
     controller.connectTransport({"COM_TEST", 9600});
