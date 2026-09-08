@@ -26,6 +26,10 @@ struct RobotControllerConfig {
     int heartbeatIntervalMs{100};
     int ackTimeoutMs{200};
     int maxRetries{3};
+    // APC220-only hard liveness budget measured from heartbeat dispatch.  The
+    // provisional profile leaves an explicit margin below the Firmware
+    // watchdog; DirectUart ignores this field.
+    int heartbeatSafetyBudgetMs{490};
     quint16 provisionalPwmMinUs{520};
     quint16 provisionalPwmMaxUs{2520};
     quint16 provisionalNeutralUs{1520};
@@ -114,6 +118,8 @@ private:
     bool dispatchApc220Retry(quint16 sequence);
     void pumpApc220Scheduler();
     void refreshApc220HeartbeatDue();
+    bool canStartApc220OrdinaryExchange() const;
+    void dispatchApc220Heartbeat();
     void processIncoming(const QByteArray &bytes);
     void handlePacket(const Packet &packet);
     void handleAck(const Packet &packet);
@@ -121,7 +127,7 @@ private:
     void updateMonitor();
     void resetSchedulerState();
     void clearQueuedCommandsForDisable(quint16 affectedMask);
-    void handleApc220LivenessLoss();
+    void failClosedApc220Actuators();
     void setEnabledMask(quint16 mask);
     void setDisablePendingMask(quint16 mask);
     void noteWriteFailure(const QString &context);
@@ -143,7 +149,9 @@ private:
     std::optional<PendingRequest> deferredRetry_;
     bool heartbeatDue_{false};
     bool heartbeatReady_{false};
+    bool actuatorFailClosed_{false};
     qint64 nextHeartbeatDueAtMs_{0};
+    qint64 nextHeartbeatSafetyDeadlineAtMs_{0};
     QTimer heartbeatTimer_;
     QTimer retryTimer_;
     ProtocolMonitor monitor_;

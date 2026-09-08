@@ -65,6 +65,7 @@ RobotControllerConfig RobotControllerConfig::apc220Provisional()
     config.linkProfile = LinkProfile::Apc220HalfDuplex;
     config.heartbeatIntervalMs = 250;
     config.ackTimeoutMs = 250;
+    config.heartbeatSafetyBudgetMs = 490;
     return config;
 }
 
@@ -114,6 +115,9 @@ RobotController::RobotController(ITransport *transport,
             heartbeatReady_ = config_.linkProfile != LinkProfile::Apc220HalfDuplex;
             heartbeatDue_ = config_.linkProfile == LinkProfile::Apc220HalfDuplex;
             nextHeartbeatDueAtMs_ = config_.linkProfile == LinkProfile::Apc220HalfDuplex
+                ? nowMs()
+                : 0;
+            nextHeartbeatSafetyDeadlineAtMs_ = config_.linkProfile == LinkProfile::Apc220HalfDuplex
                 ? nowMs()
                 : 0;
             heartbeatTimer_.start();
@@ -329,11 +333,14 @@ bool RobotController::sendCommand(MessageType type,
         refreshApc220HeartbeatDue();
         const QueuedCommand command{type, payload, affectedMask};
         const bool isSafetyDisable = type == MessageType::ServoDisable;
+        const bool ordinaryAdmissionBlocked = !isSafetyDisable
+            && !canStartApc220OrdinaryExchange();
         if (isSafetyDisable) {
             clearQueuedCommandsForDisable(affectedMask);
         }
-        if (!heartbeatReady_ || !pending_.isEmpty() || heartbeatDue_ || deferredRetry_.has_value()
-            || !priorityCommandQueue_.isEmpty() || !commandQueue_.isEmpty()) {
+        if (!heartbeatReady_ || !pending_.isEmpty() || heartbeatDue_ || ordinaryAdmissionBlocked
+            || deferredRetry_.has_value() || !priorityCommandQueue_.isEmpty()
+            || !commandQueue_.isEmpty()) {
             // A safety Disable must always have room.  Any ordinary entries
             // that survived affected-mask filtering are evicted before the
             // bounded-queue check; a full priority queue is still rejected.
@@ -359,7 +366,7 @@ bool RobotController::sendCommand(MessageType type,
                                      .arg(queuedCommandCount())
                                      .arg(kApc220CommandQueueCapacity);
             updateMonitor();
-            if (isSafetyDisable) {
+            if (isSafetyDisable || ordinaryAdmissionBlocked) {
                 pumpApc220Scheduler();
             }
             return true;
@@ -478,48 +485,12 @@ void RobotController::pumpApc220Scheduler()
         if (!heartbeatDue_) {
             return;
         }
-        QByteArray payload;
-        const quint32 uptime = static_cast<quint32>(QDateTime::currentMSecsSinceEpoch()
-                                                     & 0xffffffffU);
-        payload.append(static_cast<char>(uptime & 0xffU));
-        payload.append(static_cast<char>((uptime >> 8U) & 0xffU));
-        payload.append(static_cast<char>((uptime >> 16U) & 0xffU));
-        payload.append(static_cast<char>((uptime >> 24U) & 0xffU));
-        const qint64 dispatchAtMs = nowMs();
-        heartbeatDue_ = false;
-        nextHeartbeatDueAtMs_ = dispatchAtMs + config_.heartbeatIntervalMs;
-        if (!dispatchApc220Command({MessageType::Heartbeat, payload, 0})) {
-            heartbeatDue_ = true;
-            nextHeartbeatDueAtMs_ = dispatchAtMs;
-        } else if (!heartbeatReady_ && pending_.isEmpty()) {
-            // A synchronous rejected/mismatched ACK consumed the request
-            // during write(); keep the liveness heartbeat due without moving
-            // the next hard deadline to ACK time.
-            heartbeatDue_ = true;
-        }
+        dispatchApc220Heartbeat();
         return;
     }
 
     if (heartbeatDue_) {
-        QByteArray payload;
-        const quint32 uptime = static_cast<quint32>(QDateTime::currentMSecsSinceEpoch()
-                                                     & 0xffffffffU);
-        payload.append(static_cast<char>(uptime & 0xffU));
-        payload.append(static_cast<char>((uptime >> 8U) & 0xffU));
-        payload.append(static_cast<char>((uptime >> 16U) & 0xffU));
-        payload.append(static_cast<char>((uptime >> 24U) & 0xffU));
-        const qint64 dispatchAtMs = nowMs();
-        heartbeatDue_ = false;
-        nextHeartbeatDueAtMs_ = dispatchAtMs + config_.heartbeatIntervalMs;
-        if (!dispatchApc220Command({MessageType::Heartbeat, payload, 0})) {
-            heartbeatDue_ = true;
-            nextHeartbeatDueAtMs_ = dispatchAtMs;
-        } else if (!heartbeatReady_ && pending_.isEmpty()) {
-            // A synchronous rejected/mismatched ACK consumed the request
-            // during write(); keep the liveness heartbeat due without moving
-            // the next hard deadline to ACK time.
-            heartbeatDue_ = true;
-        }
+        dispatchApc220Heartbeat();
         return;
     }
 
@@ -534,6 +505,17 @@ void RobotController::pumpApc220Scheduler()
                 "APC220 priority command dropped after write failure (message 0x%1)")
                                 .arg(static_cast<quint8>(command.type), 2, 16, QLatin1Char('0')));
         }
+        return;
+    }
+
+    // The soft target is allowed to slip while an exchange is in flight, but
+    // do not start ordinary work when its worst-case timeout/polling window
+    // would cross the hard heartbeat safety boundary.  Send a heartbeat now
+    // and release the ordinary queue only after that exchange completes.
+    const bool hasOrdinaryWork = deferredRetry_.has_value() || !commandQueue_.isEmpty();
+    if (hasOrdinaryWork && !canStartApc220OrdinaryExchange()) {
+        heartbeatDue_ = true;
+        dispatchApc220Heartbeat();
         return;
     }
 
@@ -583,12 +565,61 @@ void RobotController::sendHeartbeat()
     sendCommand(MessageType::Heartbeat, payload);
 }
 
-void RobotController::refreshApc220HeartbeatDue()
+void RobotController::dispatchApc220Heartbeat()
 {
-    if (config_.linkProfile == LinkProfile::Apc220HalfDuplex
-        && nextHeartbeatDueAtMs_ > 0 && nowMs() >= nextHeartbeatDueAtMs_) {
+    QByteArray payload;
+    const quint32 uptime = static_cast<quint32>(QDateTime::currentMSecsSinceEpoch()
+                                                 & 0xffffffffU);
+    payload.append(static_cast<char>(uptime & 0xffU));
+    payload.append(static_cast<char>((uptime >> 8U) & 0xffU));
+    payload.append(static_cast<char>((uptime >> 16U) & 0xffU));
+    payload.append(static_cast<char>((uptime >> 24U) & 0xffU));
+
+    // Both deadlines are anchored at the wire dispatch time.  ACK handling
+    // may confirm liveness and record RTT, but never moves either deadline.
+    const qint64 dispatchAtMs = nowMs();
+    heartbeatDue_ = false;
+    nextHeartbeatDueAtMs_ = dispatchAtMs + qMax(0, config_.heartbeatIntervalMs);
+    nextHeartbeatSafetyDeadlineAtMs_ = config_.heartbeatSafetyBudgetMs > 0
+        ? dispatchAtMs + config_.heartbeatSafetyBudgetMs
+        : 0;
+    if (!dispatchApc220Command({MessageType::Heartbeat, payload, 0})) {
+        heartbeatDue_ = true;
+        nextHeartbeatDueAtMs_ = dispatchAtMs;
+        nextHeartbeatSafetyDeadlineAtMs_ = dispatchAtMs;
+    } else if (!heartbeatReady_ && pending_.isEmpty()) {
+        // A synchronous rejected/mismatched ACK consumed the request during
+        // write(); keep liveness due without moving the deadline to ACK time.
         heartbeatDue_ = true;
     }
+}
+
+void RobotController::refreshApc220HeartbeatDue()
+{
+    const qint64 now = nowMs();
+    if (config_.linkProfile == LinkProfile::Apc220HalfDuplex
+        && ((nextHeartbeatDueAtMs_ > 0 && now >= nextHeartbeatDueAtMs_)
+            || (nextHeartbeatSafetyDeadlineAtMs_ > 0
+                && now >= nextHeartbeatSafetyDeadlineAtMs_))) {
+        heartbeatDue_ = true;
+    }
+}
+
+bool RobotController::canStartApc220OrdinaryExchange() const
+{
+    if (config_.linkProfile != LinkProfile::Apc220HalfDuplex
+        || nextHeartbeatSafetyDeadlineAtMs_ <= 0
+        || config_.heartbeatSafetyBudgetMs <= 0) {
+        return true;
+    }
+
+    // A timeout is only observed on the retry timer, so reserve one polling
+    // interval in addition to the configured ACK timeout.  The APC220
+    // profile's 490 ms hard budget therefore leaves an explicit 10 ms below
+    // Firmware's strict >500 ms watchdog boundary.
+    const qint64 worstExchangeMs = qMax(0, config_.ackTimeoutMs)
+        + qMax(0, retryTimer_.interval());
+    return nowMs() + worstExchangeMs <= nextHeartbeatSafetyDeadlineAtMs_;
 }
 
 void RobotController::processIncoming(const QByteArray &bytes)
@@ -742,6 +773,9 @@ void RobotController::handleAck(const Packet &packet)
         // confirms liveness/RTT; preserve a deadline that elapsed while the
         // heartbeat exchange was in flight.
     } else if (request->type == MessageType::ServoEnable) {
+        // A matching user Enable ACK is the explicit re-arm after any
+        // liveness fail-closed transition.
+        actuatorFailClosed_ = false;
         setEnabledMask(static_cast<quint16>(enabledMask_ | request->servoMask));
     } else if (request->type == MessageType::ServoDisable) {
         clearDisablePending();
@@ -775,6 +809,11 @@ void RobotController::checkTimeouts()
         }
         if (it->type == MessageType::Heartbeat) {
             heartbeatReady_ = false;
+            // Fail closed at the first missed heartbeat.  Retry bookkeeping
+            // remains active so link liveness may recover independently of
+            // actuator state, but stale actuator work must not survive the
+            // Firmware watchdog budget.
+            failClosedApc220Actuators();
         }
         if (it->retries >= config_.maxRetries) {
             const MessageType timedOutType = it->type;
@@ -791,10 +830,10 @@ void RobotController::checkTimeouts()
                                 .arg(static_cast<quint8>(timedOutType), 2, 16, QLatin1Char('0'))
                                 .arg(sequence));
             if (timedOutType == MessageType::Heartbeat) {
-                handleApc220LivenessLoss();
                 heartbeatReady_ = false;
                 heartbeatDue_ = true;
                 nextHeartbeatDueAtMs_ = now;
+                nextHeartbeatSafetyDeadlineAtMs_ = now;
                 pumpApc220Scheduler();
                 updateMonitor();
                 return;
@@ -831,6 +870,15 @@ void RobotController::checkTimeouts()
         if (it->type != MessageType::Heartbeat && heartbeatDue_) {
             deferredRetry_ = it.value();
             pending_.erase(it);
+            pumpApc220Scheduler();
+            updateMonitor();
+            return;
+        }
+
+        if (it->type != MessageType::Heartbeat && !canStartApc220OrdinaryExchange()) {
+            deferredRetry_ = it.value();
+            pending_.erase(it);
+            heartbeatDue_ = true;
             pumpApc220Scheduler();
             updateMonitor();
             return;
@@ -893,7 +941,9 @@ void RobotController::resetSchedulerState()
     deferredRetry_.reset();
     heartbeatDue_ = false;
     heartbeatReady_ = false;
+    actuatorFailClosed_ = false;
     nextHeartbeatDueAtMs_ = 0;
+    nextHeartbeatSafetyDeadlineAtMs_ = 0;
     decoder_.reset();
     setEnabledMask(0);
     setDisablePendingMask(0);
@@ -931,16 +981,19 @@ void RobotController::clearQueuedCommandsForDisable(quint16 affectedMask)
     }
 }
 
-void RobotController::handleApc220LivenessLoss()
+void RobotController::failClosedApc220Actuators()
 {
-    pending_.clear();
+    const bool firstFailClosed = !actuatorFailClosed_;
+    actuatorFailClosed_ = true;
     priorityCommandQueue_.clear();
     commandQueue_.clear();
     deferredRetry_.reset();
     setEnabledMask(0);
     setDisablePendingMask(0);
-    emit logMessage(QStringLiteral(
-        "APC220 liveness lost; logical Servo state and stale actuator commands were cleared"));
+    if (firstFailClosed) {
+        emit logMessage(QStringLiteral(
+            "APC220 liveness lost; logical Servo state and stale actuator commands were cleared"));
+    }
 }
 
 void RobotController::setEnabledMask(quint16 mask)
