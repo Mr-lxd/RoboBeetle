@@ -230,8 +230,10 @@ void testDisableAckClearsPendingWhenAlreadyDisabled()
     acknowledge(transport, request, rb::AckResult::Ok, rb::MessageType::ServoDisable);
     expect(!controller.isServoDisablePending(rb::ServoId::Servo1),
            "successful Disable All ACK should clear pending for already-disabled Servo1");
-    expect(pending.events == std::vector<std::pair<int, bool>>{{0, true}, {0, false}},
-           "Disable All should emit pending true then false even when Servo1 was already disabled");
+    expect(pending.events == std::vector<std::pair<int, bool>>{
+               {0, true}, {1, true}, {2, true}, {3, true}, {4, true},
+               {0, false}, {1, false}, {2, false}, {3, false}, {4, false}},
+           "Disable All should emit pending transitions for all five semantic servos");
 
     expect(controller.enableServo(rb::ServoId::Servo1),
            "Servo1 should remain re-enableable after an already-disabled Disable All ACK");
@@ -418,29 +420,31 @@ void testProvisionalPwmCalibrationAndBounds()
     rb::FakeTransport transport;
     const rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
     rb::RobotController controller(&transport, config);
-    expect(config.provisionalPwmMinUs == 520, "provisional PWM minimum must be 520 us");
-    expect(config.provisionalNeutralUs == 1520, "provisional PWM neutral must be 1520 us");
-    expect(config.provisionalPwmMaxUs == 2520, "provisional PWM maximum must be 2520 us");
+    const rb::ServoDescriptor *descriptor = rb::servoDescriptor(rb::ServoId::FrontRight);
+    expect(descriptor != nullptr, "FrontRight descriptor must exist");
+    expect(descriptor->commandMinPwmUs == 1050, "SAVOX command minimum must be 1050 us");
+    expect(descriptor->neutralPwmUs == 1500, "SAVOX neutral must be 1500 us");
+    expect(descriptor->commandMaxPwmUs == 1950, "SAVOX command maximum must be 1950 us");
     controller.connectTransport({"COM_TEST", 9600});
     transport.simulateConnected();
     controller.enableServo(rb::ServoId::Servo1);
     acknowledgeLast(transport);
     const qsizetype before = transport.writes().size();
 
-    expect(!controller.setServoPwm(rb::ServoId::Servo1, 519),
-           "PWM below provisional range must be rejected");
-    expect(!controller.setServoPwm(rb::ServoId::Servo1, 2521),
-           "PWM above provisional range must be rejected");
+    expect(!controller.setServoPwm(rb::ServoId::Servo1, 1049),
+           "SAVOX PWM below command range must be rejected");
+    expect(!controller.setServoPwm(rb::ServoId::Servo1, 1951),
+           "SAVOX PWM above command range must be rejected");
     expect(transport.writes().size() == before, "rejected commands must not write frames");
 
-    expect(controller.setServoPwm(rb::ServoId::Servo1, 520),
-           "PWM minimum boundary must be accepted");
-    expect(lastPacket(transport).payload == QByteArray::fromHex("01000802"),
-           "PWM minimum must be encoded as count, Servo1, uint16 LE");
-    expect(controller.setServoPwm(rb::ServoId::Servo1, 2520),
-           "PWM maximum boundary must be accepted");
-    expect(lastPacket(transport).payload == QByteArray::fromHex("0100d809"),
-           "PWM maximum must be encoded as count, Servo1, uint16 LE");
+    expect(controller.setServoPwm(rb::ServoId::Servo1, 1050),
+           "SAVOX PWM minimum boundary must be accepted");
+    expect(lastPacket(transport).payload == QByteArray::fromHex("01001a04"),
+           "SAVOX PWM minimum must be encoded as count, FrontRight, uint16 LE");
+    expect(controller.setServoPwm(rb::ServoId::Servo1, 1950),
+           "SAVOX PWM maximum boundary must be accepted");
+    expect(lastPacket(transport).payload == QByteArray::fromHex("01009e07"),
+           "SAVOX PWM maximum must be encoded as count, FrontRight, uint16 LE");
 }
 
 void testSetAngleEncodingAndBounds()
@@ -453,38 +457,28 @@ void testSetAngleEncodingAndBounds()
     acknowledgeLast(transport);
 
     const qsizetype before = transport.writes().size();
-    expect(!controller.setServoAngle(rb::ServoId::Servo1, -9001),
-           "angle below -90 degrees must be rejected");
-    expect(!controller.setServoAngle(rb::ServoId::Servo1, 9001),
-           "angle above +90 degrees must be rejected");
+    expect(!controller.setServoAngle(rb::ServoId::Servo1, -4501),
+           "FrontRight angle below -45 degrees must be rejected");
+    expect(!controller.setServoAngle(rb::ServoId::Servo1, 4501),
+           "FrontRight angle above +45 degrees must be rejected");
     expect(transport.writes().size() == before, "out-of-range angles must not write frames");
 
-    expect(controller.setServoAngle(rb::ServoId::Servo1, -9000),
-           "-90 degrees must be accepted");
+    expect(controller.setServoAngle(rb::ServoId::Servo1, -4500),
+           "-45 degrees must be accepted");
     expect(lastPacket(transport).type == rb::MessageType::SetServoAngle,
            "angle must use SetServoAngle message");
-    expect(lastPacket(transport).payload == QByteArray::fromHex("0100d8dc"),
-           "-9000 cdeg must be encoded as int16 LE");
+    expect(lastPacket(transport).payload == QByteArray::fromHex("01006cee"),
+           "-4500 cdeg must be encoded as int16 LE");
 
     expect(controller.setServoAngle(rb::ServoId::Servo1, 0),
            "zero degrees must be accepted");
     expect(lastPacket(transport).payload == QByteArray::fromHex("01000000"),
            "zero cdeg must be encoded as int16 LE");
 
-    expect(controller.setServoAngle(rb::ServoId::Servo1, -4500),
-           "-45 degrees must be accepted");
-    expect(lastPacket(transport).payload == QByteArray::fromHex("01006cee"),
-           "-4500 cdeg must be encoded as int16 LE");
-
     expect(controller.setServoAngle(rb::ServoId::Servo1, 4500),
            "+45 degrees must be accepted");
     expect(lastPacket(transport).payload == QByteArray::fromHex("01009411"),
            "+4500 cdeg must be encoded as int16 LE");
-
-    expect(controller.setServoAngle(rb::ServoId::Servo1, 9000),
-           "+90 degrees must be accepted");
-    expect(lastPacket(transport).payload == QByteArray::fromHex("01002823"),
-           "+9000 cdeg must be encoded as int16 LE");
 }
 
 void testDisconnectAttemptsDisableAll()
@@ -498,8 +492,8 @@ void testDisconnectAttemptsDisableAll()
     expect(!transport.writes().isEmpty(), "disconnect must attempt to send Disable All");
     expect(lastPacket(transport).type == rb::MessageType::ServoDisable,
            "disconnect safety frame must be ServoDisable");
-    expect(lastPacket(transport).payload == QByteArray::fromHex("0100"),
-           "disconnect must disable only the currently supported Servo1 mask");
+    expect(lastPacket(transport).payload == QByteArray::fromHex("1f00"),
+           "disconnect must disable the fixed five-servo supported mask");
     expect(transport.closeCallCount() == 1, "disconnect must close the transport");
 }
 
@@ -528,26 +522,103 @@ void testNeutralEncodingAndAck()
            "successful neutral ACK must be matched to its request");
 }
 
-void testUnsupportedServoIsRejectedLocally()
+void testFrontAxisIsPwmOnly()
 {
     rb::FakeTransport transport;
     rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
     controller.connectTransport({"COM_TEST", 9600});
     transport.simulateConnected();
 
-    expect(!controller.isServoSupported(rb::ServoId::Servo2),
-           "Servo2 must be marked unsupported in Phase 1");
-    expect(!controller.enableServo(rb::ServoId::Servo2),
-           "unsupported Servo2 enable must be rejected");
-    expect(!controller.disableServo(rb::ServoId::Servo2),
-           "unsupported Servo2 disable must be rejected");
-    expect(!controller.neutralServo(rb::ServoId::Servo2),
-           "unsupported Servo2 neutral must be rejected");
-    expect(!controller.setServoPwm(rb::ServoId::Servo2, 1520),
-           "unsupported Servo2 PWM must be rejected");
-    expect(!controller.setServoAngle(rb::ServoId::Servo2, 0),
-           "unsupported Servo2 angle must be rejected");
-    expect(transport.writes().isEmpty(), "unsupported Servo2 commands must not write frames");
+    const rb::ServoDescriptor *descriptor = rb::servoDescriptor(rb::ServoId::FrontAxis);
+    expect(descriptor != nullptr && descriptor->supported,
+           "FrontAxis must be supported");
+    expect(descriptor != nullptr && !descriptor->angleSupported,
+           "FrontAxis must remain PWM-only");
+    expect(controller.enableServo(rb::ServoId::FrontAxis),
+           "FrontAxis enable should be sent");
+    acknowledgeLast(transport);
+    const qsizetype beforeAngle = transport.writes().size();
+    expect(!controller.setServoPwm(rb::ServoId::FrontAxis, 1449),
+           "FrontAxis PWM below 1450 us must be rejected");
+    expect(controller.setServoPwm(rb::ServoId::FrontAxis, 1450),
+           "FrontAxis PWM 1450 us must be accepted");
+    expect(controller.setServoPwm(rb::ServoId::FrontAxis, 1550),
+           "FrontAxis PWM 1550 us must be accepted");
+    expect(!controller.setServoPwm(rb::ServoId::FrontAxis, 1551),
+           "FrontAxis PWM above 1550 us must be rejected");
+    expect(!controller.setServoAngle(rb::ServoId::FrontAxis, 0),
+           "FrontAxis Set Angle must always be rejected");
+    expect(transport.writes().size() == beforeAngle + 2,
+           "FrontAxis angle rejection must not write a frame");
+}
+
+void testSemanticServoCommandBoundaries()
+{
+    struct BoundaryCase {
+        rb::ServoId id;
+        quint16 pwmMin;
+        quint16 pwmMax;
+        qint16 angleMin;
+        qint16 angleMax;
+        bool angleSupported;
+    };
+    const BoundaryCase cases[] = {
+        {rb::ServoId::FrontRight, 1050, 1950, -4500, 4500, true},
+        {rb::ServoId::FrontLeft, 1050, 1950, -4500, 4500, true},
+        {rb::ServoId::FrontAxis, 1450, 1550, 0, 0, false},
+        {rb::ServoId::RearRight, 1020, 2020, -4500, 4500, true},
+        {rb::ServoId::RearLeft, 1020, 2020, -4500, 4500, true},
+    };
+
+    for (const BoundaryCase &boundary : cases) {
+        rb::FakeTransport transport;
+        rb::RobotController controller(
+            &transport, rb::RobotControllerConfig::bringUpProvisional());
+        controller.connectTransport({"COM_TEST", 9600});
+        transport.simulateConnected();
+        expect(controller.enableServo(boundary.id),
+               "every semantic servo should accept Enable");
+        acknowledgeLast(transport);
+        const qsizetype beforeCommands = transport.writes().size();
+
+        expect(!controller.setServoPwm(boundary.id,
+                                       static_cast<quint16>(boundary.pwmMin - 1)),
+               "PWM below the descriptor command envelope must be rejected");
+        expect(!controller.setServoPwm(boundary.id,
+                                       static_cast<quint16>(boundary.pwmMax + 1)),
+               "PWM above the descriptor command envelope must be rejected");
+        expect(controller.setServoPwm(boundary.id, boundary.pwmMin),
+               "descriptor PWM minimum must be accepted");
+        rb::Packet packet = lastPacket(transport);
+        expect(static_cast<quint8>(packet.payload[0]) == 1
+                   && static_cast<quint8>(packet.payload[1])
+                          == static_cast<quint8>(boundary.id),
+               "PWM payload must carry count and semantic servo ID");
+        expect(controller.setServoPwm(boundary.id, boundary.pwmMax),
+               "descriptor PWM maximum must be accepted");
+
+        if (!boundary.angleSupported) {
+            expect(!controller.setServoAngle(boundary.id, 0),
+                   "FrontAxis Set Angle must remain unsupported");
+        } else {
+            expect(!controller.setServoAngle(boundary.id,
+                                             static_cast<qint16>(boundary.angleMin - 1)),
+                   "angle below -45 degrees must be rejected");
+            expect(!controller.setServoAngle(boundary.id,
+                                             static_cast<qint16>(boundary.angleMax + 1)),
+                   "angle above +45 degrees must be rejected");
+            expect(controller.setServoAngle(boundary.id, boundary.angleMin),
+                   "angle -45 degrees must be accepted");
+            expect(controller.setServoAngle(boundary.id, 0),
+                   "angle zero must be accepted");
+            expect(controller.setServoAngle(boundary.id, boundary.angleMax),
+                   "angle +45 degrees must be accepted");
+        }
+
+        const qsizetype expectedAcceptedWrites = boundary.angleSupported ? 5 : 2;
+        expect(transport.writes().size() == beforeCommands + expectedAcceptedWrites,
+               "out-of-range or unsupported commands must not write frames");
+    }
 }
 
 void testAckRejectionAndMatching()
@@ -1837,7 +1908,8 @@ int main(int argc, char **argv)
     testSetAngleEncodingAndBounds();
     testDisconnectAttemptsDisableAll();
     testNeutralEncodingAndAck();
-    testUnsupportedServoIsRejectedLocally();
+    testFrontAxisIsPwmOnly();
+    testSemanticServoCommandBoundaries();
     testAckRejectionAndMatching();
     testRetryReusesIdenticalSequenceAndFrame();
     testUnexpectedTransportLossRecordsDisableFailure();

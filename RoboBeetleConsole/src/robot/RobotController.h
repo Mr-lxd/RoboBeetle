@@ -2,6 +2,7 @@
 
 #include "protocol/StreamDecoder.h"
 #include "robot/RobotCommand.h"
+#include "robot/ServoDescriptor.h"
 #include "transport/ITransport.h"
 
 #include <QHash>
@@ -30,12 +31,7 @@ struct RobotControllerConfig {
     // provisional profile leaves an explicit margin below the Firmware
     // watchdog; DirectUart ignores this field.
     int heartbeatSafetyBudgetMs{490};
-    quint16 provisionalPwmMinUs{520};
-    quint16 provisionalPwmMaxUs{2520};
-    quint16 provisionalNeutralUs{1520};
-    qint16 provisionalAngleMinCdeg{-9000};
-    qint16 provisionalAngleMaxCdeg{9000};
-    quint16 supportedServoMask{SupportedServoMaskPhase1};
+    quint16 supportedServoMask{SupportedServoMask};
     LinkProfile linkProfile{LinkProfile::DirectUart};
 
     static RobotControllerConfig bringUpProvisional();

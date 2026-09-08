@@ -23,6 +23,8 @@ add_library(RoboBeetleCore
     src/transport/SerialTransport.h
     src/transport/SerialTransport.cpp
     src/robot/RobotCommand.h
+    src/robot/ServoDescriptor.h
+    src/robot/ServoDescriptor.cpp
     src/robot/RobotController.h
     src/robot/RobotController.cpp
 )
@@ -47,4 +49,8 @@ if(BUILD_TESTING)
     add_executable(robot_controller_tests tests/robot_controller_tests.cpp)
     target_link_libraries(robot_controller_tests PRIVATE RoboBeetleCore)
     add_test(NAME robot_controller_tests COMMAND robot_controller_tests)
+
+    add_executable(servo_descriptor_tests tests/servo_descriptor_tests.cpp)
+    target_link_libraries(servo_descriptor_tests PRIVATE RoboBeetleCore)
+    add_test(NAME servo_descriptor_tests COMMAND servo_descriptor_tests)
 endif()
