@@ -279,18 +279,18 @@ static void test_command_ranges_and_capabilities(void)
                SERVO_SERVICE_RESULT_OUT_OF_RANGE,
            "GDW above +45 degrees must be rejected");
 
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 1199U) ==
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 999U) ==
                SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "FrontAxis 1199 us must be rejected");
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 1200U) ==
+           "FrontAxis 999 us must be rejected");
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 1000U) ==
                SERVO_SERVICE_RESULT_OK,
-           "FrontAxis 1200 us must be accepted");
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 1800U) ==
+           "FrontAxis 1000 us must be accepted");
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 2000U) ==
                SERVO_SERVICE_RESULT_OK,
-           "FrontAxis 1800 us must be accepted");
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 1801U) ==
+           "FrontAxis 2000 us must be accepted");
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 2001U) ==
                SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "FrontAxis 1801 us must be rejected");
+           "FrontAxis 2001 us must be rejected");
     expect(servo_service_set_angle(&service, SERVO_ID_FRONT_AXIS, 0) ==
                SERVO_SERVICE_RESULT_UNSUPPORTED_SERVO,
            "FrontAxis SetAngle must remain unsupported");

@@ -19,15 +19,15 @@ The Qt Console now uses an independent descriptor table for the five semantic ID
 |---:|---|---|---|
 | `0` / `0x0001` | `FrontRight` / 前足右 | SAVOX SW-0250MG+, TIM3_CH1 / PA6 | PWM 1050–1950 μs; angle −45…+45° |
 | `1` / `0x0002` | `FrontLeft` / 前足左 | SAVOX SW-0250MG+, TIM3_CH2 / PA7 | PWM 1050–1950 μs; angle −45…+45° |
-| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D, TIM3_CH3 / PB0 | Electrical 500/1500/2500 μs; PWM command 1200–1800 μs; **Calibration Pending**; Set Angle disabled |
+| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D, TIM3_CH3 / PB0 | Electrical 500/1500/2500 μs; PWM command 1000–2000 μs; **Calibration Pending**; Set Angle disabled |
 | `3` / `0x0008` | `RearRight` / 后足右 | GDW IPX896HV, TIM4_CH1 / PD12 | PWM 1020–2020 μs; angle −45…+45° |
 | `4` / `0x0010` | `RearLeft` / 后足左 | GDW IPX896HV, TIM4_CH2 / PD13 | PWM 1020–2020 μs; angle −45…+45° |
 
-`ServoId::Servo1` remains only as a deprecated historical source-compatibility alias for `FrontRight`; there is deliberately no `Servo2` alias. New UI text, logs, tests, and implementation use semantic names. FrontAxis's seller-provided electrical metadata is 500–2500 μs with a 1500 μs center candidate; these values describe electrical/absolute capability and do not widen the user command range. Qt and Firmware now enforce the same provisional 1200–1800 μs PWM-only calibration exploration window. Its button is labelled `Center 1500 us — Provisional`; this reuses the Neutral protocol command without claiming a calibrated or Hardware Verified mechanical center. Only the supplied 1480/1500/1520 direction check is Hardware Verified; the expanded window and endpoints remain pending. The next unloaded exploration uses `1500,1450,1400,1350,1300,1250,1200`, returns to 1500, then `1500,1550,1600,1650,1700,1750,1800`, with smaller steps near resistance.
+`ServoId::Servo1` remains only as a deprecated historical source-compatibility alias for `FrontRight`; there is deliberately no `Servo2` alias. New UI text, logs, tests, and implementation use semantic names. FrontAxis's seller-provided electrical metadata is 500–2500 μs with a 1500 μs center candidate; these values describe electrical/absolute capability and do not widen the user command range. Qt and Firmware now enforce the same provisional 1000–2000 μs PWM-only endpoint-exploration window. This `1000–2000 μs` window is **[Pending Hardware Verification]** and is not the final mechanically safe endpoint range. Its button is labelled `Center 1500 us — Provisional`; this reuses the Neutral protocol command without claiming a calibrated or Hardware Verified mechanical center. Only the supplied 1480/1500/1520 direction check is Hardware Verified; the expanded window and endpoints remain pending. The next unloaded exploration uses `1500,1400,1300,1200,1100,1000`, returns to 1500, then `1500,1600,1700,1800,1900,2000`, with smaller steps near resistance.
 
 FrontAxis waterproof capability is **[Unverified]**. The seller parameter page says it is not waterproof, while the product photo/shell says “Water proof Robot Servo.” Until reliable IP/sealing evidence exists, the project must not describe the actuator as suitable for direct immersion.
 
-Current supplied bring-up evidence keeps `FrontRight`, `FrontLeft`, and `RearLeft` **[Hardware Verified]**; the `RearRight` STM32/A12 PWM path is **[Hardware Verified]**, while the original RearRight actuator/lead is a hardware fault scheduled for replacement. Depth direction at 1480/1500/1520 μs is **[Hardware Verified]** only; the expanded 1200–1800 μs window and endpoint calibration remain **[Pending Hardware Verification]**.
+Current supplied bring-up evidence keeps `FrontRight`, `FrontLeft`, and `RearLeft` **[Hardware Verified]**; the `RearRight` STM32/A12 PWM path is **[Hardware Verified]**, while the original RearRight actuator/lead is a hardware fault scheduled for replacement. Depth direction at 1480/1500/1520 μs is **[Hardware Verified]** only; the expanded 1000–2000 μs window and endpoint calibration remain **[Pending Hardware Verification]**.
 
 This is a hardware-layout compatibility break: the historical v0.4 Servo1/PA6 bring-up object was `RearLeft`, while PR #8 formally assigns PA6/ID0 to `FrontRight` and `RearLeft` to PD13/TIM4_CH2. Do not mix pre-PR8 Console/Firmware binaries with the PR8 five-servo wiring. PR #8 software verification is complete when the descriptor and controller tests pass; target hardware regression for the new layout remains pending.
 
@@ -44,7 +44,7 @@ This is a hardware-layout compatibility break: the historical v0.4 Servo1/PA6 br
 - Shared ACK result meanings `0..6`, with named rejection status in the monitor.
 - `ITransport` abstraction with real `SerialTransport` and test-only `FakeTransport` implementations.
 - Protocol codec/stream tests and controller behavior tests.
-- Set Angle UI for the four angle-capable semantic servos with descriptor-specific ranges; the UI converts to centidegrees and angle-to-pulse conversion remains authoritative in Firmware. FrontAxis is explicitly PWM-only while calibration is pending, with a shared 1200–1800 μs command envelope.
+- Set Angle UI for the four angle-capable semantic servos with descriptor-specific ranges; the UI converts to centidegrees and angle-to-pulse conversion remains authoritative in Firmware. FrontAxis is explicitly PWM-only while calibration is pending, with a shared 1000–2000 μs command envelope.
 
 ### [Planned]
 
@@ -236,7 +236,7 @@ Do not mix the MinGW Qt libraries with MSVC, LLVM-MinGW, the separately installe
 
 - A fresh MinGW/Qt CMake configure and build succeeds without changing the project CMake structure.
 - `protocol_tests`: **PASS**, including CRC/COBS regression, result enum values, Neutral, and −9000/0/+9000 cdeg golden vectors.
-- `robot_controller_tests`: **PASS**, including semantic five-servo descriptor boundaries, PWM boundaries (including FrontAxis 1200/1800 acceptance and 1199/1801 rejection), angle-capability/range gates, FrontAxis rejection, pending-Disable PWM/Neutral/Angle barriers across APC Error/timeout, Neutral ACK, ACK match/mismatch, identical-frame retry, APC220 first-heartbeat ACK gate, heartbeat coalescing and retry priority, bounded queue release, heartbeat rejection/timeout liveness, Error type validation, error-only/write-failure reset, and DirectUart multi-pending regression.
+- `robot_controller_tests`: **PASS**, including semantic five-servo descriptor boundaries, PWM boundaries (including FrontAxis 1000/2000 acceptance and 999/2001 rejection), angle-capability/range gates, FrontAxis rejection, pending-Disable PWM/Neutral/Angle barriers across APC Error/timeout, Neutral ACK, ACK match/mismatch, identical-frame retry, APC220 first-heartbeat ACK gate, heartbeat coalescing and retry priority, bounded queue release, heartbeat rejection/timeout liveness, Error type validation, error-only/write-failure reset, and DirectUart multi-pending regression.
 - Firmware was separately clean-built with the STM32 GCC toolchain. PR #7 user hardware regression passed on the desktop APC220 bench; the timing values remain a Console-side adaptation and the Firmware watchdog remains unchanged.
 
 ## Historical Servo1 hardware milestones (pre-PR #8)
