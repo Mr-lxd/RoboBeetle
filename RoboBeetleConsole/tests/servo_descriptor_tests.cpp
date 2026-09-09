@@ -71,6 +71,17 @@ int main()
     expect(table[4].id == rb::ServoId::RearLeft && table[4].mask == 0x0010,
            "ID 4 must be RearLeft");
 
+    expect(table[0].displayName == std::string_view("FrontRight"),
+           "FrontRight display name must be ASCII and semantic");
+    expect(table[1].displayName == std::string_view("FrontLeft"),
+           "FrontLeft display name must be ASCII and semantic");
+    expect(table[2].displayName == std::string_view("Depth"),
+           "Depth display name must be ASCII");
+    expect(table[3].displayName == std::string_view("RearRight"),
+           "RearRight display name must be ASCII and semantic");
+    expect(table[4].displayName == std::string_view("RearLeft"),
+           "RearLeft display name must be ASCII and semantic");
+
     expectSavoX(table[0]);
     expectSavoX(table[1]);
     expect(table[2].hardwareName == std::string_view("HDKJ S3150D"),
@@ -80,7 +91,7 @@ int main()
     expect(table[2].electricalMinPwmUs == 500 && table[2].neutralPwmUs == 1500
                && table[2].electricalMaxPwmUs == 2500,
            "FrontAxis electrical metadata must remain 500/1500/2500 us");
-    expect(table[2].commandMinPwmUs == 1000 && table[2].commandMaxPwmUs == 2000
+    expect(table[2].commandMinPwmUs == 500 && table[2].commandMaxPwmUs == 2500
                && table[2].neutralPwmUs == 1500,
            "FrontAxis PWM bring-up envelope must match");
     expectGdw(table[3]);

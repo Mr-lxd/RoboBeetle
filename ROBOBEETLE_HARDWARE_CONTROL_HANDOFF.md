@@ -4,7 +4,7 @@
 
 ### 当前状态
 
-本轮只扩大 `FrontAxis`/Depth 的 PWM-only command envelope；Firmware 与 Qt 两张独立 descriptor table 现在均为 `1000–2000 μs`。卖家/电气能力元数据仍为 `500/1500/2500 μs`，只用于描述舵机的电气/绝对能力，不代表用户命令安全范围，也不允许因此发送 `500–2500 μs`。`1500 μs` 仍是 provisional bring-up center candidate，不是 true mechanical center 或已标定 Neutral；`angle_supported=false` 保持不变，Depth Set Angle 仍不可用。
+本轮只扩大 `FrontAxis`/Depth 的 PWM-only command envelope；Firmware 与 Qt 两张独立 descriptor table 现在均为 `500–2500 μs`。卖家/电气能力元数据仍为 `500/1500/2500 μs`，只用于描述舵机的电气/绝对能力，不代表最终机械安全范围。`1500 μs` 仍是 provisional bring-up center candidate，不是 true mechanical center 或已标定 Neutral；`angle_supported=false` 保持不变，Depth Set Angle 仍不可用。用户界面显示名固定为 ASCII `FrontRight`、`FrontLeft`、`Depth`、`RearRight`、`RearLeft`；内部 `FrontAxis` 标识不变。
 
 既有硬件事实保持不变：
 
@@ -14,11 +14,11 @@
 - `RearRight` STM32/A12 PWM output path：**[Hardware Verified]**；原 RearRight servo actuator/线束为 hardware fault，计划更换，不属于 Firmware bug。
 - Depth 在 `1480/1500/1520 μs` 的运动方向：**[Hardware Verified]**（PWM 减小 → front A 上翻，PWM 增大 → front A 下翻）。
 
-本次新增开放的 `1000–2000 μs` 全行程、机械端点、safe min/max、practical center、PWM-to-angle calibration 和 angle control 均为 **[Pending Hardware Verification]**；该窗口不是最终 mechanically safe endpoints。本环境仅记录 Host Test；ARM Build、Program Verify 和本轮新窗口的 Hardware Verification 不在本次会话中宣称通过。
+本次新增开放的 `500–2500 μs` 全行程、机械端点、safe min/max、practical center、PWM-to-angle calibration 和 angle control 均为 **[Pending Hardware Verification]**；该窗口是 endpoint exploration window，不是最终 mechanically safe endpoints。本环境仅记录 Host Test；ARM Build、Program Verify 和本轮新窗口的 Hardware Verification 不在本次会话中宣称通过。
 
 ### 下一轮 Depth 实机计划
 
-仅连接 Depth，机构卸载并脱开舵盘/连杆。从 `1500 μs` 开始，按 `1500, 1400, 1300, 1200, 1100, 1000` 逐步减小，再回到 1500；随后按 `1500, 1600, 1700, 1800, 1900, 2000` 逐步增大。观察 ACK、平稳性、机械干涉、持续嗡鸣、停止运动、连杆受力和发热；接近端点时改用 20/10 μs 步长，禁止让舵机顶死。最终安全端点须在真实机械硬限位内保留 margin；若 1000/2000 仍不足，不自动扩展范围，先记录实测结果。
+仅连接 Depth，机构卸载并脱开舵盘/连杆。从 `1500 μs` 开始，按 `1500, 1400, 1300, 1200, 1100, 1000, 900, 800, 700, 600, 500` 逐步减小，再回到 1500；随后按 `1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400, 2500` 逐步增大。观察 ACK、平稳性、机械干涉、持续嗡鸣、停止运动、连杆受力和发热；接近端点时改用 20/10 μs 步长，禁止让舵机顶死。最终安全端点须在真实机械硬限位内保留 margin；若 500/2500 仍不足，不自动扩展范围，先记录实测结果。
 
 ### 验证分层与烧录提醒
 
@@ -32,13 +32,13 @@ PR #8 将 Firmware 与 Qt 各自维护的 descriptor table 冻结为同一组五
 
 | ID / mask | 语义 | 硬件与 STM32 输出 | 能力 / bring-up 范围 |
 |---:|---|---|---|
-| `0` / `0x0001` | `FrontRight` / 前足右 | SAVOX SW-0250MG+，TIM3_CH1 / PA6 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
-| `1` / `0x0002` | `FrontLeft` / 前足左 | SAVOX SW-0250MG+，TIM3_CH2 / PA7 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
-| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D，TIM3_CH3 / PB0 | 电气 500/1500/2500 μs；命令仅 1000–2000 μs；Set Angle disabled；`Calibration Pending` |
-| `3` / `0x0008` | `RearRight` / 后足右 | GDW IPX896HV，TIM4_CH1 / PD12 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
-| `4` / `0x0010` | `RearLeft` / 后足左 | GDW IPX896HV，TIM4_CH2 / PD13 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
+| `0` / `0x0001` | `FrontRight` | SAVOX SW-0250MG+，TIM3_CH1 / PA6 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
+| `1` / `0x0002` | `FrontLeft` | SAVOX SW-0250MG+，TIM3_CH2 / PA7 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
+| `2` / `0x0004` | `Depth` (`FrontAxis` internal ID) | HDKJ S3150D，TIM3_CH3 / PB0 | 电气 500/1500/2500 μs；命令仅 500–2500 μs；Set Angle disabled；`Calibration Pending` |
+| `3` / `0x0008` | `RearRight` | GDW IPX896HV，TIM4_CH1 / PD12 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
+| `4` / `0x0010` | `RearLeft` | GDW IPX896HV，TIM4_CH2 / PD13 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
 
-TIM3/TIM4 当前均约 333 Hz、1 μs tick（PSC=15、ARR=3002）。FrontAxis 卖家参数记录为 500–2500 μs、中心候选 1500 μs、工作电压 4.8–7.4 V、可控行程 0–270°、死区 4 μs；这些是电气/绝对能力元数据，当前用户命令仍严格限制在 1000–2000 μs。1500 μs 只是 provisional startup/center candidate，不是 calibrated Neutral，也不是 Hardware Verified；扩展窗口的完整端点验收仍 Pending。卖家参数页写“是否防水：否”，商品照片/壳体却标示“Water proof Robot Servo”，因此 Waterproof capability = **[Unverified]**，在获得可靠 IP/密封证据前不得声明或安排直接浸水。
+TIM3/TIM4 当前均约 333 Hz、1 μs tick（PSC=15、ARR=3002）。FrontAxis 卖家参数记录为 500–2500 μs、中心候选 1500 μs、工作电压 4.8–7.4 V、可控行程 0–270°、死区 4 μs；这些是电气/绝对能力元数据，当前用户命令窗口为 provisional 500–2500 μs endpoint exploration，并非最终机械安全端点。1500 μs 只是 provisional startup/center candidate，不是 calibrated Neutral，也不是 Hardware Verified；扩展窗口的完整端点验收仍 Pending。卖家参数页写“是否防水：否”，商品照片/壳体却标示“Water proof Robot Servo”，因此 Waterproof capability = **[Unverified]**，在获得可靠 IP/密封证据前不得声明或安排直接浸水。
 
 多 bit Enable 采用 all-or-nothing：调用前已 enabled 的 requested channel 完全跳过，不产生 write/start/stop；任一新 channel start 失败时只 stop 本次 newly started channel，并保持调用前 logical/physical state。Console 中 pending Disable 是 motion-command barrier：受影响舵机的 PWM、Neutral、Set Angle 在 Controller 层即被拒绝，不写帧、不进入 APC220 queue；Disable Error/timeout 不会释放 Disable 之后的 stale motion。
 

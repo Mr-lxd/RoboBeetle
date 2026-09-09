@@ -112,7 +112,7 @@ static void test_descriptor_table(void)
            "FrontAxis channel differs");
     expect_calibration(&table[SERVO_ID_FRONT_AXIS],
                        500U, 1500U, 2500U, 0, 0,
-                       1000U, 2000U, 0, 0);
+                       500U, 2500U, 0, 0);
 
     expect(table[SERVO_ID_REAR_RIGHT].id == SERVO_ID_REAR_RIGHT,
            "RearRight row ID differs");
