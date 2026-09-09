@@ -25,3 +25,11 @@ leak_sensor_state_t leak_sensor_state(
 {
     return sensor->state;
 }
+
+bool leak_sensor_state_is_valid(
+    leak_sensor_state_t state)
+{
+    return state == LEAK_SENSOR_STATE_UNKNOWN ||
+           state == LEAK_SENSOR_STATE_DRY ||
+           state == LEAK_SENSOR_STATE_WET;
+}

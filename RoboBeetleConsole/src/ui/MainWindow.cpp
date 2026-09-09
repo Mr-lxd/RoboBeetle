@@ -67,6 +67,8 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
         }
         refreshServoUi(index);
     });
+    connect(controller_, &RobotController::leakStateChanged,
+            this, &MainWindow::setLeakUiState);
     connect(controller_, &RobotController::txHexChanged, txHex_, &QLineEdit::setText);
     connect(controller_, &RobotController::rxHexChanged, rxHex_, &QLineEdit::setText);
     connect(controller_, &RobotController::protocolMonitorChanged, this, [this](const ProtocolMonitor &monitor) {
@@ -82,6 +84,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     connect(controller_, &RobotController::logMessage, this, &MainWindow::appendLog);
 
     setConnectedUi(false);
+    setLeakUiState(controller_->leakState());
     controller_->refreshSerialPorts();
 }
 
@@ -239,10 +242,12 @@ QWidget *MainWindow::createGlobalPanel()
 {
     auto *box = new QGroupBox(QStringLiteral("Global"), this);
     auto *layout = new QHBoxLayout(box);
+    leakStatus_ = new QLabel(QStringLiteral("Leak: Unknown"), box);
     auto *disableAll = new QPushButton(QStringLiteral("Disable All"), box);
     auto *emergencyStop = new QPushButton(QStringLiteral("Emergency Stop — Not Implemented"), box);
     emergencyStop->setEnabled(false);
     emergencyStop->setToolTip(QStringLiteral("Protocol V2 has no Emergency Stop message in Phase 1"));
+    layout->addWidget(leakStatus_);
     layout->addWidget(disableAll);
     layout->addWidget(emergencyStop);
     layout->addStretch();
@@ -253,6 +258,25 @@ QWidget *MainWindow::createGlobalPanel()
         }
     });
     return box;
+}
+
+void MainWindow::setLeakUiState(LeakState state)
+{
+    if (leakStatus_ == nullptr) {
+        return;
+    }
+    leakStatus_->setText(leakStateDisplayText(state));
+    switch (state) {
+    case LeakState::Unknown:
+        leakStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+        break;
+    case LeakState::Dry:
+        leakStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-weight: bold;"));
+        break;
+    case LeakState::Wet:
+        leakStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-weight: bold;"));
+        break;
+    }
 }
 
 QWidget *MainWindow::createMonitorPanel()

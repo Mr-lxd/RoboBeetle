@@ -15,6 +15,7 @@ enum class MessageType : quint8 {
     SetServoPwm = 0x12,
     SetServoAngle = 0x13,
     Neutral = 0x14,
+    LeakStatus = 0x20,
 };
 
 enum class AckResult : quint8 {
@@ -38,6 +39,7 @@ constexpr bool isKnownMessageType(quint8 value)
     case MessageType::SetServoPwm:
     case MessageType::SetServoAngle:
     case MessageType::Neutral:
+    case MessageType::LeakStatus:
         return true;
     }
     return false;

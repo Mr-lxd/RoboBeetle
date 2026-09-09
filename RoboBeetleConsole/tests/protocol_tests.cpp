@@ -60,6 +60,7 @@ void testGoldenVectors()
     static_assert(static_cast<quint8>(rb::AckResult::ServoNotEnabled) == 4);
     static_assert(static_cast<quint8>(rb::AckResult::OutOfRange) == 5);
     static_assert(static_cast<quint8>(rb::AckResult::HardwareFailure) == 6);
+    static_assert(static_cast<quint8>(rb::MessageType::LeakStatus) == 0x20);
 
     expectGoldenVector(rb::MessageType::Heartbeat, 1, hex("78563412"),
                        "06524202010102040778563412442800");
@@ -77,6 +78,12 @@ void testGoldenVectors()
                        "06524202130702040201010103589b00");
     expectGoldenVector(rb::MessageType::SetServoAngle, 8, hex("01002823"),
                        "06524202130802040201052823d4d900");
+    expectGoldenVector(rb::MessageType::LeakStatus, 9, hex("00"),
+                       "06524202200902010103e36100");
+    expectGoldenVector(rb::MessageType::LeakStatus, 10, hex("01"),
+                       "06524202200a02010401109f00");
+    expectGoldenVector(rb::MessageType::LeakStatus, 11, hex("02"),
+                       "06524202200b02010402220500");
 }
 
 void testCrcReferenceValue()

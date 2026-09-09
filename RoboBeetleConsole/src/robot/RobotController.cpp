@@ -47,6 +47,7 @@ bool isServoActuatorCommand(MessageType type)
     case MessageType::Ack:
     case MessageType::Error:
     case MessageType::ServoDisable:
+    case MessageType::LeakStatus:
         return false;
     }
     return false;
@@ -687,6 +688,10 @@ void RobotController::processIncoming(const QByteArray &bytes)
 
 void RobotController::handlePacket(const Packet &packet)
 {
+    if (packet.type == MessageType::LeakStatus) {
+        handleLeakStatus(packet);
+        return;
+    }
     if (packet.type == MessageType::Ack) {
         handleAck(packet);
         return;
@@ -732,6 +737,7 @@ void RobotController::handlePacket(const Packet &packet)
             if (request->type == MessageType::Heartbeat) {
                 heartbeatReady_ = false;
                 heartbeatDue_ = true;
+                setLeakState(LeakState::Unknown);
                 return;
             }
             pumpApc220Scheduler();
@@ -742,6 +748,33 @@ void RobotController::handlePacket(const Packet &packet)
     }
     emit logMessage(QStringLiteral("RX message 0x%1 ignored by Phase 1 Console")
                         .arg(static_cast<quint8>(packet.type), 2, 16, QLatin1Char('0')));
+}
+
+void RobotController::handleLeakStatus(const Packet &packet)
+{
+    if (config_.linkProfile == LinkProfile::Apc220HalfDuplex && !heartbeatReady_) {
+        emit logMessage(QStringLiteral("LeakStatus ignored while APC220 liveness is not ready"));
+        setLeakState(LeakState::Unknown);
+        return;
+    }
+
+    if (packet.payload.size() != 1) {
+        emit logMessage(QStringLiteral("Invalid LeakStatus payload length=%1")
+                            .arg(packet.payload.size()));
+        setLeakState(LeakState::Unknown);
+        return;
+    }
+
+    const quint8 rawState = static_cast<quint8>(packet.payload.front());
+    if (!isValidLeakState(rawState)) {
+        emit logMessage(QStringLiteral("Invalid LeakStatus value=%1")
+                            .arg(rawState));
+        setLeakState(LeakState::Unknown);
+        return;
+    }
+
+    setLeakState(leakStateFromByte(rawState));
+    lastLeakTelemetryAtMs_ = nowMs();
 }
 
 void RobotController::handleAck(const Packet &packet)
@@ -782,6 +815,7 @@ void RobotController::handleAck(const Packet &packet)
         if (isApc220 && isHeartbeat) {
             heartbeatReady_ = false;
             heartbeatDue_ = true;
+            setLeakState(LeakState::Unknown);
         }
         monitor_.ackStatus = QStringLiteral("ACK type mismatch seq=%1").arg(requestSequence);
         emit logMessage(monitor_.ackStatus);
@@ -796,6 +830,7 @@ void RobotController::handleAck(const Packet &packet)
         if (isApc220 && isHeartbeat) {
             heartbeatReady_ = false;
             heartbeatDue_ = true;
+            setLeakState(LeakState::Unknown);
         }
         monitor_.ackStatus = QStringLiteral("ACK rejected seq=%1 result=%2 (%3)")
                                  .arg(requestSequence)
@@ -837,6 +872,7 @@ void RobotController::handleAck(const Packet &packet)
 void RobotController::checkTimeouts()
 {
     const qint64 now = nowMs();
+    refreshLeakTelemetryStaleness(now);
     if (config_.linkProfile == LinkProfile::Apc220HalfDuplex) {
         refreshApc220HeartbeatDue();
         if (pending_.isEmpty()) {
@@ -991,6 +1027,8 @@ void RobotController::resetSchedulerState()
     decoder_.reset();
     setEnabledMask(0);
     setDisablePendingMask(0);
+    lastLeakTelemetryAtMs_ = -1;
+    setLeakState(LeakState::Unknown);
 }
 
 void RobotController::clearQueuedCommandsForDisable(quint16 affectedMask)
@@ -1034,9 +1072,24 @@ void RobotController::failClosedApc220Actuators()
     deferredRetry_.reset();
     setEnabledMask(0);
     setDisablePendingMask(0);
+    setLeakState(LeakState::Unknown);
     if (firstFailClosed) {
         emit logMessage(QStringLiteral(
             "APC220 liveness lost; logical Servo state and stale actuator commands were cleared"));
+    }
+}
+
+void RobotController::refreshLeakTelemetryStaleness(qint64 now)
+{
+    if (!isConnected() || lastLeakTelemetryAtMs_ < 0
+        || config_.leakTelemetryStaleTimeoutMs <= 0
+        || leakState_ == LeakState::Unknown) {
+        return;
+    }
+
+    if (now - lastLeakTelemetryAtMs_ >= config_.leakTelemetryStaleTimeoutMs) {
+        emit logMessage(QStringLiteral("Leak telemetry stale; state set to Unknown"));
+        setLeakState(LeakState::Unknown);
     }
 }
 
@@ -1062,6 +1115,15 @@ void RobotController::setDisablePendingMask(quint16 mask)
             emit servoDisablePendingChanged(index, (disablePendingMask_ & bit) != 0U);
         }
     }
+}
+
+void RobotController::setLeakState(LeakState state)
+{
+    if (leakState_ == state) {
+        return;
+    }
+    leakState_ = state;
+    emit leakStateChanged(leakState_);
 }
 
 void RobotController::noteWriteFailure(const QString &context)

@@ -52,6 +52,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Communication/protocol_dispatcher.c
     Core/Sensors/leak_sensor.c
     Core/Sensors/leak_sensor_stm32.c
+    Core/Sensors/leak_telemetry_policy.c
     Core/Servo/servo_calibration.c
     Core/Servo/servo_descriptor.c
     Core/Servo/servo_service.c

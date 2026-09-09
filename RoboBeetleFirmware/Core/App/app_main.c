@@ -4,6 +4,7 @@
 #include "rb_protocol_v2.h"
 #include "safety_supervisor.h"
 #include "leak_sensor.h"
+#include "leak_telemetry_policy.h"
 #include "leak_sensor_stm32.h"
 #include "servo_driver_stm32.h"
 #include "servo_service.h"
@@ -17,6 +18,12 @@ static uint16_t protocol_wire_length = 0U;
 static uint8_t protocol_drop_until_delimiter = 0U;
 
 static uint16_t protocol_tx_sequence = 0U;
+
+/* Telemetry has its own sequence space so existing ACK sequence behavior
+ * remains unchanged for every command. */
+static uint16_t protocol_telemetry_sequence = 0U;
+
+#define LEAK_TELEMETRY_REFRESH_INTERVAL_MS 500U
 
 /* 下面几个主要用于 bring-up / debug */
 
@@ -34,11 +41,15 @@ static servo_driver_stm32_t servo_driver;
 static servo_service_t servo_service;
 static leak_sensor_t leak_sensor;
 static leak_sensor_stm32_t leak_sensor_reader;
+static leak_telemetry_policy_t leak_telemetry_policy;
 
-static void protocol_send_ack(
+static bool protocol_send_ack(
     uint16_t request_sequence,
     uint8_t request_type,
     rbp2_result_t result);
+
+static bool protocol_send_leak_status(
+    leak_sensor_state_t state);
 
 static void protocol_feed_byte(
     uint8_t byte)
@@ -89,10 +100,29 @@ static void protocol_feed_byte(
                     ++heartbeat_count;
                 }
 
-                protocol_send_ack(
+                const bool ack_sent = protocol_send_ack(
                     frame.sequence,
                     frame.type,
                     outcome.result);
+
+                if (ack_sent && outcome.heartbeat_accepted)
+                {
+                    const leak_sensor_state_t state =
+                        leak_sensor_state(&leak_sensor);
+
+                    if (leak_telemetry_policy_should_publish(
+                            &leak_telemetry_policy,
+                            state,
+                            now_ms,
+                            LEAK_TELEMETRY_REFRESH_INTERVAL_MS) &&
+                        protocol_send_leak_status(state))
+                    {
+                        leak_telemetry_policy_mark_published(
+                            &leak_telemetry_policy,
+                            state,
+                            now_ms);
+                    }
+                }
             }
             else
             {
@@ -137,7 +167,7 @@ static void protocol_feed_byte(
     }
 }
 
-static void protocol_send_ack(
+static bool protocol_send_ack(
     uint16_t request_sequence,
     uint8_t request_type,
     rbp2_result_t result)
@@ -166,10 +196,44 @@ static void protocol_send_ack(
 
     if (wire_length > 0U)
     {
-        (void)uart_transport_stm32_transmit(
+        return uart_transport_stm32_transmit(
             wire,
-            (uint16_t)wire_length);
+            (uint16_t)wire_length) == HAL_OK;
     }
+
+    return false;
+}
+
+static bool protocol_send_leak_status(
+    leak_sensor_state_t state)
+{
+    uint8_t payload[1];
+    uint8_t wire[RBP2_MAX_WIRE_SIZE];
+
+    if (!leak_sensor_state_is_valid(state))
+    {
+        return false;
+    }
+
+    payload[0] = (uint8_t)state;
+
+    size_t wire_length =
+        rbp2_encode_wire(
+            RBP2_MSG_LEAK_STATUS,
+            protocol_telemetry_sequence++,
+            payload,
+            sizeof(payload),
+            wire,
+            sizeof(wire));
+
+    if (wire_length == 0U)
+    {
+        return false;
+    }
+
+    return uart_transport_stm32_transmit(
+               wire,
+               (uint16_t)wire_length) == HAL_OK;
 }
 
 void app_main_init(
@@ -180,6 +244,7 @@ void app_main_init(
     uint16_t leak_gpio_pin)
 {
     leak_sensor_init(&leak_sensor);
+    leak_telemetry_policy_init(&leak_telemetry_policy);
     leak_sensor_stm32_init(
         &leak_sensor_reader,
         leak_gpio_port,

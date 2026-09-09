@@ -31,6 +31,25 @@ Current supplied bring-up evidence keeps `FrontRight`, `FrontLeft`, and `RearLef
 
 This is a hardware-layout compatibility break: the historical v0.4 Servo1/PA6 bring-up object was `RearLeft`, while PR #8 formally assigns PA6/ID0 to `FrontRight` and `RearLeft` to PD13/TIM4_CH2. Do not mix pre-PR8 Console/Firmware binaries with the PR8 five-servo wiring. PR #8 software verification is complete when the descriptor and controller tests pass; target hardware regression for the new layout remains pending.
 
+## Current PR #9 leak-status telemetry
+
+The Console accepts the monitoring-only Protocol V2 `LeakStatus` message
+(`0x20`) with a one-byte payload: `0=UNKNOWN`, `1=DRY`, and `2=WET`. The
+controller keeps this state separate from command/ACK scheduling; the frame is
+unacknowledged and its Firmware sequence is independent of command ACK
+matching. The global panel displays `Leak: Unknown`, `Leak: Dry`, or
+`LEAK DETECTED`.
+
+The Firmware publishes LeakStatus only after an accepted Heartbeat's normal
+ACK has finished transmitting, on the first valid sample, a state change, or a
+500 ms refresh. The Console treats the state as stale after 1500 ms (three
+500 ms refresh opportunities; provisional), and returns to `Unknown` on
+disconnect, APC220 liveness loss, invalid payload, or stale telemetry.
+This indicator is monitoring-only: it does not disable Servos, alter Safety,
+or auto-recover anything. Host/controller and wire-vector tests pass; PA11
+electrical behavior, physical leak response, and the end-to-end telemetry path
+remain **[Pending Hardware Verification]**.
+
 ## Current scope
 
 ### [Implemented]
@@ -45,12 +64,13 @@ This is a hardware-layout compatibility break: the historical v0.4 Servo1/PA6 br
 - `ITransport` abstraction with real `SerialTransport` and test-only `FakeTransport` implementations.
 - Protocol codec/stream tests and controller behavior tests.
 - Set Angle UI for the four angle-capable semantic servos with descriptor-specific ranges; the UI converts to centidegrees and angle-to-pulse conversion remains authoritative in Firmware. FrontAxis is explicitly PWM-only while calibration is pending, with a shared 500–2500 μs command envelope.
+- Monitoring-only LeakStatus `0x20` indicator with Unknown/Dry/Wet states and stale/disconnect fail-to-Unknown behavior; end-to-end hardware verification remains pending.
 
 ### [Planned]
 
 - Raspberry Pi onboard service and `TcpTransport`.
 - Camera and FOMO/ONNX result visualization.
-- IMU, depth, leak, battery, curves, and 3D attitude views.
+- IMU, depth, battery, curves, and 3D attitude views.
 - ROS 2, automatic control, CPG/PID integration, and telemetry models.
 - Emergency Stop. The current button is intentionally disabled because Protocol V2 has no such Phase 1 message.
 
@@ -65,7 +85,8 @@ QApplication
       │   ├─ profile-aware heartbeat timer
       │   ├─ pending ACK/retry scheduler
       │   ├─ bounded APC220 command queue
-      │   └─ logical enabled-mask state
+      │   ├─ logical enabled-mask state
+      │   └─ LeakStatus state / stale policy
       └─ MainWindow
           ├─ connection controls
           ├─ five descriptor-driven servo panels
@@ -76,7 +97,7 @@ QApplication
 |---|---|
 | `main.cpp` | Creates the application, `SerialTransport`, `RobotController`, and `MainWindow`; injects serial-port discovery. |
 | `MainWindow` | Converts UI actions into controller calls and displays controller signals. It does not access `QSerialPort` or construct packets. |
-| `RobotController` | Owns command payload construction, sequence allocation, profile-aware heartbeat/ACK scheduling, APC220 queue state, logical servo enable state, range gates, and monitor data. |
+| `RobotController` | Owns command payload construction, sequence allocation, profile-aware heartbeat/ACK scheduling, APC220 queue state, logical servo enable state, range gates, monitoring-only LeakStatus state/staleness, and monitor data. |
 | `ITransport` | Byte-stream open/close/write contract plus received-byte, state, and error signals. |
 | `SerialTransport` | Qt SerialPort adapter: port scan, 8-N-1, no flow control, async receive, buffered writes, and close-time flush attempt. |
 | `FakeTransport` | Deterministic byte transport used by controller tests. It is not a simulator of STM32 behavior. |
@@ -100,6 +121,7 @@ QApplication
 | Neutral | [Implemented] | Sends `0x14` with the selected semantic servo mask after Enable ACK and with no pending Disable; FrontAxis exposes this as `Center 1500 us — Provisional`, not calibrated Neutral. |
 | Apply PWM | [Implemented] | Explicit button; slider movement alone does not transmit. Requires successful Enable ACK, no pending Disable, and descriptor command-range validation. |
 | Set Angle | [Implemented] | Angle-capable semantic servos use descriptor-specific input ranges and 0.1° steps; Qt converts to signed cdeg and calls `RobotController::setServoAngle()`. The control requires connection, support, Enable ACK, and no pending Disable request. FrontAxis is disabled. |
+| Leak status | [Implemented / Pending Hardware Verification] | Displays `Leak: Unknown`, `Leak: Dry`, or `LEAK DETECTED` from Protocol V2 `0x20`; disconnect, APC liveness loss, invalid payload, and stale telemetry return it to Unknown. Monitoring-only; no Servo/Safety action. |
 | Protocol monitor | [Implemented] | Displays latest TX/RX chunks, packet counts, CRC errors, timeouts, latest matching-ACK RTT, ACK state, and up to 1000 log blocks. |
 
 ## Historical Servo1 hardware acceptance (2026-09-06)

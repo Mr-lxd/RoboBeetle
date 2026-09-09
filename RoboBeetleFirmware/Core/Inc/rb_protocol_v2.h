@@ -31,7 +31,10 @@ typedef enum
     RBP2_MSG_SERVO_DISABLE = 0x11,
     RBP2_MSG_SET_SERVO_PWM = 0x12,
     RBP2_MSG_SET_SERVO_ANGLE = 0x13,
-    RBP2_MSG_NEUTRAL = 0x14
+    RBP2_MSG_NEUTRAL = 0x14,
+
+    /* Unacknowledged robot-status telemetry (not a command). */
+    RBP2_MSG_LEAK_STATUS = 0x20
 
 } rbp2_message_type_t;
 

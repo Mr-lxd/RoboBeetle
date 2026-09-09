@@ -1,4 +1,5 @@
 #include "protocol/PacketCodec.h"
+#include "robot/LeakStatus.h"
 #include "robot/RobotController.h"
 #include "transport/FakeTransport.h"
 
@@ -95,6 +96,12 @@ void acknowledge(rb::FakeTransport &transport,
     transport.injectBytes(rb::PacketCodec::encodeWire({rb::MessageType::Ack, 0x8000, payload}));
 }
 
+void injectLeakStatus(rb::FakeTransport &transport, quint8 state)
+{
+    transport.injectBytes(rb::PacketCodec::encodeWire(
+        {rb::MessageType::LeakStatus, 0x6000, QByteArray(1, static_cast<char>(state))}));
+}
+
 void installSynchronousAcks(rb::FakeTransport &transport,
                             rb::AckResult disableResult,
                             bool mismatchDisableType)
@@ -177,6 +184,90 @@ void testNoAutomaticEnableAndPwmRequiresEnable()
            "PWM should be sent after enable acknowledgement");
     expect(lastPacket(transport).type == rb::MessageType::SetServoPwm,
            "PWM must use SetServoPwm message");
+}
+
+void testLeakStatusMappingAndPendingAckIsolation()
+{
+    expect(rb::leakStateDisplayText(rb::LeakState::Unknown)
+               == QStringLiteral("Leak: Unknown"),
+           "UNKNOWN leak state should map to the neutral display text");
+    expect(rb::leakStateDisplayText(rb::LeakState::Dry)
+               == QStringLiteral("Leak: Dry"),
+           "DRY leak state should map to the dry display text");
+    expect(rb::leakStateDisplayText(rb::LeakState::Wet)
+               == QStringLiteral("LEAK DETECTED"),
+           "WET leak state should map to the warning display text");
+
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+    expect(controller.enableServo(rb::ServoId::FrontRight),
+           "status isolation test should create a pending command");
+    const qsizetype writesBeforeStatus = transport.writes().size();
+
+    injectLeakStatus(transport, 1U);
+    expect(controller.leakState() == rb::LeakState::Dry,
+           "valid DRY telemetry should update controller state");
+    expect(transport.writes().size() == writesBeforeStatus,
+           "leak telemetry must not write or alter a pending command");
+    expect(!controller.isServoEnabled(rb::ServoId::FrontRight),
+           "leak telemetry must not satisfy a pending Enable ACK");
+
+    injectLeakStatus(transport, 3U);
+    expect(controller.leakState() == rb::LeakState::Unknown,
+           "invalid leak telemetry must fail closed to UNKNOWN");
+    acknowledgeLast(transport);
+    expect(controller.isServoEnabled(rb::ServoId::FrontRight),
+           "the real matching ACK must still complete the pending command");
+}
+
+void testLeakStatusStaleAndDisconnectTransitions()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 20;
+    config.leakTelemetryStaleTimeoutMs = 30;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    injectLeakStatus(transport, 1U);
+    expect(controller.leakState() == rb::LeakState::Dry,
+           "fresh DRY telemetry should be visible before stale timeout");
+    waitForMs(70);
+    expect(controller.leakState() == rb::LeakState::Unknown,
+           "stale telemetry must return to UNKNOWN");
+
+    injectLeakStatus(transport, 2U);
+    expect(controller.leakState() == rb::LeakState::Wet,
+           "a fresh valid telemetry frame should recover from stale UNKNOWN");
+    controller.disconnectTransport();
+    expect(controller.leakState() == rb::LeakState::Unknown,
+           "disconnect must clear trusted leak state");
+}
+
+void testApcHeartbeatLossClearsLeakState()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 5;
+    config.ackTimeoutMs = 5;
+    config.maxRetries = 0;
+    config.heartbeatSafetyBudgetMs = 100;
+    config.leakTelemetryStaleTimeoutMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+    injectLeakStatus(transport, 1U);
+    expect(controller.leakState() == rb::LeakState::Dry,
+           "APC liveness test should begin with trusted DRY telemetry");
+
+    waitForMs(40);
+    expect(controller.leakState() == rb::LeakState::Unknown,
+           "APC Heartbeat loss must clear trusted leak state immediately");
 }
 
 void testAngleDegreesConvertToCentidegrees()
@@ -1974,6 +2065,9 @@ int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
     testNoAutomaticEnableAndPwmRequiresEnable();
+    testLeakStatusMappingAndPendingAckIsolation();
+    testLeakStatusStaleAndDisconnectTransitions();
+    testApcHeartbeatLossClearsLeakState();
     testAngleDegreesConvertToCentidegrees();
     testSetAngleBlockedDuringDisableRequest();
     testApc220DisablePendingBlocksAllMotionAndErrorReleasesNoStaleWork();

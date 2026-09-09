@@ -1,8 +1,8 @@
 # RoboBeetle 硬件控制交接审计
 
-## 2026-09-09 Leak detection sensor bring-up（传感器分支，待实机验收）
+## 2026-09-09 Leak detection sensor bring-up（PR #9，软件实现；实机验收待完成）
 
-本阶段在 PR #8 五舵机分支之后采用 stacked branch，只实现第一条最小数字漏水检测路径，不改变 Protocol V2、Servo 行为、Safety 行为或 Qt。漏水模块由 3.3 V 供电，与 STM32 共地；数字输出 `D0` 接 STM32 `PA11`，模拟输出 `A0` 暂不使用。
+本阶段在 PR #8 五舵机分支之后采用 stacked branch，实现第一条最小数字漏水检测路径及其 monitoring-only Protocol V2/Qt 显示，不改变 Servo 行为或 Safety 行为。漏水模块由 3.3 V 供电，与 STM32 共地；数字输出 `D0` 接 STM32 `PA11`，模拟输出 `A0` 暂不使用。
 
 ### 当前实现
 
@@ -12,13 +12,17 @@ leak module D0
   → leak_sensor_stm32 raw-level reader
   → leak_sensor pure-C mapper
   → app_main 内部状态（主循环 polling）
+  → Protocol V2 LeakStatus `0x20`（Heartbeat ACK 完成后）
+  → Qt Leak indicator
 ```
 
 - `PA11` 在现有 `MX_GPIO_Init()` 中配置为 `GPIO_MODE_INPUT` + `GPIO_NOPULL`，没有新增 EXTI/NVIC。
 - `PA11` 已对照当前 `.ioc`、`main.c`、HAL MSP、USART1、TIM3/TIM4、SWD 与既有 GPIO 资源确认在软件配置层面 free；本阶段将其作为漏水 D0 输入。
 - 当前集中定义的初始极性是 `PA11 HIGH → LEAK_SENSOR_STATE_DRY`、`PA11 LOW → LEAK_SENSOR_STATE_WET`；首次采样前状态为 `UNKNOWN`。
 - `GPIO_NOPULL` 是 bring-up assumption，不是已验证的电气结论；资料尚未可靠确认 D0 输出级是推挽还是开漏。若实机显示浮动/不稳定，另行依据测量结果决定 pull 配置。
-- 轮询只更新内部状态，不触发 Servo disable、Emergency Stop、报警、Protocol telemetry 或 Qt 显示。
+- 轮询只更新内部状态；LeakStatus 是无 ACK 的 monitoring-only telemetry，不触发 Servo disable、Emergency Stop、报警或其它 Safety 动作。
+- Firmware 只在 accepted Heartbeat 的正常 ACK 已完整发送后，在首次有效采样、状态变化或 500 ms refresh opportunity 发布一帧；telemetry 使用独立序列空间，不进入 command pending/ACK matching。
+- Qt 将 `0=UNKNOWN`、`1=DRY`、`2=WET` 显示为 `Leak: Unknown`、`Leak: Dry`、`LEAK DETECTED`；断开、APC liveness loss、非法 payload 或 1500 ms（3 × 500 ms opportunity，provisional）无更新时回到 Unknown。
 
 ### 验证分层
 
@@ -30,8 +34,8 @@ leak module D0
 | PA11 Dry/Wet 电平与极性 | **Pending Hardware Verification** |
 | 实际漏水响应/恢复/稳定性 | **Pending Hardware Verification** |
 | Leak Safety Supervisor response | **Pending / Not Implemented** |
-| Protocol V2 leak telemetry | **Pending / Not Implemented** |
-| Qt leak visualization | **Pending / Not Implemented** |
+| Protocol V2 LeakStatus `0x20` codec/controller path | **Host Test: PASS; Hardware Pending** |
+| Qt leak visualization / stale-disconnect behavior | **Host Test: PASS; Hardware Pending** |
 
 ### Leak 首次实机步骤
 
@@ -40,7 +44,7 @@ leak module D0
 3. 在干燥状态测量并记录 `D0` 电压和 GPIO 逻辑值（预期 HIGH，但尚未 Hardware Verified）。
 4. 只润湿漏水线缆的计划感测段，观察并记录 `D0` 是否变为 LOW、响应延迟和是否有抖动。
 5. 擦干/移除水分，记录恢复延迟、最终逻辑值和是否回到 HIGH。
-6. 不要在本阶段把漏水状态接入自动停机或 Servo 安全动作；不要直接浸水，除非模块与整机密封能力已有独立证据。
+6. 观察 Qt Leak indicator 的 Unknown → Dry/Wet → Unknown（断开/超时）状态；不要在本阶段把漏水状态接入自动停机或 Servo 安全动作；不要直接浸水，除非模块与整机密封能力已有独立证据。
 
 请记录：
 
@@ -52,7 +56,7 @@ Dry recovery delay = ?
 Chatter / unstable transitions = ?
 ```
 
-传感器 bring-up 顺序固定为：`Leak detection → JY901S IMU → depth/sensor board → Protocol V2 sensor telemetry → Qt visualization`。先做 Leak 是因为它是最小的数字输入路径，可先验证 GPIO/电平/状态抽象，再扩展串口和遥测。
+传感器 bring-up 顺序固定为：`Leak detection (including LeakStatus telemetry) → JY901S IMU → depth/sensor board`。先做 Leak 是因为它是最小的数字输入路径，可先验证 GPIO/电平/状态抽象，再扩展其它传感器；LeakStatus 协议和 Qt 指示器虽已实现，端到端硬件证据仍待补齐。
 
 ## 2026-09-09 Depth PWM calibration window follow-up（PR #8）
 
@@ -306,8 +310,9 @@ Windows Laptop
         STM32F407VET6 USART1 PA9/PA10
           ├─ IRQ + 128-byte ring buffer
           ├─ Protocol V2 dispatcher / ACK / heartbeat watchdog
-          └─ Servo1 TIM3_CH1 PA6 @ ≈333 Hz
-                → GDW IPX896HV
+          ├─ Leak D0 PA11 → LeakStatus `0x20` monitoring telemetry
+          └─ five-servo descriptor/service/driver path
+                → TIM3/TIM4 PWM outputs
 
 [Planned future path]
 Windows Laptop Qt Console
@@ -351,7 +356,7 @@ USART1_IRQHandler
 - ACK 使用 `HAL_UART_Transmit(..., 100 ms)`，是 main-loop 阻塞发送，不在 ISR 中。
 - 有效 Heartbeat 更新本地 `last_heartbeat_rx_ms` 并设置 `host_alive`。
 - 超过 500 ms 未收到有效 Heartbeat 时停止 Servo1 PWM、清空 enable mask；恢复后必须重新 Heartbeat + Enable。
-- 没有独立硬件看门狗、Emergency Stop、漏水安全响应/遥测、电池/过流输入或持久故障记录；Leak D0 目前仅按轮询方式更新内部状态。
+- 没有独立硬件看门狗、Emergency Stop、漏水安全响应、电池/过流输入或持久故障记录；Leak D0 目前按轮询方式更新内部状态，并通过 PR #9 的 `LeakStatus (0x20)` 做 monitoring-only 遥测。该遥测不触发 Servo/Safety 动作，PA11 电平和端到端漏水行为仍 Pending。
 
 ### Console ↔ Firmware Protocol V2 结论
 

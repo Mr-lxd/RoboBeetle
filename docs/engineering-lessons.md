@@ -1,6 +1,6 @@
 # RoboBeetle Engineering Lessons
 
-This note records the evidence and boundaries behind the Console PR #7 scheduler adaptation, the PR #8 five-servo semantic bring-up, and the first leak-sensor bring-up. The scheduler is **[Hardware Verified - Bench]** on the tested desktop setup, while the PR #8 five-servo layout and the new leak input remain pending their respective target hardware evidence.
+This note records the evidence and boundaries behind the Console PR #7 scheduler adaptation, the PR #8 five-servo semantic bring-up, and the PR #9 leak-sensor telemetry bring-up. The scheduler is **[Hardware Verified - Bench]** on the tested desktop setup, while the PR #8 five-servo layout and the PA11 leak input/telemetry path remain pending their respective target hardware evidence.
 
 ## Keep programming and runtime links separate
 
@@ -94,11 +94,19 @@ fully confirmed, so `GPIO_NOPULL` is a bring-up assumption that must be checked
 on the bench rather than presented as an electrical fact.
 
 The mapper is polled in `app_main` and has no EXTI, debounce, latch, alarm,
-Safety action, Protocol V2 telemetry, Servo action, or Qt display. Host tests
-can therefore establish polarity without pretending to verify PA11 voltage or
-water response. The planned order is leak detection → JY901S IMU → depth/sensor
-board → Protocol V2 sensor telemetry → Qt visualization; leak comes first
-because it is the lowest-complexity input baseline.
+Safety action, or Servo action. PR #9 adds a deliberately narrow monitoring
+path: after an accepted Heartbeat's normal ACK has finished transmitting,
+`app_main` may emit unacknowledged Protocol V2 `LeakStatus` (`0x20`) telemetry
+for the first valid sample, a state change, or a 500 ms refresh. It uses an
+independent telemetry sequence and does not enter command pending/ACK matching.
+The Qt controller displays Unknown/Dry/Wet and returns to Unknown on disconnect,
+APC liveness loss, invalid payload, or a provisional 1500 ms stale interval
+(three 500 ms Firmware refresh opportunities). It is monitoring-only and must
+not be wired to automatic stop behavior in this phase. Host tests can therefore
+establish polarity, wire compatibility, and stale-state handling without
+pretending to verify PA11 voltage or water response. The remaining order is
+physical leak verification → JY901S IMU → depth/sensor board; telemetry and the
+Qt indicator are implemented but their end-to-end hardware evidence is pending.
 
 The Firmware Debug ARM configure/build is **[ARM Build: PASS]** with the
 STM32CubeIDE GNU Tools for STM32 14.3.1 toolchain, but no image was programmed
@@ -107,6 +115,18 @@ levels/voltages, wet response delay, dry recovery delay, and any chatter. Until
 those observations are supplied, PA11 polarity and wet/dry detection remain
 **[Pending Hardware Verification]**; do not connect the state to automatic stop
 behavior.
+
+## Keep sensor telemetry inside an existing liveness window
+
+For a low-rate sensor, an independent transmit timer would compete with
+Protocol V2 command/ACK traffic and create an unbounded source of frames. The
+PR #9 policy therefore publishes LeakStatus only in the already controlled
+Heartbeat opportunity, after the normal Heartbeat ACK has fully transmitted.
+State changes are sent immediately at that opportunity and an unchanged state
+is refreshed at most every 500 ms. The frame is unacknowledged and has its own
+sequence space, so it cannot satisfy or reorder a command ACK. This keeps the
+telemetry path observable without coupling leak indication to Servo or Safety
+actions.
 
 ## Cross-swap actuator faults before changing firmware
 
