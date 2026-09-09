@@ -4,7 +4,7 @@
 
 ### 当前状态
 
-本轮只扩大 `FrontAxis`/Depth 的 PWM-only command envelope；Firmware 与 Qt 两张独立 descriptor table 现在均为 `500–2500 μs`。卖家/电气能力元数据仍为 `500/1500/2500 μs`，只用于描述舵机的电气/绝对能力，不代表最终机械安全范围。`1500 μs` 仍是 provisional bring-up center candidate，不是 true mechanical center 或已标定 Neutral；`angle_supported=false` 保持不变，Depth Set Angle 仍不可用。用户界面显示名固定为 ASCII `FrontRight`、`FrontLeft`、`Depth`、`RearRight`、`RearLeft`；内部 `FrontAxis` 标识不变。
+本轮只扩大 `FrontAxis`/Depth 的 PWM-only command envelope；Firmware 与 Qt 两张独立 descriptor table 现在均为 `500–2500 μs`。卖家/电气能力元数据仍为 `500/1500/2500 μs`，只用于描述舵机的电气/绝对能力，不代表最终机械安全范围。`1500 μs` 仍是 provisional bring-up center candidate，不是 true mechanical center 或已标定 Neutral；`angle_supported=false` 保持不变，Depth Set Angle 仍不可用。当前台架观察到约 `1100–2500 μs` 可产生约 180° 的机构翻转，低于约 `1100 μs` 的命令容易出现 ACK timeout，因此当前暂不继续向下探测；完整机械装配完成前，最终 safe min/max、practical center 和 angle mapping 均延期。用户界面显示名固定为 ASCII `FrontRight`、`FrontLeft`、`Depth`、`RearRight`、`RearLeft`；内部 `FrontAxis` 标识不变。
 
 既有硬件事实保持不变：
 
@@ -14,11 +14,11 @@
 - `RearRight` STM32/A12 PWM output path：**[Hardware Verified]**；原 RearRight servo actuator/线束为 hardware fault，计划更换，不属于 Firmware bug。
 - Depth 在 `1480/1500/1520 μs` 的运动方向：**[Hardware Verified]**（PWM 减小 → front A 上翻，PWM 增大 → front A 下翻）。
 
-本次新增开放的 `500–2500 μs` 全行程、机械端点、safe min/max、practical center、PWM-to-angle calibration 和 angle control 均为 **[Pending Hardware Verification]**；该窗口是 endpoint exploration window，不是最终 mechanically safe endpoints。本环境仅记录 Host Test；ARM Build、Program Verify 和本轮新窗口的 Hardware Verification 不在本次会话中宣称通过。
+本次新增开放的 `500–2500 μs` 全行程、机械端点、safe min/max、practical center、PWM-to-angle calibration 和 angle control 均为 **[Pending Hardware Verification]**；该窗口是 endpoint exploration window，不是最终 mechanically safe endpoints。当前台架的约 `1100–2500 μs` 机构翻转观察和低于约 `1100 μs` 的 ACK timeout 现象属于新实测记录，不构成最终机械端点标定，也不授权继续探测更低脉宽。`1500 μs` 仍不是最终机械中心。本环境仅记录 Host Test；ARM Build、Program Verify 和本轮新窗口的 Hardware Verification 不在本次会话中宣称通过。
 
 ### 下一轮 Depth 实机计划
 
-仅连接 Depth，机构卸载并脱开舵盘/连杆。从 `1500 μs` 开始，按 `1500, 1400, 1300, 1200, 1100, 1000, 900, 800, 700, 600, 500` 逐步减小，再回到 1500；随后按 `1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400, 2500` 逐步增大。观察 ACK、平稳性、机械干涉、持续嗡鸣、停止运动、连杆受力和发热；接近端点时改用 20/10 μs 步长，禁止让舵机顶死。最终安全端点须在真实机械硬限位内保留 margin；若 500/2500 仍不足，不自动扩展范围，先记录实测结果。
+仅连接 Depth，机构卸载并脱开舵盘/连杆。基于当前约 `1100–2500 μs` 台架观察和低于约 `1100 μs` 的 ACK timeout，当前不要继续探测低于约 `1100 μs` 的命令。后续完整机械装配后的安全计划应从 `1500 μs` 开始，在确认不顶死且保留 margin 的前提下逐步探索；必须记录 ACK、平稳性、机械干涉、持续嗡鸣、停止运动、连杆受力和发热。最终安全端点须在真实机械硬限位内保留 margin；1500 μs 仍仅为 provisional bring-up center，不是最终机械中心。
 
 ### 验证分层与烧录提醒
 
