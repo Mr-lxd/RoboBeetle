@@ -58,7 +58,10 @@ PA11 LOW →
 `LEAK_SENSOR_STATE_WET`. The pure-C mapper host regression is **[Host Test:
 PASS]**; PA11 voltage, polarity, response/recovery time, chatter, Program
 Verify, and physical leak detection remain **[Pending Hardware Verification]**.
-Host Test does not establish target execution or physical sensor behavior.
+The Firmware Debug ARM configure/build is **[ARM Build: PASS]** with the
+STM32CubeIDE GNU Tools for STM32 14.3.1 toolchain; no image was programmed or
+verified in this session. Host Test and ARM Build do not establish physical
+sensor behavior.
 
 The planned sensor sequence is leak detection → JY901S IMU → depth/sensor board
 → Protocol V2 sensor telemetry → Qt visualization. Leak is first because it is

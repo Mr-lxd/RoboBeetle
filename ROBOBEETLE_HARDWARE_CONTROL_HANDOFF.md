@@ -25,7 +25,7 @@ leak module D0
 | 项目 | 当前状态 |
 |---|---|
 | Leak HIGH→Dry / LOW→Wet 纯 C 逻辑 | **Host Test: PASS** |
-| Firmware ARM Build | **Pending**，只有实际 `arm-none-eabi-gcc` 构建成功才能升级 |
+| Firmware ARM Build | **ARM Build: PASS**（STM32CubeIDE GNU Tools for STM32 14.3.1，CMake Debug configure/build；生成 `RoboBeetleFirmware.elf`） |
 | Program Verify | **Pending**，本阶段未执行烧录/校验 |
 | PA11 Dry/Wet 电平与极性 | **Pending Hardware Verification** |
 | 实际漏水响应/恢复/稳定性 | **Pending Hardware Verification** |
@@ -68,7 +68,7 @@ Chatter / unstable transitions = ?
 - `RearRight` STM32/A12 PWM output path：**[Hardware Verified]**；原 RearRight servo actuator/线束为 hardware fault，计划更换，不属于 Firmware bug。
 - Depth 在 `1480/1500/1520 μs` 的运动方向：**[Hardware Verified]**（PWM 减小 → front A 上翻，PWM 增大 → front A 下翻）。
 
-本次新增开放的 `500–2500 μs` 全行程、机械端点、safe min/max、practical center、PWM-to-angle calibration 和 angle control 均为 **[Pending Hardware Verification]**；该窗口是 endpoint exploration window，不是最终 mechanically safe endpoints。当前台架的约 `1100–2500 μs` 机构翻转观察和低于约 `1100 μs` 的 ACK timeout 现象属于新实测记录，不构成最终机械端点标定，也不授权继续探测更低脉宽。`1500 μs` 仍不是最终机械中心。本环境仅记录 Host Test；ARM Build、Program Verify 和本轮新窗口的 Hardware Verification 不在本次会话中宣称通过。
+本次新增开放的 `500–2500 μs` 全行程、机械端点、safe min/max、practical center、PWM-to-angle calibration 和 angle control 均为 **[Pending Hardware Verification]**；该窗口是 endpoint exploration window，不是最终 mechanically safe endpoints。当前台架的约 `1100–2500 μs` 机构翻转观察和低于约 `1100 μs` 的 ACK timeout 现象属于新实测记录，不构成最终机械端点标定，也不授权继续探测更低脉宽。`1500 μs` 仍不是最终机械中心。本环境记录纯 C Host Test 与 Firmware ARM Build；Program Verify 和本轮新窗口的 Hardware Verification 不在本次会话中宣称通过。
 
 ### 下一轮 Depth 实机计划
 

@@ -58,11 +58,12 @@ follow-up.
 
 ## Verification boundary
 
-Host tests prove only the pure polarity/state logic. ARM target build and
-program verification are reported separately when actually run. PA11 voltage
-levels, wet/dry polarity, response/recovery delay, and chatter require the
-user's physical test and remain pending until then. No leak Hardware Verified
-claim is made by this design.
+Host tests prove only the pure polarity/state logic. The Firmware Debug ARM
+configure/build has now passed with the STM32CubeIDE GNU Tools for STM32 14.3.1
+toolchain, but program verification was not run. PA11 voltage levels, wet/dry
+polarity, response/recovery delay, and chatter require the user's physical test
+and remain pending until then. No leak Hardware Verified claim is made by this
+design.
 
 ## Deferred work
 

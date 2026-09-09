@@ -100,10 +100,13 @@ water response. The planned order is leak detection → JY901S IMU → depth/sen
 board → Protocol V2 sensor telemetry → Qt visualization; leak comes first
 because it is the lowest-complexity input baseline.
 
-The first physical check must record dry and wet GPIO levels/voltages, wet
-response delay, dry recovery delay, and any chatter. Until those observations
-are supplied, PA11 polarity and wet/dry detection remain **[Pending Hardware
-Verification]**; do not connect the state to automatic stop behavior.
+The Firmware Debug ARM configure/build is **[ARM Build: PASS]** with the
+STM32CubeIDE GNU Tools for STM32 14.3.1 toolchain, but no image was programmed
+or verified here. The first physical check must record dry and wet GPIO
+levels/voltages, wet response delay, dry recovery delay, and any chatter. Until
+those observations are supplied, PA11 polarity and wet/dry detection remain
+**[Pending Hardware Verification]**; do not connect the state to automatic stop
+behavior.
 
 ## Cross-swap actuator faults before changing firmware
 
