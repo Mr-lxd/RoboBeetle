@@ -15,6 +15,7 @@ leak module D0
 ```
 
 - `PA11` 在现有 `MX_GPIO_Init()` 中配置为 `GPIO_MODE_INPUT` + `GPIO_NOPULL`，没有新增 EXTI/NVIC。
+- `PA11` 已对照当前 `.ioc`、`main.c`、HAL MSP、USART1、TIM3/TIM4、SWD 与既有 GPIO 资源确认在软件配置层面 free；本阶段将其作为漏水 D0 输入。
 - 当前集中定义的初始极性是 `PA11 HIGH → LEAK_SENSOR_STATE_DRY`、`PA11 LOW → LEAK_SENSOR_STATE_WET`；首次采样前状态为 `UNKNOWN`。
 - `GPIO_NOPULL` 是 bring-up assumption，不是已验证的电气结论；资料尚未可靠确认 D0 输出级是推挽还是开漏。若实机显示浮动/不稳定，另行依据测量结果决定 pull 配置。
 - 轮询只更新内部状态，不触发 Servo disable、Emergency Stop、报警、Protocol telemetry 或 Qt 显示。

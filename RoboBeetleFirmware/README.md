@@ -50,8 +50,11 @@ leak D0 → PA11 GPIO input → leak_sensor_stm32 raw reader
 `GPIO_MODE_INPUT` with `GPIO_NOPULL`; no EXTI, debounce, alarm, Safety action,
 Protocol telemetry, or Qt display is connected. The module's output-stage type
 is not fully established by the available documentation, so `GPIO_NOPULL` is a
-bring-up assumption rather than a verified electrical conclusion. The explicit
-initial polarity is PA11 HIGH → `LEAK_SENSOR_STATE_DRY` and PA11 LOW →
+bring-up assumption rather than a verified electrical conclusion. A source-level
+resource scan checked PA11 against the active `.ioc`, `main.c`, HAL MSP, USART1,
+TIM3/TIM4, SWD, and existing GPIO assignments and found it free at the software
+resource level. The initial polarity is PA11 HIGH → `LEAK_SENSOR_STATE_DRY` and
+PA11 LOW →
 `LEAK_SENSOR_STATE_WET`. The pure-C mapper host regression is **[Host Test:
 PASS]**; PA11 voltage, polarity, response/recovery time, chatter, Program
 Verify, and physical leak detection remain **[Pending Hardware Verification]**.

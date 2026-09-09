@@ -45,9 +45,11 @@ reported on the wire or used to disable servos.
 
 ## GPIO and electrical assumptions
 
-The active `.ioc` currently has no PA11 assignment, and no source or HAL MSP
-code uses PA11. The branch adds PA11 as a plain `GPIO_MODE_INPUT` with
-`GPIO_NOPULL`, using the existing `MX_GPIO_Init` clock/configuration path. The
+Before this branch, the active `.ioc` had no PA11 assignment, and no source or
+HAL MSP code used PA11. A source-level resource scan confirms PA11 is free with
+respect to the current USART1, TIM3/TIM4, SWD, and GPIO assignments. The branch
+adds PA11 as a plain `GPIO_MODE_INPUT` with `GPIO_NOPULL`, using the existing
+`MX_GPIO_Init` clock/configuration path. The
 module documentation indicates a digital HIGH/LOW output, but its output-stage
 type is not fully established in the repository; therefore `GPIO_NOPULL` is a
 bring-up assumption, not a verified electrical conclusion. If physical tests
@@ -69,5 +71,4 @@ alarm, Safety Supervisor integration, Protocol V2 sensor telemetry, Qt display,
 and a defined recovery policy. The bring-up order remains leak detection,
 JY901S IMU, depth/sensor board, sensor telemetry, then Qt visualization because
 the leak input is the smallest digital-input baseline.
-
 

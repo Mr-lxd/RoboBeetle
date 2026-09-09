@@ -86,7 +86,10 @@ common ground, `D0` to STM32 `PA11`, and `A0` unused. The implementation keeps
 the boundary narrow: the existing CubeMX `MX_GPIO_Init()` configures PA11 as
 `GPIO_MODE_INPUT` with `GPIO_NOPULL`, a thin HAL reader samples the pin, and a
 HAL-independent pure-C mapper stores `UNKNOWN`, `DRY`, or `WET`. The explicit
-initial polarity is HIGH → Dry and LOW → Wet, but the output-stage type is not
+resource scan against the active `.ioc`, `main.c`, HAL MSP, USART1, TIM3/TIM4,
+SWD, and GPIO assignments confirms PA11 is free at the software configuration
+level. The initial polarity is HIGH → Dry and LOW → Wet, but the output-stage
+type is not
 fully confirmed, so `GPIO_NOPULL` is a bring-up assumption that must be checked
 on the bench rather than presented as an electrical fact.
 
