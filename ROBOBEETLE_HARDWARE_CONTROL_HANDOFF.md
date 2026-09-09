@@ -1,5 +1,58 @@
 # RoboBeetle 硬件控制交接审计
 
+## 2026-09-09 Leak detection sensor bring-up（传感器分支，待实机验收）
+
+本阶段在 PR #8 五舵机分支之后采用 stacked branch，只实现第一条最小数字漏水检测路径，不改变 Protocol V2、Servo 行为、Safety 行为或 Qt。漏水模块由 3.3 V 供电，与 STM32 共地；数字输出 `D0` 接 STM32 `PA11`，模拟输出 `A0` 暂不使用。
+
+### 当前实现
+
+```text
+leak module D0
+  → PA11 GPIO input
+  → leak_sensor_stm32 raw-level reader
+  → leak_sensor pure-C mapper
+  → app_main 内部状态（主循环 polling）
+```
+
+- `PA11` 在现有 `MX_GPIO_Init()` 中配置为 `GPIO_MODE_INPUT` + `GPIO_NOPULL`，没有新增 EXTI/NVIC。
+- 当前集中定义的初始极性是 `PA11 HIGH → LEAK_SENSOR_STATE_DRY`、`PA11 LOW → LEAK_SENSOR_STATE_WET`；首次采样前状态为 `UNKNOWN`。
+- `GPIO_NOPULL` 是 bring-up assumption，不是已验证的电气结论；资料尚未可靠确认 D0 输出级是推挽还是开漏。若实机显示浮动/不稳定，另行依据测量结果决定 pull 配置。
+- 轮询只更新内部状态，不触发 Servo disable、Emergency Stop、报警、Protocol telemetry 或 Qt 显示。
+
+### 验证分层
+
+| 项目 | 当前状态 |
+|---|---|
+| Leak HIGH→Dry / LOW→Wet 纯 C 逻辑 | **Host Test: PASS** |
+| Firmware ARM Build | **Pending**，只有实际 `arm-none-eabi-gcc` 构建成功才能升级 |
+| Program Verify | **Pending**，本阶段未执行烧录/校验 |
+| PA11 Dry/Wet 电平与极性 | **Pending Hardware Verification** |
+| 实际漏水响应/恢复/稳定性 | **Pending Hardware Verification** |
+| Leak Safety Supervisor response | **Pending / Not Implemented** |
+| Protocol V2 leak telemetry | **Pending / Not Implemented** |
+| Qt leak visualization | **Pending / Not Implemented** |
+
+### Leak 首次实机步骤
+
+1. 将漏水模块接到 3.3 V，模块 GND 与 STM32 GND 共地。
+2. 将 `D0` 接 `PA11`；`A0` 保持悬空/不连接。
+3. 在干燥状态测量并记录 `D0` 电压和 GPIO 逻辑值（预期 HIGH，但尚未 Hardware Verified）。
+4. 只润湿漏水线缆的计划感测段，观察并记录 `D0` 是否变为 LOW、响应延迟和是否有抖动。
+5. 擦干/移除水分，记录恢复延迟、最终逻辑值和是否回到 HIGH。
+6. 不要在本阶段把漏水状态接入自动停机或 Servo 安全动作；不要直接浸水，除非模块与整机密封能力已有独立证据。
+
+请记录：
+
+```text
+Dry GPIO level / D0 voltage = ?
+Wet GPIO level / D0 voltage = ?
+Wet response delay = ?
+Dry recovery delay = ?
+Chatter / unstable transitions = ?
+```
+
+传感器 bring-up 顺序固定为：`Leak detection → JY901S IMU → depth/sensor board → Protocol V2 sensor telemetry → Qt visualization`。先做 Leak 是因为它是最小的数字输入路径，可先验证 GPIO/电平/状态抽象，再扩展串口和遥测。
+
 ## 2026-09-09 Depth PWM calibration window follow-up（PR #8）
 
 ### 当前状态
@@ -297,7 +350,7 @@ USART1_IRQHandler
 - ACK 使用 `HAL_UART_Transmit(..., 100 ms)`，是 main-loop 阻塞发送，不在 ISR 中。
 - 有效 Heartbeat 更新本地 `last_heartbeat_rx_ms` 并设置 `host_alive`。
 - 超过 500 ms 未收到有效 Heartbeat 时停止 Servo1 PWM、清空 enable mask；恢复后必须重新 Heartbeat + Enable。
-- 没有独立硬件看门狗、Emergency Stop、漏水/电池/过流输入或持久故障记录。
+- 没有独立硬件看门狗、Emergency Stop、漏水安全响应/遥测、电池/过流输入或持久故障记录；Leak D0 目前仅按轮询方式更新内部状态。
 
 ### Console ↔ Firmware Protocol V2 结论
 

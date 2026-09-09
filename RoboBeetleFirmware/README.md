@@ -35,6 +35,33 @@ This is a hardware-layout compatibility break. Historical v0.4 `Servo1`/PA6 brin
 
 PR #8 software descriptor, service, and dispatch regressions are the implementation gate. Five-servo target build/download and physical motion verification are still **[Pending Hardware Verification]**; the earlier Servo1-only hardware milestones remain historical evidence for the old layout.
 
+## Current sensor bring-up: leak D0 on PA11
+
+The first sensor phase adds only a polled digital leak input. The module is
+powered from 3.3 V with common GND; its digital output `D0` is wired to
+STM32 `PA11`, while analog `A0` is intentionally unused. The current path is:
+
+```text
+leak D0 → PA11 GPIO input → leak_sensor_stm32 raw reader
+  → leak_sensor pure-C mapper → app_main internal state
+```
+
+`PA11` is configured in the existing `MX_GPIO_Init()` path as
+`GPIO_MODE_INPUT` with `GPIO_NOPULL`; no EXTI, debounce, alarm, Safety action,
+Protocol telemetry, or Qt display is connected. The module's output-stage type
+is not fully established by the available documentation, so `GPIO_NOPULL` is a
+bring-up assumption rather than a verified electrical conclusion. The explicit
+initial polarity is PA11 HIGH → `LEAK_SENSOR_STATE_DRY` and PA11 LOW →
+`LEAK_SENSOR_STATE_WET`. The pure-C mapper host regression is **[Host Test:
+PASS]**; PA11 voltage, polarity, response/recovery time, chatter, Program
+Verify, and physical leak detection remain **[Pending Hardware Verification]**.
+Host Test does not establish target execution or physical sensor behavior.
+
+The planned sensor sequence is leak detection → JY901S IMU → depth/sensor board
+→ Protocol V2 sensor telemetry → Qt visualization. Leak is first because it is
+the smallest digital-input path and establishes a low-complexity sensor
+bring-up baseline.
+
 ## Active target and CubeMX configuration
 
 The active configuration file is `RoboBeetleFirmware/RoboBeetleFirmware.ioc`. A separately referenced `D:\RoboBeetle\RoboBeetle.ioc` was not present during this audit.
@@ -151,7 +178,7 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 ### Limitations
 
 - Watchdog processing shares the main loop with blocking ACK transmission and all frame dispatch.
-- There is no independent hardware watchdog, fault state, persisted reset reason, leak/battery/current input, or emergency-stop message in this Phase 1 source.
+- There is no independent hardware watchdog, fault state, persisted reset reason, leak safety response, leak telemetry, battery/current input, or emergency-stop message in this Phase 1 source. The leak D0 input is only polled into an internal state; it does not change Servo behavior.
 - Duplicate suppression intentionally retains one successful non-Heartbeat request rather than a multi-entry replay window. A later distinct successful actuator request replaces it.
 - Disconnect safety relies on the host's best-effort Disable All plus the 500 ms Firmware heartbeat timeout.
 
@@ -228,6 +255,9 @@ Core/
 │  ├─ servo_driver_stm32.c/h
 │  ├─ servo_service.c/h
 │  └─ servo_calibration.c/h
+├─ Sensors/
+│  ├─ leak_sensor.c/h
+│  └─ leak_sensor_stm32.c/h
 ├─ Safety/
 │  └─ safety_supervisor.c/h
 └─ Src/main.c
