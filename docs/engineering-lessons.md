@@ -4,7 +4,7 @@ This note records the evidence and boundaries behind the Console PR #7 scheduler
 
 ## Keep programming and runtime links separate
 
-The DAP/ST-LINK and OpenOCD path is the programming and debug boundary. It should be validated independently by detecting the target, halting/resetting it, and confirming that the intended image is loaded. The run-time Protocol V2 stream is a separate boundary: a successful OpenOCD session does not prove that the USB serial adapter, APC220 pair, UART pins, or application dispatcher are exchanging bytes.
+The DAP/ST-LINK and OpenOCD path is the programming and debug boundary. It should be validated independently by detecting the target, halting/resetting it, and confirming that the intended image is loaded. The run-time Protocol V2 stream is a separate boundary: a successful OpenOCD session does not prove that the USB serial adapter, APC220 pair, UART pins, or application dispatcher are exchanging bytes. The stable bring-up sequence recorded for this project is `SWD clock 100 kHz → SYSRESETREQ → halt → program → verify`; if UART behaves abnormally after flashing, perform a complete power cycle before considering software changes.
 
 If OpenOCD reports a target-side Flash algorithm failure, treat that as a programming-path failure even when DAP target detection succeeds. Check target power, reset/boot state, flash protection, adapter speed, and the selected device algorithm; a slower programming fallback can be useful for recovery, but a slow fallback success still does not validate the run-time UART/APC220 path. Record the programming result and the run-time result as separate evidence.
 
@@ -71,9 +71,21 @@ When a multi-bit Enable request is accepted, every newly requested channel must 
 
 Once Disable is accepted and awaiting ACK, new PWM, Neutral, and Set Angle commands for the affected servo must be rejected at the Controller boundary—not merely disabled in the UI. This prevents DirectUart writes and APC220 queue entries from being created behind a safety command, so a later Disable Error or timeout cannot release stale post-disable motion.
 
+## Separate electrical capability from the command exploration window
+
+The HDKJ S3150D seller values `500/1500/2500 μs` describe electrical/absolute capability metadata. They do not authorize those pulses as current user commands. The PR #8 follow-up keeps Firmware and Qt descriptors aligned at a provisional `1200–1800 μs` PWM-only calibration exploration window. `1500 μs` remains a provisional bring-up center candidate, not a true mechanical center or calibrated Neutral; `angle_supported=false` and Set Angle rejection remain unchanged. Only the supplied `1480/1500/1520 μs` direction observation is **[Hardware Verified]**. Full travel, safe endpoints, practical center, and angle mapping remain **[Pending Hardware Verification]** and must be checked unloaded with small steps near resistance.
+
 ## Treat FrontAxis center as a bring-up candidate, not calibration
 
-The HDKJ S3150D FrontAxis descriptor separates seller-provided electrical capability (500/1500/2500 μs, 4.8–7.4 V, 0–270° travel, 4 μs dead band) from the deliberately narrow 1450–1550 μs bring-up command envelope. It remains SetAngle-disabled, and 1500 μs is only a provisional startup/center candidate. First hardware verification must be unloaded with the horn or linkage detached, using `1500 → 1450 → 1500 → 1550 → 1500`; only measured mechanical behavior can promote a neutral calibration. The seller page also conflicts with the product shell/photo on waterproofing, so waterproof capability remains **[Unverified]** and direct immersion is prohibited until reliable IP/sealing evidence is available.
+The HDKJ S3150D FrontAxis descriptor separates seller-provided electrical capability (500/1500/2500 μs, 4.8–7.4 V, 0–270° travel, 4 μs dead band) from the provisional 1200–1800 μs bring-up command envelope. It remains SetAngle-disabled, and 1500 μs is only a provisional startup/center candidate. The supplied 1480/1500/1520 direction observation is Hardware Verified; the expanded window and endpoint calibration are not. The next unloaded sequence is `1500,1450,1400,1350,1300,1250,1200`, return to 1500, then `1500,1550,1600,1650,1700,1750,1800`; only measured mechanical behavior can promote a practical center or endpoint. The seller page also conflicts with the product shell/photo on waterproofing, so waterproof capability remains **[Unverified]** and direct immersion is prohibited until reliable IP/sealing evidence is available.
+
+## Cross-swap actuator faults before changing firmware
+
+During single-channel bring-up, a known-good RearLeft actuator rotated on the RearRight A12/PWM channel, and a new same-type replacement actuator also rotated there, while the original RearRight actuator did not. This cross-swap pattern shows that the STM32 timer/GPIO/PWM path is **[Hardware Verified]** and the original actuator/lead is a hardware fault to replace; an isolated actuator failure must not trigger speculative UART, timer, GPIO, or Protocol changes.
+
+## Keep validation levels explicit
+
+Record each result as one of: `Host Test` (desktop unit/regression test), `ARM Build` (target compiler build), `Program Verify` (DAP/ST-LINK image verification), `Hardware Verified` (physical behavior explicitly observed), or `Pending` (not yet evidenced). The PR #8 Depth window expansion is Host-Tested only in this session; its 1200–1800 μs travel and endpoint behavior remain Pending until the unloaded hardware plan is completed. Do not collapse these levels into a single “tested” label.
 
 ## Record layout compatibility breaks explicitly
 

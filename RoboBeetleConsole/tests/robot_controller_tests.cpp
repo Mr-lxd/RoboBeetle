@@ -618,14 +618,14 @@ void testFrontAxisIsPwmOnly()
            "FrontAxis enable should be sent");
     acknowledgeLast(transport);
     const qsizetype beforeAngle = transport.writes().size();
-    expect(!controller.setServoPwm(rb::ServoId::FrontAxis, 1449),
-           "FrontAxis PWM below 1450 us must be rejected");
-    expect(controller.setServoPwm(rb::ServoId::FrontAxis, 1450),
-           "FrontAxis PWM 1450 us must be accepted");
-    expect(controller.setServoPwm(rb::ServoId::FrontAxis, 1550),
-           "FrontAxis PWM 1550 us must be accepted");
-    expect(!controller.setServoPwm(rb::ServoId::FrontAxis, 1551),
-           "FrontAxis PWM above 1550 us must be rejected");
+    expect(!controller.setServoPwm(rb::ServoId::FrontAxis, 1199),
+           "FrontAxis PWM below 1200 us must be rejected");
+    expect(controller.setServoPwm(rb::ServoId::FrontAxis, 1200),
+           "FrontAxis PWM 1200 us must be accepted");
+    expect(controller.setServoPwm(rb::ServoId::FrontAxis, 1800),
+           "FrontAxis PWM 1800 us must be accepted");
+    expect(!controller.setServoPwm(rb::ServoId::FrontAxis, 1801),
+           "FrontAxis PWM above 1800 us must be rejected");
     expect(!controller.setServoAngle(rb::ServoId::FrontAxis, 0),
            "FrontAxis Set Angle must always be rejected");
     expect(transport.writes().size() == beforeAngle + 2,
@@ -645,7 +645,7 @@ void testSemanticServoCommandBoundaries()
     const BoundaryCase cases[] = {
         {rb::ServoId::FrontRight, 1050, 1950, -4500, 4500, true},
         {rb::ServoId::FrontLeft, 1050, 1950, -4500, 4500, true},
-        {rb::ServoId::FrontAxis, 1450, 1550, 0, 0, false},
+        {rb::ServoId::FrontAxis, 1200, 1800, 0, 0, false},
         {rb::ServoId::RearRight, 1020, 2020, -4500, 4500, true},
         {rb::ServoId::RearLeft, 1020, 2020, -4500, 4500, true},
     };
