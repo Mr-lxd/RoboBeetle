@@ -71,4 +71,3 @@ alarm, Safety Supervisor integration, Protocol V2 sensor telemetry, Qt display,
 and a defined recovery policy. The bring-up order remains leak detection,
 JY901S IMU, depth/sensor board, sensor telemetry, then Qt visualization because
 the leak input is the smallest digital-input baseline.
-

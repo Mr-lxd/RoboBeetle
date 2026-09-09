@@ -234,7 +234,3 @@ exact push/PR blocker.
   validation categories, documentation, and the stacked-branch relationship.
 - No task changes Protocol V2, Servo behavior/calibration, Safety actions, Qt,
   IMU, depth, ADC, EXTI, debounce, or generated CubeMX CMake.
-
-
-
-
