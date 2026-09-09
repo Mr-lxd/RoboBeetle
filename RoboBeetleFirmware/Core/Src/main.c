@@ -93,7 +93,12 @@ int main(void)
   MX_TIM4_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  app_main_init(&huart1, &htim3, &htim4);
+  app_main_init(
+      &huart1,
+      &htim3,
+      &htim4,
+      LEAK_SENSOR_GPIO_Port,
+      LEAK_SENSOR_Pin);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -318,6 +323,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(DBG_LED_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : LEAK_SENSOR_Pin */
+  GPIO_InitStruct.Pin = LEAK_SENSOR_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(LEAK_SENSOR_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 

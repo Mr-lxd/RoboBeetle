@@ -3,6 +3,8 @@
 #include "protocol_dispatcher.h"
 #include "rb_protocol_v2.h"
 #include "safety_supervisor.h"
+#include "leak_sensor.h"
+#include "leak_sensor_stm32.h"
 #include "servo_driver_stm32.h"
 #include "servo_service.h"
 #include "uart_transport_stm32.h"
@@ -30,6 +32,8 @@ static protocol_dispatcher_t protocol_dispatcher;
 static safety_supervisor_t safety_supervisor;
 static servo_driver_stm32_t servo_driver;
 static servo_service_t servo_service;
+static leak_sensor_t leak_sensor;
+static leak_sensor_stm32_t leak_sensor_reader;
 
 static void protocol_send_ack(
     uint16_t request_sequence,
@@ -171,8 +175,15 @@ static void protocol_send_ack(
 void app_main_init(
     UART_HandleTypeDef *uart,
     TIM_HandleTypeDef *tim3,
-    TIM_HandleTypeDef *tim4)
+    TIM_HandleTypeDef *tim4,
+    GPIO_TypeDef *leak_gpio_port,
+    uint16_t leak_gpio_pin)
 {
+    leak_sensor_init(&leak_sensor);
+    leak_sensor_stm32_init(
+        &leak_sensor_reader,
+        leak_gpio_port,
+        leak_gpio_pin);
     safety_supervisor_init(&safety_supervisor);
     servo_driver_stm32_init(
         &servo_driver,
@@ -192,6 +203,11 @@ void app_main_init(
 void app_main_process(void)
 {
     uint8_t byte;
+
+    leak_sensor_update_from_gpio_level(
+        &leak_sensor,
+        leak_sensor_stm32_read_level(
+            &leak_sensor_reader));
 
     while (uart_transport_stm32_pop(&byte))
     {
