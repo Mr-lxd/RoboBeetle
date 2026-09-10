@@ -15,6 +15,10 @@
 #include "jy901s_transport_stm32.h"
 #include "uart_transport_stm32.h"
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
 static uint8_t protocol_wire_buffer[
     RBP2_MAX_WIRE_SIZE];
 

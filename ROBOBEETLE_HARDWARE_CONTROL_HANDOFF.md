@@ -143,7 +143,7 @@ diagnostics，不包含 3D、历史曲线、校准、控制动作或 raw passthr
 | 项目 | 状态 |
 |---|---|
 | Host Test | **PASS**：全部当前 Firmware regressions（含 Leak sensor / Leak telemetry policy）、JY901S telemetry codec/scheduler、Console protocol/controller/descriptor/IMU/MainWindow tests |
-| ARM Build | **Pending**：需在 PR #11 branch 对新增 target sources 重新执行 ARM build |
+| ARM Build | **FAIL**：real hardware checkout previously failed on missing `<stddef.h>`；修复后需重新执行 ARM build |
 | Program Verify | **Pending**：本轮明确不烧录 PR #11 image |
 | Hardware Verified | **Pending**：没有物理 JY901S telemetry、USART1/APC220 新链路或 Qt IMU 实机结论 |
 | PR #10 listen-only ARM/Program evidence | **PASS**：仅适用于 PR #10 记录的 bring-up ELF，不自动覆盖 PR #11 |

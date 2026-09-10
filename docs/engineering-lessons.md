@@ -12,6 +12,14 @@ If OpenOCD reports a target-side Flash algorithm failure, treat that as a progra
 
 Host-side pure-C tests and syntax checks can pass while the STM32CubeIDE `arm-none-eabi-gcc` build fails. Transitive includes differ between toolchains and can hide a missing direct standard-header dependency; each translation unit must include the standard header that defines the symbols it uses. The STM32CubeIDE target build captured the missing `<stddef.h>` dependency for `NULL` in `servo_calibration.c`, which host checks had not exposed.
 
+Treat this as an implementation and review checklist item: do not rely on
+transitive includes for standard-library symbols or types. Every C translation
+unit and public/internal header must directly include the defining header: `NULL`
+and `size_t` → `<stddef.h>`, `bool` → `<stdbool.h>`, fixed-width integers →
+`<stdint.h>`, memory/string APIs → `<string.h>`, stdio → `<stdio.h>`, stdlib →
+`<stdlib.h>`, and math APIs → `<math.h>`. Host compiler success does not
+guarantee ARM translation-unit portability.
+
 ## Do not use HAL enum values as invalid sentinels
 
 Third-party HAL enum/raw constant values are part of the valid domain and must not double as invalid markers. STM32 HAL defines `TIM_CHANNEL_1` as `0x00000000U`; channel validity is therefore represented independently by the STM32 driver mapping result (`channel_valid`), and every write/start/stop operation checks that explicit validity. The FrontRight and RearRight CH1 bindings must remain valid even though their HAL channel value is zero; an unmapped symbolic channel must fail closed.

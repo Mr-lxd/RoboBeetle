@@ -90,7 +90,7 @@ programming evidence:
 | Evidence | Status |
 |---|---|
 | Firmware host regressions, telemetry codec/scheduler tests, and Qt tests | **[Host Test: PASS]** |
-| PR #11 STM32 target build | **[Pending]** until run on this branch |
+| PR #11 STM32 target build | **[FAIL]** — real hardware checkout previously failed on missing `<stddef.h>`; re-run required after fix |
 | PR #11 program/verify | **[Pending]**; no hardware programming in this phase |
 | JY901S physical telemetry / end-to-end IMU data | **[Pending]** |
 

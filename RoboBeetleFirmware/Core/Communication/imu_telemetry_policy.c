@@ -1,5 +1,9 @@
 #include "imu_telemetry_policy.h"
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
 void imu_telemetry_policy_init(
     imu_telemetry_policy_t *policy)
 {

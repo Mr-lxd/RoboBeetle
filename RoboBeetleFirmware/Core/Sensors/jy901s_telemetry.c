@@ -1,5 +1,8 @@
 #include "jy901s_telemetry.h"
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 static void write_le16(

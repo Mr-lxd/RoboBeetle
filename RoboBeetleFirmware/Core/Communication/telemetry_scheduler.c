@@ -1,5 +1,6 @@
 #include "telemetry_scheduler.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 
 void telemetry_scheduler_init(

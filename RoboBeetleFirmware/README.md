@@ -195,7 +195,7 @@ PR #11 software evidence is recorded separately from PR #10's target evidence:
 | Gate | Status |
 |---|---|
 | Host Test | **PASS**: all current Firmware regressions, telemetry codec/scheduler tests, and Console tests |
-| ARM Build | **Pending** until the PR #11 target build is run |
+| ARM Build | **FAIL** — real hardware checkout previously failed on missing `<stddef.h>`; re-run required after fix |
 | Program Verify | **Pending**; this phase is not to be programmed in this turn |
 | Hardware Verified | **Pending**: no physical JY901S telemetry claim |
 
