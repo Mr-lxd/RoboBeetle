@@ -457,7 +457,7 @@ Current constants:
 - Magic `52 42`, version `02`
 - Header 8 bytes, CRC 2 bytes, payload ≤64 bytes
 - `WireFrame = COBS(LogicalFrame) + 00`
-- Message IDs: Heartbeat `01`, ACK `02`, Error `03`, Servo Enable `10`, Servo Disable `11`, Set Servo PWM `12`, Set Servo Angle `13`, Neutral `14`, LeakStatus `20`, ImuSnapshot `21`
+- Message IDs: Heartbeat `01`, ACK `02`, Error `03`, Servo Enable `10`, Servo Disable `11`, Set Servo PWM `12`, Set Servo Angle `13`, Neutral `14`, LeakStatus `20`, ImuSnapshot `21`, DepthSnapshot `22`
 
 See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmware matrix. Important current behavior is:
 
