@@ -1,5 +1,7 @@
 #include "ring_buffer.h"
 
+#include <stddef.h>
+
 static bool ring_buffer_is_configured(const ring_buffer_t *buffer)
 {
     return (buffer != NULL) &&
