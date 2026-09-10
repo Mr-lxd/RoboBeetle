@@ -48,6 +48,52 @@ leak module D0
 
 传感器 bring-up 顺序固定为：`Leak detection (including LeakStatus telemetry) → JY901S IMU → depth/sensor board`。LeakStatus 端到端证据现已补齐；JY901S 与 Depth 尚未开始。
 
+## 2026-09-10 JY901S listen-only bring-up（Review / Hardware Verification Ready）
+
+本轮只实现 JY901S 的 RX/parser-only 路径，不发送任何传感器配置命令：
+
+```text
+JY901S TX
+  → STM32 PB11 / USART3_RX
+  → one-byte interrupt RX
+  → 独立 256-byte ring buffer（255-byte effective capacity）
+  → 11-byte pure-C frame parser
+  → Acc / Gyro / Angle 内部状态
+```
+
+- JY901S TX 接 PB11；JY901S RX 接 PB10；共地。
+- STM32 USART3 本地使用 9600 baud、8-N-1、TX/RX、无硬件流控；这不是向 JY901S 写入波特率。
+- PB10 仅按硬件设计配置；应用层不发送 baud、输出频率、output mask、保存、重启、校准或其它 JY901S command。
+- 按当前持久化/default 配置监听，预期约 10 Hz，通常包含 `0x51` Acc、`0x52` Gyro、`0x53` Angle，也可能持续收到合法 `0x54` Mag。
+- `0x54` Mag 是 known-but-not-decoded：checksum 正确时保持 parser 同步、增加 `mag_frame_count`，不改变 Acc/Gyro/Angle state，也不增加 `unsupported_frame_count`。
+- 其它 checksum-valid 未知类型才增加 `unsupported_frame_count`；checksum error 单独统计。
+
+### 实机诊断顺序
+
+如果完全没有合法帧，不得立即加入自动配置；按以下顺序记录：
+
+1. `rx_byte_count` 是否增加；
+2. ring buffer push/pop 是否增加，是否 overflow/drop；
+3. parser 是否看到 `0x55` header；
+4. `valid_frame_count` 是否增加；
+5. `checksum_error_count` 是否增加；
+6. `mag_frame_count` 与 `unsupported_frame_count` 的分类；
+7. Acc/Gyro/Angle valid flags、数值与 last-valid tick。
+
+USART3 的 RX re-arm failure 和 HAL UART error（ORE/FE/NE/PE/DMA/其它）只在 callback 中计数并标记 needs-rearm；foreground 的 `app_main_process` 通过一次轻量 poll 重新尝试 `HAL_UART_Receive_IT(..., 1U)`。ISR 不解析、不阻塞、不循环重试。USART1/APC220 的已有 RX、ring 和 transmit 行为保持不变。
+
+### 本轮验证分层
+
+| 项目 | 状态 |
+|---|---|
+| Host Test | **PASS**：parser、USART3 transport mock、ring-buffer 与全部当前 Firmware regressions |
+| ARM Build | **Pending**：等待可用 `arm-none-eabi-gcc` / target build |
+| Program Verify | **Pending**：本轮不烧录硬件 |
+| Hardware Verified | **Pending**：等待用户实机验证 |
+| Pending | 物理 RX、电气/接线、当前 JY901S 持久化配置诊断，以及后续独立 configuration/init phase |
+
+本轮不涉及 Protocol V2 IMU telemetry、Qt IMU display、Depth sensor、Safety、自动 JY901S configuration 或 body-frame calibration。
+
 ## 2026-09-09 Depth PWM calibration window follow-up（PR #8）
 
 ### 当前状态

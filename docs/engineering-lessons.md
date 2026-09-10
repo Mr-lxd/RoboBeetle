@@ -154,3 +154,10 @@ Semantic renaming can also change the physical wiring contract. The historical v
 ## Keep user-facing servo labels plain and semantic
 
 The Qt descriptor keeps `FrontAxis` as the internal compatibility identifier, but its user-facing label is `Depth`; the other panels display `FrontRight`, `FrontLeft`, `RearRight`, and `RearLeft`. Exact ASCII labels avoid mojibake in the servo panel and keep logs/docs aligned with the frozen semantic IDs. Do not “fix” a display issue by renaming the internal identifier or by reintroducing a historical `Servo2` alias.
+
+## JY901S listen-only lessons
+
+- One-byte UART reception needs a recoverable ownership state: a failed HAL re-arm cannot be left as a counter-only event. The ISR marks needs-rearm and the foreground retries once per poll, while UART error callbacks record flags and enter the same path.
+- A legal frame type that is intentionally not decoded is different from an unknown frame type. JY901S `0x54` Mag is known-but-ignored and needs its own counter so default output does not look like an unsupported-protocol fault.
+- A 256-byte storage ring has 255 bytes of usable capacity under the empty-slot convention; the observed RX byte rate and overflow counter determine whether that is sufficient for a persistent output mask/rate.
+- Host Test, ARM Build, Program Verify, Hardware Verified, and Pending are evidence categories; one cannot be inferred from another.

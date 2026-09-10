@@ -87,9 +87,65 @@ verifying that image, the complete PA11 → Firmware → Protocol V2 → Qt path
 as intended. No numeric voltage or response-time values are asserted here because
 they were not part of the recorded acceptance result.
 
-The remaining sensor sequence is JY901S IMU → depth/sensor board; neither has
-started in this closeout. LeakStatus remains monitoring-only and is not connected
-to Servo or Safety actions.
+At the PR #9 closeout, the remaining sensor sequence was JY901S IMU →
+depth/sensor board; the current JY901S phase is documented below. LeakStatus
+remains monitoring-only and is not connected to Servo or Safety actions.
+
+## JY901S listen-only bring-up — Review / Hardware Verification Ready
+
+This phase adds only the receive and parser path:
+
+```text
+JY901S TX
+  → PB11 / USART3_RX
+  → one-byte interrupt receive
+  → independent 256-byte ring buffer (255-byte effective capacity)
+  → pure-C 11-byte parser
+  → internal Acc / Gyro / Angle state
+```
+
+JY901S RX is connected to PB10 / USART3_TX in the hardware design. PB10 is
+configured for the UART path, but this application does not send baud-rate,
+output-rate, output-mask, save, restart, calibration, or any other JY901S
+command. STM32 USART3 is locally configured for 9600 baud, 8-N-1, TX/RX, and
+no hardware flow control so the firmware can listen to the sensor's current
+persistent/default configuration. The bench expectation is approximately
+10 Hz with Acc, Gyro, Angle, and possibly Mag frames.
+
+The parser decodes WIT standard types `0x51` Acc, `0x52` Gyro, and `0x53`
+Angle using signed little-endian values and the documented engineering-unit
+scalings. A checksum-valid `0x54` Mag frame is known-but-ignored: it increments
+`mag_frame_count`, preserves all supported state, and does not increment
+`unsupported_frame_count`. A checksum-valid genuinely unknown type increments
+`unsupported_frame_count` and also preserves supported state. The frame
+contract follows the [official WIT standard protocol](https://wit-motion.gitbook.io/witmotion-sdk/wit-standard-protocol/wit-standard-communication-protocol);
+the product page lists 9600 baud and the default output expectations.
+
+USART3 diagnostics are available through the bring-up accessors and include
+`rx_byte_count`, successful ring pushes, foreground pops, ring overflow/drop,
+re-arm failures, aggregate and per-flag UART errors, parser header starts,
+valid checksum frames, checksum errors, Mag-known-ignore frames, unsupported
+types, per-domain frame counts, and the last valid-frame tick. If a callback
+re-arm fails or USART3 reports ORE/FE/NE/PE/DMA/other errors, the ISR only
+records the event and marks `needs_rearm`; `app_main_process` makes at most one
+non-blocking re-arm attempt per poll. No parser work or retry loop runs in the
+ISR.
+
+Validation is intentionally separated:
+
+| Gate | Status |
+|---|---|
+| Host Test | **PASS**: parser, transport mock, ring-buffer, and all current Firmware regressions |
+| ARM Build | **Pending** until an `arm-none-eabi-gcc` target build is available |
+| Program Verify | **Pending**; this phase does not burn hardware |
+| Hardware Verified | **Pending** user bench verification |
+| Pending | Physical USART3 reception, wiring/electrical checks, and current sensor-configuration diagnosis |
+
+If no legal frame appears on the bench, first inspect RX bytes, ring-buffer
+activity, `0x55` headers, valid/checksum/error counters, and state updates in
+that order. Do not add automatic JY901S configuration in response; a separate
+configuration/init phase requires evidence that the physical UART is working
+but the sensor's current persistent settings are not the expected ones.
 
 ## Active target and CubeMX configuration
 
@@ -165,12 +221,12 @@ The App/Main extraction in PR #6 is now **[Hardware Verified]**. STM32CubeIDE bu
 
 ## UART receive and transmit audit
 
-- **[Implemented]** `ring_buffer` storage is 128 bytes with `uint16_t` head/tail indices.
+- **[Implemented]** The USART1/APC220 `ring_buffer` storage is 128 bytes with `uint16_t` head/tail indices. JY901S uses a separate 256-byte storage instance.
 - The empty/full distinction reserves one slot, so usable capacity is **127 bytes**.
-- On full buffer, `ring_buffer_push()` silently drops the new byte. There is no overflow flag/counter and no host-visible error.
+- On the USART1/APC220 full buffer, `ring_buffer_push()` silently drops the new byte. That legacy transport has no overflow flag/counter and no host-visible error; the JY901S transport has independent overflow diagnostics.
 - Head and tail remain volatile, with the same one-byte ISR producer / main-loop consumer model as the original implementation.
-- `uart_transport_stm32` calls `HAL_UART_Receive_IT()` at startup and re-arms it in the callback; no blocking receive remains.
-- Return values from initial and callback receive-arm calls are ignored.
+- The USART1/APC220 `uart_transport_stm32` calls `HAL_UART_Receive_IT()` at startup and re-arms it in the callback; no blocking receive remains.
+- Return values from the legacy USART1/APC220 initial and callback receive-arm calls are ignored. USART3/JY901S records re-arm failures and retries once from foreground maintenance.
 - The transport calls `HAL_UART_Transmit(..., 100U)` only while main-loop dispatch sends an ACK. It is blocking but not ISR-blocking. At 9600 8-N-1 a short ACK frame normally takes milliseconds, yet a stalled transmit can block the loop for up to 100 ms.
 
 ## Protocol V2
@@ -324,7 +380,7 @@ Do not split the already isolated Protocol V2 codec further during Phase 1, add 
 
 - P1: the HAL-coupled App/Main layer has no dedicated host integration test; target build and physical regression are the verification gate.
 - P1: the one-entry duplicate cache is deliberately minimal and is not a general replay window.
-- P1: ring overflow and RX re-arm failures are silent.
+- P1: JY901S overflow, RX re-arm, and UART error diagnostics are volatile/debug-visible only; they are not exposed through Protocol V2 telemetry.
 - P1: blocking UART ACK transmit shares the watchdog/parser loop.
 - P2: Error `0x03` remains reserved; command failures currently use the frozen ACK result enum.
 - P2: diagnostics are volatile counters only and are not exposed as telemetry.
