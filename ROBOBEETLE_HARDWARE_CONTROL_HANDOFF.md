@@ -87,10 +87,23 @@ USART3 的 RX re-arm failure 和 HAL UART error（ORE/FE/NE/PE/DMA/其它）只�
 | 项目 | 状态 |
 |---|---|
 | Host Test | **PASS**：parser、USART3 transport mock、ring-buffer 与全部当前 Firmware regressions |
-| ARM Build | **Pending**：等待可用 `arm-none-eabi-gcc` / target build |
-| Program Verify | **Pending**：本轮不烧录硬件 |
-| Hardware Verified | **Pending**：等待用户实机验证 |
+| ARM Build | **PASS**：STM32 target build，0 errors、0 warnings；RAM 2680 B / 128 KB，FLASH 23260 B / 512 KB |
+| Program Verify | **PASS**：DAP/OpenOCD programming flow 完成并报告 `Verified OK` |
+| Hardware Verified | **Pending**：等待 JY901S 物理 RX 与数据实机验证 |
+| USART3 physical RX | **Pending** |
+| JY901S valid real frames | **Pending** |
+| Acc/Gyro/Angle real data | **Pending** |
 | Pending | 物理 RX、电气/接线、当前 JY901S 持久化配置诊断，以及后续独立 configuration/init phase |
+
+2026-09-10，用户在 hardware-verification checkout 完成了当前
+`RoboBeetleFirmware.elf` 的 STM32 target build：0 errors、0 warnings，RAM
+2680 B / 128 KB，FLASH 23260 B / 512 KB；ELF 为
+`D:\RoboBeetle\RoboBeetleFirmware\build\Debug\RoboBeetleFirmware.elf`，
+记录的 LastWriteTime 为 2026-09-10 17:07:11。随后使用 DAP/OpenOCD（SWD
+100 kHz、SYSRESETREQ、halt、program、verify、reset-run）完成编程与校验，
+记录为 `Programming Finished`、`Verify Started`、`Verified OK`。这些证据只
+关闭 ARM Build 与 Program Verify；USART3 物理接收、合法 JY901S frame 以及
+Acc/Gyro/Angle 实际数据仍为 Pending，不能标记 Hardware Verified。
 
 本轮不涉及 Protocol V2 IMU telemetry、Qt IMU display、Depth sensor、Safety、自动 JY901S configuration 或 body-frame calibration。
 

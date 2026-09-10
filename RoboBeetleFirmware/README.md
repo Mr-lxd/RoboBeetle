@@ -136,10 +136,23 @@ Validation is intentionally separated:
 | Gate | Status |
 |---|---|
 | Host Test | **PASS**: parser, transport mock, ring-buffer, and all current Firmware regressions |
-| ARM Build | **Pending** until an `arm-none-eabi-gcc` target build is available |
-| Program Verify | **Pending**; this phase does not burn hardware |
-| Hardware Verified | **Pending** user bench verification |
+| ARM Build | **PASS**: STM32 target build; 0 errors, 0 warnings; RAM 2680 B / 128 KB, FLASH 23260 B / 512 KB |
+| Program Verify | **PASS**: DAP/OpenOCD programming flow completed and reported `Verified OK` |
+| Hardware Verified | **Pending**: physical JY901S bench verification |
+| USART3 physical RX | **Pending** |
+| JY901S valid real frames | **Pending** |
+| Acc/Gyro/Angle real data | **Pending** |
 | Pending | Physical USART3 reception, wiring/electrical checks, and current sensor-configuration diagnosis |
+
+On 2026-09-10, the hardware-verification checkout built
+`RoboBeetleFirmware.elf` at
+`D:\RoboBeetle\RoboBeetleFirmware\build\Debug\RoboBeetleFirmware.elf`
+with 0 errors and 0 warnings. The recorded artifact had a last-write time of
+2026-09-10 17:07:11. The DAP/OpenOCD flow used SWD 100 kHz, SYSRESETREQ,
+halt, program, verify, and reset-run, and reported `Programming Finished`,
+`Verify Started`, and `Verified OK`. These facts establish the ARM Build and
+Program Verify gates only; they do not establish physical JY901S reception or
+valid Acc/Gyro/Angle data.
 
 If no legal frame appears on the bench, first inspect RX bytes, ring-buffer
 activity, `0x55` headers, valid/checksum/error counters, and state updates in
