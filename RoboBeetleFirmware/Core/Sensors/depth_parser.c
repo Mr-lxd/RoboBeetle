@@ -161,47 +161,14 @@ static bool parse_canonical_line(
             length,
             &offset,
             &depth_metres_centi) ||
-        !match_literal(line, length, &offset, "m Temp:") ||
+        ((!match_literal(line, length, &offset, "m Temp:")) &&
+         (!match_literal(line, length, &offset, "m Temp="))) ||
         !parse_fixed_decimal(
             line,
             length,
             &offset,
             &temperature_centi) ||
         !match_literal(line, length, &offset, "C") ||
-        (offset != length) ||
-        !convert_depth_to_millimetres(depth_metres_centi, depth_mm) ||
-        !convert_temperature_to_centi_degrees(
-            temperature_centi,
-            temperature_centi_c))
-    {
-        return false;
-    }
-
-    return true;
-}
-
-static bool parse_compact_line(
-    const uint8_t *line,
-    size_t length,
-    int32_t *depth_mm,
-    int16_t *temperature_centi_c)
-{
-    size_t offset = 0U;
-    int64_t depth_metres_centi = 0;
-    int64_t temperature_centi = 0;
-
-    if (!match_literal(line, length, &offset, "T=") ||
-        !parse_fixed_decimal(
-            line,
-            length,
-            &offset,
-            &temperature_centi) ||
-        !match_literal(line, length, &offset, "D=") ||
-        !parse_fixed_decimal(
-            line,
-            length,
-            &offset,
-            &depth_metres_centi) ||
         (offset != length) ||
         !convert_depth_to_millimetres(depth_metres_centi, depth_mm) ||
         !convert_temperature_to_centi_degrees(
@@ -227,15 +194,6 @@ static bool parse_line(
         length,
         &depth_mm,
         &temperature_centi_c);
-
-    if (!accepted)
-    {
-        accepted = parse_compact_line(
-            line,
-            length,
-            &depth_mm,
-            &temperature_centi_c);
-    }
 
     if (!accepted)
     {
