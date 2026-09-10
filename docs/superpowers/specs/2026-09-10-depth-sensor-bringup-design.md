@@ -144,12 +144,12 @@ most one optional telemetry frame. A due LeakStatus is always selected first;
 when LeakStatus is not due, a pure-C cursor fairly rotates due IMU and Depth.
 The preference order when no LeakStatus is due is:
 
-| Last successful slot | Preference order |
+| Last successful slot | Preference order when LeakStatus is not due |
 |---|---|
-| none | Leak, IMU, Depth |
-| Leak | IMU, Depth, Leak |
-| IMU | Depth, Leak, IMU |
-| Depth | Leak, IMU, Depth |
+| none | IMU, Depth |
+| Leak | IMU, Depth |
+| IMU | Depth, IMU |
+| Depth | IMU, Depth |
 
 If `leak_due` is true, the selector immediately returns LeakStatus. Otherwise
 the cursor scans only the due IMU and Depth slots in fair order. A failed send
