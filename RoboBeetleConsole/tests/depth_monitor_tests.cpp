@@ -138,6 +138,14 @@ void testPayloadValidationAndInvalidFieldZeroRules()
     expect(!rb::DepthSnapshot::decodePayload(invalidNoValidAge).has_value(),
            "snapshot with no valid measurements must reject known age");
 
+    QByteArray invalidTemperatureOnlyAge = invalidNoValidAge;
+    invalidTemperatureOnlyAge[1] =
+        static_cast<char>(rb::DepthSnapshot::TemperatureValid);
+    invalidTemperatureOnlyAge[8] = static_cast<char>(0xd2);
+    invalidTemperatureOnlyAge[9] = static_cast<char>(0x04);
+    expect(!rb::DepthSnapshot::decodePayload(invalidTemperatureOnlyAge).has_value(),
+           "temperature-only snapshot must reject known depth age");
+
     rb::DepthSnapshot partial;
     partial.validityFlags = rb::DepthSnapshot::TemperatureValid;
     partial.temperatureCentiC = 2534;

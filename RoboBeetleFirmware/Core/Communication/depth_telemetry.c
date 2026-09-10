@@ -203,7 +203,7 @@ bool depth_telemetry_decode(
         return false;
     }
 
-    if ((flags == 0U) &&
+    if (((flags & DEPTH_TELEMETRY_FLAG_DEPTH_VALID) == 0U) &&
         (sample_age_raw != DEPTH_TELEMETRY_SAMPLE_AGE_UNKNOWN))
     {
         return false;

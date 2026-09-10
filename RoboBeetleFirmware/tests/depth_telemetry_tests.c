@@ -292,6 +292,20 @@ static void test_decode_rejects_malformed_payloads(void)
                &decoded_diagnostics),
            "no-valid-sample payload must use unknown age");
 
+    payload[1] = DEPTH_TELEMETRY_FLAG_TEMPERATURE_VALID;
+    payload[2] = 0U;
+    payload[3] = 0U;
+    payload[4] = 0U;
+    payload[5] = 0U;
+    payload[8] = 0xD2U;
+    payload[9] = 0x04U;
+    expect(!depth_telemetry_decode(
+               payload,
+               sizeof payload,
+               &decoded_source,
+               &decoded_diagnostics),
+           "temperature-only payload must use unknown depth age");
+
     expect(!depth_telemetry_decode(
                NULL,
                sizeof payload,

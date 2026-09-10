@@ -147,9 +147,10 @@ std::optional<DepthSnapshot> DepthSnapshot::decodePayload(QByteArrayView payload
         setDetail(detail, QStringLiteral("DepthSnapshot has nonzero invalid values"));
         return std::nullopt;
     }
-    if (validityFlags == 0 && sampleAgeMs != UnknownSampleAgeMs) {
+    if ((validityFlags & DepthValid) == 0
+        && sampleAgeMs != UnknownSampleAgeMs) {
         setDetail(detail,
-                  QStringLiteral("DepthSnapshot without a valid sample must use unknown age"));
+                  QStringLiteral("DepthSnapshot without valid depth must use unknown age"));
         return std::nullopt;
     }
 
