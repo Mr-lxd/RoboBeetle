@@ -1,5 +1,6 @@
 #include "rb_protocol_v2.h"
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>

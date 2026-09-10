@@ -50,6 +50,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Communication/ring_buffer.c
     Core/Communication/uart_transport_stm32.c
     Core/Communication/jy901s_transport_stm32.c
+    Core/Communication/depth_transport_stm32.c
+    Core/Communication/depth_telemetry.c
     Core/Communication/imu_telemetry_policy.c
     Core/Communication/telemetry_scheduler.c
     Core/Communication/protocol_dispatcher.c
@@ -57,6 +59,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Sensors/leak_sensor_stm32.c
     Core/Sensors/leak_telemetry_policy.c
     Core/Sensors/jy901s_parser.c
+    Core/Sensors/depth_parser.c
     Core/Sensors/jy901s_telemetry.c
     Core/Servo/servo_calibration.c
     Core/Servo/servo_descriptor.c
