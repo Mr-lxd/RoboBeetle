@@ -181,6 +181,48 @@ IMU publication, LeakStatus regains priority on the next shared due
 opportunity. A failed optional transmit is not marked published, so the
 pending policy remains retryable. There is no independent IMU transmit timer.
 
+### DepthSnapshot — `0x22`
+
+`DepthSnapshot` is an unacknowledged, monitoring-only frame from the
+listen-only ROVMAKER decoder-board path. Firmware publishes it only after an
+accepted Heartbeat ACK completes, at most one optional telemetry frame per
+opportunity, using a separate telemetry sequence. It never enters command/ACK
+matching or Servo/Safety behavior.
+
+The payload is exactly 38 bytes, schema version `0x01`; all multi-byte fields
+are little-endian and no C/C++ struct is copied directly to the wire:
+
+| Offset | Size | Field | Encoding |
+|---:|---:|---|---|
+| `0` | 1 | schema version | `uint8`, currently `0x01` |
+| `1` | 1 | validity flags | bit 0 depth valid, bit 1 temperature valid; bits 2–7 zero |
+| `2` | 4 | depth | signed `int32 LE`, millimetres |
+| `6` | 2 | temperature | signed `int16 LE`, centi-°C |
+| `8` | 2 | sample age | `uint16 LE`, milliseconds; `0xffff` means no valid sample or saturation |
+| `10` | 4 | RX bytes | `uint32 LE` |
+| `14` | 4 | valid lines | `uint32 LE` |
+| `18` | 4 | parse errors | `uint32 LE` |
+| `22` | 4 | overlong lines | `uint32 LE` |
+| `26` | 4 | RX buffer overflows | `uint32 LE` |
+| `30` | 4 | hard RX re-arm failures | `uint32 LE` |
+| `34` | 4 | UART errors | `uint32 LE` |
+
+When a validity bit is clear, its numeric field is encoded as zero and the
+receiver must ignore it. If no valid sample has ever been received, age is
+`0xffff`; otherwise the latest valid sample age is explicitly saturated to the
+`uint16` range and must not wrap around to appear fresh. The Qt monitor uses
+local packet arrival and the existing telemetry lifecycle for liveness; it does
+not use `sample_age_ms` as its sole stale decision. The Console rejects an
+unknown schema, reserved flags, nonzero invalid numeric fields, or any payload
+whose length is not exactly 38 bytes.
+
+The Firmware parser accepts the canonical vendor line
+`Depth:XX.XXm Temp:XX.XXC\r\n` and the separately documented compact line
+`T=XX.XXD=XX.XX\r\n`. These are exact bounded grammars: the implementation does
+not accept guessed `Temp=`, arbitrary separators, substring matches, bare LF,
+or trailing data. The decoder path is listen-only and sends no configuration,
+save, restart, calibration, or other command.
+
 ### Set Servo PWM — `0x12`
 
 ```text
@@ -230,6 +272,7 @@ This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware v
 | Neutral | `0x14` | Sends the selected semantic mask after local enable | Requires live host, valid mask, and enabled selected channels; writes descriptor neutral pulses without disabling | `uint16 mask` | Yes | **Implemented; FrontAxis neutral remains provisional** |
 | LeakStatus | `0x20` | Receives one-byte monitoring telemetry and updates Unknown/Dry/Wet indicator; never creates an ACK pending entry | Samples PA11 and emits after accepted Heartbeat ACK, first/change/500 ms refresh; no ACK and no Servo/Safety action | `uint8 state` | No | **Implemented; end-to-end monitoring [Hardware Verified]** |
 | ImuSnapshot | `0x21` | Decodes fixed 56-byte monitoring telemetry into `ImuMonitor`; never creates or releases an ACK pending entry; displays Unknown/Receiving/Stale/Error and clears invalid/stale values | Encodes current JY901S state and diagnostics after accepted Heartbeat ACK, at most one optional frame per opportunity, with first-shared-opportunity LeakStatus priority and bounded fairness for a still-due IMU | 56-byte fixed schema | No | **Implemented / Host Test: PASS; physical JY901S telemetry [Hardware Verified]** |
+| DepthSnapshot | `0x22` | Decodes fixed 38-byte monitoring telemetry into `DepthMonitor`; validates schema/flags/length and never creates or releases an ACK pending entry | Parses the listen-only ROVMAKER decoder line, encodes validity-gated fixed-point fields and seven diagnostics counters after accepted Heartbeat ACK, at most one optional frame per opportunity | 38-byte fixed schema | No | **Implemented / Host Test: PASS; physical decoder path [Pending Hardware Verification]** |
 
 ## Sequence, ACK, retry, and duplicate behavior
 

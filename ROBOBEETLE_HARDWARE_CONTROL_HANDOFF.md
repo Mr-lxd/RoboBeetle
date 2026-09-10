@@ -211,6 +211,60 @@ timeouts 均为 `0`，目前不进行协议重设计。
 最终 robot body-frame mapping 与 magnetic/yaw calibration 仍为 **[Pending]**。
 不得因任何单次异常在本阶段加入自动 JY901S configuration/init。
 
+## 2026-09-11 Depth Sensor / ROVMAKER decoder bring-up（software implemented; Hardware Verification pending）
+
+本阶段实现 ROVMAKER 水深传感器解码板的 listen-only 接收与 monitoring-only
+遥测，不发送任何 decoder-board configuration、保存、重启、校准或其它命令：
+
+```text
+ROVMAKER decoder board
+  → STM32 PC7 / USART6_RX（115200 8-N-1）
+  → one-byte interrupt RX
+  → 独立 512-byte ring buffer（511-byte effective capacity）
+  → bounded ASCII line parser
+  → DepthSnapshot `0x22`
+  → existing USART1 host link / DAP UART/COM13
+  → Qt `Depth Sensor — ROVMAKER` read-only monitor
+```
+
+STM32 同时按生成式配置保留 PC6 / USART6_TX，但应用层不发送解码板命令。
+厂商 [深度传感器产品手册](https://docs.rovmaker.cn/产品手册/水深传感器产品手册/深度传感器产品手册.html)
+记录了 115200 8-N-1 及 canonical line
+`Depth:XX.XXm Temp:XX.XXC\r\n`；同一官方资料中记录的 compact line
+`T=XX.XXD=XX.XX\r\n` 作为明确的第二格式兼容。实现不接受猜测的 `Temp=`、
+任意 separator、substring、bare LF 或 trailing data。
+
+### DepthSnapshot contract
+
+`DepthSnapshot` 是 unacknowledged、独立 telemetry sequence 的 Protocol V2
+消息，message ID `0x22`，payload 固定 38 bytes，schema `1`，little-endian。
+byte 0 为 schema；byte 1 的 bit 0/1 分别为 depth/temperature valid，其他位
+必须为零；bytes 2–5 为 `depth_mm:int32`，6–7 为
+`temperature_centi_c:int16`，8–9 为 `sample_age_ms:uint16`（无 sample 或
+saturation 为 `0xffff`），10–37 为七个 `uint32` diagnostics：RX bytes、
+valid lines、parse errors、overlong lines、RX ring overflows、hard re-arm
+failures、UART errors。无效 numeric field 必须编码为零；Qt 以本地 packet
+arrival 与既定 telemetry lifecycle 判断 liveness，不单独依赖 sample age。
+
+Depth telemetry 不满足 ACK、不改变 LeakStatus、不进入 Servo command queue，
+也不改变 Safety 行为。现有 Protocol V2/USART1/JY901S/Leak 路径保持原边界。
+
+### 验证分层
+
+| 项目 | 状态 |
+|---|---|
+| Host Test | **PASS**：全部当前 Firmware regressions、Depth parser/transport/codec、Console CTest 与 Depth monitor/controller/MainWindow tests |
+| Console CTest | **PASS** |
+| HAL / `.ioc` / C portability checks | **PASS**：生成式 USART6 配置与直接标准头审计通过 |
+| ARM Build | **Pending**：本环境无 `arm-none-eabi-gcc`；须在 STM32CubeIDE/真实 target checkout 重跑 |
+| Program Verify | **Pending**：本阶段未烧录 |
+| Hardware Verified | **Pending**：等待 decoder-board 电平、PC7/USART6 实收、zeroing、density/cadence 与端到端深度数据实测 |
+| External GitHub Review | **Pending** |
+
+本阶段与旧的 `FrontAxis`/Depth 舵机 PWM calibration window 是两条不同的
+范围：旧记录中的 Depth 是舵机语义/机械标定；本节的 Depth Sensor 是新的
+ROVMAKER 串口传感器输入。两者不共享硬件验证结论。
+
 ## 2026-09-09 Depth PWM calibration window follow-up（PR #8）
 
 ### 当前状态

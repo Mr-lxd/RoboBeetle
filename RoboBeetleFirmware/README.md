@@ -270,6 +270,73 @@ PR #10's STM32 ARM Build and Program Verify remain PASS for the listen-only
 bring-up ELF documented in the section above; that evidence does not silently
 close the new PR #11 telemetry target gate.
 
+## Current Depth Sensor / ROVMAKER decoder bring-up — software implemented; hardware pending
+
+This phase adds a listen-only ROVMAKER decoder-board path without sending any
+decoder configuration command:
+
+```text
+ROVMAKER decoder board → USART6 / PC7 RX → one-byte interrupt receive
+  → dedicated 512-byte ring buffer (511-byte effective capacity)
+  → bounded pure-C ASCII parser → internal depth/temperature state
+  → DepthSnapshot 0x22 → existing USART1 / DAP UART / COM13 → Qt read-only monitor
+```
+
+USART6 is configured as 115200 8-N-1 TX/RX with PC6 TX and PC7 RX. The
+application does not send decoder commands, change output rate, or configure
+the board. The decoder-side electrical level, power/ground wiring, above-water
+zeroing procedure, density setting, and output cadence remain **[Pending
+Hardware Verification]**. The implementation is based on the official
+[ROVMAKER decoder-board manual](https://docs.rovmaker.cn/产品手册/水深传感器产品手册/深度传感器产品手册.html)
+and its documented serial output; the exact vendor-recorded compact form is
+also preserved as `T=XX.XXD=XX.XX\r\n`, not a guessed `Temp=` variant.
+
+The parser accepts only these two complete CRLF records:
+
+```text
+Depth:<signed two-decimal>m Temp:<signed two-decimal>C\r\n
+T=<signed two-decimal>D=<signed two-decimal>\r\n
+```
+
+There is no substring, arbitrary-separator, bare-LF, or trailing-data
+fallback. Malformed and overlong lines have separate counters; a valid line
+updates both fixed-point fields atomically. The Qt monitor is read-only and
+uses local telemetry arrival for Unknown/Receiving/Stale/Error lifecycle; it
+does not treat `sample_age_ms` as its only liveness signal.
+
+`DepthSnapshot` is message `0x22`, unacknowledged, little-endian, fixed
+payload length 38, schema version `1`. The frozen payload is:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 1 | schema `u8 = 1` |
+| 1 | 1 | flags: bit 0 depth valid, bit 1 temperature valid; bits 2–7 reserved zero |
+| 2 | 4 | `depth_mm` signed `int32` LE; zero when invalid |
+| 6 | 2 | `temperature_centi_c` signed `int16` LE; zero when invalid |
+| 8 | 2 | `sample_age_ms` `uint16` LE; `0xFFFF` means unknown or saturated |
+| 10 | 4 | `rx_byte_count` `uint32` LE |
+| 14 | 4 | `valid_line_count` `uint32` LE |
+| 18 | 4 | `parse_error_count` `uint32` LE |
+| 22 | 4 | `overlong_line_count` `uint32` LE |
+| 26 | 4 | `rx_buffer_overflow_count` `uint32` LE |
+| 30 | 4 | `hard_rearm_failure_count` `uint32` LE |
+| 34 | 4 | `uart_error_count` `uint32` LE |
+
+Firmware evaluates the provisional one-second DepthSnapshot policy only after
+an accepted Heartbeat ACK has completed and selects at most one optional
+telemetry frame per opportunity. The scheduler rotates LeakStatus, IMU, and
+Depth fairly; failed optional sends do not mark a policy successful. The
+frame never enters command ACK matching, Servo, Safety, or decoder control.
+
+| Gate | Status |
+|---|---|
+| Host Test | **PASS**: all 16 Firmware executable regressions, `app_main` API syntax, and Console CTest |
+| ARM Build | **Pending**: no `arm-none-eabi-gcc` toolchain is available in this environment; real target build required |
+| Program Verify | **Pending**: no hardware was programmed in this phase |
+| Hardware Verified | **Pending**: decoder-board physical path and end-to-end DepthSnapshot remain unverified |
+| External GitHub Review | **Pending** |
+| Pending | decoder electrical level, power/ground, zeroing/density/cadence, physical depth/temperature response, and final calibration |
+
 ## Active target and CubeMX configuration
 
 The active configuration file is `RoboBeetleFirmware/RoboBeetleFirmware.ioc`. A separately referenced `D:\RoboBeetle\RoboBeetle.ioc` was not present during this audit.
@@ -456,7 +523,7 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Servo, Safety, and Sensors modules and their include directories. The Firmware host gate currently compiles and runs all 13 executable test sources: `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_descriptor_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, `tests/protocol_dispatcher_tests.c`, `tests/leak_sensor_tests.c`, `tests/servo_driver_stm32_tests.c`, `tests/jy901s_parser_tests.c`, `tests/jy901s_transport_stm32_tests.c`, `tests/jy901s_telemetry_tests.c`, and `tests/telemetry_scheduler_tests.c`. The leak sensor source is linked with `leak_telemetry_policy.c` because that existing test covers both behaviors. The HAL-adapter mapping test uses host stubs for PWM start/stop and explicitly verifies that HAL `TIM_CHANNEL_1 == 0` remains valid. `tests/app_main_jy901s_api_tests.c` is a separate compile-contract check; all are compiled manually with `-Wall -Wextra -Werror` plus the documented host HAL pointer-cast suppression where needed. These host checks complement, but do not replace, the real ARM target build.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Servo, Safety, and Sensors modules and their include directories. The Firmware host gate currently compiles and runs all 16 executable test sources: the existing `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_descriptor_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, `tests/protocol_dispatcher_tests.c`, `tests/leak_sensor_tests.c`, `tests/servo_driver_stm32_tests.c`, `tests/jy901s_parser_tests.c`, `tests/jy901s_transport_stm32_tests.c`, `tests/jy901s_telemetry_tests.c`, and `tests/telemetry_scheduler_tests.c`, plus `tests/depth_parser_tests.c`, `tests/depth_transport_stm32_tests.c`, and `tests/depth_telemetry_tests.c`. The leak sensor source is linked with `leak_telemetry_policy.c` because that existing test covers both behaviors. The HAL-adapter mapping test uses host stubs for PWM start/stop and explicitly verifies that HAL `TIM_CHANNEL_1 == 0` remains valid. `tests/app_main_jy901s_api_tests.c` is a separate compile-contract check; all are compiled manually with `-Wall -Wextra -Werror` plus the documented host HAL pointer-cast suppression where needed. These host checks complement, but do not replace, the real ARM target build.
 
 ## App/Main maintainability audit
 

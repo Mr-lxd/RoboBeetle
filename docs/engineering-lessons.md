@@ -216,3 +216,10 @@ The source-level `Apc220HalfDuplex` name identifies a conservative stop-and-wait
 host-link policy; it is not evidence that an APC220 radio was present or enabled.
 APC220 remains an earlier/legacy transport record and requires a separate future
 hardware verification run.
+
+## Depth sensor bring-up lessons
+
+- Keep decoder-board bring-up listen-only until the physical link and vendor configuration are verified; do not add speculative configuration commands.
+- Match parser compatibility to exact vendor-recorded grammars. Canonical and explicitly documented alternate formats get separate tests; guessed separators and substring parsing do not.
+- Treat fixed-point payload offsets, schema, validity flags, endianness, and saturation as an interoperability boundary. Encode/decode fields explicitly rather than copying a packed struct.
+- Keep `Host Test`, `ARM Build`, `Program Verify`, `Hardware Verified`, and `Pending` separate; a host pass or target compile does not establish physical decoder behavior.
