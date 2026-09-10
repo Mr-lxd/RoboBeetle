@@ -209,16 +209,12 @@ as an ACK-requiring request.
 
 Firmware evaluates the one-second IMU publication policy only after a normal
 Heartbeat ACK has completed. At most one optional telemetry frame is selected
-per accepted Heartbeat opportunity. LeakStatus `0x20` wins the first shared due
-opportunity; after a successful LeakStatus publication, a still-due IMU snapshot
-`0x21` wins the next shared opportunity even if LeakStatus is due again. After
-successful IMU publication, LeakStatus regains priority on the next shared due
-opportunity. Failed optional transmits are not marked published, so the pending
-policy remains retryable and repeated LeakStatus due events cannot starve IMU.
-At 9600 8-N-1, the maximum 68-byte IMU wire frame is within the documented
-low-rate budget; this is a software/conservative host-link load result, not an
-APC220 throughput claim. The current physical host link is DAP UART/COM13;
-APC220 remains a legacy/future-separate transport.
+per accepted Heartbeat opportunity. A due LeakStatus `0x20` always preempts
+IMU/Depth; when LeakStatus is not due, the scheduler fairly rotates due IMU and
+Depth slots. Failed optional transmits are not marked published, so the pending
+policy remains retryable. At 9600 8-N-1, the maximum 68-byte IMU wire frame is
+within the documented low-rate budget. The current physical host link is DAP
+UART/COM13; APC220 remains a legacy/future-separate transport.
 With the nominal accepted Heartbeat cadence, the effective ImuSnapshot refresh
 is up to approximately 1 Hz; delayed ACK opportunities or pending LeakStatus
 refreshes may reduce it, and no independent IMU transmit timer is used.
@@ -284,25 +280,46 @@ ROVMAKER decoder board → USART6 / PC7 RX → one-byte interrupt receive
 
 USART6 is configured as 115200 8-N-1 TX/RX with PC6 TX and PC7 RX. The
 application does not send decoder commands, change output rate, or configure
-the board. The decoder-side electrical level, power/ground wiring, above-water
-zeroing procedure, density setting, and output cadence remain **[Pending
-Hardware Verification]**. The implementation is based on the official
-[ROVMAKER decoder-board manual](https://docs.rovmaker.cn/产品手册/水深传感器产品手册/深度传感器产品手册.html)
-and its documented serial output; the exact vendor-recorded compact form is
-also preserved as `T=XX.XXD=XX.XX\r\n`, not a guessed `Temp=` variant.
+the board. The intended physical topology is the wet pressure face/probe →
+sealed hull penetration/threaded installation → pressure hull → cable → dry
+ROVMAKER decoder board → PC7/USART6; the exact seal/thread design, electrical
+levels, power/ground wiring, zeroing, density setting, and output cadence remain
+**[Pending Hardware Verification]**. The official
+[ROVMAKER decoder-board manual](https://docs.rovmaker.cn/产品手册/水深传感器产品手册/深度传感器解算板V1.0.html)
+instructs that the board and sensor be powered at the water surface so the
+ambient air pressure establishes the zero output. This is vendor guidance, not
+physical verification of this robot's installation.
+
+The local `ms5837.py` reference was also inspected. It implements direct
+Raspberry Pi I2C access to the MS5837 (PROM/CRC, ADC conversion, compensation,
+and density-based depth calculation); it does not establish the decoder UART
+grammar, cadence, or electrical levels, and is not imported into Firmware. A
+future laptop → network/tether → onboard Raspberry Pi → local serial → STM32
+architecture may host ROS 2/high-level functions, but no such path is in this
+bring-up.
 
 The parser accepts only these two complete CRLF records:
 
 ```text
 Depth:<signed two-decimal>m Temp:<signed two-decimal>C\r\n
-T=<signed two-decimal>D=<signed two-decimal>\r\n
+Depth:<signed two-decimal>m Temp=<signed two-decimal>C\r\n
 ```
 
-There is no substring, arbitrary-separator, bare-LF, or trailing-data
-fallback. Malformed and overlong lines have separate counters; a valid line
-updates both fixed-point fields atomically. The Qt monitor is read-only and
-uses local telemetry arrival for Unknown/Receiving/Stale/Error lifecycle; it
-does not treat `sample_age_ms` as its only liveness signal.
+The canonical line is also the exact shape used by the vendor's example, which
+uses `Temp=25.27C`; `Temp=` is therefore an explicit documented compatibility
+form, not a guessed separator. There is no substring, arbitrary-separator,
+bare-LF, or trailing-data fallback. Malformed and overlong lines have separate
+counters; a valid line updates both fixed-point fields atomically. The Qt
+monitor is read-only and uses local telemetry arrival for Unknown/Receiving/
+Stale/Error lifecycle; it does not treat `sample_age_ms` as its only liveness
+signal.
+
+Firmware uses the provisional
+`DEPTH_TELEMETRY_SENSOR_FRESHNESS_TIMEOUT_MS = 3000` ms sensor-sample bound,
+separate from the one-second publication policy and Qt's host-packet stale
+timeout. Once that bound expires, depth and temperature validity are cleared and
+their wire values are zeroed; transport/parser diagnostics remain observable.
+An accepted fresh line restores live validity.
 
 `DepthSnapshot` is message `0x22`, unacknowledged, little-endian, fixed
 payload length 38, schema version `1`. The frozen payload is:
@@ -324,9 +341,10 @@ payload length 38, schema version `1`. The frozen payload is:
 
 Firmware evaluates the provisional one-second DepthSnapshot policy only after
 an accepted Heartbeat ACK has completed and selects at most one optional
-telemetry frame per opportunity. The scheduler rotates LeakStatus, IMU, and
-Depth fairly; failed optional sends do not mark a policy successful. The
-frame never enters command ACK matching, Servo, Safety, or decoder control.
+telemetry frame per opportunity. A due LeakStatus always preempts IMU/Depth;
+when LeakStatus is not due, the scheduler fairly rotates the due IMU and Depth
+slots. Failed optional sends do not mark a policy successful. The frame never
+enters command ACK matching, Servo, Safety, or decoder control.
 
 | Gate | Status |
 |---|---|
@@ -411,7 +429,7 @@ The current communication split is:
 - **[Implemented]** `Core/Servo/servo_driver_stm32.c/.h` owns the HAL/TIM3/TIM4 channel adapter. It maps abstract descriptor selectors to timer handles and HAL channels and has no Protocol or heartbeat knowledge.
 - **[Implemented]** `Core/Sensors/leak_sensor.c/.h` owns the HAL-independent UNKNOWN/DRY/WET mapping; `leak_sensor_stm32.c/.h` only reads the configured PA11 GPIO.
 - **[Implemented]** `Core/Sensors/leak_telemetry_policy.c/.h` limits LeakStatus publication to first sample/state changes/500 ms refreshes. `Core/App/app_main.c` sends one-byte `0x20` telemetry only after a successful Heartbeat ACK; it does not connect leak state to Safety or Servo behavior.
-- **[Implemented / Software Verified]** `Core/Sensors/jy901s_telemetry.c/.h` encodes the fixed 56-byte `ImuSnapshot` payload with explicit little-endian fixed-point fields and bring-up diagnostics. `Core/Communication/imu_telemetry_policy.c/.h` and `telemetry_scheduler.c/.h` keep IMU publication at one second, after completed Heartbeat ACK, with first-opportunity LeakStatus priority, bounded fairness for a still-due IMU, and at most one optional frame per opportunity. The IMU path does not enter command/ACK matching or alter USART1 behavior.
+- **[Implemented / Software Verified]** `Core/Sensors/jy901s_telemetry.c/.h` encodes the fixed 56-byte `ImuSnapshot` payload with explicit little-endian fixed-point fields and bring-up diagnostics. `Core/Communication/imu_telemetry_policy.c/.h` and `telemetry_scheduler.c/.h` keep IMU publication at one second, after completed Heartbeat ACK, with immediate priority for due LeakStatus, fair rotation against a due DepthSnapshot when LeakStatus is not due, and at most one optional frame per opportunity. The IMU path does not enter command/ACK matching or alter USART1 behavior.
 - **[Hardware Verified]** `Core/Safety/safety_supervisor.c/.h` owns host liveness, the last valid Heartbeat timestamp, strict timeout evaluation, and one-shot timeout transition reporting. It has no HAL, Protocol, UART, or Servo dependency.
 - **[Hardware Verified]** `Core/Communication/protocol_dispatcher.c/.h` owns decoded command payload validation, HostAlive gating, Servo service invocation/result mapping, Heartbeat semantics, and the one-entry successful-command cache. It has no HAL, UART, TIM3, or Console dependency.
 - **[Hardware Verified]** `main.c` keeps the CubeMX entry/configuration, `app_main_init`/`app_main_process` calls, and a small UART callback transport delegate. Protocol, Safety, Servo, ACK, diagnostics, and RX-drain orchestration live in `Core/App/app_main.c`.
@@ -448,7 +466,7 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 - Neutral validates liveness/mask/enabled state, writes each descriptor's neutral pulse, and leaves the selected channels enabled.
 - Set Angle is available only for the four calibrated SAVOX/GDW angle-capable descriptors; FrontAxis is PWM-only. Each angle is range-checked and mapped with `int32_t` intermediates.
 - LeakStatus `0x20` is a one-byte, unacknowledged monitoring frame (`UNKNOWN=0`, `DRY=1`, `WET=2`). Firmware sends it only after an accepted Heartbeat and completed ACK transmission, on first sample/state change or a 500 ms refresh; it has an independent telemetry sequence and does not trigger Safety or Servo actions.
-- ImuSnapshot `0x21` is a fixed 56-byte, unacknowledged monitoring frame. Firmware sends it only after an accepted Heartbeat ACK has completed, at most once per one-second policy interval, with first-shared-opportunity LeakStatus priority and bounded fairness for a still-due IMU. It uses the independent telemetry sequence and carries explicit little-endian fixed-point Acc/Gyro/Angle values plus JY901S diagnostics; it does not trigger Safety, Servo, or JY901S configuration actions.
+- ImuSnapshot `0x21` is a fixed 56-byte, unacknowledged monitoring frame. Firmware sends it only after an accepted Heartbeat ACK has completed, at most once per one-second policy interval, with due LeakStatus priority and fair rotation against a due DepthSnapshot when LeakStatus is not due. It uses the independent telemetry sequence and carries explicit little-endian fixed-point Acc/Gyro/Angle values plus JY901S diagnostics; it does not trigger Safety, Servo, or JY901S configuration actions.
 - ACK result values are frozen as `OK=0`, `InvalidPayload=1`, `HostNotAlive=2`, `UnsupportedServo=3`, `ServoNotEnabled=4`, `OutOfRange=5`, and `HardwareFailure=6`.
 - Supported mask is exactly `0x001F`. Zero mask is invalid; any unknown bit fails with `UnsupportedServo`. Multi-bit Enable is all-or-nothing with rollback on a channel-start failure.
 - The most recent successful non-Heartbeat request is cached by sequence and type. Its retry replays the ACK without executing the Servo action again. Heartbeats refresh liveness but do not evict this cache.

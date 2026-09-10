@@ -32,14 +32,15 @@ by `\\r\\n`:
 
 ```text
 Depth:<signed-decimal-with-two-fractional-digits>m Temp:<signed-decimal-with-two-fractional-digits>C\\r\\n
-T=<signed-decimal-with-two-fractional-digits>D=<signed-decimal-with-two-fractional-digits>\\r\\n
+Depth:<signed-decimal-with-two-fractional-digits>m Temp=<signed-decimal-with-two-fractional-digits>C\\r\\n
 ```
 
 The first is the decoder-board manual's canonical output format. The second is
-the exact compact `T=...D=...` form recorded in the vendor material. The
-manual's isolated `Temp=` example is treated as an internal documentation
-inconsistency and is not generalized into a third grammar. No whitespace,
-substring, arbitrary separator, bare-LF, or trailing-data variant is accepted.
+the exact `Depth:1.21m Temp=25.27C` example recorded in the same official
+decoder-board manual. The parser does not accept an inferred compact
+`T=...D=...` form. No whitespace, substring, arbitrary separator, bare-LF, or
+trailing-data variant is accepted. The manual also records 115200 8-N-1 and
+surface power/air-zero guidance; see the [official decoder-board manual](https://docs.rovmaker.cn/产品手册/水深传感器产品手册/深度传感器解算板V1.0.html).
 
 Signs are optional and both `+` and `-` are accepted. Negative depth is not
 rejected merely because the board is above water; it can represent zeroing,
@@ -98,6 +99,11 @@ The firmware does not apply a zero offset or density conversion of its own.
 `sample_age_ms` is calculated from the current tick and the latest valid depth
 sample. It is `0xFFFF` when no valid depth sample exists and otherwise saturates
 at `65535`; it never wraps into a value that makes an old sample look new.
+Firmware additionally treats a sample as current only while its wrap-safe age is
+less than the provisional `DEPTH_TELEMETRY_SENSOR_FRESHNESS_TIMEOUT_MS` of
+3000 ms. This is separate from the one-second publication interval and Qt's
+host-packet stale timeout. At expiry the published validity bits and numeric
+values are cleared, while diagnostics remain available.
 
 ## Frozen Protocol V2 contract
 
@@ -134,8 +140,9 @@ cadence.
 ## Telemetry scheduling
 
 After a Heartbeat is accepted and its ACK transmit succeeds, firmware emits at
-most one optional telemetry frame. Leak, IMU, and Depth are selected by one
-pure-C fair cursor. Preference order is:
+most one optional telemetry frame. A due LeakStatus is always selected first;
+when LeakStatus is not due, a pure-C cursor fairly rotates due IMU and Depth.
+The preference order when no LeakStatus is due is:
 
 | Last successful slot | Preference order |
 |---|---|
@@ -144,10 +151,10 @@ pure-C fair cursor. Preference order is:
 | IMU | Depth, Leak, IMU |
 | Depth | Leak, IMU, Depth |
 
-The selector scans the preference order for a due policy. A failed send does
-not advance the cursor or mark the policy published. With Depth not due, the
-existing Leak/IMU behavior remains equivalent; with all three due, the cursor
-prevents starvation without emitting a burst.
+If `leak_due` is true, the selector immediately returns LeakStatus. Otherwise
+the cursor scans only the due IMU and Depth slots in fair order. A failed send
+does not advance the cursor or mark the policy published, and at most one
+optional frame is emitted per opportunity.
 
 ## Qt monitor
 
@@ -157,9 +164,9 @@ payload length, schema, reserved flags, signed fields, and validity/zero rules.
 
 The panel displays `Unknown`, `Receiving`, `Stale`, or `Error`, depth in metres,
 temperature in degrees Celsius, sample age, and the frozen diagnostics. Invalid
-fields display `--`; stale, disconnected, and liveness-lost states clear old
-measurement values. The panel adds no plot, command, calibration, or control
-action.
+or sensor-stale fields display `--` while received diagnostics remain visible;
+disconnected and host-liveness-lost states reset to `Unknown`. The panel adds no
+plot, command, calibration, or control action.
 
 ## Verification boundary
 
@@ -177,6 +184,10 @@ Program Verify: Pending until the user programs and checks the board
 Hardware Verified: Pending until the user supplies real depth hardware evidence
 ```
 
-Electrical signal level, surface-zero procedure, actual decoder cadence,
-seawater density selection, and body-frame mapping are explicitly documented
-as hardware/future verification items.
+Electrical signal level, physical sealed mounting, the vendor surface-zero
+procedure, actual decoder cadence, seawater density selection, and body-frame
+mapping are explicitly documented as hardware/future verification items. The
+local Raspberry Pi `ms5837.py` source is sensor-level direct-I2C reference only;
+it does not justify a second Firmware I2C implementation. A future
+laptop/network-or-tether → onboard Raspberry Pi/ROS 2 → local serial → STM32
+split remains architecture documentation, not implementation in this phase.

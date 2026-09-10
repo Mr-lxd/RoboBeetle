@@ -157,7 +157,7 @@ JY901S parser state + diagnostics
 
 - `ImuSnapshot` 使用独立 telemetry sequence，不进入 command/ACK matching；不发送 raw JY901S frame、ASCII 或平台相关 struct memcpy。
 - payload 固定 56 bytes：schema `0x01`、Acc/Gyro/Angle validity flags、little-endian fixed-point values，以及 USART3/parser diagnostics counters。Acc 为 mg，Gyro 为 0.1 dps，Angle 为 0.01 degree；无效 domain 编码为零。
-- Firmware 只在 accepted Heartbeat 的正常 ACK 已完成发送后评估 IMU policy；每次 opportunity 最多发送一个 non-ACK telemetry frame。首次同时 due 时 LeakStatus `0x20` 优先；LeakStatus 成功发送后，如果 ImuSnapshot `0x21` 仍 due，则下一次同时 due 的 opportunity 发送 IMU，即使 LeakStatus 再次 due。IMU 成功发送后 LeakStatus 恢复优先；失败发送不 mark published，重复的 LeakStatus due 不会永久饿死 IMU。
+- Firmware 只在 accepted Heartbeat 的正常 ACK 已完成发送后评估 IMU/Depth policy；每次 opportunity 最多发送一个 non-ACK telemetry frame。只要 LeakStatus `0x20` due 就立即优先；Leak 不 due 时，在仍 due 的 ImuSnapshot `0x21` 与 DepthSnapshot `0x22` 之间公平轮转。失败发送不 mark published，保持该 policy 可重试。
 - IMU policy interval 为 1 s；成功发送后才 mark published。在 nominal accepted Heartbeat cadence 下，ImuSnapshot 的实际有效刷新率 up to approximately 1 Hz；ACK opportunity 延迟或 LeakStatus pending refresh 会使实际速率更低。56-byte payload 的最大 wire frame 为 68 bytes；9600 8-N-1 下按现有 Protocol V2 host-link/Heartbeat/Leak 预算计算，不宣称实机吞吐已验证；不增加独立 IMU TX timer。
 - 当前 DAP UART/COM13 host link 不增加独立 IMU TX timer；IMU 不会创建、释放、重试或重排 ACK pending request。USART1 host-link 与 LeakStatus 行为保持不变，Apc220HalfDuplex 仅保留为 legacy-named conservative policy。
 
@@ -228,11 +228,21 @@ ROVMAKER decoder board
 ```
 
 STM32 同时按生成式配置保留 PC6 / USART6_TX，但应用层不发送解码板命令。
-厂商 [深度传感器产品手册](https://docs.rovmaker.cn/产品手册/水深传感器产品手册/深度传感器产品手册.html)
-记录了 115200 8-N-1 及 canonical line
-`Depth:XX.XXm Temp:XX.XXC\r\n`；同一官方资料中记录的 compact line
-`T=XX.XXD=XX.XX\r\n` 作为明确的第二格式兼容。实现不接受猜测的 `Temp=`、
-任意 separator、substring、bare LF 或 trailing data。
+官方 [ROVMAKER 解算板手册](https://docs.rovmaker.cn/产品手册/水深传感器产品手册/深度传感器解算板V1.0.html)
+记录了 115200 8-N-1、canonical line
+`Depth:XX.XXm Temp:XX.XXC\r\n`，以及精确示例
+`Depth:1.21m Temp=25.27C`。因此 parser 只兼容完整的 `Temp:` 与 `Temp=`
+两种格式；不接受猜测的 compact `T=...D=...`、任意 separator、substring、
+bare LF 或 trailing data。该手册还要求板和传感器在水面通电，以环境空气压
+建立深度零点；这是厂商操作指导，不是本机器人实机验证结果。
+
+物理安装边界按以下拓扑记录：湿侧 pressure face/probe → pressure hull 的
+sealed penetration/threaded installation → pressure hull 内部 cable → 干侧
+ROVMAKER decoder board → STM32 PC7/USART6_RX。这里不推断具体 O-ring、螺纹或
+密封结构；电平、供电/地、安装、zeroing、density、cadence 与端到端响应仍为
+**[Pending Hardware Verification]**。本地 `ms5837.py` 仅是 Raspberry Pi 直连
+MS5837 的 I2C/PROM/ADC/补偿/density 参考，不证明解码板 UART 格式、cadence 或
+电气接口，Firmware 不引入第二条 I2C 路径。
 
 ### DepthSnapshot contract
 
@@ -247,7 +257,11 @@ failures、UART errors。无效 numeric field 必须编码为零；Qt 以本地 
 arrival 与既定 telemetry lifecycle 判断 liveness，不单独依赖 sample age。
 
 Depth telemetry 不满足 ACK、不改变 LeakStatus、不进入 Servo command queue，
-也不改变 Safety 行为。现有 Protocol V2/USART1/JY901S/Leak 路径保持原边界。
+也不改变 Safety 行为。Firmware 使用 provisional 3000 ms sensor freshness，
+超时后清除 depth/temperature valid 并将数值编码为 0，但保留 diagnostics；
+该策略独立于一秒 publication 与 Qt host-packet stale timeout。调度上 due
+LeakStatus 立即优先，Leak 不 due 时只在 IMU/Depth 之间公平轮转。现有
+Protocol V2/USART1/JY901S/Leak 路径保持原边界。
 
 ### 验证分层
 

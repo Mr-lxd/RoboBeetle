@@ -174,12 +174,11 @@ IMU transmit timer.
 
 Firmware evaluates the one-second IMU policy only after an accepted Heartbeat
 has completed its normal ACK transmission. It selects at most one optional
-frame per opportunity. LeakStatus `0x20` wins the first shared due opportunity;
-after a successful LeakStatus publication, a still-due ImuSnapshot `0x21` wins
-the next shared opportunity even if LeakStatus is due again. After successful
-IMU publication, LeakStatus regains priority on the next shared due
-opportunity. A failed optional transmit is not marked published, so the
-pending policy remains retryable. There is no independent IMU transmit timer.
+frame per opportunity. A due LeakStatus `0x20` always wins the shared due
+opportunity. When LeakStatus is not due, the scheduler fairly rotates the due
+ImuSnapshot `0x21` and DepthSnapshot `0x22` slots. A failed optional transmit is
+not marked published, so the pending policy remains retryable. There is no
+independent IMU or depth transmit timer.
 
 ### DepthSnapshot — `0x22`
 
@@ -217,11 +216,19 @@ unknown schema, reserved flags, nonzero invalid numeric fields, or any payload
 whose length is not exactly 38 bytes.
 
 The Firmware parser accepts the canonical vendor line
-`Depth:XX.XXm Temp:XX.XXC\r\n` and the separately documented compact line
-`T=XX.XXD=XX.XX\r\n`. These are exact bounded grammars: the implementation does
-not accept guessed `Temp=`, arbitrary separators, substring matches, bare LF,
-or trailing data. The decoder path is listen-only and sends no configuration,
-save, restart, calibration, or other command.
+`Depth:XX.XXm Temp:XX.XXC\r\n` and the vendor's documented example form
+`Depth:XX.XXm Temp=XX.XXC\r\n`. These are exact bounded grammars: the
+implementation does not accept guessed compact `T=...D=...`, arbitrary
+separators, substring matches, bare LF, or trailing data. The decoder path is
+listen-only and sends no configuration, save, restart, calibration, or other
+command. See the official [decoder-board manual](https://docs.rovmaker.cn/产品手册/水深传感器产品手册/深度传感器解算板V1.0.html)
+for the canonical format, example, and surface-power/air-zero instruction.
+
+Firmware separately applies a provisional 3000 ms sensor-sample freshness
+bound. At expiry it clears depth/temperature validity and zeroes those values
+in the snapshot while retaining all transport/parser diagnostics. This is
+separate from the one-second publication policy and Qt's 3500 ms host-packet
+stale timeout; Qt still uses telemetry lifecycle rather than sample age alone.
 
 ### Set Servo PWM — `0x12`
 
@@ -271,8 +278,8 @@ This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware v
 | Set Servo Angle | `0x13` | Controller and Qt UI send count 1, angle-capable semantic ID, signed cdeg LE; UI is gated by connection, Enable ACK, and no pending Disable | Maps each accepted descriptor angle with `int32_t` arithmetic; FrontAxis is rejected | `uint8,uint8,int16` | Yes | **Implemented; new five-servo hardware verification pending** |
 | Neutral | `0x14` | Sends the selected semantic mask after local enable | Requires live host, valid mask, and enabled selected channels; writes descriptor neutral pulses without disabling | `uint16 mask` | Yes | **Implemented; FrontAxis neutral remains provisional** |
 | LeakStatus | `0x20` | Receives one-byte monitoring telemetry and updates Unknown/Dry/Wet indicator; never creates an ACK pending entry | Samples PA11 and emits after accepted Heartbeat ACK, first/change/500 ms refresh; no ACK and no Servo/Safety action | `uint8 state` | No | **Implemented; end-to-end monitoring [Hardware Verified]** |
-| ImuSnapshot | `0x21` | Decodes fixed 56-byte monitoring telemetry into `ImuMonitor`; never creates or releases an ACK pending entry; displays Unknown/Receiving/Stale/Error and clears invalid/stale values | Encodes current JY901S state and diagnostics after accepted Heartbeat ACK, at most one optional frame per opportunity, with first-shared-opportunity LeakStatus priority and bounded fairness for a still-due IMU | 56-byte fixed schema | No | **Implemented / Host Test: PASS; physical JY901S telemetry [Hardware Verified]** |
-| DepthSnapshot | `0x22` | Decodes fixed 38-byte monitoring telemetry into `DepthMonitor`; validates schema/flags/length and never creates or releases an ACK pending entry | Parses the listen-only ROVMAKER decoder line, encodes validity-gated fixed-point fields and seven diagnostics counters after accepted Heartbeat ACK, at most one optional frame per opportunity | 38-byte fixed schema | No | **Implemented / Host Test: PASS; physical decoder path [Pending Hardware Verification]** |
+| ImuSnapshot | `0x21` | Decodes fixed 56-byte monitoring telemetry into `ImuMonitor`; never creates or releases an ACK pending entry; displays Unknown/Receiving/Stale/Error and clears invalid/stale values | Encodes current JY901S state and diagnostics after accepted Heartbeat ACK, at most one optional frame per opportunity, with due LeakStatus priority and fair rotation against a due DepthSnapshot when LeakStatus is not due | 56-byte fixed schema | No | **Implemented / Host Test: PASS; physical JY901S telemetry [Hardware Verified]** |
+| DepthSnapshot | `0x22` | Decodes fixed 38-byte monitoring telemetry into `DepthMonitor`; validates schema/flags/length and never creates or releases an ACK pending entry; sensor-invalid snapshots are Stale with values hidden while diagnostics remain visible | Parses the listen-only ROVMAKER decoder line, applies the provisional 3000 ms sensor freshness bound, and encodes validity-gated fixed-point fields and seven diagnostics counters after accepted Heartbeat ACK, at most one optional frame per opportunity | 38-byte fixed schema | No | **Implemented / Host Test: PASS; physical decoder path [Pending Hardware Verification]** |
 
 ## Sequence, ACK, retry, and duplicate behavior
 
@@ -322,7 +329,7 @@ Duplicate handling is the most important protocol-level safety gap before adding
 - The historical APC220 RTT of approximately 167–173 ms is an input to scheduler test scenarios, not a current DAP/COM13 measurement or formal guarantee: 250 + 170 = 420 ms is only an illustrative nominal observation. The local admission boundary is the 490 ms dispatch-anchored **Console host-side/local safety admission budget**; ordinary work is admitted only when its configured worst-case timeout plus retry polling still fits, leaving 10 ms below the 500 ms watchdog boundary. Host scheduling and future APC220 radio jitter require separate validation.
 - On the first missed host-link Heartbeat ACK, the Console clears its logical enabled state and stale actuator queue before Firmware can diverge at its watchdog boundary. Heartbeat retries may continue, but recovery does not replay old actions; after recovery a new valid Heartbeat and a new Servo Enable ACK are required before PWM/Angle commands can succeed.
 - PWM is not started at boot. TIM3/TIM4 CCRs are initialized from the descriptor table, but waveforms start only on accepted Servo Enable.
-- The low-rate JY901S ImuSnapshot policy is one second and runs only in an existing accepted-Heartbeat opportunity. LeakStatus wins the first shared due opportunity; after a successful LeakStatus publication, a still-due IMU gets the next shared opportunity, and LeakStatus regains priority after successful IMU publication. At most one non-ACK telemetry frame is sent after each completed Heartbeat ACK. The Console marks IMU values stale after 3500 ms without a valid snapshot and clears the live values; this is a monitoring policy, not a control or calibration path.
+- The low-rate JY901S ImuSnapshot and depth policies run only in an existing accepted-Heartbeat opportunity. A due LeakStatus always preempts the optional IMU/Depth slots; when LeakStatus is not due, the scheduler fairly rotates due IMU and Depth publications. At most one non-ACK telemetry frame is sent after each completed Heartbeat ACK. Firmware marks a sensor sample unusable after the provisional 3000 ms depth freshness bound, while the Console marks host telemetry stale after 3500 ms without a valid live packet; both are monitoring policies, not control or calibration paths.
 
 The 250 ms/250 ms values are a **[Provisional]** conservative host-link policy target, not a Firmware watchdog change. The current DAP UART/COM13/USART1 path uses a stop-and-wait exchange to avoid overlapping frames; heartbeat intent is coalesced while a command or retry is active and the actual wire cadence depends on ACK turnaround. The Apc220HalfDuplex name is retained for source compatibility and historical scheduler context; it is not evidence of a current APC220 radio. Every matching ACK records the latest measured round-trip time in `ProtocolMonitor::lastAckRttMs` and the Qt monitor.
 

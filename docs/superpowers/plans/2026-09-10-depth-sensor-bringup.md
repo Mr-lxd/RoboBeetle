@@ -30,8 +30,8 @@
 Agent A owns new files under `RoboBeetleFirmware/Core/Communication/` and
 focused Firmware tests:
 
-1. Add failing parser tests for canonical format, exact compact `T=...D=...`
-   format, split CRLF, concatenated lines, signed values, fixed-point exactness,
+1. Add failing parser tests for canonical format and the exact documented
+   `Depth:...m Temp=...C` format, split CRLF, concatenated lines, signed values, fixed-point exactness,
    malformed units/separators, bare LF, overflow, leading garbage, overlong
    recovery, and invalid-to-valid recovery.
 2. Implement the bounded pure-C parser/state with direct standard headers and
@@ -76,8 +76,9 @@ Coordinator integrates the accepted slices in this order:
 
 1. Extend Firmware and Console message registries with `DepthSnapshot=0x22` and
    known-message/non-actuator handling.
-2. Generalize the pure-C telemetry scheduler to Leak/IMU/Depth using the
-   approved fair cursor. Preserve mark-after-success and one optional frame.
+2. Generalize the pure-C telemetry scheduler to Leak/IMU/Depth with immediate
+   LeakStatus priority and fair IMU/Depth rotation when LeakStatus is not due.
+   Preserve mark-after-success and one optional frame.
 3. Extend `app_main` with a depth UART/transport/state dependency, poll and
    parser drain, depth policy, snapshot construction, and post-ACK scheduling.
 4. Add the USART6 callbacks while keeping USART1 and USART3 instance behavior

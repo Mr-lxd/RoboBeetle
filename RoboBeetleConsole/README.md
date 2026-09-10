@@ -135,8 +135,10 @@ from the listen-only ROVMAKER decoder-board path. The read-only `Depth Sensor �
 ROVMAKER` panel displays `Unknown`, `Receiving`, `Stale`, or `Error`, plus
 validity-gated depth, temperature, sample age, and transport/parser counters.
 It uses local packet arrival for its telemetry lifecycle and does not treat the
-wire sample age as a standalone liveness decision. Invalid, stale, disconnected,
-and host-link-liveness-lost states clear the displayed values.
+wire sample age as a standalone liveness decision. Sensor-invalid snapshots
+enter `Stale`, render measurement values as `--`, and retain received
+diagnostics for troubleshooting; disconnected and host-link-liveness-lost
+states reset to `Unknown`.
 
 The frozen payload is schema `1`, little-endian, fixed 38 bytes: flags at byte
 1; signed `depth_mm` at bytes 2–5; signed `temperature_centi_c` at bytes 6–7;
@@ -146,11 +148,20 @@ bytes 10–37. Invalid numeric fields must be zero and an unknown/saturated age 
 schema, and non-38-byte payloads. Depth telemetry never satisfies an ACK, alters
 LeakStatus, queues a Servo command, or changes Safety behavior.
 
-The depth monitor is **[Implemented / Host Test: PASS]**. The matching ROVMAKER
-decoder-board electrical level, physical USART6/PC7 reception, above-water
-zeroing, density/cadence behavior, and end-to-end hardware result remain
-**[Pending Hardware Verification]**; no decoder configuration command is sent by
-this phase.
+The Firmware applies a provisional 3000 ms sensor-sample freshness bound,
+separate from its one-second publication policy and the Qt host-packet
+`StaleTimeoutMs` of 3500 ms. The depth monitor is **[Implemented / Host Test:
+PASS]**. The matching ROVMAKER decoder-board electrical level, physical
+USART6/PC7 reception, above-water zeroing, density/cadence behavior, physical
+mounting, and end-to-end hardware result remain **[Pending Hardware
+Verification]**; no decoder configuration command is sent by this phase.
+
+The intended installation boundary is wet pressure face/probe → sealed hull
+penetration/threaded installation → pressure hull → cable → dry ROVMAKER
+decoder → USART6. Exact seal/thread details are not specified here. The vendor
+decoder manual's surface-power/air-zero instruction is recorded as guidance;
+the local `ms5837.py` direct-I2C implementation is reference material only and
+is not a second Firmware sensor path.
 
 ## Current scope
 

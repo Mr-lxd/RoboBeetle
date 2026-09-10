@@ -177,11 +177,11 @@ The Qt descriptor keeps `FrontAxis` as the internal compatibility identifier, bu
 
 The PR #11 ImuSnapshot uses one fixed 56-byte payload and a separate telemetry
 sequence, but it is published only after an accepted Heartbeat ACK completes.
-The selector allows at most one optional non-ACK frame per opportunity. LeakStatus
-wins the first shared due opportunity, then a still-due IMU gets the next shared
-opportunity after a successful LeakStatus publication; LeakStatus regains
-priority after successful IMU publication. Failed optional transmits are not
-marked published, so repeated LeakStatus due events cannot starve a pending IMU.
+The selector allows at most one optional non-ACK frame per opportunity. A due
+LeakStatus always preempts the optional IMU/Depth slots; when LeakStatus is not
+due, the scheduler fairly rotates due IMU and Depth. Failed optional transmits
+are not marked published, so a failed send remains retryable without changing
+the priority rule.
 This keeps low-rate monitoring from competing with the conservative host-link
 command/ACK slot or creating an independent burst source.
 Under the nominal accepted Heartbeat cadence, the effective IMU refresh is up
@@ -190,6 +190,27 @@ can make it lower. This is a policy ceiling, not a fixed independent timer rate.
 The 68-byte maximum IMU wire frame and the combined nominal budget are recorded
 as DAP/USART1 host-link estimates; they are not APC220 physical RF throughput
 evidence.
+
+## Sensor freshness is separate from telemetry publication freshness
+
+Publishing a sensor packet every second does not make its contained sample
+fresh. Firmware therefore uses an explicit provisional 3000 ms depth-sample
+freshness bound, separate from the publication interval and the Qt host-packet
+stale timeout. At expiry it clears the depth/temperature validity and zeroes the
+numeric fields, while keeping transport/parser diagnostics visible; a newly
+accepted sensor line restores live validity. This prevents a stopped decoder
+from appearing live merely because heartbeat telemetry continues.
+
+## Vendor format evidence must be exact
+
+The ROVMAKER decoder manual documents the canonical
+`Depth:XX.XXm Temp:XX.XXC\r\n` line and the exact example
+`Depth:1.21m Temp=25.27C`. The parser supports those two complete forms only;
+it does not promote an inferred `T=...D=...` compact form into the contract.
+The manual's surface-power/air-zero instruction is recorded as vendor guidance,
+while installation, electrical levels, density, cadence, and physical response
+remain pending verification. The local `ms5837.py` is a direct-I2C sensor-level
+reference and does not establish the decoder-board UART boundary.
 
 ## Fixed-point schemas are an interoperability boundary
 
