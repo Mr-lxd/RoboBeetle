@@ -1,12 +1,12 @@
 # RoboBeetle Engineering Lessons
 
-This note records the evidence and boundaries behind the Console PR #7 scheduler adaptation, the PR #8 five-servo semantic bring-up, and the PR #9 leak-sensor telemetry bring-up. The scheduler is **[Hardware Verified - Bench]** on the tested desktop setup. PR #8 retains explicit partial-bench **[Hardware Verified]** findings for the installed servo paths and **[Pending Hardware Verification]** for the remaining Depth endpoints. PR #9's PA11 leak input, Protocol V2 LeakStatus path, Qt indicator, and end-to-end monitoring are now **[Hardware Verified]** after the correct current ELF was rebuilt, programmed, and verified.
+This note records the evidence and boundaries behind the historical APC220 scheduler adaptation, the PR #8 five-servo semantic bring-up, the PR #9 leak-sensor telemetry bring-up, and the PR #10 JY901S listen-only path. The recent Servo, LeakStatus, and JY901S runtime evidence used the wired DAP UART/COM13 → STM32 USART1 host link; APC220 is legacy/earlier and was not used in that closeout. JY901S physical reception, parsing, Acc/Gyro/Angle state, and post-fix re-arm recovery are **[Hardware Verified]**; USART3 UART/checksum physical-link quality and final body/yaw calibration remain **[Pending]**.
 
 ## Keep programming and runtime links separate
 
-The DAP/ST-LINK and OpenOCD path is the programming and debug boundary. It should be validated independently by detecting the target, halting/resetting it, and confirming that the intended image is loaded. The run-time Protocol V2 stream is a separate boundary: a successful OpenOCD session does not prove that the USB serial adapter, APC220 pair, UART pins, or application dispatcher are exchanging bytes. The stable bring-up sequence recorded for this project is `SWD clock 100 kHz → SYSRESETREQ → halt → program → verify`; if UART behaves abnormally after flashing, perform a complete power cycle before considering software changes.
+The DAP/ST-LINK and OpenOCD path is the programming and debug boundary. It should be validated independently by detecting the target, halting/resetting it, and confirming that the intended image is loaded. The run-time Protocol V2 stream is a separate boundary: a successful OpenOCD session does not prove that DAP UART/COM13, an APC220 pair, UART pins, or the application dispatcher are exchanging bytes. The stable bring-up sequence recorded for this project is `SWD clock 100 kHz → SYSRESETREQ → halt → program → verify`; if UART behaves abnormally after flashing, perform a complete power cycle before considering software changes.
 
-If OpenOCD reports a target-side Flash algorithm failure, treat that as a programming-path failure even when DAP target detection succeeds. Check target power, reset/boot state, flash protection, adapter speed, and the selected device algorithm; a slower programming fallback can be useful for recovery, but a slow fallback success still does not validate the run-time UART/APC220 path. Record the programming result and the run-time result as separate evidence.
+If OpenOCD reports a target-side Flash algorithm failure, treat that as a programming-path failure even when DAP target detection succeeds. Check target power, reset/boot state, flash protection, adapter speed, and the selected device algorithm; a slower programming fallback can be useful for recovery, but a slow fallback success still does not validate the run-time USART1 host-link path. Record the programming result and the run-time result as separate evidence.
 
 ## Host verification cannot replace the ARM target build
 
@@ -16,9 +16,9 @@ Host-side pure-C tests and syntax checks can pass while the STM32CubeIDE `arm-no
 
 Third-party HAL enum/raw constant values are part of the valid domain and must not double as invalid markers. STM32 HAL defines `TIM_CHANNEL_1` as `0x00000000U`; channel validity is therefore represented independently by the STM32 driver mapping result (`channel_valid`), and every write/start/stop operation checks that explicit validity. The FrontRight and RearRight CH1 bindings must remain valid even though their HAL channel value is zero; an unmapped symbolic channel must fail closed.
 
-## Treat APC220 power and logic levels as an explicit interface
+## Treat APC220 power and logic levels as an explicit legacy interface
 
-An APC220 installation must document its supply rail, UART I/O voltage, common ground, and direction-control assumptions. A module advertised or wired around 5 V power is not automatically proof that its UART pins are 5 V tolerant. Measure the actual rails and idle/high levels, use level translation where the selected module requires it, and keep the MCU's 3.3 V GPIO limits authoritative. Do not use a servo-power rail as an implicit logic reference.
+An APC220 installation must document its supply rail, UART I/O voltage, common ground, and direction-control assumptions before it is used again. This is legacy/earlier hardware guidance; APC220 is not enabled or currently used in the present DAP UART/COM13 closeout. A module advertised or wired around 5 V power is not automatically proof that its UART pins are 5 V tolerant. Measure the actual rails and idle/high levels, use level translation where the selected module requires it, and keep the MCU's 3.3 V GPIO limits authoritative. Do not use a servo-power rail as an implicit logic reference.
 
 ## Isolate faults with segmented loopback tests
 
@@ -31,15 +31,15 @@ When an end-to-end command fails, split the path into reversible checks:
 
 Inject one fault at a time (wrong baud, disconnected ground, reversed TX/RX, framing/CRC corruption, and link loss) and record which boundary detects it. This prevents treating a DAP/OpenOCD result or a GUI status as proof of a wireless serial path.
 
-## RTT measurements must drive scheduler budgets
+## Historical APC220 RTT measurements and scheduler budgets
 
 The normal desktop request/ACK round-trip time was approximately 160–170 ms (approximately 160–173 ms across the recorded observations). That is longer than the original 100 ms heartbeat cadence and leaves little margin under the original 200 ms ACK timeout. With independent heartbeat and command sends, a half-duplex link can therefore accumulate overlapping ACK-requiring traffic or time out a valid exchange during module turnaround. Deliberately injected Retry/Timeout events are expected fault-injection behavior and must not be counted as normal-link timeout statistics.
 
-The Console keeps the original DirectUart 100 ms / 200 ms multi-pending behavior for regression compatibility, while the APC220 profile uses 250 ms heartbeat and 250 ms ACK timeout. APC220 scheduling is stop-and-wait: one ACK-requiring frame is active, heartbeat ticks collapse into one due intent, user commands use a bounded queue, heartbeat due work precedes an ordinary command retry, and retries preserve the original sequence and encoded frame. The latest matching ACK RTT is shown by the protocol monitor so future measurements can replace provisional values with evidence.
+The Console keeps the original DirectUart 100 ms / 200 ms multi-pending behavior for regression compatibility, while the legacy-named Apc220HalfDuplex profile supplies the conservative 250 ms heartbeat / 250 ms ACK stop-and-wait policy. The recent COM13/DAP/USART1 run used that policy as a host-link load limit, not as an APC220 radio test. One ACK-requiring frame is active, heartbeat ticks collapse into one due intent, user commands use a bounded queue, heartbeat due work precedes an ordinary command retry, and retries preserve the original sequence and encoded frame. The latest matching ACK RTT is shown by the protocol monitor so future measurements can replace provisional values with evidence.
 
-## PR #7 desktop-bench hardware verification
+## [Historical Reference] PR #7 APC220 desktop-bench record
 
-The APC220 Half-Duplex Scheduler is **[Hardware Verified - Bench]** for the tested 440 MHz two-module desktop setup. User regression passed the complete Qt → APC220 → STM32 → ACK → APC220 → Qt path, 60 s idle Heartbeat, Servo1 Enable/ACK, Neutral, 0°/±10°/±45°/±90°, rapid queued Set Angle traffic, Disable/Disable All priority, robot-side disconnect, Heartbeat retry and Firmware watchdog safe-disable, recovery without automatic re-arm, and fresh Enable + matching ACK recovery. CRC errors were 0 during the normal run.
+The APC220 Half-Duplex Scheduler record below is historical/earlier bench evidence for the tested 440 MHz two-module setup. It is not current DAP UART/COM13 evidence, does not verify the present host link, and does not make APC220 part of the current enabled hardware path. The user regression passed the complete Qt → APC220 → STM32 → ACK → APC220 → Qt path, 60 s idle Heartbeat, Servo1 Enable/ACK, Neutral, 0°/±10°/±45°/±90°, rapid queued Set Angle traffic, Disable/Disable All priority, robot-side disconnect, Heartbeat retry and Firmware watchdog safe-disable, recovery without automatic re-arm, and fresh Enable + matching ACK recovery. CRC errors were 0 during that historical run.
 
 The 250 ms Heartbeat target, 250 ms ACK timeout, and 490 ms Console host-side/local safety admission budget remain **[Provisional]** until lab/poolside distance, antenna-orientation, and outdoor RF characterization are complete. The 490 ms value is a host-side/local admission policy, not a Windows-plus-RF hard-real-time guarantee; RF jitter and host scheduling still require characterization.
 
@@ -57,7 +57,7 @@ Disable and Disable All are safety actions, not ordinary FIFO work. When a Disab
 
 ## Timing budget and safety boundary
 
-Budget the complete exchange, not just MCU handler time: host serialization, APC220 buffering, half-duplex direction/turnaround, air/link latency, STM32 receive/dispatch/ACK transmission, and host scheduling jitter all contribute. The APC220 profile's 250 ms ACK timeout is a Console link budget; it does not change the Firmware watchdog. The Firmware watchdog remains greater than 500 ms after the last valid heartbeat, and a disconnect/error/reconnect clears Console in-flight work, queued commands, heartbeat intent, and logical enable state. Reconnect requires a fresh heartbeat and an explicit Enable ACK.
+Budget the complete exchange, not just MCU handler time: host serialization, USART1 buffering, Protocol V2 receive/dispatch/ACK transmission, and host scheduling jitter all contribute to the current DAP UART/COM13 path. The legacy-named profile's 250 ms ACK timeout is a conservative Console host-link budget; it does not change the Firmware watchdog. The Firmware watchdog remains greater than 500 ms after the last valid heartbeat, and a disconnect/error/reconnect clears Console in-flight work, queued commands, heartbeat intent, and logical enable state. Reconnect requires a fresh heartbeat and an explicit Enable ACK. APC220 air latency/turnaround is outside the current evidence and requires a separate future verification.
 
 ## Keep descriptor tables independent at a C/C++ boundary
 
@@ -157,8 +157,12 @@ The Qt descriptor keeps `FrontAxis` as the internal compatibility identifier, bu
 
 ## JY901S listen-only lessons
 
-- One-byte UART reception needs a recoverable ownership state: a failed HAL re-arm cannot be left as a counter-only event. The ISR marks needs-rearm and the foreground retries once per poll, while UART error callbacks record flags and enter the same path.
+- One-byte UART reception needs a recoverable ownership state: the RX/error callbacks record the byte or error and mark needs-rearm; foreground maintenance retries once per poll. HAL_BUSY is deferred work and must not inflate the hard re-arm-failure counter, while HAL_ERROR and other non-success statuses remain hard failures. The post-fix Run A and Run B hardware regressions both kept hard re-arm failures at zero while valid frames continued.
 - A legal frame type that is intentionally not decoded is different from an unknown frame type. JY901S `0x54` Mag is known-but-ignored and needs its own counter so default output does not look like an unsupported-protocol fault.
 - A 256-byte storage ring has 255 bytes of usable capacity under the empty-slot convention; the observed RX byte rate and overflow counter determine whether that is sufficient for a persistent output mask/rate.
 - Host Test, ARM Build, Program Verify, Hardware Verified, and Pending are evidence categories; one cannot be inferred from another.
 - A successful target build and DAP/OpenOCD `Verified OK` establish ARM Build and Program Verify for the intended ELF, but they do not establish that a JY901S is physically transmitting valid frames. Record the ELF path, artifact timestamp, programming/verify result, and sensor-runtime evidence separately so image provenance is auditable.
+
+## Name the physical transport separately from scheduler policy
+
+The current recent Servo, LeakStatus, and JY901S evidence used `Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2` at 9600 8-N-1. The source-level `Apc220HalfDuplex` name identifies a conservative stop-and-wait/load policy that was exercised over this host link; it is not evidence that an APC220 radio was present or enabled. APC220 remains an earlier/legacy transport record and requires a separate future hardware verification run.

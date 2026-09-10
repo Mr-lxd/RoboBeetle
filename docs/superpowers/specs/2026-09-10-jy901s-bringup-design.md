@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add the first JY901S bring-up path on the STM32F407 without changing the existing USART1/APC220, Protocol V2, Servo, Leak, Safety, or Console behavior:
+Add the first JY901S bring-up path on the STM32F407 without changing the existing USART1 host-link, Protocol V2, Servo, Leak, Safety, or Console behavior. The current host-link evidence uses DAP UART/COM13; the APC220 profile is an earlier/legacy transport record and is not current hardware evidence:
 
 ```text
 JY901S
@@ -50,7 +50,7 @@ The active CubeMX configuration will gain only the USART3 resources required by 
 
 `main.c` will own the generated `huart3`, call a generated `MX_USART3_UART_Init`, and pass both `huart1` and `huart3` to `app_main_init`. `stm32f4xx_hal_msp.c` will configure the USART3 clock, PB10/PB11 alternate function 7, and `USART3_IRQn`. `stm32f4xx_it.c` will add `USART3_IRQHandler` calling `HAL_UART_IRQHandler(&huart3)`.
 
-There will remain exactly one global `HAL_UART_RxCpltCallback`. It will delegate to both transport modules; each module will accept only its own USART instance. USART1 continues to own the APC220 ring and transmit path. USART3 will have no transmit wrapper. If the generated project has no existing UART error callback, there will also be one global `HAL_UART_ErrorCallback` that dispatches only USART3 errors to the JY901S transport; USART1 error behavior is otherwise unchanged.
+There will remain exactly one global `HAL_UART_RxCpltCallback`. It will delegate to both transport modules; each module will accept only its own USART instance. USART1 continues to own the host-link ring and transmit path (the current bench uses DAP UART/COM13; the source profile name for its conservative scheduler is retained separately). USART3 will have no transmit wrapper. If the generated project has no existing UART error callback, there will also be one global `HAL_UART_ErrorCallback` that dispatches only USART3 errors to the JY901S transport; USART1 error behavior is otherwise unchanged.
 
 The USART3 callback will perform only these operations in order:
 
@@ -62,7 +62,7 @@ The USART3 callback will perform only these operations in order:
 
 It will not parse frames, update IMU state, or send commands from interrupt context.
 
-The transport tracks whether the one-byte receive is armed and whether it needs a foreground re-arm. If the callback's re-arm attempt returns `HAL_BUSY` or another failure, it increments `rx_rearm_failure_count`, marks the receive as not armed/needs-rearm, and returns without looping or blocking. `jy901s_transport_stm32_poll()` is called from `app_main_process`; when the transport needs re-arm, it makes one non-blocking `HAL_UART_Receive_IT(..., 1U)` attempt. A successful attempt clears the needs-rearm state and restores the armed state. A failed foreground attempt leaves the state pending for the next foreground poll and records the failure through the same diagnostic counter.
+The transport tracks whether the one-byte receive is armed and whether it needs a foreground re-arm. RX and error callbacks only record the event and mark the pending state. `jy901s_transport_stm32_poll()` is called from `app_main_process`; when recovery is pending, it makes at most one non-blocking `HAL_UART_Receive_IT(..., 1U)` attempt. HAL_BUSY is deferred work and does not increment the hard `rx_rearm_failure_count`; HAL_ERROR and other non-success statuses do. A successful attempt clears the pending state and restores the armed state, while a failed attempt remains retryable for the next foreground poll.
 
 The single global `HAL_UART_ErrorCallback` performs no parsing or recovery loop. For USART3 it records an aggregate UART error count plus diagnostics for the HAL error flags (including overrun, framing, noise, parity, and other/error flags), marks the receive as needs-rearm, and returns. Foreground polling uses the same one-attempt recovery path. USART1 is not routed through this new recovery state.
 
@@ -75,7 +75,7 @@ The existing pure-C ring buffer will be minimally generalized to use caller-prov
 
 At 9600 baud with 8-N-1 framing, the line can deliver at most 960 bytes/s. With the documented default output mask and rate, four 11-byte frames at 10 Hz require approximately 440 bytes/s. The 255-byte USART3 effective capacity therefore represents approximately 0.58 seconds of nominal buffering. This is a bring-up estimate, not a permanent limit: a different persistent output mask or rate must be evaluated using observed RX byte rate, valid-frame rate, and overflow count.
 
-The USART3 transport exposes diagnostics for RX bytes, successful ring pushes, bytes popped by the foreground, overflow/drop count, and receive re-arm failures. These remain internal/debug-visible and do not become Protocol V2 telemetry.
+The USART3 transport exposes diagnostics for RX bytes, successful ring pushes, bytes popped by the foreground, overflow/drop count, hard receive re-arm failures, deferred HAL_BUSY attempts, and UART error flags. These remain internal/debug-visible and do not become Protocol V2 telemetry.
 
 ## Parser design
 
@@ -112,7 +112,7 @@ The latest internal IMU state and diagnostic structures are available through na
 ## Error handling and recovery
 
 - A full USART3 ring buffer drops only the newest byte, records the drop, and keeps the interrupt receiver armed.
-- A failed USART3 re-arm is recorded, marks the transport as needing re-arm, and returns. The foreground transport poll retries once per call until it succeeds; no parser, retry loop, or blocking operation is attempted from the ISR.
+- A failed USART3 re-arm marks the transport as needing re-arm and returns. The foreground transport poll retries once per call until it succeeds; HAL_BUSY is deferred rather than counted as a hard failure, while HAL_ERROR and other non-success statuses remain hard failures. No parser, retry loop, or blocking operation is attempted from the ISR.
 - USART3 HAL UART errors are recorded, mark the transport as needing re-arm, and are recovered by that same foreground poll path. Error handling does not change USART1 behavior.
 - Leading garbage is ignored until the next header.
 - Bad checksums do not update state and do not permanently stop parsing.
@@ -137,3 +137,9 @@ The final report will preserve these labels:
 ## Explicit non-goals
 
 This change will not add IMU Protocol V2 telemetry, Qt IMU visualization, depth pressure sensing, Safety actions, IMU-based servo control, stabilization, EKF/sensor fusion, robot-frame transforms, mounting calibration, or automatic JY901S configuration.
+
+## Closeout addendum — 2026-09-10
+
+The matching PR #11 Firmware + Qt hardware run verified the JY901S physical PB11/USART3 RX path, one-byte interrupt receive, independent ring buffer, 11-byte parser, Acc/Gyro/Angle state, and known-but-ignored Mag classification. The recent host-link path was `Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2`; no APC220 radio participated.
+
+Post-fix short regression runs were: Run A — RX 43295, headers 4006, valid 3831, checksum failures 175, overflow 0, hard re-arm failures 0, UART errors 180, Mag 958, unsupported 0; Run B — RX 73444, headers 6815, valid 6448, checksum failures 366, overflow 0, hard re-arm failures 0, UART errors 376, Mag 1618, unsupported 0. Valid frames continued and hard re-arm failures stayed at zero, closing the re-arm diagnostic follow-up. UART/checksum physical-link quality remains pending/non-blocking; final body-frame mapping and magnetic/yaw calibration remain pending.
