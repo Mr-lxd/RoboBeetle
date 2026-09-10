@@ -8,6 +8,8 @@
 #include "leak_sensor_stm32.h"
 #include "servo_driver_stm32.h"
 #include "servo_service.h"
+#include "jy901s_parser.h"
+#include "jy901s_transport_stm32.h"
 #include "uart_transport_stm32.h"
 
 static uint8_t protocol_wire_buffer[
@@ -42,6 +44,8 @@ static servo_service_t servo_service;
 static leak_sensor_t leak_sensor;
 static leak_sensor_stm32_t leak_sensor_reader;
 static leak_telemetry_policy_t leak_telemetry_policy;
+static jy901s_parser_t jy901s_parser;
+static volatile uint32_t jy901s_last_valid_frame_ms;
 
 static bool protocol_send_ack(
     uint16_t request_sequence,
@@ -238,6 +242,7 @@ static bool protocol_send_leak_status(
 
 void app_main_init(
     UART_HandleTypeDef *uart,
+    UART_HandleTypeDef *jy901s_uart,
     TIM_HandleTypeDef *tim3,
     TIM_HandleTypeDef *tim4,
     GPIO_TypeDef *leak_gpio_port,
@@ -263,11 +268,16 @@ void app_main_init(
         &servo_service,
         &safety_supervisor);
     uart_transport_stm32_init(uart);
+    jy901s_parser_init(&jy901s_parser);
+    jy901s_last_valid_frame_ms = 0U;
+    jy901s_transport_stm32_init(jy901s_uart);
 }
 
 void app_main_process(void)
 {
     uint8_t byte;
+
+    jy901s_transport_stm32_poll();
 
     leak_sensor_update_from_gpio_level(
         &leak_sensor,
@@ -277,6 +287,17 @@ void app_main_process(void)
     while (uart_transport_stm32_pop(&byte))
     {
         protocol_feed_byte(byte);
+    }
+
+    while (jy901s_transport_stm32_pop(&byte))
+    {
+        jy901s_parser_event_t event =
+            jy901s_parser_feed_byte(&jy901s_parser, byte);
+
+        if (event != JY901S_PARSER_EVENT_NONE)
+        {
+            jy901s_last_valid_frame_ms = HAL_GetTick();
+        }
     }
 
     if (safety_supervisor_process(
@@ -292,4 +313,25 @@ void app_main_process(void)
         protocol_dispatcher_invalidate_action_cache(
             &protocol_dispatcher);
     }
+}
+
+void app_main_jy901s_get_state(jy901s_imu_state_t *state)
+{
+    jy901s_parser_get_state(&jy901s_parser, state);
+}
+
+void app_main_jy901s_get_parser_stats(jy901s_parser_stats_t *stats)
+{
+    jy901s_parser_get_stats(&jy901s_parser, stats);
+}
+
+void app_main_jy901s_get_transport_diagnostics(
+    jy901s_transport_stm32_diagnostics_t *diagnostics)
+{
+    jy901s_transport_stm32_get_diagnostics(diagnostics);
+}
+
+uint32_t app_main_jy901s_last_valid_frame_ms(void)
+{
+    return jy901s_last_valid_frame_ms;
 }

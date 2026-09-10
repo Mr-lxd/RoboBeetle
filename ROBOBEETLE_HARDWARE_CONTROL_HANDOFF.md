@@ -1,5 +1,7 @@
 # RoboBeetle 硬件控制交接审计
 
+本次收口所对应的近期 Servo、LeakStatus 与 JY901S 实机运行均使用：Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1（9600 8-N-1）。APC220 仅保留为早期/legacy transport 记录，未参与本次验证，也不是当前启用的硬件链路。
+
 ## 2026-09-10 Leak detection sensor bring-up（PR #9，end-to-end Hardware Verified）
 
 本阶段在 PR #8 五舵机分支之后采用 stacked branch，实现第一条最小数字漏水检测路径及其 monitoring-only Protocol V2/Qt 显示，不改变 Servo 行为或 Safety 行为。漏水模块由 3.3 V 供电，与 STM32 共地；数字输出 `D0` 接 STM32 `PA11`，模拟输出 `A0` 暂不使用。PA11 → Firmware → Protocol V2 → Qt 的完整路径已经完成实机验收。
@@ -46,7 +48,88 @@ leak module D0
 3. 通过真实 Protocol V2 链路观察 Qt indicator 状态变化，确认 LeakStatus 不产生 ACK、不触发 Servo 或 Safety 动作。
 4. 本次验收未记录数值电压或响应时间；这些数值不应从本次 PASS 结论中推导。
 
-传感器 bring-up 顺序固定为：`Leak detection (including LeakStatus telemetry) → JY901S IMU → depth/sensor board`。LeakStatus 端到端证据现已补齐；JY901S 与 Depth 尚未开始。
+传感器 bring-up 顺序固定为：`Leak detection (including LeakStatus telemetry) → JY901S IMU → depth/sensor board`。在 PR #9 LeakStatus closeout 的历史记录中，JY901S 与 Depth 尚未开始；当前 JY901S phase 见下节，Depth 仍未开始。
+
+## 2026-09-10 JY901S listen-only bring-up（Hardware Verified / UART quality follow-up open）
+
+本轮只实现 JY901S 的 RX/parser-only 路径，不发送任何传感器配置命令：
+
+```text
+JY901S TX
+  → STM32 PB11 / USART3_RX
+  → one-byte interrupt RX
+  → 独立 256-byte ring buffer（255-byte effective capacity）
+  → 11-byte pure-C frame parser
+  → Acc / Gyro / Angle 内部状态
+```
+
+- JY901S TX 接 PB11；JY901S RX 接 PB10；共地。
+- STM32 USART3 本地使用 9600 baud、8-N-1、TX/RX、无硬件流控；这不是向 JY901S 写入波特率。
+- PB10 仅按硬件设计配置；应用层不发送 baud、输出频率、output mask、保存、重启、校准或其它 JY901S command。
+- 按当前持久化/default 配置监听，预期约 10 Hz，通常包含 `0x51` Acc、`0x52` Gyro、`0x53` Angle，也可能持续收到合法 `0x54` Mag。
+- `0x54` Mag 是 known-but-not-decoded：checksum 正确时保持 parser 同步、增加 `mag_frame_count`，不改变 Acc/Gyro/Angle state，也不增加 `unsupported_frame_count`。
+- 其它 checksum-valid 未知类型才增加 `unsupported_frame_count`；checksum error 单独统计。
+
+### 实机诊断顺序
+
+如果完全没有合法帧，不得立即加入自动配置；按以下顺序记录：
+
+1. `rx_byte_count` 是否增加；
+2. ring buffer push/pop 是否增加，是否 overflow/drop；
+3. parser 是否看到 `0x55` header；
+4. `valid_frame_count` 是否增加；
+5. `checksum_error_count` 是否增加；
+6. `mag_frame_count` 与 `unsupported_frame_count` 的分类；
+7. Acc/Gyro/Angle valid flags、数值与 last-valid tick。
+
+PR #10 source branch 的 USART3 RX-complete/error path 仍直接尝试
+`HAL_UART_Receive_IT(..., 1U)`，并把每个非 `HAL_OK` 结果记入原始 re-arm
+failure counter。堆叠的 PR #11 follow-up 才将预期的 `HAL_BUSY` 与 hard
+failure 分开，并把恢复维护移到 foreground；下方 post-fix 实机数据属于
+matching PR #11 image。ISR 不解析、不阻塞、不循环重试；USART1 的现有 RX、
+ring 和 host-link transmit 行为保持不变。
+
+### 本轮验证分层
+
+| 项目 | 状态 |
+|---|---|
+| Host Test | **PASS**：parser、USART3 transport mock、ring-buffer 与全部当前 Firmware regressions |
+| ARM Build | **PASS**：STM32 target build，0 errors、0 warnings；RAM 2680 B / 128 KB，FLASH 23260 B / 512 KB |
+| Program Verify | **PASS**：DAP/OpenOCD programming flow 完成并报告 `Verified OK` |
+| Hardware Verified | **PASS**：matching PR #11 Firmware + Qt run 完成 JY901S 实机端到端观测 |
+| USART3 physical RX | **Hardware Verified**：PB11 / USART3 RX、ring path 与持续接收 |
+| JY901S valid real frames | **Hardware Verified**：valid frame 持续增加、overflow 为 0 |
+| Acc/Gyro/Angle real data | **Hardware Verified**：Acc 合理、静止 Gyro 接近零、Angle 正确响应 |
+| 0x54 Mag recognition | **Hardware Verified**：Mag frames 被识别为 known-but-ignored，unsupported 为 0 |
+| Re-arm diagnostics | **PR #11 follow-up**：post-fix 两次短回归 hard re-arm failures 均为 0；PR #10 原始 non-`HAL_OK` counter 由堆叠修正取代 |
+| USART3 UART/checksum physical quality | **Pending / non-blocking**：UART/checksum 计数保持可观测，物理来源尚未由本证据确定 |
+| Pending | 最终 body-frame mapping、magnetic/yaw calibration，以及 USART3 physical-link quality follow-up |
+
+2026-09-10，用户在 hardware-verification checkout 完成了当前
+`RoboBeetleFirmware.elf` 的 STM32 target build：0 errors、0 warnings，RAM
+2680 B / 128 KB，FLASH 23260 B / 512 KB；ELF 为
+`D:\RoboBeetle\RoboBeetleFirmware\build\Debug\RoboBeetleFirmware.elf`，
+记录的 LastWriteTime 为 2026-09-10 17:07:11。随后使用 DAP/OpenOCD（SWD
+100 kHz、SYSRESETREQ、halt、program、verify、reset-run）完成编程与校验，
+记录为 `Programming Finished`、`Verify Started`、`Verified OK`。这些证据关闭
+ARM Build 与 Program Verify；matching PR #11 Firmware + Qt 实机运行另外提供
+了本节所记录的 JY901S physical RX、合法 frame、Acc/Gyro/Angle 与 Mag
+recognition Hardware Verified 结果，并关闭 re-arm diagnostic anomaly。
+
+Post-fix short hardware regression evidence：
+
+- Run A：RX bytes 43295，headers 4006，valid frames 3831，checksum failures
+  175，overflow 0，hard re-arm failures 0，UART errors 180，Mag frames 958，
+  unsupported 0。
+- Run B：RX bytes 73444，headers 6815，valid frames 6448，checksum failures
+  366，overflow 0，hard re-arm failures 0，UART errors 376，Mag frames 1618，
+  unsupported 0。
+
+两次运行中 RX bytes 与 valid frames 均持续增加，overflow 与 hard re-arm failures
+均为 0。UART aggregate、各 subtype 与 checksum errors 仍是可见诊断；本收口
+不把 USART3 physical-link quality 解释为无错误，也不推断这些错误的物理来源。
+
+本轮不涉及 Protocol V2 IMU telemetry、Qt IMU display、Depth sensor、Safety、自动 JY901S configuration 或 body-frame calibration。
 
 ## 2026-09-09 Depth PWM calibration window follow-up（PR #8）
 
@@ -88,7 +171,7 @@ PR #8 将 Firmware 与 Qt 各自维护的 descriptor table 冻结为同一组五
 
 TIM3/TIM4 当前均约 333 Hz、1 μs tick（PSC=15、ARR=3002）。FrontAxis 卖家参数记录为 500–2500 μs、中心候选 1500 μs、工作电压 4.8–7.4 V、可控行程 0–270°、死区 4 μs；这些是电气/绝对能力元数据，当前用户命令窗口为 provisional 500–2500 μs endpoint exploration，并非最终机械安全端点。1500 μs 只是 provisional startup/center candidate，不是 calibrated Neutral，也不是 Hardware Verified；扩展窗口的完整端点验收仍 Pending。卖家参数页写“是否防水：否”，商品照片/壳体却标示“Water proof Robot Servo”，因此 Waterproof capability = **[Unverified]**，在获得可靠 IP/密封证据前不得声明或安排直接浸水。
 
-多 bit Enable 采用 all-or-nothing：调用前已 enabled 的 requested channel 完全跳过，不产生 write/start/stop；任一新 channel start 失败时只 stop 本次 newly started channel，并保持调用前 logical/physical state。Console 中 pending Disable 是 motion-command barrier：受影响舵机的 PWM、Neutral、Set Angle 在 Controller 层即被拒绝，不写帧、不进入 APC220 queue；Disable Error/timeout 不会释放 Disable 之后的 stale motion。
+多 bit Enable 采用 all-or-nothing：调用前已 enabled 的 requested channel 完全跳过，不产生 write/start/stop；任一新 channel start 失败时只 stop 本次 newly started channel，并保持调用前 logical/physical state。Console 中 pending Disable 是 motion-command barrier：受影响舵机的 PWM、Neutral、Set Angle 在 Controller 层即被拒绝，不写帧、不进入当前 Protocol V2 host-link queue；Disable Error/timeout 不会释放 Disable 之后的 stale motion。
 
 ### 当前 Firmware 路径（PR #8）
 
@@ -107,13 +190,13 @@ USART1 IRQ → HAL callback → uart_transport_stm32 → ring_buffer
 
 历史 v0.4 的 Servo1/PA6 bring-up 对象是 `RearLeft`；PR #8 后 PA6/ID0 正式为 `FrontRight`，`RearLeft` 改为 PD13/TIM4_CH2。五舵机重新布线后，禁止旧 v0.4 Console/Firmware 与 PR #8 layout 交叉使用。Qt 的 `ServoId::Servo1` 若存在，仅是 deprecated source alias 指向 `FrontRight`；新 UI、日志、实现和文档必须使用 semantic name，且不保留 `Servo2` alias。
 
-## 2026-09-08 APC220 half-duplex scheduler hardware acceptance（PR #7）
+## [Historical Reference] 2026-09-08 APC220 half-duplex scheduler hardware acceptance（PR #7；当前未启用）
 
-### 当前状态
+### 历史状态（当前未启用）
 
 APC220 Half-Duplex Scheduler：**[Hardware Verified - Bench]**
 
-用户已完成当前桌面台架的完整实机验收：
+以下仅保留早期 APC220 桌面台架的历史记录；它不属于近期 COM13/DAP/USART1 的硬件验证，也不代表 APC220 是当前启用的链路：
 
 - APC220 440 MHz 双端链路，以及 Qt → APC220 → STM32 → ACK → APC220 → Qt 完整闭环；
 - 60 s idle Heartbeat、Servo1 Enable + ACK、Neutral、0° → +10° → 0° → −10° → 0°、±45°、±90°；
@@ -380,7 +463,7 @@ Console timeout 为 200 ms，原发送后最多重试 3 次，并复用相同 se
 | 里程碑 | 代码交叉证据 |
 |---|---|
 | Qt 6 Console 可启动 | 已有 Qt 6.11.2 MinGW 构建产物 |
-| SerialTransport 工作，COM10 ↔ USART1 跑通 | 当前 SerialTransport/USART1 配置与开发记录一致 |
+| 当前主机链路：COM13 → DAP UART/USB serial bridge ↔ USART1 跑通 | 当前 SerialTransport/USART1 配置与近期开发记录一致 |
 | STM32 → PC ASCII bring-up 曾验证 | 仅开发记录；ASCII 路径已不是当前 Protocol V2 主路径 |
 | PC ↔ STM32 UART 双向通信 | RX 中断链 + Firmware ACK TX 源码 |
 | USART interrupt + ring buffer | 当前源码直接实现；实机成功来自开发记录 |
