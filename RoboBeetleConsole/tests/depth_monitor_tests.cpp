@@ -235,6 +235,16 @@ void testMonitorLifecycleUsesLocalArrivalFreshness()
 void testSensorStaleSnapshotIsNotPresentedAsReceiving()
 {
     rb::DepthMonitor monitor;
+    const rb::DepthSnapshot valid = validSnapshot();
+    monitor.handlePacket(
+        {depthMessageType(), 6,
+         rb::DepthSnapshot::encodePayload(valid)},
+        6000);
+    expect(monitor.state().status == rb::DepthStatus::Receiving
+               && monitor.state().snapshot.has_value()
+               && monitor.state().snapshot->depthMm == valid.depthMm,
+           "sensor freshness regression must start from a live sample");
+
     rb::DepthSnapshot stale;
     stale.validityFlags = 0;
     stale.depthMm = 0;
@@ -249,6 +259,7 @@ void testSensorStaleSnapshotIsNotPresentedAsReceiving()
            "sensor-invalid DepthSnapshot must enter Stale instead of Receiving");
     expect(monitor.state().snapshot.has_value()
                && !monitor.state().snapshot->depthValid()
+               && monitor.state().snapshot->depthMm == 0
                && monitor.state().snapshot->diagnostics.validLineCount == 7,
            "sensor-stale snapshot must retain invalid fields and diagnostics");
 }
