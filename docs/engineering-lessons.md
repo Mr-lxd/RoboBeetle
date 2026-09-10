@@ -174,6 +174,9 @@ priority after successful IMU publication. Failed optional transmits are not
 marked published, so repeated LeakStatus due events cannot starve a pending IMU.
 This keeps low-rate monitoring from competing with the APC220 stop-and-wait
 command/ACK slot or creating an independent burst source.
+Under the nominal accepted Heartbeat cadence, the effective IMU refresh is up
+to approximately 1 Hz; delayed ACK opportunities or pending LeakStatus refreshes
+can make it lower. This is a policy ceiling, not a fixed independent timer rate.
 The 68-byte maximum IMU wire frame and the combined nominal budget are recorded
 as estimates; they are not physical RF throughput evidence.
 

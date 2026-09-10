@@ -71,6 +71,10 @@ existing Protocol V2 decoder and keeps it separate from ACK matching and the
 monitoring-only LeakStatus path. The payload is a fixed 56-byte schema with
 explicit little-endian fixed-point Acc (mg), Gyro (0.1 dps), and Angle (0.01
 degree) fields plus bring-up diagnostics counters.
+Under the nominal accepted Heartbeat cadence, the effective ImuSnapshot refresh
+is up to approximately 1 Hz; delayed ACK opportunities or pending LeakStatus
+refreshes may reduce it. The Firmware does not use an independent IMU transmit
+timer.
 
 The `IMU — JY901S` panel is read-only and shows status, Acc, Gyro, Euler angle,
 and diagnostics. It displays `Unknown` before data or after transport/APC

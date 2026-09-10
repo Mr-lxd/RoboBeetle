@@ -126,7 +126,7 @@ JY901S parser state + diagnostics
 - `ImuSnapshot` 使用独立 telemetry sequence，不进入 command/ACK matching；不发送 raw JY901S frame、ASCII 或平台相关 struct memcpy。
 - payload 固定 56 bytes：schema `0x01`、Acc/Gyro/Angle validity flags、little-endian fixed-point values，以及 USART3/parser diagnostics counters。Acc 为 mg，Gyro 为 0.1 dps，Angle 为 0.01 degree；无效 domain 编码为零。
 - Firmware 只在 accepted Heartbeat 的正常 ACK 已完成发送后评估 IMU policy；每次 opportunity 最多发送一个 non-ACK telemetry frame。首次同时 due 时 LeakStatus `0x20` 优先；LeakStatus 成功发送后，如果 ImuSnapshot `0x21` 仍 due，则下一次同时 due 的 opportunity 发送 IMU，即使 LeakStatus 再次 due。IMU 成功发送后 LeakStatus 恢复优先；失败发送不 mark published，重复的 LeakStatus due 不会永久饿死 IMU。
-- IMU policy interval 为 1 s；成功发送后才 mark published。56-byte payload 的最大 wire frame 为 68 bytes；9600 8-N-1 下按现有 APC220/Heartbeat/Leak 预算计算，不宣称实机吞吐已验证。
+- IMU policy interval 为 1 s；成功发送后才 mark published。在 nominal accepted Heartbeat cadence 下，ImuSnapshot 的实际有效刷新率 up to approximately 1 Hz；ACK opportunity 延迟或 LeakStatus pending refresh 会使实际速率更低。56-byte payload 的最大 wire frame 为 68 bytes；9600 8-N-1 下按现有 APC220/Heartbeat/Leak 预算计算，不宣称实机吞吐已验证；不增加独立 IMU TX timer。
 - APC220 不增加独立 IMU TX timer；IMU 不会创建、释放、重试或重排 ACK pending request。USART1/APC220 与 LeakStatus 行为保持不变。
 
 ### Qt 监视器边界

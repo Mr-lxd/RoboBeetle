@@ -61,6 +61,10 @@ Heartbeat+ACK exchanges, up to two 500 ms LeakStatus refreshes, and one IMU
 snapshot per second consume at most approximately 222 bytes per second using
 the endpoint worst-case frame sizes, before RF turnaround and application
 overhead. This is a budget estimate, not a hardware throughput claim.
+The effective IMU refresh is up to approximately 1 Hz under the nominal
+accepted Heartbeat cadence, and may be lower if ACK opportunities are delayed
+or consumed by pending LeakStatus refreshes; this is not an independent timer
+rate.
 
 ## Firmware scheduling
 

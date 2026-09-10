@@ -166,6 +166,10 @@ refreshes per second, and one IMU snapshot per second is approximately 222
 wire bytes per second using endpoint worst-case sizes, before RF turnaround and
 application overhead. This is a budget estimate, not a physical throughput
 claim.
+The effective ImuSnapshot refresh is therefore up to approximately 1 Hz under
+the nominal accepted Heartbeat cadence, and may be lower when ACK opportunities
+are delayed or consumed by pending LeakStatus refreshes; there is no independent
+IMU transmit timer.
 
 Firmware evaluates the one-second IMU policy only after an accepted Heartbeat
 has completed its normal ACK transmission. It selects at most one optional

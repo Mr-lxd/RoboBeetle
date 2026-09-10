@@ -186,6 +186,9 @@ policy remains retryable and repeated LeakStatus due events cannot starve IMU.
 At 9600 8-N-1, the maximum 68-byte IMU wire frame is within the documented
 low-rate budget; this is a software/budget result, not a physical APC220
 throughput claim.
+With the nominal accepted Heartbeat cadence, the effective ImuSnapshot refresh
+is up to approximately 1 Hz; delayed ACK opportunities or pending LeakStatus
+refreshes may reduce it, and no independent IMU transmit timer is used.
 
 PR #11 software evidence is recorded separately from PR #10's target evidence:
 
