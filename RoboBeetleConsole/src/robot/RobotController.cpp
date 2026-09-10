@@ -48,6 +48,7 @@ bool isServoActuatorCommand(MessageType type)
     case MessageType::Error:
     case MessageType::ServoDisable:
     case MessageType::LeakStatus:
+    case MessageType::ImuSnapshot:
         return false;
     }
     return false;
@@ -77,7 +78,8 @@ RobotController::RobotController(ITransport *transport,
     : QObject(parent),
       transport_(transport),
       config_(config),
-      portDiscovery_(std::move(portDiscovery))
+      portDiscovery_(std::move(portDiscovery)),
+      imuMonitor_(this)
 {
     Q_ASSERT(transport_ != nullptr);
     heartbeatTimer_.setInterval(config_.heartbeatIntervalMs);
@@ -111,6 +113,7 @@ RobotController::RobotController(ITransport *transport,
     connect(transport_, &ITransport::stateChanged, this, [this](TransportState state) {
         const bool wasConnected = state_ == TransportState::Connected;
         state_ = state;
+        imuMonitor_.handleTransportState(state);
         if (state == TransportState::Connected) {
             resetSchedulerState();
             heartbeatReady_ = config_.linkProfile != LinkProfile::Apc220HalfDuplex;
@@ -688,6 +691,10 @@ void RobotController::processIncoming(const QByteArray &bytes)
 
 void RobotController::handlePacket(const Packet &packet)
 {
+    if (packet.type == MessageType::ImuSnapshot) {
+        handleImuSnapshot(packet);
+        return;
+    }
     if (packet.type == MessageType::LeakStatus) {
         handleLeakStatus(packet);
         return;
@@ -737,7 +744,7 @@ void RobotController::handlePacket(const Packet &packet)
             if (request->type == MessageType::Heartbeat) {
                 heartbeatReady_ = false;
                 heartbeatDue_ = true;
-                setLeakState(LeakState::Unknown);
+                markApc220LivenessLost();
                 return;
             }
             pumpApc220Scheduler();
@@ -750,11 +757,22 @@ void RobotController::handlePacket(const Packet &packet)
                         .arg(static_cast<quint8>(packet.type), 2, 16, QLatin1Char('0')));
 }
 
+void RobotController::handleImuSnapshot(const Packet &packet)
+{
+    if (config_.linkProfile == LinkProfile::Apc220HalfDuplex && !heartbeatReady_) {
+        emit logMessage(QStringLiteral("ImuSnapshot ignored while APC220 liveness is not ready"));
+        imuMonitor_.handleLivenessLost();
+        return;
+    }
+
+    imuMonitor_.handlePacket(packet, nowMs());
+}
+
 void RobotController::handleLeakStatus(const Packet &packet)
 {
     if (config_.linkProfile == LinkProfile::Apc220HalfDuplex && !heartbeatReady_) {
         emit logMessage(QStringLiteral("LeakStatus ignored while APC220 liveness is not ready"));
-        setLeakState(LeakState::Unknown);
+        markApc220LivenessLost();
         return;
     }
 
@@ -815,7 +833,7 @@ void RobotController::handleAck(const Packet &packet)
         if (isApc220 && isHeartbeat) {
             heartbeatReady_ = false;
             heartbeatDue_ = true;
-            setLeakState(LeakState::Unknown);
+            markApc220LivenessLost();
         }
         monitor_.ackStatus = QStringLiteral("ACK type mismatch seq=%1").arg(requestSequence);
         emit logMessage(monitor_.ackStatus);
@@ -830,7 +848,7 @@ void RobotController::handleAck(const Packet &packet)
         if (isApc220 && isHeartbeat) {
             heartbeatReady_ = false;
             heartbeatDue_ = true;
-            setLeakState(LeakState::Unknown);
+            markApc220LivenessLost();
         }
         monitor_.ackStatus = QStringLiteral("ACK rejected seq=%1 result=%2 (%3)")
                                  .arg(requestSequence)
@@ -873,6 +891,7 @@ void RobotController::checkTimeouts()
 {
     const qint64 now = nowMs();
     refreshLeakTelemetryStaleness(now);
+    imuMonitor_.tick(now);
     if (config_.linkProfile == LinkProfile::Apc220HalfDuplex) {
         refreshApc220HeartbeatDue();
         if (pending_.isEmpty()) {
@@ -1028,7 +1047,7 @@ void RobotController::resetSchedulerState()
     setEnabledMask(0);
     setDisablePendingMask(0);
     lastLeakTelemetryAtMs_ = -1;
-    setLeakState(LeakState::Unknown);
+    markApc220LivenessLost();
 }
 
 void RobotController::clearQueuedCommandsForDisable(quint16 affectedMask)
@@ -1072,7 +1091,7 @@ void RobotController::failClosedApc220Actuators()
     deferredRetry_.reset();
     setEnabledMask(0);
     setDisablePendingMask(0);
-    setLeakState(LeakState::Unknown);
+    markApc220LivenessLost();
     if (firstFailClosed) {
         emit logMessage(QStringLiteral(
             "APC220 liveness lost; logical Servo state and stale actuator commands were cleared"));
@@ -1124,6 +1143,12 @@ void RobotController::setLeakState(LeakState state)
     }
     leakState_ = state;
     emit leakStateChanged(leakState_);
+}
+
+void RobotController::markApc220LivenessLost()
+{
+    setLeakState(LeakState::Unknown);
+    imuMonitor_.handleLivenessLost();
 }
 
 void RobotController::noteWriteFailure(const QString &context)

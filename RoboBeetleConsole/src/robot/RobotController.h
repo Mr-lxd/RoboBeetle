@@ -2,6 +2,7 @@
 
 #include "protocol/StreamDecoder.h"
 #include "robot/LeakStatus.h"
+#include "robot/ImuMonitor.h"
 #include "robot/RobotCommand.h"
 #include "robot/ServoDescriptor.h"
 #include "transport/ITransport.h"
@@ -83,6 +84,9 @@ public:
     [[nodiscard]] bool isServoEnabled(ServoId id) const;
     [[nodiscard]] bool isServoDisablePending(ServoId id) const;
     [[nodiscard]] LeakState leakState() const { return leakState_; }
+    [[nodiscard]] const ImuMonitorState &imuState() const { return imuMonitor_.state(); }
+    [[nodiscard]] ImuMonitor *imuMonitor() { return &imuMonitor_; }
+    [[nodiscard]] const ImuMonitor *imuMonitor() const { return &imuMonitor_; }
     [[nodiscard]] RobotControllerConfig config() const { return config_; }
     [[nodiscard]] ProtocolMonitor monitor() const { return monitor_; }
     [[nodiscard]] qsizetype queuedCommandCount() const
@@ -130,6 +134,7 @@ private:
     void handlePacket(const Packet &packet);
     void handleAck(const Packet &packet);
     void handleLeakStatus(const Packet &packet);
+    void handleImuSnapshot(const Packet &packet);
     void checkTimeouts();
     void refreshLeakTelemetryStaleness(qint64 now);
     void updateMonitor();
@@ -139,6 +144,7 @@ private:
     void setEnabledMask(quint16 mask);
     void setDisablePendingMask(quint16 mask);
     void setLeakState(LeakState state);
+    void markApc220LivenessLost();
     void noteWriteFailure(const QString &context);
     bool rejectUnsupportedServo(ServoId id, const QString &command);
     static QByteArray maskPayload(quint16 mask);
@@ -166,6 +172,7 @@ private:
     ProtocolMonitor monitor_;
     LeakState leakState_{LeakState::Unknown};
     qint64 lastLeakTelemetryAtMs_{-1};
+    ImuMonitor imuMonitor_;
 };
 
 } // namespace rb
