@@ -1,5 +1,7 @@
 #include "jy901s_telemetry.h"
 
+#include "rb_protocol_v2.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -216,11 +218,47 @@ static void test_fixed_point_bounds_and_arguments(void)
            "short output capacity must fail safely");
 }
 
+static void test_protocol_v2_wire_round_trip(void)
+{
+    uint8_t payload[JY901S_IMU_TELEMETRY_PAYLOAD_LENGTH] = {0};
+    uint8_t wire[RBP2_MAX_WIRE_SIZE] = {0};
+    rbp2_frame_t frame = {0};
+    size_t wire_length;
+
+    for (uint8_t index = 0U;
+         index < JY901S_IMU_TELEMETRY_PAYLOAD_LENGTH;
+         ++index)
+    {
+        payload[index] = (uint8_t)(index + 1U);
+    }
+
+    wire_length = rbp2_encode_wire(
+        RBP2_MSG_IMU_SNAPSHOT,
+        0x1234U,
+        payload,
+        JY901S_IMU_TELEMETRY_PAYLOAD_LENGTH,
+        wire,
+        sizeof wire);
+
+    expect(wire_length == 68U,
+           "56-byte IMU payload should have the documented worst-case wire size");
+    expect(wire[wire_length - 1U] == 0U,
+           "Protocol V2 IMU wire frame must end with a delimiter");
+    expect(rbp2_decode_wire(wire, wire_length - 1U, &frame) == RBP2_OK,
+           "Protocol V2 IMU golden frame should decode");
+    expect(frame.type == RBP2_MSG_IMU_SNAPSHOT
+               && frame.sequence == 0x1234U
+               && frame.payload_length == JY901S_IMU_TELEMETRY_PAYLOAD_LENGTH
+               && memcmp(frame.payload, payload, sizeof payload) == 0,
+           "Protocol V2 IMU round-trip fields differ");
+}
+
 int main(void)
 {
     test_fixed_layout_and_diagnostics();
     test_invalid_domains_are_zeroed();
     test_fixed_point_bounds_and_arguments();
+    test_protocol_v2_wire_round_trip();
 
     if (failures == 0)
     {
