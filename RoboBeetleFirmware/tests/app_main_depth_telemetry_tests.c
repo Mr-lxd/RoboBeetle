@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define TEST_MAX_TX_FRAMES 8U
+#define TEST_MAX_TX_FRAMES 24U
 
 static int failures = 0;
 static uint32_t test_tick = 0U;
@@ -216,6 +216,28 @@ static void expect_tx_type(
     }
 }
 
+static bool find_last_tx_type(
+    uint8_t type,
+    rbp2_frame_t *frame)
+{
+    for (size_t index = tx_frame_count; index > 0U; --index)
+    {
+        rbp2_frame_t candidate;
+
+        if (decode_tx_frame(index - 1U, &candidate) &&
+            (candidate.type == type))
+        {
+            if (frame != NULL)
+            {
+                *frame = candidate;
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
 int main(void)
 {
     UART_HandleTypeDef uart1 = {0};
@@ -295,6 +317,56 @@ int main(void)
                "DepthSnapshot re-arm diagnostics differ");
         expect(diagnostics.uart_error_count == 0U,
                "DepthSnapshot UART diagnostics differ");
+    }
+
+    test_tick = 4000U;
+    send_heartbeat(&uart1, 4U);
+    send_heartbeat(&uart1, 5U);
+    send_heartbeat(&uart1, 6U);
+
+    expect(find_last_tx_type(RBP2_MSG_DEPTH_SNAPSHOT, &depth_frame),
+           "sensor-stop regression did not emit a DepthSnapshot heartbeat");
+    if (find_last_tx_type(RBP2_MSG_DEPTH_SNAPSHOT, &depth_frame))
+    {
+        expect(depth_telemetry_decode(
+                   depth_frame.payload,
+                   depth_frame.payload_length,
+                   &source,
+                   &diagnostics),
+               "stale DepthSnapshot payload did not decode");
+        expect(!source.depth_valid && !source.temperature_valid,
+               "stopped sensor must not keep old depth values valid");
+        expect(source.depth_mm == 0 && source.temperature_centi_c == 0,
+               "stopped sensor must scrub old depth values");
+        expect(diagnostics.valid_line_count == 1U,
+               "stale DepthSnapshot must retain parser diagnostics");
+    }
+
+    test_tick = 5000U;
+    inject_depth_line(
+        &uart6,
+        "Depth:5.67m Temp:19.25C\r\n");
+    app_main_process();
+    send_heartbeat(&uart1, 7U);
+    send_heartbeat(&uart1, 8U);
+    send_heartbeat(&uart1, 9U);
+
+    expect(find_last_tx_type(RBP2_MSG_DEPTH_SNAPSHOT, &depth_frame),
+           "fresh sensor recovery did not emit a DepthSnapshot");
+    if (find_last_tx_type(RBP2_MSG_DEPTH_SNAPSHOT, &depth_frame))
+    {
+        expect(depth_telemetry_decode(
+                   depth_frame.payload,
+                   depth_frame.payload_length,
+                   &source,
+                   &diagnostics),
+               "recovered DepthSnapshot payload did not decode");
+        expect(source.depth_valid && source.temperature_valid,
+               "fresh sensor line must restore valid depth values");
+        expect(source.depth_mm == 5670,
+               "fresh sensor recovery depth differs");
+        expect(source.temperature_centi_c == 1925,
+               "fresh sensor recovery temperature differs");
     }
 
     if (failures == 0)

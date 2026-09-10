@@ -447,7 +447,21 @@ void MainWindow::setDepthUiState(const DepthMonitorState &state)
         depthValue_->setText(QStringLiteral("--"));
         depthTemperature_->setText(QStringLiteral("--"));
         depthAge_->setText(QStringLiteral("--"));
-        depthDiagnostics_->setText(QStringLiteral("--"));
+        if (!state.snapshot.has_value()) {
+            depthDiagnostics_->setText(QStringLiteral("--"));
+        } else {
+            const DepthDiagnostics &diagnostics = state.snapshot->diagnostics;
+            depthDiagnostics_->setText(
+                QStringLiteral("RX %1 | valid lines %2 | parse errors %3 | overlong %4 | "
+                               "overflow %5 | hard re-arm %6 | UART errors %7")
+                    .arg(diagnostics.rxByteCount)
+                    .arg(diagnostics.validLineCount)
+                    .arg(diagnostics.parseErrorCount)
+                    .arg(diagnostics.overlongLineCount)
+                    .arg(diagnostics.ringOverflowCount)
+                    .arg(diagnostics.hardRearmFailureCount)
+                    .arg(diagnostics.uartErrorCount));
+        }
         return;
     }
 

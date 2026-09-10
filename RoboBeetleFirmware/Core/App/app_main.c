@@ -375,10 +375,17 @@ static bool protocol_send_depth_snapshot(void)
     depth_parser_get_stats(&depth_parser, &parser_stats);
     depth_transport_stm32_get_diagnostics(&transport_stats);
 
-    source.depth_valid = state.depth_valid;
-    source.temperature_valid = state.temperature_valid;
-    source.depth_mm = state.depth_mm;
-    source.temperature_centi_c = state.temperature_centi_c;
+    const bool sample_is_current =
+        depth_telemetry_sensor_sample_is_current(
+            state.depth_valid,
+            state.last_valid_sample_ms,
+            now_ms);
+
+    source.depth_valid = state.depth_valid && sample_is_current;
+    source.temperature_valid = state.temperature_valid && sample_is_current;
+    source.depth_mm = source.depth_valid ? state.depth_mm : 0;
+    source.temperature_centi_c =
+        source.temperature_valid ? state.temperature_centi_c : 0;
     source.sample_age_ms = state.depth_valid
         ? (uint32_t)(now_ms - state.last_valid_sample_ms)
         : 0U;

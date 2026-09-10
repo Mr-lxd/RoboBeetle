@@ -232,6 +232,27 @@ void testMonitorLifecycleUsesLocalArrivalFreshness()
            "disconnect must clear depth values and return Unknown");
 }
 
+void testSensorStaleSnapshotIsNotPresentedAsReceiving()
+{
+    rb::DepthMonitor monitor;
+    rb::DepthSnapshot stale;
+    stale.validityFlags = 0;
+    stale.depthMm = 0;
+    stale.temperatureCentiC = 0;
+    stale.sampleAgeMs = rb::DepthSnapshot::UnknownSampleAgeMs;
+    stale.diagnostics.validLineCount = 7;
+
+    const QByteArray payload = rb::DepthSnapshot::encodePayload(stale);
+    monitor.handlePacket({depthMessageType(), 7, payload}, 7000);
+
+    expect(monitor.state().status == rb::DepthStatus::Stale,
+           "sensor-invalid DepthSnapshot must enter Stale instead of Receiving");
+    expect(monitor.state().snapshot.has_value()
+               && !monitor.state().snapshot->depthValid()
+               && monitor.state().snapshot->diagnostics.validLineCount == 7,
+           "sensor-stale snapshot must retain invalid fields and diagnostics");
+}
+
 void testStatusText()
 {
     expect(rb::depthStatusText(rb::DepthStatus::Unknown) == QStringLiteral("Unknown"),
@@ -253,6 +274,7 @@ int main(int argc, char **argv)
     testPayloadRoundTripAndGoldenBytes();
     testPayloadValidationAndInvalidFieldZeroRules();
     testMonitorLifecycleUsesLocalArrivalFreshness();
+    testSensorStaleSnapshotIsNotPresentedAsReceiving();
     testStatusText();
 
     if (failures == 0) {

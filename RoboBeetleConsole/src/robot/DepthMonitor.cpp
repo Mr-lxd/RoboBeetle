@@ -22,10 +22,17 @@ void DepthMonitor::handlePacket(const Packet &packet, qint64 receivedAtMs)
         return;
     }
 
-    state_.status = DepthStatus::Receiving;
+    const bool sensorSampleIsCurrent =
+        decoded->depthValid()
+        && decoded->sampleAgeMs != DepthSnapshot::UnknownSampleAgeMs;
+    state_.status = sensorSampleIsCurrent
+        ? DepthStatus::Receiving
+        : DepthStatus::Stale;
     state_.snapshot = decoded;
     state_.lastReceivedAtMs = receivedAtMs;
-    state_.error.clear();
+    state_.error = sensorSampleIsCurrent
+        ? QString{}
+        : QStringLiteral("Depth sensor sample is stale or unavailable");
     emit changed();
 }
 
