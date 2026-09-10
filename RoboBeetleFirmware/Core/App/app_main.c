@@ -48,6 +48,7 @@ static leak_sensor_t leak_sensor;
 static leak_sensor_stm32_t leak_sensor_reader;
 static leak_telemetry_policy_t leak_telemetry_policy;
 static imu_telemetry_policy_t imu_telemetry_policy;
+static telemetry_scheduler_t telemetry_scheduler;
 static jy901s_parser_t jy901s_parser;
 static volatile uint32_t jy901s_last_valid_frame_ms;
 
@@ -133,6 +134,7 @@ static void protocol_feed_byte(
                             JY901S_IMU_TELEMETRY_INTERVAL_MS);
 
                     switch (telemetry_scheduler_select(
+                                &telemetry_scheduler,
                                 leak_due,
                                 imu_due))
                     {
@@ -143,6 +145,9 @@ static void protocol_feed_byte(
                                     &leak_telemetry_policy,
                                     state,
                                     now_ms);
+                                telemetry_scheduler_mark_success(
+                                    &telemetry_scheduler,
+                                    TELEMETRY_SLOT_LEAK_STATUS);
                             }
                             break;
 
@@ -152,6 +157,9 @@ static void protocol_feed_byte(
                                 imu_telemetry_policy_mark_published(
                                     &imu_telemetry_policy,
                                     now_ms);
+                                telemetry_scheduler_mark_success(
+                                    &telemetry_scheduler,
+                                    TELEMETRY_SLOT_IMU_SNAPSHOT);
                             }
                             break;
 
@@ -354,6 +362,7 @@ void app_main_init(
     uart_transport_stm32_init(uart);
     jy901s_parser_init(&jy901s_parser);
     imu_telemetry_policy_init(&imu_telemetry_policy);
+    telemetry_scheduler_init(&telemetry_scheduler);
     jy901s_last_valid_frame_ms = 0U;
     jy901s_transport_stm32_init(jy901s_uart);
 }

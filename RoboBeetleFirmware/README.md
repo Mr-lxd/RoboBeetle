@@ -177,12 +177,15 @@ as an ACK-requiring request.
 
 Firmware evaluates the one-second IMU publication policy only after a normal
 Heartbeat ACK has completed. At most one optional telemetry frame is selected
-per accepted Heartbeat opportunity; LeakStatus `0x20` has priority, so an IMU
-snapshot is selected only when LeakStatus is not due. The first due IMU frame
-is sent at the next eligible opportunity, and the policy is marked only after
-the transmit succeeds. At 9600 8-N-1, the maximum 68-byte IMU wire frame is
-within the documented low-rate budget; this is a software/budget result, not a
-physical APC220 throughput claim.
+per accepted Heartbeat opportunity. LeakStatus `0x20` wins the first shared due
+opportunity; after a successful LeakStatus publication, a still-due IMU snapshot
+`0x21` wins the next shared opportunity even if LeakStatus is due again. After
+successful IMU publication, LeakStatus regains priority on the next shared due
+opportunity. Failed optional transmits are not marked published, so the pending
+policy remains retryable and repeated LeakStatus due events cannot starve IMU.
+At 9600 8-N-1, the maximum 68-byte IMU wire frame is within the documented
+low-rate budget; this is a software/budget result, not a physical APC220
+throughput claim.
 
 PR #11 software evidence is recorded separately from PR #10's target evidence:
 
@@ -261,7 +264,7 @@ The current communication split is:
 - **[Implemented]** `Core/Servo/servo_driver_stm32.c/.h` owns the HAL/TIM3/TIM4 channel adapter. It maps abstract descriptor selectors to timer handles and HAL channels and has no Protocol or heartbeat knowledge.
 - **[Implemented]** `Core/Sensors/leak_sensor.c/.h` owns the HAL-independent UNKNOWN/DRY/WET mapping; `leak_sensor_stm32.c/.h` only reads the configured PA11 GPIO.
 - **[Implemented]** `Core/Sensors/leak_telemetry_policy.c/.h` limits LeakStatus publication to first sample/state changes/500 ms refreshes. `Core/App/app_main.c` sends one-byte `0x20` telemetry only after a successful Heartbeat ACK; it does not connect leak state to Safety or Servo behavior.
-- **[Implemented / Software Verified]** `Core/Sensors/jy901s_telemetry.c/.h` encodes the fixed 56-byte `ImuSnapshot` payload with explicit little-endian fixed-point fields and bring-up diagnostics. `Core/Communication/imu_telemetry_policy.c/.h` and `telemetry_scheduler.c/.h` keep IMU publication at one second, after completed Heartbeat ACK, with LeakStatus priority and at most one optional frame per opportunity. The IMU path does not enter command/ACK matching or alter USART1 behavior.
+- **[Implemented / Software Verified]** `Core/Sensors/jy901s_telemetry.c/.h` encodes the fixed 56-byte `ImuSnapshot` payload with explicit little-endian fixed-point fields and bring-up diagnostics. `Core/Communication/imu_telemetry_policy.c/.h` and `telemetry_scheduler.c/.h` keep IMU publication at one second, after completed Heartbeat ACK, with first-opportunity LeakStatus priority, bounded fairness for a still-due IMU, and at most one optional frame per opportunity. The IMU path does not enter command/ACK matching or alter USART1 behavior.
 - **[Hardware Verified]** `Core/Safety/safety_supervisor.c/.h` owns host liveness, the last valid Heartbeat timestamp, strict timeout evaluation, and one-shot timeout transition reporting. It has no HAL, Protocol, UART, or Servo dependency.
 - **[Hardware Verified]** `Core/Communication/protocol_dispatcher.c/.h` owns decoded command payload validation, HostAlive gating, Servo service invocation/result mapping, Heartbeat semantics, and the one-entry successful-command cache. It has no HAL, UART, TIM3, or Console dependency.
 - **[Hardware Verified]** `main.c` keeps the CubeMX entry/configuration, `app_main_init`/`app_main_process` calls, and a small UART callback transport delegate. Protocol, Safety, Servo, ACK, diagnostics, and RX-drain orchestration live in `Core/App/app_main.c`.

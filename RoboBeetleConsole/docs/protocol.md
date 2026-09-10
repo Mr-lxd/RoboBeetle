@@ -169,11 +169,12 @@ claim.
 
 Firmware evaluates the one-second IMU policy only after an accepted Heartbeat
 has completed its normal ACK transmission. It selects at most one optional
-frame per opportunity: LeakStatus `0x20` first, then ImuSnapshot `0x21`, then
-none. LeakStatus and IMU policies are marked published only after their own
-transmit succeeds. There is no independent IMU transmit timer, so a due IMU
-frame waits for the next eligible Heartbeat opportunity after a priority
-LeakStatus frame.
+frame per opportunity. LeakStatus `0x20` wins the first shared due opportunity;
+after a successful LeakStatus publication, a still-due ImuSnapshot `0x21` wins
+the next shared opportunity even if LeakStatus is due again. After successful
+IMU publication, LeakStatus regains priority on the next shared due
+opportunity. A failed optional transmit is not marked published, so the
+pending policy remains retryable. There is no independent IMU transmit timer.
 
 ### Set Servo PWM — `0x12`
 

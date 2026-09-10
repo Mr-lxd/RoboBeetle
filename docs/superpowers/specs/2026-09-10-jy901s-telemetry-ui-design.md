@@ -66,13 +66,18 @@ overhead. This is a budget estimate, not a hardware throughput claim.
 
 Firmware evaluates the existing LeakStatus policy and the new one-second IMU
 policy only after an accepted Heartbeat has had its normal ACK transmit return
-successfully. A pure-C selector returns exactly one slot:
+successfully. A pure-C selector returns exactly one slot. LeakStatus wins the
+first shared opportunity when both policies are due. After a successful
+LeakStatus publication, a still-due ImuSnapshot gets the next shared
+opportunity—even if LeakStatus is due again—so a slow Heartbeat cadence cannot
+starve IMU forever. After a successful ImuSnapshot publication, LeakStatus
+regains priority on the next shared due opportunity. If a selected transmit
+fails, its policy is not marked and the scheduler keeps the previous successful
+slot, allowing the pending telemetry to be retried without claiming it was
+published.
 
-1. LeakStatus when its first/change/refresh policy is due;
-2. ImuSnapshot when LeakStatus is not due and the one-second IMU interval is due;
-3. no optional frame otherwise.
-
-Thus a Heartbeat can cause zero or one non-ACK telemetry frame, never both.
+Thus a Heartbeat can cause zero or one non-ACK telemetry frame, never both, and
+repeated LeakStatus due events cannot permanently starve a due IMU snapshot.
 The leak policy is marked published only after successful LeakStatus transmit;
 the IMU policy is marked only after successful snapshot transmit. The first
 valid Heartbeat can publish the first due frame. A later Heartbeat opportunity

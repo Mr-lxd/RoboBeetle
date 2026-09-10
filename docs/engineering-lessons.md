@@ -167,9 +167,13 @@ The Qt descriptor keeps `FrontAxis` as the internal compatibility identifier, bu
 
 The PR #11 ImuSnapshot uses one fixed 56-byte payload and a separate telemetry
 sequence, but it is published only after an accepted Heartbeat ACK completes.
-The selector allows at most one optional non-ACK frame per opportunity and gives
-LeakStatus priority. This keeps low-rate monitoring from competing with the
-APC220 stop-and-wait command/ACK slot or creating an independent burst source.
+The selector allows at most one optional non-ACK frame per opportunity. LeakStatus
+wins the first shared due opportunity, then a still-due IMU gets the next shared
+opportunity after a successful LeakStatus publication; LeakStatus regains
+priority after successful IMU publication. Failed optional transmits are not
+marked published, so repeated LeakStatus due events cannot starve a pending IMU.
+This keeps low-rate monitoring from competing with the APC220 stop-and-wait
+command/ACK slot or creating an independent burst source.
 The 68-byte maximum IMU wire frame and the combined nominal budget are recorded
 as estimates; they are not physical RF throughput evidence.
 

@@ -41,28 +41,63 @@ static void test_interval_and_wraparound(void)
 
 static void test_one_optional_slot_and_leak_priority(void)
 {
-    expect(telemetry_scheduler_select(false, false) ==
+    telemetry_scheduler_t scheduler;
+
+    telemetry_scheduler_init(&scheduler);
+    expect(telemetry_scheduler_select(&scheduler, false, false) ==
                TELEMETRY_SLOT_NONE,
            "no due telemetry should select no slot");
-    expect(telemetry_scheduler_select(true, false) ==
+    expect(telemetry_scheduler_select(&scheduler, true, false) ==
                TELEMETRY_SLOT_LEAK_STATUS,
            "due LeakStatus should select LeakStatus");
-    expect(telemetry_scheduler_select(false, true) ==
+    expect(telemetry_scheduler_select(&scheduler, false, true) ==
                TELEMETRY_SLOT_IMU_SNAPSHOT,
            "due IMU should select the IMU slot");
-    expect(telemetry_scheduler_select(true, true) ==
+    expect(telemetry_scheduler_select(&scheduler, true, true) ==
                TELEMETRY_SLOT_LEAK_STATUS,
            "LeakStatus must win when both telemetry types are due");
 }
 
 static void test_due_imu_survives_leak_opportunity(void)
 {
-    expect(telemetry_scheduler_select(true, true) ==
+    telemetry_scheduler_t scheduler;
+
+    telemetry_scheduler_init(&scheduler);
+    expect(telemetry_scheduler_select(&scheduler, true, true) ==
                TELEMETRY_SLOT_LEAK_STATUS,
            "the first shared opportunity must send LeakStatus");
-    expect(telemetry_scheduler_select(false, true) ==
+    telemetry_scheduler_mark_success(
+        &scheduler,
+        TELEMETRY_SLOT_LEAK_STATUS);
+    expect(telemetry_scheduler_select(&scheduler, false, true) ==
                TELEMETRY_SLOT_IMU_SNAPSHOT,
            "a still-due IMU must use the next available opportunity");
+}
+
+static void test_repeated_leak_due_does_not_starve_imu(void)
+{
+    telemetry_scheduler_t scheduler;
+
+    telemetry_scheduler_init(&scheduler);
+    expect(telemetry_scheduler_select(&scheduler, true, true) ==
+               TELEMETRY_SLOT_LEAK_STATUS,
+           "the first shared opportunity must retain LeakStatus priority");
+    telemetry_scheduler_mark_success(
+        &scheduler,
+        TELEMETRY_SLOT_LEAK_STATUS);
+
+    expect(telemetry_scheduler_select(&scheduler, true, true) ==
+               TELEMETRY_SLOT_IMU_SNAPSHOT,
+           "a still-due IMU must win the next repeated shared opportunity");
+    expect(telemetry_scheduler_select(&scheduler, true, true) ==
+               TELEMETRY_SLOT_IMU_SNAPSHOT,
+           "a failed IMU send must keep the IMU slot pending");
+    telemetry_scheduler_mark_success(
+        &scheduler,
+        TELEMETRY_SLOT_IMU_SNAPSHOT);
+    expect(telemetry_scheduler_select(&scheduler, true, true) ==
+               TELEMETRY_SLOT_LEAK_STATUS,
+           "LeakStatus should regain priority after IMU publication");
 }
 
 int main(void)
@@ -70,6 +105,7 @@ int main(void)
     test_interval_and_wraparound();
     test_one_optional_slot_and_leak_priority();
     test_due_imu_survives_leak_opportunity();
+    test_repeated_leak_due_does_not_starve_imu();
 
     if (failures == 0)
     {
