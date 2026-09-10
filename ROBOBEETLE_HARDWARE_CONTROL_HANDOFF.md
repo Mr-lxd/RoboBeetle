@@ -46,7 +46,7 @@ leak module D0
 3. 通过真实 Protocol V2 链路观察 Qt indicator 状态变化，确认 LeakStatus 不产生 ACK、不触发 Servo 或 Safety 动作。
 4. 本次验收未记录数值电压或响应时间；这些数值不应从本次 PASS 结论中推导。
 
-传感器 bring-up 顺序固定为：`Leak detection (including LeakStatus telemetry) → JY901S IMU → depth/sensor board`。LeakStatus 端到端证据现已补齐；JY901S 与 Depth 尚未开始。
+传感器 bring-up 顺序固定为：`Leak detection (including LeakStatus telemetry) → JY901S IMU → depth/sensor board`。在 PR #9 LeakStatus closeout 的历史记录中，JY901S 与 Depth 尚未开始；当前 JY901S phase 见下节，Depth 仍未开始。
 
 ## 2026-09-10 JY901S listen-only bring-up（Review / Hardware Verification Ready）
 
