@@ -1,12 +1,20 @@
-# APC220 Bring-up Engineering Lessons
+# RoboBeetle Engineering Lessons
 
-This note records the evidence and boundaries behind the Console PR #7 scheduler adaptation. The scheduler is **[Hardware Verified - Bench]** on the tested desktop setup, but this is not a claim that the wireless path is fully characterized in every installation.
+This note records the evidence and boundaries behind the Console PR #7 scheduler adaptation and the PR #8 five-servo semantic bring-up. The scheduler is **[Hardware Verified - Bench]** on the tested desktop setup, while the PR #8 five-servo layout remains pending target hardware regression.
 
 ## Keep programming and runtime links separate
 
-The DAP/ST-LINK and OpenOCD path is the programming and debug boundary. It should be validated independently by detecting the target, halting/resetting it, and confirming that the intended image is loaded. The run-time Protocol V2 stream is a separate boundary: a successful OpenOCD session does not prove that the USB serial adapter, APC220 pair, UART pins, or application dispatcher are exchanging bytes.
+The DAP/ST-LINK and OpenOCD path is the programming and debug boundary. It should be validated independently by detecting the target, halting/resetting it, and confirming that the intended image is loaded. The run-time Protocol V2 stream is a separate boundary: a successful OpenOCD session does not prove that the USB serial adapter, APC220 pair, UART pins, or application dispatcher are exchanging bytes. The stable bring-up sequence recorded for this project is `SWD clock 100 kHz → SYSRESETREQ → halt → program → verify`; if UART behaves abnormally after flashing, perform a complete power cycle before considering software changes.
 
 If OpenOCD reports a target-side Flash algorithm failure, treat that as a programming-path failure even when DAP target detection succeeds. Check target power, reset/boot state, flash protection, adapter speed, and the selected device algorithm; a slower programming fallback can be useful for recovery, but a slow fallback success still does not validate the run-time UART/APC220 path. Record the programming result and the run-time result as separate evidence.
+
+## Host verification cannot replace the ARM target build
+
+Host-side pure-C tests and syntax checks can pass while the STM32CubeIDE `arm-none-eabi-gcc` build fails. Transitive includes differ between toolchains and can hide a missing direct standard-header dependency; each translation unit must include the standard header that defines the symbols it uses. The STM32CubeIDE target build captured the missing `<stddef.h>` dependency for `NULL` in `servo_calibration.c`, which host checks had not exposed.
+
+## Do not use HAL enum values as invalid sentinels
+
+Third-party HAL enum/raw constant values are part of the valid domain and must not double as invalid markers. STM32 HAL defines `TIM_CHANNEL_1` as `0x00000000U`; channel validity is therefore represented independently by the STM32 driver mapping result (`channel_valid`), and every write/start/stop operation checks that explicit validity. The FrontRight and RearRight CH1 bindings must remain valid even though their HAL channel value is zero; an unmapped symbolic channel must fail closed.
 
 ## Treat APC220 power and logic levels as an explicit interface
 
@@ -50,3 +58,39 @@ Disable and Disable All are safety actions, not ordinary FIFO work. When a Disab
 ## Timing budget and safety boundary
 
 Budget the complete exchange, not just MCU handler time: host serialization, APC220 buffering, half-duplex direction/turnaround, air/link latency, STM32 receive/dispatch/ACK transmission, and host scheduling jitter all contribute. The APC220 profile's 250 ms ACK timeout is a Console link budget; it does not change the Firmware watchdog. The Firmware watchdog remains greater than 500 ms after the last valid heartbeat, and a disconnect/error/reconnect clears Console in-flight work, queued commands, heartbeat intent, and logical enable state. Reconnect requires a fresh heartbeat and an explicit Enable ACK.
+
+## Keep descriptor tables independent at a C/C++ boundary
+
+The five-servo bring-up keeps a pure-C Firmware `servo_descriptor` table and an independent Qt/C++ table. Both freeze `FrontRight=0`, `FrontLeft=1`, `FrontAxis=2`, `RearRight=3`, `RearLeft=4`, and supported mask `0x001F`, while separate tests compare the capability and calibration contract. This avoids coupling HAL headers to Qt and makes descriptor drift a visible test failure. HAL timer/channel constants belong only in `servo_driver_stm32`, which maps abstract selectors to `TIM_HandleTypeDef *` and HAL channels.
+
+## Multi-servo Enable must be transactional
+
+When a multi-bit Enable request is accepted, every newly requested channel must start or the operation must roll back. A requested channel that was already enabled is an idempotent no-op: rewriting its pulse to center would alter physical state even if the logical mask were restored later. If one fake/real driver start fails, only channels newly started by that call are stopped, the enabled mask returns to its pre-call value, and already-running channels receive no write/start/stop event. Partial arm is unsafe and must not be reported as success. Disable and Disable All intentionally remain fail-closed/best-effort stop operations.
+
+## Treat pending Disable as a motion-command barrier
+
+Once Disable is accepted and awaiting ACK, new PWM, Neutral, and Set Angle commands for the affected servo must be rejected at the Controller boundary—not merely disabled in the UI. This prevents DirectUart writes and APC220 queue entries from being created behind a safety command, so a later Disable Error or timeout cannot release stale post-disable motion.
+
+## Separate electrical capability from the command exploration window
+
+The HDKJ S3150D seller values `500/1500/2500 μs` describe electrical/absolute capability metadata. They do not by themselves establish a final mechanical-safe user command range. The PR #8 follow-up keeps Firmware and Qt descriptors aligned at a provisional `500–2500 μs` PWM-only endpoint-exploration window. This window is **[Pending Hardware Verification]**, not the final mechanically safe endpoint range. The current bench observation was approximately `1100–2500 μs` for approximately 180 degrees of mechanism travel; commands below approximately `1100 μs` tended to cause ACK timeouts, so further probing below approximately `1100 μs` is paused. Final mechanical safe min/max, practical center, and angle mapping remain deferred until the complete mechanical assembly is installed. `1500 μs` remains a provisional bring-up center candidate, not a true mechanical center or calibrated Neutral; `angle_supported=false` and Set Angle rejection remain unchanged. Only the supplied `1480/1500/1520 μs` direction observation is **[Hardware Verified]**. Full travel, safe endpoints, practical center, and angle mapping remain **[Pending Hardware Verification]** and must be checked with the assembled mechanism and explicit safety margin.
+
+## Treat FrontAxis center as a bring-up candidate, not calibration
+
+The HDKJ S3150D FrontAxis descriptor separates seller-provided electrical capability (500/1500/2500 μs, 4.8–7.4 V, 0–270° travel, 4 μs dead band) from the provisional 500–2500 μs bring-up command envelope. It remains SetAngle-disabled, and 1500 μs is only a provisional startup/center candidate. The supplied 1480/1500/1520 direction observation is Hardware Verified; the approximately 1100–2500 μs bench travel observation, expanded window, and endpoint calibration are not. Commands below approximately 1100 μs tended to cause ACK timeouts and should not be probed further for now. Final safe endpoints and practical center require the complete mechanical assembly and explicit margin. The seller page also conflicts with the product shell/photo on waterproofing, so waterproof capability remains **[Unverified]** and direct immersion is prohibited until reliable IP/sealing evidence is available.
+
+## Cross-swap actuator faults before changing firmware
+
+During single-channel bring-up, a known-good RearLeft actuator rotated on the RearRight A12/PWM channel, and a new same-type replacement actuator also rotated there, while the original RearRight actuator did not. This cross-swap pattern shows that the STM32 timer/GPIO/PWM path is **[Hardware Verified]** and the original actuator/lead is a hardware fault to replace; an isolated actuator failure must not trigger speculative UART, timer, GPIO, or Protocol changes.
+
+## Keep validation levels explicit
+
+Record each result as one of: `Host Test` (desktop unit/regression test), `ARM Build` (target compiler build), `Program Verify` (DAP/ST-LINK image verification), `Hardware Verified` (physical behavior explicitly observed), or `Pending` (not yet evidenced). The PR #8 Depth window expansion has a bench observation of approximately 1100–2500 μs travel and below-1100 μs ACK timeouts, but the command window, safe endpoints, practical center, and angle behavior remain Pending until the complete mechanical assembly is checked. Do not collapse these levels into a single “tested” label.
+
+## Record layout compatibility breaks explicitly
+
+Semantic renaming can also change the physical wiring contract. The historical v0.4 Servo1/PA6 bring-up object was RearLeft; the five-servo layout assigns PA6/ID0 to FrontRight and PD13/TIM4_CH2 to RearLeft. Old and new Console/Firmware binaries must not be mixed with the rewired harness. A compatibility alias can preserve source builds, but it must be deprecated and never used as the current UI or log identity.
+
+## Keep user-facing servo labels plain and semantic
+
+The Qt descriptor keeps `FrontAxis` as the internal compatibility identifier, but its user-facing label is `Depth`; the other panels display `FrontRight`, `FrontLeft`, `RearRight`, and `RearLeft`. Exact ASCII labels avoid mojibake in the servo panel and keep logs/docs aligned with the frozen semantic IDs. Do not “fix” a display issue by renaming the internal identifier or by reintroducing a historical `Servo2` alias.

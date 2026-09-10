@@ -29,9 +29,12 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     auto *root = new QVBoxLayout(central);
     root->addWidget(createConnectionPanel());
 
-    auto *servos = new QHBoxLayout;
-    servos->addWidget(createServoPanel(0, ServoId::Servo1));
-    servos->addWidget(createServoPanel(1, ServoId::Servo2));
+    auto *servos = new QGridLayout;
+    const auto &descriptors = servoDescriptorTable();
+    for (int index = 0; index < kServoCount; ++index) {
+        servos->addWidget(createServoPanel(index, descriptors.at(index).id),
+                          index / 2, index % 2);
+    }
     root->addLayout(servos);
     root->addWidget(createGlobalPanel());
     root->addWidget(createMonitorPanel(), 1);
@@ -51,20 +54,18 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
         setConnectedUi(state == TransportState::Connected);
     });
     connect(controller_, &RobotController::servoStateChanged, this, [this](int index, bool enabled) {
-        if (index < 0 || index >= 2) {
+        if (index < 0 || index >= kServoCount) {
             return;
         }
-        enableButtons_[index]->setText(enabled ? QStringLiteral("Disable") : QStringLiteral("Enable"));
-        neutralButtons_[index]->setEnabled(enabled);
-        applyButtons_[index]->setEnabled(enabled);
-        setAngleUiEnabled(index, enabled);
+        Q_UNUSED(enabled);
+        refreshServoUi(index);
     });
     connect(controller_, &RobotController::servoDisablePendingChanged,
             this, [this](int index, bool) {
-        if (index < 0 || index >= 2) {
+        if (index < 0 || index >= kServoCount) {
             return;
         }
-        setAngleUiEnabled(index, controller_->isServoEnabled(static_cast<ServoId>(index)));
+        refreshServoUi(index);
     });
     connect(controller_, &RobotController::txHexChanged, txHex_, &QLineEdit::setText);
     connect(controller_, &RobotController::rxHexChanged, rxHex_, &QLineEdit::setText);
@@ -119,61 +120,88 @@ QWidget *MainWindow::createConnectionPanel()
 
 QWidget *MainWindow::createServoPanel(int index, ServoId id)
 {
-    const bool supported = controller_->isServoSupported(id);
-    auto *box = new QGroupBox(
-        supported
-            ? QStringLiteral("Servo %1").arg(index + 1)
-            : QStringLiteral("Servo %1 — Unsupported / Planned").arg(index + 1),
-        this);
+    const ServoDescriptor *descriptor = servoDescriptor(id);
+    Q_ASSERT(descriptor != nullptr);
+    const bool supported = descriptor != nullptr && controller_->isServoSupported(id);
+    const QString semanticName = descriptor == nullptr
+        ? QStringLiteral("Unknown")
+        : QString::fromLatin1(descriptor->displayName);
+    auto *box = new QGroupBox(semanticName, this);
     auto *layout = new QGridLayout(box);
-    const RobotControllerConfig config = controller_->config();
-    auto *warning = new QLabel(
-        supported
-            ? QStringLiteral("BRING-UP PROVISIONAL: %1–%2 μs")
-                  .arg(config.provisionalPwmMinUs)
-                  .arg(config.provisionalPwmMaxUs)
-            : QStringLiteral("UNSUPPORTED IN PHASE 1 — NO HARDWARE CHANNEL"),
-        box);
+    const QString warningText = descriptor == nullptr || !supported
+        ? QStringLiteral("UNSUPPORTED — NO HARDWARE CHANNEL")
+        : descriptor->calibrationPending
+            ? QStringLiteral("CALIBRATION PENDING — PWM bring-up only: %1–%2 μs")
+                  .arg(descriptor->commandMinPwmUs)
+                  .arg(descriptor->commandMaxPwmUs)
+            : QStringLiteral("PWM command range: %1–%2 μs; angle: %3–%4°")
+                  .arg(descriptor->commandMinPwmUs)
+                  .arg(descriptor->commandMaxPwmUs)
+                  .arg(static_cast<double>(descriptor->commandMinAngleCdeg) / 100.0, 0, 'f', 1)
+                  .arg(static_cast<double>(descriptor->commandMaxAngleCdeg) / 100.0, 0, 'f', 1);
+    auto *warning = new QLabel(warningText, box);
     warning->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
 
     pwmSpins_[index] = new QSpinBox(box);
-    pwmSpins_[index]->setRange(config.provisionalPwmMinUs, config.provisionalPwmMaxUs);
-    pwmSpins_[index]->setValue(config.provisionalNeutralUs);
+    pwmSpins_[index]->setRange(descriptor == nullptr ? 0 : descriptor->commandMinPwmUs,
+                               descriptor == nullptr ? 0 : descriptor->commandMaxPwmUs);
+    pwmSpins_[index]->setValue(descriptor == nullptr ? 0 : descriptor->neutralPwmUs);
     pwmSpins_[index]->setSuffix(QStringLiteral(" μs"));
     pwmSliders_[index] = new QSlider(Qt::Horizontal, box);
-    pwmSliders_[index]->setRange(config.provisionalPwmMinUs, config.provisionalPwmMaxUs);
-    pwmSliders_[index]->setValue(config.provisionalNeutralUs);
+    pwmSliders_[index]->setRange(descriptor == nullptr ? 0 : descriptor->commandMinPwmUs,
+                                 descriptor == nullptr ? 0 : descriptor->commandMaxPwmUs);
+    pwmSliders_[index]->setValue(descriptor == nullptr ? 0 : descriptor->neutralPwmUs);
     pwmSpins_[index]->setEnabled(supported);
     pwmSliders_[index]->setEnabled(supported);
     enableButtons_[index] = new QPushButton(QStringLiteral("Enable"), box);
-    neutralButtons_[index] = new QPushButton(QStringLiteral("Neutral"), box);
+    neutralButtons_[index] = new QPushButton(
+        descriptor != nullptr && descriptor->calibrationPending
+            ? QStringLiteral("Center %1 us — Provisional").arg(descriptor->neutralPwmUs)
+            : QStringLiteral("Neutral"),
+        box);
+    if (descriptor != nullptr && descriptor->calibrationPending) {
+        neutralButtons_[index]->setToolTip(QStringLiteral(
+            "Provisional center candidate only; not a calibrated Neutral. "
+            "This action reuses the Protocol V2 Neutral command."));
+    }
     applyButtons_[index] = new QPushButton(QStringLiteral("Apply PWM"), box);
     angleSpins_[index] = new QDoubleSpinBox(box);
-    angleSpins_[index]->setRange(static_cast<double>(config.provisionalAngleMinCdeg) / 100.0,
-                                 static_cast<double>(config.provisionalAngleMaxCdeg) / 100.0);
+    angleSpins_[index]->setRange(descriptor == nullptr ? 0.0
+                                                      : static_cast<double>(descriptor->commandMinAngleCdeg) / 100.0,
+                                 descriptor == nullptr ? 0.0
+                                                      : static_cast<double>(descriptor->commandMaxAngleCdeg) / 100.0);
     angleSpins_[index]->setDecimals(1);
     angleSpins_[index]->setSingleStep(0.1);
     angleSpins_[index]->setValue(0.0);
     angleSpins_[index]->setSuffix(QStringLiteral(" deg"));
     angleSpins_[index]->setEnabled(false);
+    const bool angleSupported = supported && descriptor != nullptr && descriptor->angleSupported;
     angleButtons_[index] = new QPushButton(
-        supported ? QStringLiteral("Set Angle") : QStringLiteral("Set Angle — Unsupported / Planned"), box);
+        angleSupported
+            ? QStringLiteral("Set Angle")
+            : QStringLiteral("Set Angle — PWM Only / Planned"),
+        box);
     angleButtons_[index]->setEnabled(false);
     angleButtons_[index]->setToolTip(
-        supported
-            ? QStringLiteral("Send Servo1 angle as Protocol V2 centidegrees after Enable ACK")
-            : QStringLiteral("Servo2 is unsupported in Phase 1 and cannot receive angle commands"));
+        angleSupported
+            ? QStringLiteral("Send %1 as Protocol V2 centidegrees after Enable ACK")
+                  .arg(semanticName)
+            : QStringLiteral("%1 has no angle capability; use PWM only while calibration is pending")
+                  .arg(semanticName));
+    statusLabels_[index] = new QLabel(QStringLiteral("Disconnected"), box);
 
     layout->addWidget(warning, 0, 0, 1, 3);
-    layout->addWidget(new QLabel(QStringLiteral("PWM"), box), 1, 0);
-    layout->addWidget(pwmSpins_[index], 1, 1);
-    layout->addWidget(pwmSliders_[index], 2, 0, 1, 3);
-    layout->addWidget(enableButtons_[index], 3, 0);
-    layout->addWidget(neutralButtons_[index], 3, 1);
-    layout->addWidget(applyButtons_[index], 3, 2);
-    layout->addWidget(new QLabel(QStringLiteral("Angle"), box), 4, 0);
-    layout->addWidget(angleSpins_[index], 4, 1);
-    layout->addWidget(angleButtons_[index], 4, 2);
+    layout->addWidget(new QLabel(QStringLiteral("Status"), box), 1, 0);
+    layout->addWidget(statusLabels_[index], 1, 1, 1, 2);
+    layout->addWidget(new QLabel(QStringLiteral("PWM"), box), 2, 0);
+    layout->addWidget(pwmSpins_[index], 2, 1);
+    layout->addWidget(pwmSliders_[index], 3, 0, 1, 3);
+    layout->addWidget(enableButtons_[index], 4, 0);
+    layout->addWidget(neutralButtons_[index], 4, 1);
+    layout->addWidget(applyButtons_[index], 4, 2);
+    layout->addWidget(new QLabel(QStringLiteral("Angle"), box), 5, 0);
+    layout->addWidget(angleSpins_[index], 5, 1);
+    layout->addWidget(angleButtons_[index], 5, 2);
 
     connect(pwmSpins_[index], qOverload<int>(&QSpinBox::valueChanged),
             pwmSliders_[index], &QSlider::setValue);
@@ -182,7 +210,6 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     connect(enableButtons_[index], &QPushButton::clicked, this, [this, id, index] {
         if (controller_->isServoEnabled(id)) {
             controller_->disableServo(id);
-            setAngleUiEnabled(index, controller_->isServoEnabled(id));
         } else {
             controller_->enableServo(id);
         }
@@ -196,12 +223,15 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     connect(angleButtons_[index], &QPushButton::clicked, this, [this, id, index] {
         if (!controller_->isConnected() || !controller_->isServoSupported(id)
             || !controller_->isServoEnabled(id)
-            || controller_->isServoDisablePending(id)) {
-            setAngleUiEnabled(index, controller_->isServoEnabled(id));
+            || controller_->isServoDisablePending(id)
+            || servoDescriptor(id) == nullptr
+            || !servoDescriptor(id)->angleSupported) {
+            refreshServoUi(index);
             return;
         }
         controller_->setServoAngle(id, angleDegreesToCentidegrees(angleSpins_[index]->value()));
     });
+    refreshServoUi(index);
     return box;
 }
 
@@ -218,8 +248,8 @@ QWidget *MainWindow::createGlobalPanel()
     layout->addStretch();
     connect(disableAll, &QPushButton::clicked, this, [this] {
         controller_->disableAll();
-        for (int index = 0; index < 2; ++index) {
-            setAngleUiEnabled(index, controller_->isServoEnabled(static_cast<ServoId>(index)));
+        for (int index = 0; index < kServoCount; ++index) {
+            refreshServoUi(index);
         }
     });
     return box;
@@ -273,23 +303,58 @@ void MainWindow::setConnectedUi(bool connected)
     connectButton_->setText(connected ? QStringLiteral("Disconnect") : QStringLiteral("Connect"));
     portCombo_->setEnabled(!connected);
     baudSpin_->setEnabled(!connected);
-    for (int index = 0; index < 2; ++index) {
-        const ServoId id = static_cast<ServoId>(index);
-        enableButtons_[index]->setEnabled(connected && controller_->isServoSupported(id));
-        applyButtons_[index]->setEnabled(connected && controller_->isServoEnabled(static_cast<ServoId>(index)));
-        neutralButtons_[index]->setEnabled(connected && controller_->isServoEnabled(static_cast<ServoId>(index)));
-        setAngleUiEnabled(index, connected);
+    for (int index = 0; index < kServoCount; ++index) {
+        refreshServoUi(index);
     }
+}
+
+void MainWindow::refreshServoUi(int index)
+{
+    if (index < 0 || index >= kServoCount) {
+        return;
+    }
+    const ServoDescriptor *descriptor = servoDescriptor(static_cast<quint8>(index));
+    if (descriptor == nullptr) {
+        return;
+    }
+    const ServoId id = descriptor->id;
+    const bool connected = controller_->isConnected();
+    const bool supported = controller_->isServoSupported(id);
+    const bool enabled = controller_->isServoEnabled(id);
+    const bool pendingDisable = controller_->isServoDisablePending(id);
+    enableButtons_[index]->setText(enabled ? QStringLiteral("Disable") : QStringLiteral("Enable"));
+    enableButtons_[index]->setEnabled(connected && supported);
+    neutralButtons_[index]->setEnabled(connected && supported && enabled && !pendingDisable);
+    applyButtons_[index]->setEnabled(connected && supported && enabled && !pendingDisable);
+    if (!connected) {
+        statusLabels_[index]->setText(QStringLiteral("Disconnected"));
+    } else if (!supported) {
+        statusLabels_[index]->setText(QStringLiteral("Unsupported"));
+    } else if (pendingDisable) {
+        statusLabels_[index]->setText(QStringLiteral("Disable pending ACK"));
+    } else if (enabled) {
+        statusLabels_[index]->setText(QStringLiteral("Enabled / ACKed"));
+    } else if (descriptor->calibrationPending) {
+        statusLabels_[index]->setText(QStringLiteral("Disabled — Calibration Pending"));
+    } else {
+        statusLabels_[index]->setText(QStringLiteral("Disabled"));
+    }
+    setAngleUiEnabled(index, enabled);
 }
 
 void MainWindow::setAngleUiEnabled(int index, bool enabled)
 {
-    if (index < 0 || index >= 2) {
+    if (index < 0 || index >= kServoCount) {
         return;
     }
-    const ServoId id = static_cast<ServoId>(index);
+    const ServoDescriptor *descriptor = servoDescriptor(static_cast<quint8>(index));
+    if (descriptor == nullptr) {
+        return;
+    }
+    const ServoId id = descriptor->id;
     const bool actionable = enabled && controller_->isConnected()
-        && controller_->isServoSupported(id) && controller_->isServoEnabled(id)
+        && controller_->isServoSupported(id) && descriptor->angleSupported
+        && !descriptor->calibrationPending && controller_->isServoEnabled(id)
         && !controller_->isServoDisablePending(id);
     angleSpins_[index]->setEnabled(actionable);
     angleButtons_[index]->setEnabled(actionable);

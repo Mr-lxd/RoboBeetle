@@ -1,5 +1,64 @@
 # RoboBeetle 硬件控制交接审计
 
+## 2026-09-09 Depth PWM calibration window follow-up（PR #8）
+
+### 当前状态
+
+本轮只扩大 `FrontAxis`/Depth 的 PWM-only command envelope；Firmware 与 Qt 两张独立 descriptor table 现在均为 `500–2500 μs`。卖家/电气能力元数据仍为 `500/1500/2500 μs`，只用于描述舵机的电气/绝对能力，不代表最终机械安全范围。`1500 μs` 仍是 provisional bring-up center candidate，不是 true mechanical center 或已标定 Neutral；`angle_supported=false` 保持不变，Depth Set Angle 仍不可用。当前台架观察到约 `1100–2500 μs` 可产生约 180° 的机构翻转，低于约 `1100 μs` 的命令容易出现 ACK timeout，因此当前暂不继续向下探测；完整机械装配完成前，最终 safe min/max、practical center 和 angle mapping 均延期。用户界面显示名固定为 ASCII `FrontRight`、`FrontLeft`、`Depth`、`RearRight`、`RearLeft`；内部 `FrontAxis` 标识不变。
+
+既有硬件事实保持不变：
+
+- `FrontRight`：**[Hardware Verified]**；
+- `FrontLeft`：**[Hardware Verified]**；
+- `RearLeft`：**[Hardware Verified]**；
+- `RearRight` STM32/A12 PWM output path：**[Hardware Verified]**；原 RearRight servo actuator/线束为 hardware fault，计划更换，不属于 Firmware bug。
+- Depth 在 `1480/1500/1520 μs` 的运动方向：**[Hardware Verified]**（PWM 减小 → front A 上翻，PWM 增大 → front A 下翻）。
+
+本次新增开放的 `500–2500 μs` 全行程、机械端点、safe min/max、practical center、PWM-to-angle calibration 和 angle control 均为 **[Pending Hardware Verification]**；该窗口是 endpoint exploration window，不是最终 mechanically safe endpoints。当前台架的约 `1100–2500 μs` 机构翻转观察和低于约 `1100 μs` 的 ACK timeout 现象属于新实测记录，不构成最终机械端点标定，也不授权继续探测更低脉宽。`1500 μs` 仍不是最终机械中心。本环境仅记录 Host Test；ARM Build、Program Verify 和本轮新窗口的 Hardware Verification 不在本次会话中宣称通过。
+
+### 下一轮 Depth 实机计划
+
+仅连接 Depth，机构卸载并脱开舵盘/连杆。基于当前约 `1100–2500 μs` 台架观察和低于约 `1100 μs` 的 ACK timeout，当前不要继续探测低于约 `1100 μs` 的命令。后续完整机械装配后的安全计划应从 `1500 μs` 开始，在确认不顶死且保留 margin 的前提下逐步探索；必须记录 ACK、平稳性、机械干涉、持续嗡鸣、停止运动、连杆受力和发热。最终安全端点须在真实机械硬限位内保留 margin；1500 μs 仍仅为 provisional bring-up center，不是最终机械中心。
+
+### 验证分层与烧录提醒
+
+`Host Test`、`ARM Build`、`Program Verify`、`Hardware Verified`、`Pending` 是不同证据层级，不能用笼统的 “tested” 互相替代。已验证的 DAP/OpenOCD 稳定流程为 `SWD clock 100 kHz → SYSRESETREQ → halt → program → verify`；若烧录后 UART 异常，先完整断电再上电，不加入软件 workaround。
+
+## 2026-09-08 五舵机语义 descriptor bring-up（PR #8，待实机验收）
+
+### 当前状态
+
+PR #8 将 Firmware 与 Qt 各自维护的 descriptor table 冻结为同一组五舵机语义 ID，supported mask 固定为 `0x001F`。descriptor drift 由两端独立测试分别拦截；Firmware 的 `servo_descriptor` 保持 pure C / HAL-independent，抽象 timer/channel 由 `servo_driver_stm32` 映射为 HAL handle 和 channel 常量。
+
+| ID / mask | 语义 | 硬件与 STM32 输出 | 能力 / bring-up 范围 |
+|---:|---|---|---|
+| `0` / `0x0001` | `FrontRight` | SAVOX SW-0250MG+，TIM3_CH1 / PA6 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
+| `1` / `0x0002` | `FrontLeft` | SAVOX SW-0250MG+，TIM3_CH2 / PA7 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
+| `2` / `0x0004` | `Depth` (`FrontAxis` internal ID) | HDKJ S3150D，TIM3_CH3 / PB0 | 电气 500/1500/2500 μs；命令仅 500–2500 μs；Set Angle disabled；`Calibration Pending` |
+| `3` / `0x0008` | `RearRight` | GDW IPX896HV，TIM4_CH1 / PD12 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
+| `4` / `0x0010` | `RearLeft` | GDW IPX896HV，TIM4_CH2 / PD13 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
+
+TIM3/TIM4 当前均约 333 Hz、1 μs tick（PSC=15、ARR=3002）。FrontAxis 卖家参数记录为 500–2500 μs、中心候选 1500 μs、工作电压 4.8–7.4 V、可控行程 0–270°、死区 4 μs；这些是电气/绝对能力元数据，当前用户命令窗口为 provisional 500–2500 μs endpoint exploration，并非最终机械安全端点。1500 μs 只是 provisional startup/center candidate，不是 calibrated Neutral，也不是 Hardware Verified；扩展窗口的完整端点验收仍 Pending。卖家参数页写“是否防水：否”，商品照片/壳体却标示“Water proof Robot Servo”，因此 Waterproof capability = **[Unverified]**，在获得可靠 IP/密封证据前不得声明或安排直接浸水。
+
+多 bit Enable 采用 all-or-nothing：调用前已 enabled 的 requested channel 完全跳过，不产生 write/start/stop；任一新 channel start 失败时只 stop 本次 newly started channel，并保持调用前 logical/physical state。Console 中 pending Disable 是 motion-command barrier：受影响舵机的 PWM、Neutral、Set Angle 在 Controller 层即被拒绝，不写帧、不进入 APC220 queue；Disable Error/timeout 不会释放 Disable 之后的 stale motion。
+
+### 当前 Firmware 路径（PR #8）
+
+```text
+USART1 IRQ → HAL callback → uart_transport_stm32 → ring_buffer
+  → app_main_process → Protocol V2 decode → protocol_dispatcher
+  → servo_service → servo_driver_stm32
+  → TIM3_CH1/PA6 FrontRight | TIM3_CH2/PA7 FrontLeft
+  → TIM3_CH3/PB0 FrontAxis | TIM4_CH1/PD12 RearRight
+  → TIM4_CH2/PD13 RearLeft
+```
+
+本 PR 的 descriptor/service/driver/dispatcher 软件验证是实现门槛；五舵机 target build/download 与 physical regression 在用户验收前保持 **[Pending Hardware Verification]**。历史 PR #1、PR #3/6 的 Servo1/PA6 硬件证据不自动覆盖新布局。
+
+### Layout compatibility break（必须显式隔离）
+
+历史 v0.4 的 Servo1/PA6 bring-up 对象是 `RearLeft`；PR #8 后 PA6/ID0 正式为 `FrontRight`，`RearLeft` 改为 PD13/TIM4_CH2。五舵机重新布线后，禁止旧 v0.4 Console/Firmware 与 PR #8 layout 交叉使用。Qt 的 `ServoId::Servo1` 若存在，仅是 deprecated source alias 指向 `FrontRight`；新 UI、日志、实现和文档必须使用 semantic name，且不保留 `Servo2` alias。
+
 ## 2026-09-08 APC220 half-duplex scheduler hardware acceptance（PR #7）
 
 ### 当前状态

@@ -51,6 +51,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Communication/uart_transport_stm32.c
     Core/Communication/protocol_dispatcher.c
     Core/Servo/servo_calibration.c
+    Core/Servo/servo_descriptor.c
     Core/Servo/servo_service.c
     Core/Servo/servo_driver_stm32.c
     Core/Safety/safety_supervisor.c

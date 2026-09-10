@@ -1,8 +1,69 @@
 #include "servo_driver_stm32.h"
 
-static bool servo_driver_supports_id(uint8_t servo_id)
+#include <stddef.h>
+
+static TIM_HandleTypeDef *timer_for_descriptor(
+    servo_timer_id_t timer_id,
+    TIM_HandleTypeDef *tim3,
+    TIM_HandleTypeDef *tim4)
 {
-    return servo_id == SERVO_SERVICE_SERVO1_ID;
+    switch (timer_id)
+    {
+        case SERVO_TIMER_TIM3:
+            return tim3;
+
+        case SERVO_TIMER_TIM4:
+            return tim4;
+
+        default:
+            return NULL;
+    }
+}
+
+static bool hal_channel_for_descriptor(
+    servo_channel_id_t channel,
+    uint32_t *hal_channel)
+{
+    if (hal_channel == NULL)
+    {
+        return false;
+    }
+
+    switch (channel)
+    {
+        case SERVO_CHANNEL_1:
+            *hal_channel = TIM_CHANNEL_1;
+            return true;
+
+        case SERVO_CHANNEL_2:
+            *hal_channel = TIM_CHANNEL_2;
+            return true;
+
+        case SERVO_CHANNEL_3:
+            *hal_channel = TIM_CHANNEL_3;
+            return true;
+
+        default:
+            return false;
+    }
+}
+
+const servo_driver_stm32_binding_t *servo_driver_stm32_binding_for_id(
+    const servo_driver_stm32_t *driver,
+    uint8_t servo_id)
+{
+    if ((driver == NULL) || (servo_id >= SERVO_DESCRIPTOR_COUNT))
+    {
+        return NULL;
+    }
+
+    if ((driver->bindings[servo_id].descriptor == NULL) ||
+        (driver->bindings[servo_id].descriptor->id != servo_id))
+    {
+        return NULL;
+    }
+
+    return &driver->bindings[servo_id];
 }
 
 static void servo_driver_write_pulse(
@@ -12,13 +73,17 @@ static void servo_driver_write_pulse(
 {
     servo_driver_stm32_t *driver =
         (servo_driver_stm32_t *)context;
+    const servo_driver_stm32_binding_t *binding =
+        servo_driver_stm32_binding_for_id(driver, servo_id);
 
-    if (driver->timer != NULL &&
-        servo_driver_supports_id(servo_id))
+    if ((binding != NULL) &&
+        binding->descriptor->supported &&
+        (binding->timer != NULL) &&
+        binding->channel_valid)
     {
         __HAL_TIM_SET_COMPARE(
-            driver->timer,
-            TIM_CHANNEL_1,
+            binding->timer,
+            binding->hal_channel,
             pulse_us);
     }
 }
@@ -29,16 +94,20 @@ static bool servo_driver_start(
 {
     servo_driver_stm32_t *driver =
         (servo_driver_stm32_t *)context;
+    const servo_driver_stm32_binding_t *binding =
+        servo_driver_stm32_binding_for_id(driver, servo_id);
 
-    if (driver->timer == NULL ||
-        !servo_driver_supports_id(servo_id))
+    if ((binding == NULL) ||
+        !binding->descriptor->supported ||
+        (binding->timer == NULL) ||
+        !binding->channel_valid)
     {
         return false;
     }
 
     return HAL_TIM_PWM_Start(
-               driver->timer,
-               TIM_CHANNEL_1) == HAL_OK;
+               binding->timer,
+               binding->hal_channel) == HAL_OK;
 }
 
 static void servo_driver_stop(
@@ -47,21 +116,38 @@ static void servo_driver_stop(
 {
     servo_driver_stm32_t *driver =
         (servo_driver_stm32_t *)context;
+    const servo_driver_stm32_binding_t *binding =
+        servo_driver_stm32_binding_for_id(driver, servo_id);
 
-    if (driver->timer != NULL &&
-        servo_driver_supports_id(servo_id))
+    if ((binding != NULL) &&
+        binding->descriptor->supported &&
+        (binding->timer != NULL) &&
+        binding->channel_valid)
     {
         (void)HAL_TIM_PWM_Stop(
-            driver->timer,
-            TIM_CHANNEL_1);
+            binding->timer,
+            binding->hal_channel);
     }
 }
 
 void servo_driver_stm32_init(
     servo_driver_stm32_t *driver,
-    TIM_HandleTypeDef *timer)
+    TIM_HandleTypeDef *tim3,
+    TIM_HandleTypeDef *tim4)
 {
-    driver->timer = timer;
+    const servo_descriptor_t *table = servo_descriptor_table();
+
+    for (size_t index = 0U; index < servo_descriptor_count(); ++index)
+    {
+        driver->bindings[index].descriptor = &table[index];
+        driver->bindings[index].timer =
+            timer_for_descriptor(table[index].timer, tim3, tim4);
+        driver->bindings[index].hal_channel = 0U;
+        driver->bindings[index].channel_valid =
+            hal_channel_for_descriptor(
+                table[index].channel,
+                &driver->bindings[index].hal_channel);
+    }
 }
 
 const servo_service_driver_ops_t *servo_driver_stm32_ops(void)

@@ -1,4 +1,5 @@
 #include "servo_calibration.h"
+#include "servo_descriptor.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -16,35 +17,44 @@ static void expect(int condition, const char *message)
 
 int main(void)
 {
+    const servo_descriptor_t *table = servo_descriptor_table();
     const servo_calibration_t *calibration =
-        servo_calibration_servo1();
+        &table[SERVO_ID_REAR_RIGHT].calibration;
 
-    expect(calibration != NULL, "Servo1 calibration must exist");
+    expect(calibration != NULL, "RearRight calibration must exist");
     expect(calibration->min_pulse_us == 520U,
-           "minimum pulse calibration differs");
+           "RearRight minimum pulse calibration differs");
     expect(calibration->neutral_pulse_us == 1520U,
-           "neutral pulse calibration differs");
+           "RearRight neutral pulse calibration differs");
     expect(calibration->max_pulse_us == 2520U,
-           "maximum pulse calibration differs");
+           "RearRight maximum pulse calibration differs");
     expect(calibration->min_angle_cdeg == -9000,
-           "minimum angle calibration differs");
+           "RearRight minimum angle calibration differs");
     expect(calibration->max_angle_cdeg == 9000,
-           "maximum angle calibration differs");
+           "RearRight maximum angle calibration differs");
 
-    expect(servo_calibration_angle_to_pulse(-9000) == 520U,
+    expect(servo_calibration_angle_to_pulse(calibration, -9000) == 520U,
            "-9000 cdeg mapping differs");
-    expect(servo_calibration_angle_to_pulse(-4500) == 1020U,
+    expect(servo_calibration_angle_to_pulse(calibration, -4500) == 1020U,
            "-4500 cdeg mapping differs");
-    expect(servo_calibration_angle_to_pulse(0) == 1520U,
+    expect(servo_calibration_angle_to_pulse(calibration, 0) == 1520U,
            "zero cdeg mapping differs");
-    expect(servo_calibration_angle_to_pulse(4500) == 2020U,
+    expect(servo_calibration_angle_to_pulse(calibration, 4500) == 2020U,
            "+4500 cdeg mapping differs");
-    expect(servo_calibration_angle_to_pulse(9000) == 2520U,
+    expect(servo_calibration_angle_to_pulse(calibration, 9000) == 2520U,
            "+9000 cdeg mapping differs");
-    expect(servo_calibration_angle_to_pulse(-8999) == 521U,
+    expect(servo_calibration_angle_to_pulse(calibration, -8999) == 521U,
            "negative integer truncation differs");
-    expect(servo_calibration_angle_to_pulse(8999) == 2519U,
+    expect(servo_calibration_angle_to_pulse(calibration, 8999) == 2519U,
            "positive integer truncation differs");
+
+    calibration = &table[SERVO_ID_FRONT_RIGHT].calibration;
+    expect(servo_calibration_angle_to_pulse(calibration, -4500) == 1050U,
+           "SAVOX -4500 cdeg mapping differs");
+    expect(servo_calibration_angle_to_pulse(calibration, 0) == 1500U,
+           "SAVOX zero cdeg mapping differs");
+    expect(servo_calibration_angle_to_pulse(calibration, 4500) == 1950U,
+           "SAVOX +4500 cdeg mapping differs");
 
     if (failures == 0)
     {

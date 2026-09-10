@@ -244,15 +244,26 @@ bool RobotController::setServoPwm(ServoId id, quint16 pulseUs)
     if (rejectUnsupportedServo(id, QStringLiteral("Set PWM"))) {
         return false;
     }
-    if (!isServoEnabled(id)) {
-        emit logMessage(QStringLiteral("Set PWM rejected: servo is not enabled and acknowledged"));
+    const ServoDescriptor *descriptor = servoDescriptor(id);
+    if (descriptor == nullptr) {
         return false;
     }
-    if (pulseUs < config_.provisionalPwmMinUs || pulseUs > config_.provisionalPwmMaxUs) {
-        emit logMessage(QStringLiteral("Set PWM rejected: %1 us is outside bring-up provisional range %2-%3 us")
+    if (!isServoEnabled(id)) {
+        emit logMessage(QStringLiteral("Set PWM rejected: %1 is not enabled and acknowledged")
+                            .arg(QString::fromLatin1(descriptor->semanticName)));
+        return false;
+    }
+    if (isServoDisablePending(id)) {
+        emit logMessage(QStringLiteral("Set PWM rejected: %1 disable is awaiting ACK")
+                            .arg(QString::fromLatin1(descriptor->semanticName)));
+        return false;
+    }
+    if (pulseUs < descriptor->commandMinPwmUs || pulseUs > descriptor->commandMaxPwmUs) {
+        emit logMessage(QStringLiteral("Set PWM rejected: %1 us is outside %2 command range %3-%4 us")
                             .arg(pulseUs)
-                            .arg(config_.provisionalPwmMinUs)
-                            .arg(config_.provisionalPwmMaxUs));
+                            .arg(QString::fromLatin1(descriptor->semanticName))
+                            .arg(descriptor->commandMinPwmUs)
+                            .arg(descriptor->commandMaxPwmUs));
         return false;
     }
 
@@ -268,20 +279,31 @@ bool RobotController::setServoAngle(ServoId id, qint16 angleCentidegrees)
     if (rejectUnsupportedServo(id, QStringLiteral("Set Angle"))) {
         return false;
     }
+    const ServoDescriptor *descriptor = servoDescriptor(id);
+    if ((descriptor == nullptr) || !descriptor->angleSupported) {
+        emit logMessage(QStringLiteral("Set Angle rejected: %1 has no angle capability")
+                            .arg(descriptor == nullptr
+                                     ? QStringLiteral("unknown servo")
+                                     : QString::fromLatin1(descriptor->semanticName)));
+        return false;
+    }
     if (!isServoEnabled(id)) {
-        emit logMessage(QStringLiteral("Set Angle rejected: servo is not enabled and acknowledged"));
+        emit logMessage(QStringLiteral("Set Angle rejected: %1 is not enabled and acknowledged")
+                            .arg(QString::fromLatin1(descriptor->semanticName)));
         return false;
     }
     if (isServoDisablePending(id)) {
-        emit logMessage(QStringLiteral("Set Angle rejected: servo disable is awaiting ACK"));
+        emit logMessage(QStringLiteral("Set Angle rejected: %1 disable is awaiting ACK")
+                            .arg(QString::fromLatin1(descriptor->semanticName)));
         return false;
     }
-    if (angleCentidegrees < config_.provisionalAngleMinCdeg
-        || angleCentidegrees > config_.provisionalAngleMaxCdeg) {
-        emit logMessage(QStringLiteral("Set Angle rejected: %1 cdeg is outside provisional range %2-%3 cdeg")
+    if (angleCentidegrees < descriptor->commandMinAngleCdeg
+        || angleCentidegrees > descriptor->commandMaxAngleCdeg) {
+        emit logMessage(QStringLiteral("Set Angle rejected: %1 cdeg is outside %2 command range %3-%4 cdeg")
                             .arg(angleCentidegrees)
-                            .arg(config_.provisionalAngleMinCdeg)
-                            .arg(config_.provisionalAngleMaxCdeg));
+                            .arg(QString::fromLatin1(descriptor->semanticName))
+                            .arg(descriptor->commandMinAngleCdeg)
+                            .arg(descriptor->commandMaxAngleCdeg));
         return false;
     }
 
@@ -297,8 +319,18 @@ bool RobotController::neutralServo(ServoId id)
     if (rejectUnsupportedServo(id, QStringLiteral("Neutral"))) {
         return false;
     }
+    const ServoDescriptor *descriptor = servoDescriptor(id);
+    if (descriptor == nullptr) {
+        return false;
+    }
     if (!isServoEnabled(id)) {
-        emit logMessage(QStringLiteral("Neutral rejected: servo is not enabled and acknowledged"));
+        emit logMessage(QStringLiteral("Neutral rejected: %1 is not enabled and acknowledged")
+                            .arg(QString::fromLatin1(descriptor->semanticName)));
+        return false;
+    }
+    if (isServoDisablePending(id)) {
+        emit logMessage(QStringLiteral("Neutral rejected: %1 disable is awaiting ACK")
+                            .arg(QString::fromLatin1(descriptor->semanticName)));
         return false;
     }
     return sendCommand(MessageType::Neutral, maskPayload(servoMask(id)), servoMask(id));
@@ -306,17 +338,21 @@ bool RobotController::neutralServo(ServoId id)
 
 bool RobotController::isServoEnabled(ServoId id) const
 {
-    return (enabledMask_ & servoMask(id)) != 0U;
+    const ServoDescriptor *descriptor = servoDescriptor(id);
+    return descriptor != nullptr && (enabledMask_ & descriptor->mask) != 0U;
 }
 
 bool RobotController::isServoDisablePending(ServoId id) const
 {
-    return (disablePendingMask_ & servoMask(id)) != 0U;
+    const ServoDescriptor *descriptor = servoDescriptor(id);
+    return descriptor != nullptr && (disablePendingMask_ & descriptor->mask) != 0U;
 }
 
 bool RobotController::isServoSupported(ServoId id) const
 {
-    return (config_.supportedServoMask & servoMask(id)) != 0U;
+    const ServoDescriptor *descriptor = servoDescriptor(id);
+    return descriptor != nullptr && descriptor->supported
+        && (config_.supportedServoMask & descriptor->mask) != 0U;
 }
 
 bool RobotController::sendCommand(MessageType type,
@@ -1008,7 +1044,7 @@ void RobotController::setEnabledMask(quint16 mask)
 {
     const quint16 changed = static_cast<quint16>(enabledMask_ ^ mask);
     enabledMask_ = mask;
-    for (int index = 0; index < 2; ++index) {
+    for (int index = 0; index < kServoCount; ++index) {
         const quint16 bit = static_cast<quint16>(1U << index);
         if ((changed & bit) != 0U) {
             emit servoStateChanged(index, (enabledMask_ & bit) != 0U);
@@ -1020,7 +1056,7 @@ void RobotController::setDisablePendingMask(quint16 mask)
 {
     const quint16 changed = static_cast<quint16>(disablePendingMask_ ^ mask);
     disablePendingMask_ = mask;
-    for (int index = 0; index < 2; ++index) {
+    for (int index = 0; index < kServoCount; ++index) {
         const quint16 bit = static_cast<quint16>(1U << index);
         if ((changed & bit) != 0U) {
             emit servoDisablePendingChanged(index, (disablePendingMask_ & bit) != 0U);
@@ -1038,9 +1074,12 @@ bool RobotController::rejectUnsupportedServo(ServoId id, const QString &command)
     if (isServoSupported(id)) {
         return false;
     }
-    emit logMessage(QStringLiteral("%1 rejected: servo %2 is unsupported in Phase 1")
-                        .arg(command)
-                        .arg(static_cast<quint8>(id)));
+    const ServoDescriptor *descriptor = servoDescriptor(id);
+    const QString name = descriptor == nullptr
+        ? QStringLiteral("unknown servo")
+        : QString::fromLatin1(descriptor->semanticName);
+    emit logMessage(QStringLiteral("%1 rejected: %2 is unsupported")
+                        .arg(command, name));
     return true;
 }
 
