@@ -51,6 +51,7 @@ bool isServoActuatorCommand(MessageType type)
     case MessageType::ServoDisable:
     case MessageType::LeakStatus:
     case MessageType::ImuSnapshot:
+    case MessageType::DepthSnapshot:
         return false;
     }
     return false;
@@ -81,7 +82,8 @@ RobotController::RobotController(ITransport *transport,
       transport_(transport),
       config_(config),
       portDiscovery_(std::move(portDiscovery)),
-      imuMonitor_(this)
+      imuMonitor_(this),
+      depthMonitor_(this)
 {
     Q_ASSERT(transport_ != nullptr);
     heartbeatTimer_.setInterval(config_.heartbeatIntervalMs);
@@ -116,6 +118,7 @@ RobotController::RobotController(ITransport *transport,
         const bool wasConnected = state_ == TransportState::Connected;
         state_ = state;
         imuMonitor_.handleTransportState(state);
+        depthMonitor_.handleTransportState(state);
         if (state == TransportState::Connected) {
             resetSchedulerState();
             heartbeatReady_ = config_.linkProfile != LinkProfile::Apc220HalfDuplex;
@@ -697,6 +700,10 @@ void RobotController::handlePacket(const Packet &packet)
         handleImuSnapshot(packet);
         return;
     }
+    if (packet.type == MessageType::DepthSnapshot) {
+        handleDepthSnapshot(packet);
+        return;
+    }
     if (packet.type == MessageType::LeakStatus) {
         handleLeakStatus(packet);
         return;
@@ -768,6 +775,18 @@ void RobotController::handleImuSnapshot(const Packet &packet)
     }
 
     imuMonitor_.handlePacket(packet, nowMs());
+}
+
+void RobotController::handleDepthSnapshot(const Packet &packet)
+{
+    if (config_.linkProfile == LinkProfile::Apc220HalfDuplex && !heartbeatReady_) {
+        emit logMessage(QStringLiteral(
+            "DepthSnapshot ignored while conservative host-link liveness is not ready"));
+        depthMonitor_.handleLivenessLost();
+        return;
+    }
+
+    depthMonitor_.handlePacket(packet, nowMs());
 }
 
 void RobotController::handleLeakStatus(const Packet &packet)
@@ -894,6 +913,7 @@ void RobotController::checkTimeouts()
     const qint64 now = nowMs();
     refreshLeakTelemetryStaleness(now);
     imuMonitor_.tick(now);
+    depthMonitor_.tick(now);
     if (config_.linkProfile == LinkProfile::Apc220HalfDuplex) {
         refreshApc220HeartbeatDue();
         if (pending_.isEmpty()) {
@@ -1151,6 +1171,7 @@ void RobotController::markApc220LivenessLost()
 {
     setLeakState(LeakState::Unknown);
     imuMonitor_.handleLivenessLost();
+    depthMonitor_.handleLivenessLost();
 }
 
 void RobotController::noteWriteFailure(const QString &context)

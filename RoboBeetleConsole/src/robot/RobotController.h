@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protocol/StreamDecoder.h"
+#include "robot/DepthMonitor.h"
 #include "robot/LeakStatus.h"
 #include "robot/ImuMonitor.h"
 #include "robot/RobotCommand.h"
@@ -87,6 +88,9 @@ public:
     [[nodiscard]] const ImuMonitorState &imuState() const { return imuMonitor_.state(); }
     [[nodiscard]] ImuMonitor *imuMonitor() { return &imuMonitor_; }
     [[nodiscard]] const ImuMonitor *imuMonitor() const { return &imuMonitor_; }
+    [[nodiscard]] const DepthMonitorState &depthState() const { return depthMonitor_.state(); }
+    [[nodiscard]] DepthMonitor *depthMonitor() { return &depthMonitor_; }
+    [[nodiscard]] const DepthMonitor *depthMonitor() const { return &depthMonitor_; }
     [[nodiscard]] RobotControllerConfig config() const { return config_; }
     [[nodiscard]] ProtocolMonitor monitor() const { return monitor_; }
     [[nodiscard]] qsizetype queuedCommandCount() const
@@ -135,6 +139,7 @@ private:
     void handleAck(const Packet &packet);
     void handleLeakStatus(const Packet &packet);
     void handleImuSnapshot(const Packet &packet);
+    void handleDepthSnapshot(const Packet &packet);
     void checkTimeouts();
     void refreshLeakTelemetryStaleness(qint64 now);
     void updateMonitor();
@@ -173,6 +178,7 @@ private:
     LeakState leakState_{LeakState::Unknown};
     qint64 lastLeakTelemetryAtMs_{-1};
     ImuMonitor imuMonitor_;
+    DepthMonitor depthMonitor_;
 };
 
 } // namespace rb

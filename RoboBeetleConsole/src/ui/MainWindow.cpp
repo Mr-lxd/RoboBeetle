@@ -45,6 +45,18 @@ QString formatAngle(const std::array<qint16, 3> &values)
         .arg(static_cast<double>(values[2]) / 100.0, 0, 'f', 2);
 }
 
+QString formatDepth(qint32 depthMm)
+{
+    return QStringLiteral("%1 m")
+        .arg(static_cast<double>(depthMm) / 1000.0, 0, 'f', 3);
+}
+
+QString formatTemperature(qint16 temperatureCentiC)
+{
+    return QStringLiteral("%1 C")
+        .arg(static_cast<double>(temperatureCentiC) / 100.0, 0, 'f', 2);
+}
+
 } // namespace
 
 MainWindow::MainWindow(RobotController *controller, QWidget *parent)
@@ -67,6 +79,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     root->addLayout(servos);
     root->addWidget(createGlobalPanel());
     root->addWidget(createImuPanel());
+    root->addWidget(createDepthPanel());
     root->addWidget(createMonitorPanel(), 1);
     setCentralWidget(central);
 
@@ -102,6 +115,9 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     connect(controller_->imuMonitor(), &ImuMonitor::changed, this, [this] {
         setImuUiState(controller_->imuState());
     });
+    connect(controller_->depthMonitor(), &DepthMonitor::changed, this, [this] {
+        setDepthUiState(controller_->depthState());
+    });
     connect(controller_, &RobotController::txHexChanged, txHex_, &QLineEdit::setText);
     connect(controller_, &RobotController::rxHexChanged, rxHex_, &QLineEdit::setText);
     connect(controller_, &RobotController::protocolMonitorChanged, this, [this](const ProtocolMonitor &monitor) {
@@ -119,6 +135,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     setConnectedUi(false);
     setLeakUiState(controller_->leakState());
     setImuUiState(controller_->imuState());
+    setDepthUiState(controller_->depthState());
     controller_->refreshSerialPorts();
 }
 
@@ -383,6 +400,78 @@ void MainWindow::setImuUiState(const ImuMonitorState &state)
             .arg(diagnostics.uartErrorCount)
             .arg(diagnostics.magFrameCount)
             .arg(diagnostics.unsupportedFrameCount));
+}
+
+QWidget *MainWindow::createDepthPanel()
+{
+    auto *box = new QGroupBox(QStringLiteral("Depth Sensor — ROVMAKER"), this);
+    auto *form = new QFormLayout(box);
+    depthStatus_ = new QLabel(QStringLiteral("Unknown"), box);
+    depthValue_ = new QLabel(QStringLiteral("--"), box);
+    depthTemperature_ = new QLabel(QStringLiteral("--"), box);
+    depthAge_ = new QLabel(QStringLiteral("--"), box);
+    depthDiagnostics_ = new QLabel(QStringLiteral("--"), box);
+    depthDiagnostics_->setWordWrap(true);
+    form->addRow(QStringLiteral("Status"), depthStatus_);
+    form->addRow(QStringLiteral("Depth"), depthValue_);
+    form->addRow(QStringLiteral("Temperature"), depthTemperature_);
+    form->addRow(QStringLiteral("Sample age"), depthAge_);
+    form->addRow(QStringLiteral("Diagnostics"), depthDiagnostics_);
+    return box;
+}
+
+void MainWindow::setDepthUiState(const DepthMonitorState &state)
+{
+    if (depthStatus_ == nullptr) {
+        return;
+    }
+
+    depthStatus_->setText(depthStatusText(state.status));
+    switch (state.status) {
+    case DepthStatus::Unknown:
+        depthStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+        break;
+    case DepthStatus::Receiving:
+        depthStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-weight: bold;"));
+        break;
+    case DepthStatus::Stale:
+        depthStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
+        break;
+    case DepthStatus::Error:
+        depthStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-weight: bold;"));
+        break;
+    }
+
+    const bool live = state.status == DepthStatus::Receiving && state.snapshot.has_value();
+    if (!live) {
+        depthValue_->setText(QStringLiteral("--"));
+        depthTemperature_->setText(QStringLiteral("--"));
+        depthAge_->setText(QStringLiteral("--"));
+        depthDiagnostics_->setText(QStringLiteral("--"));
+        return;
+    }
+
+    const DepthSnapshot &snapshot = *state.snapshot;
+    depthValue_->setText(snapshot.depthValid()
+                              ? formatDepth(snapshot.depthMm)
+                              : QStringLiteral("--"));
+    depthTemperature_->setText(snapshot.temperatureValid()
+                                    ? formatTemperature(snapshot.temperatureCentiC)
+                                    : QStringLiteral("--"));
+    depthAge_->setText(snapshot.sampleAgeMs == DepthSnapshot::UnknownSampleAgeMs
+                           ? QStringLiteral("--")
+                           : QStringLiteral("%1 ms").arg(snapshot.sampleAgeMs));
+    const DepthDiagnostics &diagnostics = snapshot.diagnostics;
+    depthDiagnostics_->setText(
+        QStringLiteral("RX %1 | valid lines %2 | parse errors %3 | overlong %4 | "
+                       "overflow %5 | hard re-arm %6 | UART errors %7")
+            .arg(diagnostics.rxByteCount)
+            .arg(diagnostics.validLineCount)
+            .arg(diagnostics.parseErrorCount)
+            .arg(diagnostics.overlongLineCount)
+            .arg(diagnostics.ringOverflowCount)
+            .arg(diagnostics.hardRearmFailureCount)
+            .arg(diagnostics.uartErrorCount));
 }
 
 QWidget *MainWindow::createMonitorPanel()
