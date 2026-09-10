@@ -4,12 +4,16 @@
 
 static UART_HandleTypeDef *uart_handle;
 static uint8_t rx_byte;
+static uint8_t rx_buffer_storage[RING_BUFFER_STORAGE_SIZE];
 static ring_buffer_t rx_buffer;
 
 void uart_transport_stm32_init(UART_HandleTypeDef *huart)
 {
     uart_handle = huart;
-    ring_buffer_init(&rx_buffer);
+    ring_buffer_init(
+        &rx_buffer,
+        rx_buffer_storage,
+        (uint16_t)sizeof rx_buffer_storage);
 
     (void)HAL_UART_Receive_IT(
         uart_handle,

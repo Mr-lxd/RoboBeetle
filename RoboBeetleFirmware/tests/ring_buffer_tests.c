@@ -24,10 +24,14 @@ static void expect_pop(ring_buffer_t *buffer, uint8_t expected)
 
 static void test_empty_pop(void)
 {
+    uint8_t storage[RING_BUFFER_STORAGE_SIZE];
     ring_buffer_t buffer;
     uint8_t byte = 0xA5U;
 
-    ring_buffer_init(&buffer);
+    ring_buffer_init(
+        &buffer,
+        storage,
+        (uint16_t)sizeof storage);
 
     expect(!ring_buffer_pop(&buffer, &byte), "empty pop should fail");
     expect(byte == 0xA5U, "empty pop should not modify output");
@@ -35,9 +39,13 @@ static void test_empty_pop(void)
 
 static void test_normal_ordering(void)
 {
+    uint8_t storage[RING_BUFFER_STORAGE_SIZE];
     ring_buffer_t buffer;
 
-    ring_buffer_init(&buffer);
+    ring_buffer_init(
+        &buffer,
+        storage,
+        (uint16_t)sizeof storage);
 
     expect(ring_buffer_push(&buffer, 0x11U), "first push should succeed");
     expect(ring_buffer_push(&buffer, 0x22U), "second push should succeed");
@@ -49,9 +57,13 @@ static void test_normal_ordering(void)
 
 static void test_wraparound_ordering(void)
 {
+    uint8_t storage[RING_BUFFER_STORAGE_SIZE];
     ring_buffer_t buffer;
 
-    ring_buffer_init(&buffer);
+    ring_buffer_init(
+        &buffer,
+        storage,
+        (uint16_t)sizeof storage);
 
     for (uint8_t value = 0U; value < 100U; ++value)
     {
@@ -70,27 +82,48 @@ static void test_wraparound_ordering(void)
     }
 }
 
-static void test_full_capacity_and_drop(void)
+static void test_full_capacity_and_drop(
+    uint8_t *storage,
+    uint16_t storage_size)
 {
     ring_buffer_t buffer;
 
-    ring_buffer_init(&buffer);
+    ring_buffer_init(&buffer, storage, storage_size);
 
-    for (uint8_t value = 0U; value < 127U; ++value)
+    for (uint16_t value = 0U;
+         value < (uint16_t)(storage_size - 1U);
+         ++value)
     {
-        expect(ring_buffer_push(&buffer, value), "effective-capacity push failed");
+        expect(
+            ring_buffer_push(&buffer, (uint8_t)value),
+            "effective-capacity push failed");
     }
 
     expect(!ring_buffer_push(&buffer, 0xEEU),
            "push while full should be rejected");
 
-    for (uint8_t value = 0U; value < 127U; ++value)
+    for (uint16_t value = 0U;
+         value < (uint16_t)(storage_size - 1U);
+         ++value)
     {
-        expect_pop(&buffer, value);
+        expect_pop(&buffer, (uint8_t)value);
     }
 
     expect(!ring_buffer_pop(&buffer, &(uint8_t){0U}),
            "queue should be empty after full drain");
+}
+
+static void test_configured_capacities(void)
+{
+    uint8_t storage_128[128U];
+    uint8_t storage_256[256U];
+
+    test_full_capacity_and_drop(
+        storage_128,
+        (uint16_t)sizeof storage_128);
+    test_full_capacity_and_drop(
+        storage_256,
+        (uint16_t)sizeof storage_256);
 }
 
 int main(void)
@@ -98,7 +131,7 @@ int main(void)
     test_empty_pop();
     test_normal_ordering();
     test_wraparound_ordering();
-    test_full_capacity_and_drop();
+    test_configured_capacities();
 
     if (failures == 0)
     {
