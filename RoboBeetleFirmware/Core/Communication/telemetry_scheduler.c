@@ -21,6 +21,11 @@ telemetry_slot_t telemetry_scheduler_select(
     telemetry_slot_t last_slot = TELEMETRY_SLOT_NONE;
     telemetry_slot_t preference[3];
 
+    if (leak_due)
+    {
+        return TELEMETRY_SLOT_LEAK_STATUS;
+    }
+
     if (scheduler != NULL)
     {
         last_slot = scheduler->last_successful_slot;

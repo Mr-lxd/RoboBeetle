@@ -74,61 +74,90 @@ static void test_due_imu_survives_leak_opportunity(void)
            "a still-due IMU must use the next available opportunity");
 }
 
-static void test_repeated_leak_due_does_not_starve_imu(void)
+static void test_dry_to_wet_leak_change_preempts_periodic_slots(void)
 {
     telemetry_scheduler_t scheduler;
 
     telemetry_scheduler_init(&scheduler);
-    expect(telemetry_scheduler_select(&scheduler, true, true, false) ==
-               TELEMETRY_SLOT_LEAK_STATUS,
-           "the first shared opportunity must retain LeakStatus priority");
-    telemetry_scheduler_mark_success(
-        &scheduler,
-        TELEMETRY_SLOT_LEAK_STATUS);
-
-    expect(telemetry_scheduler_select(&scheduler, true, true, false) ==
+    expect(telemetry_scheduler_select(&scheduler, false, true, true) ==
                TELEMETRY_SLOT_IMU_SNAPSHOT,
-           "a still-due IMU must win the next repeated shared opportunity");
-    expect(telemetry_scheduler_select(&scheduler, true, true, false) ==
-               TELEMETRY_SLOT_IMU_SNAPSHOT,
-           "a failed IMU send must keep the IMU slot pending");
+           "periodic IMU should publish while LeakStatus is not due");
     telemetry_scheduler_mark_success(
         &scheduler,
         TELEMETRY_SLOT_IMU_SNAPSHOT);
-    expect(telemetry_scheduler_select(&scheduler, true, true, false) ==
+
+    /* A DRY-to-WET transition is reported to the scheduler as leak_due. */
+    expect(telemetry_scheduler_select(&scheduler, true, true, true) ==
                TELEMETRY_SLOT_LEAK_STATUS,
-           "LeakStatus should regain priority after IMU publication");
+           "a DRY-to-WET LeakStatus change must preempt both due periodic slots");
+    telemetry_scheduler_mark_success(
+        &scheduler,
+        TELEMETRY_SLOT_LEAK_STATUS);
+    expect(telemetry_scheduler_select(&scheduler, true, true, true) ==
+               TELEMETRY_SLOT_LEAK_STATUS,
+           "an ordinary LeakStatus refresh must preempt both due periodic slots");
 }
 
-static void test_depth_slot_is_fair_without_bursting(void)
+static void test_failed_leak_send_remains_pending(void)
+{
+    telemetry_scheduler_t scheduler;
+
+    telemetry_scheduler_init(&scheduler);
+    telemetry_scheduler_mark_success(
+        &scheduler,
+        TELEMETRY_SLOT_IMU_SNAPSHOT);
+    expect(telemetry_scheduler_select(&scheduler, true, true, true) ==
+               TELEMETRY_SLOT_LEAK_STATUS,
+           "a due LeakStatus should be selected before its send attempt");
+    /* No mark_success call models a failed optional send. */
+    expect(telemetry_scheduler_select(&scheduler, true, true, true) ==
+               TELEMETRY_SLOT_LEAK_STATUS,
+           "a failed LeakStatus send must leave LeakStatus pending");
+    expect(telemetry_scheduler_select(&scheduler, false, true, true) ==
+               TELEMETRY_SLOT_DEPTH_SNAPSHOT,
+           "a failed LeakStatus send must not advance past the last successful IMU");
+}
+
+static void test_all_slots_initially_due(void)
 {
     telemetry_scheduler_t scheduler;
 
     telemetry_scheduler_init(&scheduler);
     expect(telemetry_scheduler_select(&scheduler, true, true, true) ==
                TELEMETRY_SLOT_LEAK_STATUS,
-           "the first three-way opportunity must retain LeakStatus priority");
-    telemetry_scheduler_mark_success(
-        &scheduler,
-        TELEMETRY_SLOT_LEAK_STATUS);
+           "LeakStatus must win when all optional telemetry is initially due");
+}
 
-    expect(telemetry_scheduler_select(&scheduler, true, true, true) ==
+static void test_periodic_slots_are_fair_without_leak_due(void)
+{
+    telemetry_scheduler_t scheduler;
+
+    telemetry_scheduler_init(&scheduler);
+
+    expect(telemetry_scheduler_select(&scheduler, false, true, true) ==
                TELEMETRY_SLOT_IMU_SNAPSHOT,
-           "IMU must get the next three-way opportunity after LeakStatus");
+           "IMU must get the first periodic opportunity when LeakStatus is not due");
     telemetry_scheduler_mark_success(
         &scheduler,
         TELEMETRY_SLOT_IMU_SNAPSHOT);
 
-    expect(telemetry_scheduler_select(&scheduler, true, true, true) ==
+    expect(telemetry_scheduler_select(&scheduler, false, true, true) ==
                TELEMETRY_SLOT_DEPTH_SNAPSHOT,
-           "Depth must get the next three-way opportunity after IMU");
+           "Depth must get the next periodic opportunity after IMU");
     telemetry_scheduler_mark_success(
         &scheduler,
         TELEMETRY_SLOT_DEPTH_SNAPSHOT);
 
-    expect(telemetry_scheduler_select(&scheduler, true, true, true) ==
-               TELEMETRY_SLOT_LEAK_STATUS,
-           "three-way fairness must cycle back to LeakStatus");
+    expect(telemetry_scheduler_select(&scheduler, false, true, true) ==
+               TELEMETRY_SLOT_IMU_SNAPSHOT,
+           "IMU must regain the periodic opportunity after Depth");
+    telemetry_scheduler_mark_success(
+        &scheduler,
+        TELEMETRY_SLOT_IMU_SNAPSHOT);
+
+    expect(telemetry_scheduler_select(&scheduler, false, true, true) ==
+               TELEMETRY_SLOT_DEPTH_SNAPSHOT,
+           "Depth must not starve while both periodic slots remain due");
 
     expect(telemetry_scheduler_select(&scheduler, false, false, false) ==
                TELEMETRY_SLOT_NONE,
@@ -140,8 +169,10 @@ int main(void)
     test_interval_and_wraparound();
     test_one_optional_slot_and_leak_priority();
     test_due_imu_survives_leak_opportunity();
-    test_repeated_leak_due_does_not_starve_imu();
-    test_depth_slot_is_fair_without_bursting();
+    test_dry_to_wet_leak_change_preempts_periodic_slots();
+    test_failed_leak_send_remains_pending();
+    test_all_slots_initially_due();
+    test_periodic_slots_are_fair_without_leak_due();
 
     if (failures == 0)
     {
