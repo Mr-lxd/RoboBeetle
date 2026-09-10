@@ -31,11 +31,13 @@ private:
     QWidget *createServoPanel(int index, ServoId id);
     QWidget *createConnectionPanel();
     QWidget *createGlobalPanel();
+    QWidget *createImuPanel();
     QWidget *createMonitorPanel();
     void setConnectedUi(bool connected);
     void refreshServoUi(int index);
     void setAngleUiEnabled(int index, bool enabled);
     void setLeakUiState(LeakState state);
+    void setImuUiState(const ImuMonitorState &state);
     void appendLog(const QString &message);
     static QString stateText(TransportState state);
 
@@ -45,6 +47,11 @@ private:
     QPushButton *connectButton_{nullptr};
     QLabel *connectionStatus_{nullptr};
     QLabel *leakStatus_{nullptr};
+    QLabel *imuStatus_{nullptr};
+    QLabel *imuAcc_{nullptr};
+    QLabel *imuGyro_{nullptr};
+    QLabel *imuAngle_{nullptr};
+    QLabel *imuDiagnostics_{nullptr};
     std::array<QSpinBox *, kServoCount> pwmSpins_{};
     std::array<QSlider *, kServoCount> pwmSliders_{};
     std::array<QDoubleSpinBox *, kServoCount> angleSpins_{};

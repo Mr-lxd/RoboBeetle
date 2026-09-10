@@ -17,6 +17,33 @@
 #include <QWidget>
 
 namespace rb {
+namespace {
+
+QString formatAcc(const std::array<qint16, 3> &values)
+{
+    return QStringLiteral("%1, %2, %3 g")
+        .arg(static_cast<double>(values[0]) / 1000.0, 0, 'f', 3)
+        .arg(static_cast<double>(values[1]) / 1000.0, 0, 'f', 3)
+        .arg(static_cast<double>(values[2]) / 1000.0, 0, 'f', 3);
+}
+
+QString formatGyro(const std::array<qint16, 3> &values)
+{
+    return QStringLiteral("%1, %2, %3 dps")
+        .arg(static_cast<double>(values[0]) / 10.0, 0, 'f', 1)
+        .arg(static_cast<double>(values[1]) / 10.0, 0, 'f', 1)
+        .arg(static_cast<double>(values[2]) / 10.0, 0, 'f', 1);
+}
+
+QString formatAngle(const std::array<qint16, 3> &values)
+{
+    return QStringLiteral("%1, %2, %3 deg")
+        .arg(static_cast<double>(values[0]) / 100.0, 0, 'f', 2)
+        .arg(static_cast<double>(values[1]) / 100.0, 0, 'f', 2)
+        .arg(static_cast<double>(values[2]) / 100.0, 0, 'f', 2);
+}
+
+} // namespace
 
 MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     : QMainWindow(parent), controller_(controller)
@@ -37,6 +64,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     }
     root->addLayout(servos);
     root->addWidget(createGlobalPanel());
+    root->addWidget(createImuPanel());
     root->addWidget(createMonitorPanel(), 1);
     setCentralWidget(central);
 
@@ -69,6 +97,9 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     });
     connect(controller_, &RobotController::leakStateChanged,
             this, &MainWindow::setLeakUiState);
+    connect(controller_->imuMonitor(), &ImuMonitor::changed, this, [this] {
+        setImuUiState(controller_->imuState());
+    });
     connect(controller_, &RobotController::txHexChanged, txHex_, &QLineEdit::setText);
     connect(controller_, &RobotController::rxHexChanged, rxHex_, &QLineEdit::setText);
     connect(controller_, &RobotController::protocolMonitorChanged, this, [this](const ProtocolMonitor &monitor) {
@@ -85,6 +116,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
 
     setConnectedUi(false);
     setLeakUiState(controller_->leakState());
+    setImuUiState(controller_->imuState());
     controller_->refreshSerialPorts();
 }
 
@@ -277,6 +309,78 @@ void MainWindow::setLeakUiState(LeakState state)
         leakStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-weight: bold;"));
         break;
     }
+}
+
+QWidget *MainWindow::createImuPanel()
+{
+    auto *box = new QGroupBox(QStringLiteral("IMU — JY901S"), this);
+    auto *form = new QFormLayout(box);
+    imuStatus_ = new QLabel(QStringLiteral("Unknown"), box);
+    imuAcc_ = new QLabel(QStringLiteral("--"), box);
+    imuGyro_ = new QLabel(QStringLiteral("--"), box);
+    imuAngle_ = new QLabel(QStringLiteral("--"), box);
+    imuDiagnostics_ = new QLabel(QStringLiteral("--"), box);
+    imuDiagnostics_->setWordWrap(true);
+    form->addRow(QStringLiteral("Status"), imuStatus_);
+    form->addRow(QStringLiteral("Acc"), imuAcc_);
+    form->addRow(QStringLiteral("Gyro"), imuGyro_);
+    form->addRow(QStringLiteral("Angle"), imuAngle_);
+    form->addRow(QStringLiteral("Diagnostics"), imuDiagnostics_);
+    return box;
+}
+
+void MainWindow::setImuUiState(const ImuMonitorState &state)
+{
+    if (imuStatus_ == nullptr) {
+        return;
+    }
+
+    imuStatus_->setText(imuStatusText(state.status));
+    switch (state.status) {
+    case ImuStatus::Unknown:
+        imuStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+        break;
+    case ImuStatus::Receiving:
+        imuStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-weight: bold;"));
+        break;
+    case ImuStatus::Stale:
+        imuStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
+        break;
+    case ImuStatus::Error:
+        imuStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-weight: bold;"));
+        break;
+    }
+
+    const bool live = state.status == ImuStatus::Receiving && state.snapshot.has_value();
+    if (!live) {
+        imuAcc_->setText(QStringLiteral("--"));
+        imuGyro_->setText(QStringLiteral("--"));
+        imuAngle_->setText(QStringLiteral("--"));
+        imuDiagnostics_->setText(QStringLiteral("--"));
+        return;
+    }
+
+    const ImuSnapshot &snapshot = *state.snapshot;
+    imuAcc_->setText(snapshot.accValid() ? formatAcc(snapshot.accMg) : QStringLiteral("--"));
+    imuGyro_->setText(snapshot.gyroValid()
+                          ? formatGyro(snapshot.gyroDecidps)
+                          : QStringLiteral("--"));
+    imuAngle_->setText(snapshot.angleValid()
+                           ? formatAngle(snapshot.angleCentidegrees)
+                           : QStringLiteral("--"));
+    const ImuDiagnostics &diagnostics = snapshot.diagnostics;
+    imuDiagnostics_->setText(
+        QStringLiteral("RX %1 | headers %2 | valid %3 | checksum %4 | overflow %5 | "
+                       "re-arm %6 | UART %7 | Mag %8 | unsupported %9")
+            .arg(diagnostics.rxByteCount)
+            .arg(diagnostics.headerCount)
+            .arg(diagnostics.validFrameCount)
+            .arg(diagnostics.checksumErrorCount)
+            .arg(diagnostics.ringOverflowCount)
+            .arg(diagnostics.rearmFailureCount)
+            .arg(diagnostics.uartErrorCount)
+            .arg(diagnostics.magFrameCount)
+            .arg(diagnostics.unsupportedFrameCount));
 }
 
 QWidget *MainWindow::createMonitorPanel()

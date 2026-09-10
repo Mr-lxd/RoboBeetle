@@ -62,4 +62,12 @@ if(BUILD_TESTING)
     add_executable(imu_monitor_tests tests/imu_monitor_tests.cpp)
     target_link_libraries(imu_monitor_tests PRIVATE RoboBeetleCore)
     add_test(NAME imu_monitor_tests COMMAND imu_monitor_tests)
+
+    add_executable(main_window_tests
+        tests/main_window_tests.cpp
+        src/ui/MainWindow.h
+        src/ui/MainWindow.cpp
+    )
+    target_link_libraries(main_window_tests PRIVATE RoboBeetleCore Qt6::Widgets)
+    add_test(NAME main_window_tests COMMAND main_window_tests)
 endif()
