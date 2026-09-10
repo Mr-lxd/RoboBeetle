@@ -1,5 +1,8 @@
 #include "jy901s_parser.h"
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 static int16_t decode_signed_le(

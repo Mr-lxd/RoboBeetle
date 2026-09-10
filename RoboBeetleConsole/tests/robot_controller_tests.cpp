@@ -1,5 +1,6 @@
 #include "protocol/PacketCodec.h"
 #include "robot/LeakStatus.h"
+#include "robot/ImuSnapshot.h"
 #include "robot/RobotController.h"
 #include "transport/FakeTransport.h"
 
@@ -100,6 +101,19 @@ void injectLeakStatus(rb::FakeTransport &transport, quint8 state)
 {
     transport.injectBytes(rb::PacketCodec::encodeWire(
         {rb::MessageType::LeakStatus, 0x6000, QByteArray(1, static_cast<char>(state))}));
+}
+
+void injectImuSnapshot(rb::FakeTransport &transport, quint16 sequence)
+{
+    rb::ImuSnapshot snapshot;
+    snapshot.validityFlags = rb::ImuSnapshot::AccValid
+        | rb::ImuSnapshot::GyroValid | rb::ImuSnapshot::AngleValid;
+    snapshot.accMg = {1000, -2000, 0};
+    snapshot.gyroDecidps = {10, -20, 0};
+    snapshot.angleCentidegrees = {300, -400, 500};
+    const QByteArray payload = rb::ImuSnapshot::encodePayload(snapshot);
+    transport.injectBytes(rb::PacketCodec::encodeWire(
+        {rb::MessageType::ImuSnapshot, sequence, payload}));
 }
 
 void installSynchronousAcks(rb::FakeTransport &transport,
@@ -248,6 +262,35 @@ void testLeakStatusStaleAndDisconnectTransitions()
     controller.disconnectTransport();
     expect(controller.leakState() == rb::LeakState::Unknown,
            "disconnect must clear trusted leak state");
+}
+
+void testImuSnapshotDoesNotTouchAckOrLeakState()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    expect(controller.enableServo(rb::ServoId::FrontRight),
+           "IMU isolation test should create a pending Enable");
+    const qsizetype writesBeforeImu = transport.writes().size();
+    injectImuSnapshot(transport, 0x6200);
+
+    expect(controller.imuState().status == rb::ImuStatus::Receiving
+               && controller.imuState().snapshot.has_value(),
+           "valid IMU telemetry should update the monitor");
+    expect(transport.writes().size() == writesBeforeImu,
+           "IMU telemetry must not create a command write");
+    expect(!controller.isServoEnabled(rb::ServoId::FrontRight),
+           "IMU telemetry must not satisfy a pending Enable ACK");
+    expect(controller.leakState() == rb::LeakState::Unknown,
+           "IMU telemetry must not alter LeakStatus state");
+
+    acknowledgeLast(transport);
+    expect(controller.isServoEnabled(rb::ServoId::FrontRight),
+           "the real matching ACK must still complete the pending Enable");
 }
 
 void testApcHeartbeatLossClearsLeakState()
@@ -2067,6 +2110,7 @@ int main(int argc, char **argv)
     testNoAutomaticEnableAndPwmRequiresEnable();
     testLeakStatusMappingAndPendingAckIsolation();
     testLeakStatusStaleAndDisconnectTransitions();
+    testImuSnapshotDoesNotTouchAckOrLeakState();
     testApcHeartbeatLossClearsLeakState();
     testAngleDegreesConvertToCentidegrees();
     testSetAngleBlockedDuringDisableRequest();

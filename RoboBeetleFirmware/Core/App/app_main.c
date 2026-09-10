@@ -2,6 +2,8 @@
 
 #include "protocol_dispatcher.h"
 #include "rb_protocol_v2.h"
+#include "telemetry_scheduler.h"
+#include "imu_telemetry_policy.h"
 #include "safety_supervisor.h"
 #include "leak_sensor.h"
 #include "leak_telemetry_policy.h"
@@ -9,8 +11,13 @@
 #include "servo_driver_stm32.h"
 #include "servo_service.h"
 #include "jy901s_parser.h"
+#include "jy901s_telemetry.h"
 #include "jy901s_transport_stm32.h"
 #include "uart_transport_stm32.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 static uint8_t protocol_wire_buffer[
     RBP2_MAX_WIRE_SIZE];
@@ -44,6 +51,8 @@ static servo_service_t servo_service;
 static leak_sensor_t leak_sensor;
 static leak_sensor_stm32_t leak_sensor_reader;
 static leak_telemetry_policy_t leak_telemetry_policy;
+static imu_telemetry_policy_t imu_telemetry_policy;
+static telemetry_scheduler_t telemetry_scheduler;
 static jy901s_parser_t jy901s_parser;
 static volatile uint32_t jy901s_last_valid_frame_ms;
 
@@ -54,6 +63,8 @@ static bool protocol_send_ack(
 
 static bool protocol_send_leak_status(
     leak_sensor_state_t state);
+
+static bool protocol_send_imu_snapshot(void);
 
 static void protocol_feed_byte(
     uint8_t byte)
@@ -114,17 +125,51 @@ static void protocol_feed_byte(
                     const leak_sensor_state_t state =
                         leak_sensor_state(&leak_sensor);
 
-                    if (leak_telemetry_policy_should_publish(
+                    const bool leak_due =
+                        leak_telemetry_policy_should_publish(
                             &leak_telemetry_policy,
                             state,
                             now_ms,
-                            LEAK_TELEMETRY_REFRESH_INTERVAL_MS) &&
-                        protocol_send_leak_status(state))
+                            LEAK_TELEMETRY_REFRESH_INTERVAL_MS);
+                    const bool imu_due =
+                        imu_telemetry_policy_should_publish(
+                            &imu_telemetry_policy,
+                            now_ms,
+                            JY901S_IMU_TELEMETRY_INTERVAL_MS);
+
+                    switch (telemetry_scheduler_select(
+                                &telemetry_scheduler,
+                                leak_due,
+                                imu_due))
                     {
-                        leak_telemetry_policy_mark_published(
-                            &leak_telemetry_policy,
-                            state,
-                            now_ms);
+                        case TELEMETRY_SLOT_LEAK_STATUS:
+                            if (protocol_send_leak_status(state))
+                            {
+                                leak_telemetry_policy_mark_published(
+                                    &leak_telemetry_policy,
+                                    state,
+                                    now_ms);
+                                telemetry_scheduler_mark_success(
+                                    &telemetry_scheduler,
+                                    TELEMETRY_SLOT_LEAK_STATUS);
+                            }
+                            break;
+
+                        case TELEMETRY_SLOT_IMU_SNAPSHOT:
+                            if (protocol_send_imu_snapshot())
+                            {
+                                imu_telemetry_policy_mark_published(
+                                    &imu_telemetry_policy,
+                                    now_ms);
+                                telemetry_scheduler_mark_success(
+                                    &telemetry_scheduler,
+                                    TELEMETRY_SLOT_IMU_SNAPSHOT);
+                            }
+                            break;
+
+                        case TELEMETRY_SLOT_NONE:
+                        default:
+                            break;
                     }
                 }
             }
@@ -240,6 +285,57 @@ static bool protocol_send_leak_status(
                (uint16_t)wire_length) == HAL_OK;
 }
 
+static bool protocol_send_imu_snapshot(void)
+{
+    jy901s_imu_state_t state;
+    jy901s_parser_stats_t parser_stats;
+    jy901s_transport_stm32_diagnostics_t transport_stats;
+    jy901s_imu_telemetry_diagnostics_t transport_diagnostics;
+    uint8_t payload[JY901S_IMU_TELEMETRY_PAYLOAD_LENGTH];
+    uint8_t wire[RBP2_MAX_WIRE_SIZE];
+
+    jy901s_parser_get_state(&jy901s_parser, &state);
+    jy901s_parser_get_stats(&jy901s_parser, &parser_stats);
+    jy901s_transport_stm32_get_diagnostics(&transport_stats);
+
+    transport_diagnostics.rx_byte_count =
+        transport_stats.rx_byte_count;
+    transport_diagnostics.rx_buffer_overflow_count =
+        transport_stats.rx_buffer_overflow_count;
+    transport_diagnostics.rx_rearm_failure_count =
+        transport_stats.rx_rearm_failure_count;
+    transport_diagnostics.uart_error_count =
+        transport_stats.uart_error_count;
+
+    if (jy901s_imu_telemetry_encode(
+            &state,
+            &parser_stats,
+            &transport_diagnostics,
+            payload,
+            sizeof payload) == 0U)
+    {
+        return false;
+    }
+
+    const size_t wire_length =
+        rbp2_encode_wire(
+            RBP2_MSG_IMU_SNAPSHOT,
+            protocol_telemetry_sequence++,
+            payload,
+            JY901S_IMU_TELEMETRY_PAYLOAD_LENGTH,
+            wire,
+            sizeof wire);
+
+    if (wire_length == 0U)
+    {
+        return false;
+    }
+
+    return uart_transport_stm32_transmit(
+               wire,
+               (uint16_t)wire_length) == HAL_OK;
+}
+
 void app_main_init(
     UART_HandleTypeDef *uart,
     UART_HandleTypeDef *jy901s_uart,
@@ -269,6 +365,8 @@ void app_main_init(
         &safety_supervisor);
     uart_transport_stm32_init(uart);
     jy901s_parser_init(&jy901s_parser);
+    imu_telemetry_policy_init(&imu_telemetry_policy);
+    telemetry_scheduler_init(&telemetry_scheduler);
     jy901s_last_valid_frame_ms = 0U;
     jy901s_transport_stm32_init(jy901s_uart);
 }

@@ -1,0 +1,126 @@
+# JY901S low-rate telemetry and Qt bring-up monitor
+
+## Scope and evidence boundary
+
+This stacked phase starts from the reviewed PR #10 HEAD. It consumes the
+read-only JY901S state already produced by
+`USART3/PB11 -> one-byte interrupt RX -> 256-byte ring -> 11-byte parser` and
+publishes a low-rate Protocol V2 snapshot over the existing STM32 USART1 host
+link. The current bench path is Qt Console -> Windows COM13 -> DAP UART/USB
+serial bridge -> STM32 USART1; APC220 is an earlier/legacy transport record,
+not current hardware evidence. It adds no JY901S configuration command, no raw UART passthrough, no
+servo/safety linkage, no body-frame transform, no EKF, no depth work, and no
+3D/history UI.
+
+`RoboBeetleFirmware/Core/Inc/rb_protocol_v2.h` currently defines message IDs
+`0x01`, `0x02`, `0x03`, `0x10`–`0x14`, and `0x20`. A repository-wide source and
+protocol-document audit found no `0x21` use or reservation, so this phase
+assigns `0x21` to `ImuSnapshot` and records that assignment in the protocol
+documentation and both endpoint enums.
+
+The existing Protocol V2 frame remains unchanged: `RB 02`, one-byte message
+type, little-endian sequence and payload length, CRC-16/CCITT-FALSE, COBS, and
+the trailing zero delimiter. `RBP2_MAX_PAYLOAD` remains 64 bytes and the
+generated CubeMX CMake file and `.ioc` remain unchanged in this phase.
+
+## Fixed ImuSnapshot payload
+
+`ImuSnapshot` is an unacknowledged telemetry frame. Its sequence uses the
+existing Firmware telemetry sequence, which is separate from the command/ACK
+sequence. The payload is exactly 56 bytes; no C/C++ struct is copied to the
+wire.
+
+| Offset | Size | Field | Encoding |
+|---:|---:|---|---|
+| 0 | 1 | schema version | `uint8`, currently `0x01` |
+| 1 | 1 | validity flags | bit 0 Acc, bit 1 Gyro, bit 2 Angle; bits 3–7 zero |
+| 2 | 6 | Acc X/Y/Z | signed `int16 LE`, mg, nearest integer, ties away from zero |
+| 8 | 6 | Gyro X/Y/Z | signed `int16 LE`, 0.1 dps, nearest integer, ties away from zero |
+| 14 | 6 | Roll/Pitch/Yaw | signed `int16 LE`, 0.01 degree, nearest integer, ties away from zero |
+| 20 | 4 | USART3 RX bytes | `uint32 LE` |
+| 24 | 4 | parser header count | `uint32 LE` |
+| 28 | 4 | valid frame count | `uint32 LE` |
+| 32 | 4 | checksum error count | `uint32 LE` |
+| 36 | 4 | ring overflow count | `uint32 LE` |
+| 40 | 4 | RX re-arm failure count | `uint32 LE` |
+| 44 | 4 | UART error count | `uint32 LE` |
+| 48 | 4 | known Mag frame count | `uint32 LE` |
+| 52 | 4 | unsupported valid frame count | `uint32 LE` |
+
+If a domain validity bit is clear, all three corresponding fixed-point values
+are encoded as zero and the Console displays `--`. Firmware clamps a valid
+domain to the representable `int16` range; the parser's normal ranges are
+approximately Acc ±16 g, Gyro ±2000 dps, and Angle ±180 degrees. The Console
+rejects reserved flags, nonzero values for an invalid domain, and values beyond
+those documented engineering ranges. NaN is not a valid live value and is
+encoded as zero with the domain value treated as invalid by the producer.
+
+The 56-byte payload produces a 66-byte logical frame, at most a 67-byte COBS
+body, and at most a 68-byte wire frame including the delimiter. At 9600 8-N-1,
+one 1 Hz IMU frame consumes at most 68 of the approximately 960 serial bytes
+per second. With the nominal 250 ms conservative host-link Heartbeat opportunity, four
+Heartbeat+ACK exchanges, up to two 500 ms LeakStatus refreshes, and one IMU
+snapshot per second consume at most approximately 222 bytes per second using
+the endpoint worst-case frame sizes, before host-link and application
+overhead. This is a DAP/USART1 load-budget estimate, not an APC220 throughput
+claim or a Windows-plus-RF hard-real-time guarantee.
+The effective IMU refresh is up to approximately 1 Hz under the nominal
+accepted Heartbeat cadence, and may be lower if ACK opportunities are delayed
+or consumed by pending LeakStatus refreshes; this is not an independent timer
+rate.
+
+## Firmware scheduling
+
+Firmware evaluates the existing LeakStatus policy and the new one-second IMU
+policy only after an accepted Heartbeat has had its normal ACK transmit return
+successfully. A pure-C selector returns exactly one slot. LeakStatus wins the
+first shared opportunity when both policies are due. After a successful
+LeakStatus publication, a still-due ImuSnapshot gets the next shared
+opportunity—even if LeakStatus is due again—so a slow Heartbeat cadence cannot
+starve IMU forever. After a successful ImuSnapshot publication, LeakStatus
+regains priority on the next shared due opportunity. If a selected transmit
+fails, its policy is not marked and the scheduler keeps the previous successful
+slot, allowing the pending telemetry to be retried without claiming it was
+published.
+
+Thus a Heartbeat can cause zero or one non-ACK telemetry frame, never both, and
+repeated LeakStatus due events cannot permanently starve a due IMU snapshot.
+The leak policy is marked published only after successful LeakStatus transmit;
+the IMU policy is marked only after successful snapshot transmit. The first
+valid Heartbeat can publish the first due frame. A later Heartbeat opportunity
+allows a still-due IMU frame after a LeakStatus priority publication, so the
+existing LeakStatus refresh is not starved. No independent IMU timer or TX
+path is introduced, and no ACK sequence or pending-request state is touched.
+
+## Console monitor
+
+The Console decodes `ImuSnapshot` separately from ACK and LeakStatus handling.
+`ImuMonitor` owns only the latest validated snapshot and its status:
+`Unknown` before data or after disconnect/liveness loss, `Receiving` after a
+validated snapshot, `Stale` after 3500 ms without a new snapshot, and `Error`
+after a malformed snapshot. Invalid, stale, disconnected, and liveness-lost
+states clear the live snapshot so old values cannot be presented as current.
+Valid snapshots may carry partial domain validity; each invalid domain remains
+`--` while diagnostics are still visible.
+
+The Qt panel is titled `IMU — JY901S` and shows status, Acc, Gyro, Euler angle,
+and the selected bring-up counters. It intentionally has no 3D model, plot,
+history, control action, or calibration UI. Incoming IMU frames never create,
+release, retry, or reorder ACK-pending commands, and existing LeakStatus and
+USART1 host-link behavior remains unchanged. APC220 is not current hardware
+evidence and requires a separate future verification run.
+
+## Closeout status addendum — 2026-09-10
+
+The matching PR #11 Firmware + Qt run verified the complete path
+`JY901S -> USART3/PB11 -> ring/parser -> Acc/Gyro/Angle -> ImuSnapshot ->
+STM32 USART1 -> DAP UART/COM13 -> Qt`. Acc/Gyro/Angle were live and plausible,
+and checksum-valid 0x54 Mag frames were recognized as known-but-ignored. The
+post-fix Run A and Run B both reported hard re-arm failures 0 and overflow 0,
+so the re-arm diagnostic follow-up is closed. Aggregate/subtype UART errors and
+checksum errors remain observable; USART3 physical-link quality, final
+body-frame mapping, and magnetic/yaw calibration remain Pending. The isolated
+Qt invalid-length event remains an observation because split, sticky, and
+back-to-back tests pass and Protocol CRC/timeouts remained zero. No standalone
+PR #11 Program Verify record is included in this closeout, so that gate remains
+Pending.

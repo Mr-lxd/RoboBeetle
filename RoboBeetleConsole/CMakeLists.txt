@@ -24,6 +24,10 @@ add_library(RoboBeetleCore
     src/transport/SerialTransport.cpp
     src/robot/RobotCommand.h
     src/robot/LeakStatus.h
+    src/robot/ImuSnapshot.h
+    src/robot/ImuSnapshot.cpp
+    src/robot/ImuMonitor.h
+    src/robot/ImuMonitor.cpp
     src/robot/ServoDescriptor.h
     src/robot/ServoDescriptor.cpp
     src/robot/RobotController.h
@@ -54,4 +58,16 @@ if(BUILD_TESTING)
     add_executable(servo_descriptor_tests tests/servo_descriptor_tests.cpp)
     target_link_libraries(servo_descriptor_tests PRIVATE RoboBeetleCore)
     add_test(NAME servo_descriptor_tests COMMAND servo_descriptor_tests)
+
+    add_executable(imu_monitor_tests tests/imu_monitor_tests.cpp)
+    target_link_libraries(imu_monitor_tests PRIVATE RoboBeetleCore)
+    add_test(NAME imu_monitor_tests COMMAND imu_monitor_tests)
+
+    add_executable(main_window_tests
+        tests/main_window_tests.cpp
+        src/ui/MainWindow.h
+        src/ui/MainWindow.cpp
+    )
+    target_link_libraries(main_window_tests PRIVATE RoboBeetleCore Qt6::Widgets)
+    add_test(NAME main_window_tests COMMAND main_window_tests)
 endif()
