@@ -11,6 +11,7 @@ _Static_assert(RBP2_RESULT_UNSUPPORTED_SERVO == 3, "ACK result value changed");
 _Static_assert(RBP2_RESULT_SERVO_NOT_ENABLED == 4, "ACK result value changed");
 _Static_assert(RBP2_RESULT_OUT_OF_RANGE == 5, "ACK result value changed");
 _Static_assert(RBP2_RESULT_HARDWARE_FAILURE == 6, "ACK result value changed");
+_Static_assert(RBP2_MSG_LEAK_STATUS == 0x20, "LeakStatus message value changed");
 
 static int failures = 0;
 
@@ -76,6 +77,18 @@ int main(void)
     static const uint8_t angle_max_wire[] = {
         0x06U, 0x52U, 0x42U, 0x02U, 0x13U, 0x08U, 0x02U, 0x04U,
         0x02U, 0x01U, 0x05U, 0x28U, 0x23U, 0xD4U, 0xD9U, 0x00U};
+    static const uint8_t leak_unknown_payload[] = {0x00U};
+    static const uint8_t leak_dry_payload[] = {0x01U};
+    static const uint8_t leak_wet_payload[] = {0x02U};
+    static const uint8_t leak_unknown_wire[] = {
+        0x06U, 0x52U, 0x42U, 0x02U, 0x20U, 0x09U, 0x02U, 0x01U,
+        0x01U, 0x03U, 0xE3U, 0x61U, 0x00U};
+    static const uint8_t leak_dry_wire[] = {
+        0x06U, 0x52U, 0x42U, 0x02U, 0x20U, 0x0AU, 0x02U, 0x01U,
+        0x04U, 0x01U, 0x10U, 0x9FU, 0x00U};
+    static const uint8_t leak_wet_wire[] = {
+        0x06U, 0x52U, 0x42U, 0x02U, 0x20U, 0x0BU, 0x02U, 0x01U,
+        0x04U, 0x02U, 0x22U, 0x05U, 0x00U};
 
     expect(rbp2_crc16_ccitt_false((const uint8_t *)"123456789", 9U) == 0x29B1U,
            "CRC-16/CCITT-FALSE reference value differs");
@@ -89,6 +102,15 @@ int main(void)
                          sizeof(angle_zero_payload), angle_zero_wire, sizeof(angle_zero_wire));
     expect_golden_vector(RBP2_MSG_SET_SERVO_ANGLE, 8U, angle_max_payload,
                          sizeof(angle_max_payload), angle_max_wire, sizeof(angle_max_wire));
+    expect_golden_vector(RBP2_MSG_LEAK_STATUS, 9U, leak_unknown_payload,
+                         sizeof(leak_unknown_payload), leak_unknown_wire,
+                         sizeof(leak_unknown_wire));
+    expect_golden_vector(RBP2_MSG_LEAK_STATUS, 10U, leak_dry_payload,
+                         sizeof(leak_dry_payload), leak_dry_wire,
+                         sizeof(leak_dry_wire));
+    expect_golden_vector(RBP2_MSG_LEAK_STATUS, 11U, leak_wet_payload,
+                         sizeof(leak_wet_payload), leak_wet_wire,
+                         sizeof(leak_wet_wire));
 
     if (failures == 0)
     {

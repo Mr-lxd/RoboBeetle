@@ -23,6 +23,7 @@ add_library(RoboBeetleCore
     src/transport/SerialTransport.h
     src/transport/SerialTransport.cpp
     src/robot/RobotCommand.h
+    src/robot/LeakStatus.h
     src/robot/ServoDescriptor.h
     src/robot/ServoDescriptor.cpp
     src/robot/RobotController.h

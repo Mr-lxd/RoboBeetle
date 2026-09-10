@@ -61,6 +61,8 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define DBG_LED_Pin GPIO_PIN_2
 #define DBG_LED_GPIO_Port GPIOB
+#define LEAK_SENSOR_Pin GPIO_PIN_11
+#define LEAK_SENSOR_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
 

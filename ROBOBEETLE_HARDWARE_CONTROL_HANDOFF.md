@@ -1,5 +1,53 @@
 # RoboBeetle 硬件控制交接审计
 
+## 2026-09-10 Leak detection sensor bring-up（PR #9，end-to-end Hardware Verified）
+
+本阶段在 PR #8 五舵机分支之后采用 stacked branch，实现第一条最小数字漏水检测路径及其 monitoring-only Protocol V2/Qt 显示，不改变 Servo 行为或 Safety 行为。漏水模块由 3.3 V 供电，与 STM32 共地；数字输出 `D0` 接 STM32 `PA11`，模拟输出 `A0` 暂不使用。PA11 → Firmware → Protocol V2 → Qt 的完整路径已经完成实机验收。
+
+### 当前实现
+
+```text
+leak module D0
+  → PA11 GPIO input
+  → leak_sensor_stm32 raw-level reader
+  → leak_sensor pure-C mapper
+  → app_main 内部状态（主循环 polling）
+  → Protocol V2 LeakStatus `0x20`（Heartbeat ACK 完成后）
+  → Qt Leak indicator
+```
+
+- `PA11` 在现有 `MX_GPIO_Init()` 中配置为 `GPIO_MODE_INPUT` + `GPIO_NOPULL`，没有新增 EXTI/NVIC。
+- `PA11` 已对照当前 `.ioc`、`main.c`、HAL MSP、USART1、TIM3/TIM4、SWD 与既有 GPIO 资源确认在软件配置层面 free；本阶段将其作为漏水 D0 输入。
+- 当前集中定义的初始极性是 `PA11 HIGH → LEAK_SENSOR_STATE_DRY`、`PA11 LOW → LEAK_SENSOR_STATE_WET`；首次采样前状态为 `UNKNOWN`。
+- `GPIO_NOPULL` 是 bring-up assumption，不是已验证的电气结论；资料尚未可靠确认 D0 输出级是推挽还是开漏。若实机显示浮动/不稳定，另行依据测量结果决定 pull 配置。
+- 轮询只更新内部状态；LeakStatus 是无 ACK 的 monitoring-only telemetry，不触发 Servo disable、Emergency Stop、报警或其它 Safety 动作。
+- Firmware 只在 accepted Heartbeat 的正常 ACK 已完整发送后，在首次有效采样、状态变化或 500 ms refresh opportunity 发布一帧；telemetry 使用独立序列空间，不进入 command pending/ACK matching。
+- Qt 将 `0=UNKNOWN`、`1=DRY`、`2=WET` 显示为 `Leak: Unknown`、`Leak: Dry`、`LEAK DETECTED`；断开、APC liveness loss、非法 payload 或 1500 ms（3 × 500 ms opportunity，provisional）无更新时回到 Unknown。
+
+### 验证分层
+
+| 项目 | 当前状态 |
+|---|---|
+| Leak HIGH→Dry / LOW→Wet 纯 C 逻辑 | **Host Test: PASS** |
+| Firmware ARM Build | **ARM Build: PASS**（STM32CubeIDE GNU Tools for STM32 14.3.1，CMake Debug configure/build；生成 `RoboBeetleFirmware.elf`） |
+| Program Verify | **Program Verify: PASS**（重建当前 ELF 后完成烧录与校验） |
+| PA11 Dry/Wet 检测路径 | **Hardware Verified** |
+| Protocol V2 LeakStatus `0x20` 实链路 | **Hardware Verified** |
+| Qt Leak indicator | **Hardware Verified** |
+| 端到端 Leak monitoring | **Hardware Verified** |
+| Leak Safety Supervisor response | **Pending / Not Implemented** |
+| Protocol V2 LeakStatus `0x20` codec/controller path | **Host Test: PASS; Hardware Verified** |
+| Qt leak visualization / stale-disconnect behavior | **Host Test: PASS; Hardware Verified** |
+
+### Leak 实机验收记录
+
+1. 重新构建当前 Firmware ELF，完成 Program Verify；先前持续显示 `Leak: Unknown` 的问题由错误/过期 build artifact provenance 引起。
+2. 使用已验证的当前镜像运行 PA11 leak detection，确认干/湿状态能沿 Firmware `leak_sensor` 路径进入 LeakStatus telemetry。
+3. 通过真实 Protocol V2 链路观察 Qt indicator 状态变化，确认 LeakStatus 不产生 ACK、不触发 Servo 或 Safety 动作。
+4. 本次验收未记录数值电压或响应时间；这些数值不应从本次 PASS 结论中推导。
+
+传感器 bring-up 顺序固定为：`Leak detection (including LeakStatus telemetry) → JY901S IMU → depth/sensor board`。LeakStatus 端到端证据现已补齐；JY901S 与 Depth 尚未开始。
+
 ## 2026-09-09 Depth PWM calibration window follow-up（PR #8）
 
 ### 当前状态
@@ -14,7 +62,7 @@
 - `RearRight` STM32/A12 PWM output path：**[Hardware Verified]**；原 RearRight servo actuator/线束为 hardware fault，计划更换，不属于 Firmware bug。
 - Depth 在 `1480/1500/1520 μs` 的运动方向：**[Hardware Verified]**（PWM 减小 → front A 上翻，PWM 增大 → front A 下翻）。
 
-本次新增开放的 `500–2500 μs` 全行程、机械端点、safe min/max、practical center、PWM-to-angle calibration 和 angle control 均为 **[Pending Hardware Verification]**；该窗口是 endpoint exploration window，不是最终 mechanically safe endpoints。当前台架的约 `1100–2500 μs` 机构翻转观察和低于约 `1100 μs` 的 ACK timeout 现象属于新实测记录，不构成最终机械端点标定，也不授权继续探测更低脉宽。`1500 μs` 仍不是最终机械中心。本环境仅记录 Host Test；ARM Build、Program Verify 和本轮新窗口的 Hardware Verification 不在本次会话中宣称通过。
+本次新增开放的 `500–2500 μs` 全行程、机械端点、safe min/max、practical center、PWM-to-angle calibration 和 angle control 均为 **[Pending Hardware Verification]**；该窗口是 endpoint exploration window，不是最终 mechanically safe endpoints。当前台架的约 `1100–2500 μs` 机构翻转观察和低于约 `1100 μs` 的 ACK timeout 现象属于新实测记录，不构成最终机械端点标定，也不授权继续探测更低脉宽。`1500 μs` 仍不是最终机械中心。本环境记录纯 C Host Test 与 Firmware ARM Build；Program Verify 和本轮新窗口的 Hardware Verification 不在本次会话中宣称通过。
 
 ### 下一轮 Depth 实机计划
 
@@ -252,8 +300,9 @@ Windows Laptop
         STM32F407VET6 USART1 PA9/PA10
           ├─ IRQ + 128-byte ring buffer
           ├─ Protocol V2 dispatcher / ACK / heartbeat watchdog
-          └─ Servo1 TIM3_CH1 PA6 @ ≈333 Hz
-                → GDW IPX896HV
+          ├─ Leak D0 PA11 → LeakStatus `0x20` monitoring telemetry
+          └─ five-servo descriptor/service/driver path
+                → TIM3/TIM4 PWM outputs
 
 [Planned future path]
 Windows Laptop Qt Console
@@ -297,7 +346,7 @@ USART1_IRQHandler
 - ACK 使用 `HAL_UART_Transmit(..., 100 ms)`，是 main-loop 阻塞发送，不在 ISR 中。
 - 有效 Heartbeat 更新本地 `last_heartbeat_rx_ms` 并设置 `host_alive`。
 - 超过 500 ms 未收到有效 Heartbeat 时停止 Servo1 PWM、清空 enable mask；恢复后必须重新 Heartbeat + Enable。
-- 没有独立硬件看门狗、Emergency Stop、漏水/电池/过流输入或持久故障记录。
+- 没有独立硬件看门狗、Emergency Stop、漏水安全响应、电池/过流输入或持久故障记录；Leak D0 按轮询方式更新内部状态，并通过 PR #9 的 `LeakStatus (0x20)` 做 monitoring-only 遥测。该遥测不触发 Servo/Safety 动作；PA11 → LeakStatus → Qt 端到端路径已 Hardware Verified。
 
 ### Console ↔ Firmware Protocol V2 结论
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protocol/StreamDecoder.h"
+#include "robot/LeakStatus.h"
 #include "robot/RobotCommand.h"
 #include "robot/ServoDescriptor.h"
 #include "transport/ITransport.h"
@@ -22,6 +23,10 @@ enum class LinkProfile {
 };
 
 inline constexpr qsizetype kApc220CommandQueueCapacity = 8;
+inline constexpr int kLeakTelemetryRefreshIntervalMs = 500;
+inline constexpr int kLeakTelemetryStaleOpportunities = 3;
+inline constexpr int kDefaultLeakTelemetryStaleTimeoutMs =
+    kLeakTelemetryRefreshIntervalMs * kLeakTelemetryStaleOpportunities;
 
 struct RobotControllerConfig {
     int heartbeatIntervalMs{100};
@@ -31,6 +36,9 @@ struct RobotControllerConfig {
     // provisional profile leaves an explicit margin below the Firmware
     // watchdog; DirectUart ignores this field.
     int heartbeatSafetyBudgetMs{490};
+    // Three Firmware telemetry refresh opportunities (3 x 500 ms) are
+    // required before a connected Console treats leak state as stale.
+    int leakTelemetryStaleTimeoutMs{kDefaultLeakTelemetryStaleTimeoutMs};
     quint16 supportedServoMask{SupportedServoMask};
     LinkProfile linkProfile{LinkProfile::DirectUart};
 
@@ -74,6 +82,7 @@ public:
     [[nodiscard]] bool isServoSupported(ServoId id) const;
     [[nodiscard]] bool isServoEnabled(ServoId id) const;
     [[nodiscard]] bool isServoDisablePending(ServoId id) const;
+    [[nodiscard]] LeakState leakState() const { return leakState_; }
     [[nodiscard]] RobotControllerConfig config() const { return config_; }
     [[nodiscard]] ProtocolMonitor monitor() const { return monitor_; }
     [[nodiscard]] qsizetype queuedCommandCount() const
@@ -86,6 +95,7 @@ signals:
     void connectionStateChanged(rb::TransportState state);
     void servoStateChanged(int servoIndex, bool enabled);
     void servoDisablePendingChanged(int servoIndex, bool pending);
+    void leakStateChanged(rb::LeakState state);
     void protocolMonitorChanged(const rb::ProtocolMonitor &monitor);
     void txHexChanged(const QString &hex);
     void rxHexChanged(const QString &hex);
@@ -119,13 +129,16 @@ private:
     void processIncoming(const QByteArray &bytes);
     void handlePacket(const Packet &packet);
     void handleAck(const Packet &packet);
+    void handleLeakStatus(const Packet &packet);
     void checkTimeouts();
+    void refreshLeakTelemetryStaleness(qint64 now);
     void updateMonitor();
     void resetSchedulerState();
     void clearQueuedCommandsForDisable(quint16 affectedMask);
     void failClosedApc220Actuators();
     void setEnabledMask(quint16 mask);
     void setDisablePendingMask(quint16 mask);
+    void setLeakState(LeakState state);
     void noteWriteFailure(const QString &context);
     bool rejectUnsupportedServo(ServoId id, const QString &command);
     static QByteArray maskPayload(quint16 mask);
@@ -151,6 +164,8 @@ private:
     QTimer heartbeatTimer_;
     QTimer retryTimer_;
     ProtocolMonitor monitor_;
+    LeakState leakState_{LeakState::Unknown};
+    qint64 lastLeakTelemetryAtMs_{-1};
 };
 
 } // namespace rb

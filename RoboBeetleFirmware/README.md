@@ -1,6 +1,6 @@
 # RoboBeetleFirmware
 
-RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for Laptop/Qt ↔ USART1 ↔ STM32 Protocol V2 bring-up and the five-servo semantic descriptor path. This README records the merged hardware-verified modularization baseline and the PR #8 five-servo implementation; the new five-servo layout remains pending target hardware regression.
+RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for Laptop/Qt ↔ USART1 ↔ STM32 Protocol V2 bring-up, the five-servo semantic descriptor path, and the PR #9 leak-status telemetry path. This README records the merged hardware-verified modularization baseline, the PR #8 Servo/Depth bench findings, and the PR #9 leak-status hardware acceptance. Depth endpoint calibration remains pending; the LeakStatus path is now hardware verified.
 
 ## Status labels
 
@@ -34,6 +34,62 @@ Enable accepts a multi-bit mask only with all-or-nothing semantics. Requested ch
 This is a hardware-layout compatibility break. Historical v0.4 `Servo1`/PA6 bring-up referred to `RearLeft`; PR #8 formally assigns PA6/ID 0 to `FrontRight` and assigns `RearLeft` to PD13/TIM4_CH2. Do not mix a pre-PR8 Console/Firmware binary with the PR8 five-servo wiring. The Qt `Servo1` name is only a deprecated source-compatibility alias for `FrontRight`; new firmware code uses semantic names.
 
 PR #8 software descriptor, service, and dispatch regressions are the implementation gate. Five-servo target build/download and physical motion verification are still **[Pending Hardware Verification]**; the earlier Servo1-only hardware milestones remain historical evidence for the old layout.
+
+## PR #9 leak-status telemetry: leak D0 on PA11 — [Hardware Verified]
+
+The first sensor phase adds a polled digital leak input and a monitoring-only
+Protocol V2 telemetry path. The module is
+powered from 3.3 V with common GND; its digital output `D0` is wired to
+STM32 `PA11`, while analog `A0` is intentionally unused. The current path is:
+
+```text
+leak D0 → PA11 GPIO input → leak_sensor_stm32 raw reader
+  → leak_sensor pure-C mapper → app_main internal state
+  → LeakStatus `0x20` telemetry after an accepted Heartbeat ACK
+  → Qt leak indicator
+```
+
+`PA11` is configured in the existing `MX_GPIO_Init()` path as
+`GPIO_MODE_INPUT` with `GPIO_NOPULL`; there is no EXTI, debounce, alarm, or
+Safety action. The module's output-stage type is not fully established by the
+available documentation, so `GPIO_NOPULL` is a bring-up assumption rather than
+a verified electrical conclusion. A source-level resource scan checked PA11
+against the active `.ioc`, `main.c`, HAL MSP, USART1, TIM3/TIM4, SWD, and
+existing GPIO assignments and found it free at the software resource level. The
+initial polarity is PA11 HIGH → `LEAK_SENSOR_STATE_DRY` and PA11 LOW →
+`LEAK_SENSOR_STATE_WET`.
+
+Firmware emits `LeakStatus` (`0x20`) as one unacknowledged byte (`0=UNKNOWN`,
+`1=DRY`, `2=WET`) only after an accepted Heartbeat has had its normal ACK
+fully transmitted. The telemetry has an independent sequence space and is
+published on the first valid sample, on state change, or at most once per
+500 ms refresh interval; it has no independent transmit timer and never
+changes Servo or Safety state. The Console returns to `Unknown` on disconnect,
+APC liveness loss, invalid payload, or a stale telemetry interval of 1500 ms
+(three 500 ms Firmware refresh opportunities; provisional).
+
+The pure-C mapper/policy, Protocol V2 vectors, and Qt/controller regressions are
+**[Host Test: PASS]**. The current STM32CubeIDE Debug ARM configure/build is
+**[ARM Build: PASS]**, and the rebuilt current ELF was programmed and verified
+with **[Program Verify: PASS]**. Physical acceptance is now recorded as:
+
+| Acceptance item | Status |
+|---|---|
+| PA11 leak detection path | **[Hardware Verified]** |
+| Protocol V2 `LeakStatus (0x20)` real-link exchange | **[Hardware Verified]** |
+| Qt Leak indicator | **[Hardware Verified]** |
+| End-to-end Leak monitoring | **[Hardware Verified]** |
+| Leak Safety response | **[Pending / Not Implemented]** |
+
+The earlier persistent `Leak: Unknown` observation was caused by programming/build
+artifact provenance. After rebuilding the correct current ELF and programming and
+verifying that image, the complete PA11 → Firmware → Protocol V2 → Qt path worked
+as intended. No numeric voltage or response-time values are asserted here because
+they were not part of the recorded acceptance result.
+
+The remaining sensor sequence is JY901S IMU → depth/sensor board; neither has
+started in this closeout. LeakStatus remains monitoring-only and is not connected
+to Servo or Safety actions.
 
 ## Active target and CubeMX configuration
 
@@ -73,6 +129,7 @@ protocol_dispatcher_handle
   ├─ Set Servo PWM
   ├─ Set Servo Angle calibration mapping
   ├─ Neutral semantic command
+  ├─ LeakStatus telemetry (after accepted Heartbeat ACK)
   └─ one-entry duplicate suppression / result replay
         ↓
 main-loop ACK generation / UART TX
@@ -96,6 +153,8 @@ The current communication split is:
 - **[Implemented]** `Core/Servo/servo_calibration.c/.h` owns per-descriptor integer angle-to-pulse mapping.
 - **[Implemented]** `Core/Servo/servo_service.c/.h` owns supported-mask validation, enabled-state policy, command range checks, Neutral semantics, multi-bit Enable rollback, and driver-independent Servo results.
 - **[Implemented]** `Core/Servo/servo_driver_stm32.c/.h` owns the HAL/TIM3/TIM4 channel adapter. It maps abstract descriptor selectors to timer handles and HAL channels and has no Protocol or heartbeat knowledge.
+- **[Implemented]** `Core/Sensors/leak_sensor.c/.h` owns the HAL-independent UNKNOWN/DRY/WET mapping; `leak_sensor_stm32.c/.h` only reads the configured PA11 GPIO.
+- **[Implemented]** `Core/Sensors/leak_telemetry_policy.c/.h` limits LeakStatus publication to first sample/state changes/500 ms refreshes. `Core/App/app_main.c` sends one-byte `0x20` telemetry only after a successful Heartbeat ACK; it does not connect leak state to Safety or Servo behavior.
 - **[Hardware Verified]** `Core/Safety/safety_supervisor.c/.h` owns host liveness, the last valid Heartbeat timestamp, strict timeout evaluation, and one-shot timeout transition reporting. It has no HAL, Protocol, UART, or Servo dependency.
 - **[Hardware Verified]** `Core/Communication/protocol_dispatcher.c/.h` owns decoded command payload validation, HostAlive gating, Servo service invocation/result mapping, Heartbeat semantics, and the one-entry successful-command cache. It has no HAL, UART, TIM3, or Console dependency.
 - **[Hardware Verified]** `main.c` keeps the CubeMX entry/configuration, `app_main_init`/`app_main_process` calls, and a small UART callback transport delegate. Protocol, Safety, Servo, ACK, diagnostics, and RX-drain orchestration live in `Core/App/app_main.c`.
@@ -123,7 +182,7 @@ Current constants:
 - Magic `52 42`, version `02`
 - Header 8 bytes, CRC 2 bytes, payload ≤64 bytes
 - `WireFrame = COBS(LogicalFrame) + 00`
-- Message IDs: Heartbeat `01`, ACK `02`, Error `03`, Servo Enable `10`, Servo Disable `11`, Set Servo PWM `12`, Set Servo Angle `13`, Neutral `14`
+- Message IDs: Heartbeat `01`, ACK `02`, Error `03`, Servo Enable `10`, Servo Disable `11`, Set Servo PWM `12`, Set Servo Angle `13`, Neutral `14`, LeakStatus `20`
 
 See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmware matrix. Important current behavior is:
 
@@ -131,6 +190,7 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 - Error is declared but never sent by Firmware.
 - Neutral validates liveness/mask/enabled state, writes each descriptor's neutral pulse, and leaves the selected channels enabled.
 - Set Angle is available only for the four calibrated SAVOX/GDW angle-capable descriptors; FrontAxis is PWM-only. Each angle is range-checked and mapped with `int32_t` intermediates.
+- LeakStatus `0x20` is a one-byte, unacknowledged monitoring frame (`UNKNOWN=0`, `DRY=1`, `WET=2`). Firmware sends it only after an accepted Heartbeat and completed ACK transmission, on first sample/state change or a 500 ms refresh; it has an independent telemetry sequence and does not trigger Safety or Servo actions.
 - ACK result values are frozen as `OK=0`, `InvalidPayload=1`, `HostNotAlive=2`, `UnsupportedServo=3`, `ServoNotEnabled=4`, `OutOfRange=5`, and `HardwareFailure=6`.
 - Supported mask is exactly `0x001F`. Zero mask is invalid; any unknown bit fails with `UnsupportedServo`. Multi-bit Enable is all-or-nothing with rollback on a channel-start failure.
 - The most recent successful non-Heartbeat request is cached by sequence and type. Its retry replays the ACK without executing the Servo action again. Heartbeats refresh liveness but do not evict this cache.
@@ -151,7 +211,7 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 ### Limitations
 
 - Watchdog processing shares the main loop with blocking ACK transmission and all frame dispatch.
-- There is no independent hardware watchdog, fault state, persisted reset reason, leak/battery/current input, or emergency-stop message in this Phase 1 source.
+- There is no independent hardware watchdog, fault state, persisted reset reason, leak safety response, battery/current input, or emergency-stop message in this Phase 1 source. Leak D0 is polled into an internal state and exposed through monitoring-only LeakStatus telemetry; it does not change Servo behavior.
 - Duplicate suppression intentionally retains one successful non-Heartbeat request rather than a multi-entry replay window. A later distinct successful actuator request replaces it.
 - Disconnect safety relies on the host's best-effort Disable All plus the 500 ms Firmware heartbeat timeout.
 
@@ -205,7 +265,7 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Servo, and Safety modules and their include directories. The seven pure-C checks `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_descriptor_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, and `tests/protocol_dispatcher_tests.c` are compiled manually with `-Wall -Wextra -Werror`. The HAL-adapter mapping regression in `tests/servo_driver_stm32_tests.c` uses host stubs for PWM start/stop and explicitly verifies that HAL `TIM_CHANNEL_1 == 0` remains valid; it complements, but does not replace, the real ARM target build.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Servo, Safety, and Sensors modules and their include directories. The pure-C checks include `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_descriptor_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, `tests/protocol_dispatcher_tests.c`, and `tests/leak_sensor_tests.c`; they are compiled manually with `-Wall -Wextra -Werror`. The HAL-adapter mapping regression in `tests/servo_driver_stm32_tests.c` uses host stubs for PWM start/stop and explicitly verifies that HAL `TIM_CHANNEL_1 == 0` remains valid; it complements, but does not replace, the real ARM target build.
 
 ## App/Main maintainability audit
 
@@ -228,6 +288,9 @@ Core/
 │  ├─ servo_driver_stm32.c/h
 │  ├─ servo_service.c/h
 │  └─ servo_calibration.c/h
+├─ Sensors/
+│  ├─ leak_sensor.c/h
+│  └─ leak_sensor_stm32.c/h
 ├─ Safety/
 │  └─ safety_supervisor.c/h
 └─ Src/main.c
@@ -275,3 +338,5 @@ PR #4 adds only the pure-C `Core/Safety` supervisor, its user-maintained top-lev
 PR #5 adds only the pure-C `Core/Communication/protocol_dispatcher` module, its host regression test, the user-maintained CMake source entry, the `main.c` decoded-frame/outcome integration, and this documentation. Protocol V2 wire framing, ACK encoding/transmit, UART transport, Safety policy, Servo behavior/calibration, `.ioc`, and generated CubeMX CMake remain unchanged. The Protocol Dispatcher extraction is now **[Hardware Verified]**: STM32CubeIDE build PASS, ST-LINK download PASS, and physical Protocol regression PASS covering Connect + Heartbeat, Enable + ACK, Neutral, Set Angle 0/+10/-10 degrees, Set PWM 1520 us near Neutral, Disable/re-enable, Disconnect, the >500 ms safe-disable transition, reconnect without automatic Enable, and manual Enable + ACK recovery.
 
 PR #6 adds only the `Core/App/app_main.c/.h` orchestration layer, its user-maintained CMake source/include entries, the `main.c` delegation points, and this documentation. Protocol V2 wire framing, ACK encoding/transmit, duplicate cache, UART transport, Safety policy, Servo behavior/calibration, `.ioc`, generated CubeMX CMake, and peripheral initialization values remain unchanged. App/Main extraction is now **[Hardware Verified]**: STM32CubeIDE Build PASS, ST-LINK Download PASS, and Full physical regression PASS.
+
+PR #9 adds the pure-C leak-state telemetry policy, the Protocol V2 `LeakStatus (0x20)` frame, and a monitoring-only Qt indicator. Firmware samples PA11 and publishes after an accepted Heartbeat ACK on first/change/500 ms refresh opportunities; Console stale/disconnect/liveness loss returns the indicator to Unknown. Host Test, ARM Build, Program Verify, PA11 detection, real-link telemetry, Qt indication, and end-to-end Leak monitoring are now **[Hardware Verified]**. The acceptance also confirmed that rebuilding/programming/verifying the correct current ELF resolved the earlier persistent Unknown display; no numeric voltage or response-time claim is made. No leak state is connected to Servo or Safety actions.

@@ -1,6 +1,6 @@
 # RoboBeetle Engineering Lessons
 
-This note records the evidence and boundaries behind the Console PR #7 scheduler adaptation and the PR #8 five-servo semantic bring-up. The scheduler is **[Hardware Verified - Bench]** on the tested desktop setup, while the PR #8 five-servo layout remains pending target hardware regression.
+This note records the evidence and boundaries behind the Console PR #7 scheduler adaptation, the PR #8 five-servo semantic bring-up, and the PR #9 leak-sensor telemetry bring-up. The scheduler is **[Hardware Verified - Bench]** on the tested desktop setup. PR #8 retains explicit partial-bench **[Hardware Verified]** findings for the installed servo paths and **[Pending Hardware Verification]** for the remaining Depth endpoints. PR #9's PA11 leak input, Protocol V2 LeakStatus path, Qt indicator, and end-to-end monitoring are now **[Hardware Verified]** after the correct current ELF was rebuilt, programmed, and verified.
 
 ## Keep programming and runtime links separate
 
@@ -78,6 +78,66 @@ The HDKJ S3150D seller values `500/1500/2500 μs` describe electrical/absolute c
 ## Treat FrontAxis center as a bring-up candidate, not calibration
 
 The HDKJ S3150D FrontAxis descriptor separates seller-provided electrical capability (500/1500/2500 μs, 4.8–7.4 V, 0–270° travel, 4 μs dead band) from the provisional 500–2500 μs bring-up command envelope. It remains SetAngle-disabled, and 1500 μs is only a provisional startup/center candidate. The supplied 1480/1500/1520 direction observation is Hardware Verified; the approximately 1100–2500 μs bench travel observation, expanded window, and endpoint calibration are not. Commands below approximately 1100 μs tended to cause ACK timeouts and should not be probed further for now. Final safe endpoints and practical center require the complete mechanical assembly and explicit margin. The seller page also conflicts with the product shell/photo on waterproofing, so waterproof capability remains **[Unverified]** and direct immersion is prohibited until reliable IP/sealing evidence is available.
+
+## Start sensor bring-up with the smallest digital path
+
+The first sensor phase is a leak module's digital output: power from 3.3 V,
+common ground, `D0` to STM32 `PA11`, and `A0` unused. The implementation keeps
+the boundary narrow: the existing CubeMX `MX_GPIO_Init()` configures PA11 as
+`GPIO_MODE_INPUT` with `GPIO_NOPULL`, a thin HAL reader samples the pin, and a
+HAL-independent pure-C mapper stores `UNKNOWN`, `DRY`, or `WET`. The explicit
+resource scan against the active `.ioc`, `main.c`, HAL MSP, USART1, TIM3/TIM4,
+SWD, and GPIO assignments confirms PA11 is free at the software configuration
+level. The initial polarity is HIGH → Dry and LOW → Wet, but the output-stage
+type is not
+fully confirmed, so `GPIO_NOPULL` is a bring-up assumption that must be checked
+on the bench rather than presented as an electrical fact.
+
+The mapper is polled in `app_main` and has no EXTI, debounce, latch, alarm,
+Safety action, or Servo action. PR #9 adds a deliberately narrow monitoring
+path: after an accepted Heartbeat's normal ACK has finished transmitting,
+`app_main` may emit unacknowledged Protocol V2 `LeakStatus` (`0x20`) telemetry
+for the first valid sample, a state change, or a 500 ms refresh. It uses an
+independent telemetry sequence and does not enter command pending/ACK matching.
+The Qt controller displays Unknown/Dry/Wet and returns to Unknown on disconnect,
+APC liveness loss, invalid payload, or a provisional 1500 ms stale interval
+(three 500 ms Firmware refresh opportunities). It is monitoring-only and must
+not be wired to automatic stop behavior in this phase. Host tests can therefore
+establish polarity, wire compatibility, and stale-state handling without
+pretending to verify PA11 voltage or water response. The recorded PR #9 evidence
+now separates the levels explicitly: pure-C/Qt checks are **[Host Test: PASS]**,
+the STM32 target compile is **[ARM Build: PASS]**, the rebuilt current ELF was
+programmed and checked as **[Program Verify: PASS]**, and PA11 detection,
+Protocol V2 LeakStatus real-link exchange, the Qt indicator, and end-to-end Leak
+monitoring are **[Hardware Verified]**. Leak-triggered Safety action remains
+**[Pending / Not Implemented]**. The remaining order is physical leak evidence
+(now complete) → JY901S IMU → depth/sensor board; JY901S and the Depth sensor
+work have not started.
+
+## Firmware image provenance is part of hardware verification
+
+The earlier persistent `Leak: Unknown` result was caused by build/programming
+artifact provenance rather than a new Protocol V2 or sensor-path defect. Rebuild
+the correct current source into the matching ELF, program that image, verify the
+programmed image, and only then interpret the real-link result. Once that
+provenance was corrected, the complete PA11 → Firmware → LeakStatus → Qt path
+worked and passed end-to-end hardware acceptance. Do not invent or infer numeric
+voltage or response-time values when they were not recorded. Keep **Host Test**,
+**ARM Build**, **Program Verify**, **Hardware Verified**, and **Pending** as
+separate evidence levels; a host test or target compile alone cannot establish
+physical sensor behavior.
+
+## Keep sensor telemetry inside an existing liveness window
+
+For a low-rate sensor, an independent transmit timer would compete with
+Protocol V2 command/ACK traffic and create an unbounded source of frames. The
+PR #9 policy therefore publishes LeakStatus only in the already controlled
+Heartbeat opportunity, after the normal Heartbeat ACK has fully transmitted.
+State changes are sent immediately at that opportunity and an unchanged state
+is refreshed at most every 500 ms. The frame is unacknowledged and has its own
+sequence space, so it cannot satisfy or reorder a command ACK. This keeps the
+telemetry path observable without coupling leak indication to Servo or Safety
+actions.
 
 ## Cross-swap actuator faults before changing firmware
 

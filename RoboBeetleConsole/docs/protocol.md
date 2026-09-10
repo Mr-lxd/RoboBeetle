@@ -1,6 +1,6 @@
 # RoboBeetle Protocol V2 — Phase 1 Baseline
 
-This document describes the Console and Firmware sources repaired and clean-built on 2026-09-08, plus the Console APC220 scheduler adaptation. **[Implemented]** refers to code presence and software verification; the pre-PR8 Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]** for its historical layout. PR #7 scheduler behavior is **[Hardware Verified - Bench]** on the tested desktop setup; its timing parameters remain **[Provisional]**. The PR #8 five-servo implementation is software-verified, while its target hardware regression remains pending.
+This document describes the Console and Firmware sources repaired and clean-built on 2026-09-10, plus the Console APC220 scheduler adaptation and PR #9 leak-status telemetry. **[Implemented]** refers to code presence and software verification; the pre-PR8 Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]** for its historical layout. PR #7 scheduler behavior is **[Hardware Verified - Bench]** on the tested desktop setup; its timing parameters remain **[Provisional]**. PR #8's Servo/Depth bench findings are recorded in the canonical handoff, with Depth endpoint calibration still pending; PR #9 LeakStatus end-to-end monitoring is now **[Hardware Verified]**.
 
 Evidence labels used across the project are **[Implemented]** (current source), **[Hardware Verified]** (development-record hardware evidence), **[Provisional]** (bring-up value/incomplete contract), **[Planned]** (future work), and **[Historical Reference]** (old papers/code only). This protocol document relies primarily on Implemented evidence; hardware milestones and historical context are kept in the project READMEs and root handoff.
 
@@ -99,6 +99,29 @@ servo_mask  uint16 LE
 
 Mask assignments are the frozen five semantic bits from the PR #8 descriptor contract above. Firmware and Console use `SUPPORTED_SERVO_MASK = 0x001F`. A zero mask returns `InvalidPayload`; any bit outside `0x001F` returns `UnsupportedServo` and performs no partial action. Multi-bit Enable is all-or-nothing: requested channels that were already enabled are skipped without pulse write/start/stop, and if a newly requested channel fails to start, only channels newly started by that call are rolled back while the pre-call logical and physical state is preserved. Disable and Disable All retain fail-closed/best-effort stop semantics. While a Disable is pending for a servo, the Console Controller rejects PWM, Neutral, and Set Angle before wire encoding or APC queueing. Neutral otherwise requires a live host and enabled selected channels, writes each descriptor's center/neutral pulse, and returns `OK`; FrontAxis remains PWM-only with calibration pending and its 1500 μs action is provisional.
 
+### LeakStatus — `0x20`
+
+```text
+state  uint8
+```
+
+The state is `0=UNKNOWN`, `1=DRY`, or `2=WET`. This is an
+unacknowledged, monitoring-only telemetry frame; its Firmware sequence is
+independent of command/ACK sequence matching. Firmware samples the PA11 leak
+input in the main loop and publishes LeakStatus only after an accepted
+Heartbeat has had its normal ACK fully transmitted, on the first valid sample,
+on a state change, or at most once per 500 ms refresh interval. No independent
+telemetry timer or Safety/Servo action is introduced. The Console accepts only
+the one-byte values, records the last telemetry time, and returns its display to
+`Unknown` on disconnect, APC220 liveness loss, invalid payload, or after 1500 ms
+(three 500 ms refresh opportunities; provisional) without a valid update.
+The PA11 leak detection path, Protocol V2 real-link exchange, and Qt indicator
+were **[Hardware Verified]** in the recorded end-to-end acceptance. The prior
+persistent `Leak: Unknown` result was traced to programming/build artifact
+provenance; rebuilding the correct current ELF and programming and verifying it
+restored the complete path. No numeric voltage or response-time values are
+asserted here because none were recorded in that acceptance.
+
 ### Set Servo PWM — `0x12`
 
 ```text
@@ -146,6 +169,7 @@ This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware v
 | Set Servo PWM | `0x12` | Sends count 1, semantic ID, pulse LE; applies descriptor command envelope | Accepts exactly count 1 and a supported semantic ID; host-alive/enabled/range gates; writes mapped timer CCR | `uint8,uint8,uint16` | Yes | **Consistent for all five IDs; FrontAxis is PWM-only at 500–2500 μs, endpoint verification pending** |
 | Set Servo Angle | `0x13` | Controller and Qt UI send count 1, angle-capable semantic ID, signed cdeg LE; UI is gated by connection, Enable ACK, and no pending Disable | Maps each accepted descriptor angle with `int32_t` arithmetic; FrontAxis is rejected | `uint8,uint8,int16` | Yes | **Implemented; new five-servo hardware verification pending** |
 | Neutral | `0x14` | Sends the selected semantic mask after local enable | Requires live host, valid mask, and enabled selected channels; writes descriptor neutral pulses without disabling | `uint16 mask` | Yes | **Implemented; FrontAxis neutral remains provisional** |
+| LeakStatus | `0x20` | Receives one-byte monitoring telemetry and updates Unknown/Dry/Wet indicator; never creates an ACK pending entry | Samples PA11 and emits after accepted Heartbeat ACK, first/change/500 ms refresh; no ACK and no Servo/Safety action | `uint8 state` | No | **Implemented; end-to-end monitoring [Hardware Verified]** |
 
 ## Sequence, ACK, retry, and duplicate behavior
 
