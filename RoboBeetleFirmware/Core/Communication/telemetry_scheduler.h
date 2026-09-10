@@ -7,7 +7,8 @@ typedef enum
 {
     TELEMETRY_SLOT_NONE = 0,
     TELEMETRY_SLOT_LEAK_STATUS,
-    TELEMETRY_SLOT_IMU_SNAPSHOT
+    TELEMETRY_SLOT_IMU_SNAPSHOT,
+    TELEMETRY_SLOT_DEPTH_SNAPSHOT
 } telemetry_slot_t;
 
 typedef struct
@@ -21,7 +22,8 @@ void telemetry_scheduler_init(
 telemetry_slot_t telemetry_scheduler_select(
     const telemetry_scheduler_t *scheduler,
     bool leak_due,
-    bool imu_due);
+    bool imu_due,
+    bool depth_due);
 
 void telemetry_scheduler_mark_success(
     telemetry_scheduler_t *scheduler,

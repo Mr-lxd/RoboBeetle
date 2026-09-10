@@ -12,6 +12,7 @@ _Static_assert(RBP2_RESULT_SERVO_NOT_ENABLED == 4, "ACK result value changed");
 _Static_assert(RBP2_RESULT_OUT_OF_RANGE == 5, "ACK result value changed");
 _Static_assert(RBP2_RESULT_HARDWARE_FAILURE == 6, "ACK result value changed");
 _Static_assert(RBP2_MSG_LEAK_STATUS == 0x20, "LeakStatus message value changed");
+_Static_assert(RBP2_MSG_DEPTH_SNAPSHOT == 0x22, "DepthSnapshot message value changed");
 
 static int failures = 0;
 
