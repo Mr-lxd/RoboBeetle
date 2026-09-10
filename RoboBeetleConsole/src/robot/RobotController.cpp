@@ -374,7 +374,7 @@ bool RobotController::sendCommand(MessageType type,
     if (config_.linkProfile == LinkProfile::Apc220HalfDuplex && expectAck) {
         if (type == MessageType::ServoEnable && actuatorFailClosed_ && !heartbeatReady_) {
             monitor_.ackStatus = QStringLiteral(
-                "APC220 liveness recovering; Enable rejected");
+                "Host-link liveness recovering; Enable rejected");
             emit logMessage(monitor_.ackStatus);
             updateMonitor();
             return false;
@@ -400,7 +400,7 @@ bool RobotController::sendCommand(MessageType type,
             }
             if (queuedCommandCount() >= kApc220CommandQueueCapacity) {
                 emit logMessage(QStringLiteral(
-                    "Command rejected: APC220 command queue is full (%1)")
+                    "Command rejected: host-link command queue is full (%1)")
                                     .arg(kApc220CommandQueueCapacity));
                 return false;
             }
@@ -552,7 +552,7 @@ void RobotController::pumpApc220Scheduler()
                     static_cast<quint16>(disablePendingMask_ & ~command.affectedMask));
             }
             emit logMessage(QStringLiteral(
-                "APC220 priority command dropped after write failure (message 0x%1)")
+                "Host-link priority command dropped after write failure (message 0x%1)")
                                 .arg(static_cast<quint8>(command.type), 2, 16, QLatin1Char('0')));
         }
         return;
@@ -585,7 +585,7 @@ void RobotController::pumpApc220Scheduler()
                     static_cast<quint16>(disablePendingMask_ & ~command.affectedMask));
             }
             emit logMessage(QStringLiteral(
-                "APC220 command dropped after write failure (message 0x%1)")
+                "Host-link command dropped after write failure (message 0x%1)")
                                 .arg(static_cast<quint8>(command.type), 2, 16, QLatin1Char('0')));
         }
     }
@@ -664,8 +664,8 @@ bool RobotController::canStartApc220OrdinaryExchange() const
     }
 
     // A timeout is only observed on the retry timer, so reserve one polling
-    // interval in addition to the configured ACK timeout.  The APC220
-    // profile's 490 ms hard budget therefore leaves an explicit 10 ms below
+    // interval in addition to the configured ACK timeout.  The conservative
+    // host-link profile's 490 ms hard budget therefore leaves an explicit 10 ms below
     // Firmware's strict >500 ms watchdog boundary.
     const qint64 worstExchangeMs = qMax(0, config_.ackTimeoutMs)
         + qMax(0, retryTimer_.interval());
@@ -762,7 +762,7 @@ void RobotController::handlePacket(const Packet &packet)
 void RobotController::handleImuSnapshot(const Packet &packet)
 {
     if (config_.linkProfile == LinkProfile::Apc220HalfDuplex && !heartbeatReady_) {
-        emit logMessage(QStringLiteral("ImuSnapshot ignored while APC220 liveness is not ready"));
+        emit logMessage(QStringLiteral("ImuSnapshot ignored while conservative host-link liveness is not ready"));
         imuMonitor_.handleLivenessLost();
         return;
     }
@@ -773,7 +773,7 @@ void RobotController::handleImuSnapshot(const Packet &packet)
 void RobotController::handleLeakStatus(const Packet &packet)
 {
     if (config_.linkProfile == LinkProfile::Apc220HalfDuplex && !heartbeatReady_) {
-        emit logMessage(QStringLiteral("LeakStatus ignored while APC220 liveness is not ready"));
+        emit logMessage(QStringLiteral("LeakStatus ignored while conservative host-link liveness is not ready"));
         markApc220LivenessLost();
         return;
     }
@@ -1096,7 +1096,7 @@ void RobotController::failClosedApc220Actuators()
     markApc220LivenessLost();
     if (firstFailClosed) {
         emit logMessage(QStringLiteral(
-            "APC220 liveness lost; logical Servo state and stale actuator commands were cleared"));
+            "Conservative host-link liveness lost; logical Servo state and stale actuator commands were cleared"));
     }
 }
 

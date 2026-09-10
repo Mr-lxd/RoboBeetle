@@ -1,6 +1,8 @@
 # RoboBeetleFirmware
 
-RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for Laptop/Qt ↔ USART1 ↔ STM32 Protocol V2 bring-up, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, and the PR #11 low-rate JY901S telemetry path. This README records the merged hardware-verified modularization baseline, the PR #8 Servo/Depth bench findings, the PR #9 leak-status hardware acceptance, and the PR #10/PR #11 JY901S evidence boundaries. The JY901S physical receive and end-to-end monitoring path are now hardware verified; re-arm diagnostic follow-up, body-frame mapping, final magnetic/yaw calibration, and Depth endpoint calibration remain pending.
+RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for the Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, and the PR #11 low-rate JY901S telemetry path. This README records the merged hardware-verified modularization baseline, the PR #8 Servo/Depth bench findings, the PR #9 leak-status hardware acceptance, and the PR #10/PR #11 JY901S evidence boundaries. The JY901S physical receive and end-to-end monitoring path are now hardware verified; USART3 UART/checksum physical-link quality, body-frame mapping, final magnetic/yaw calibration, and Depth endpoint calibration remain pending.
+
+The recent Servo, LeakStatus, and JY901S hardware runs used the wired DAP UART/COM13 host path above. APC220 is an earlier/legacy transport record, was not enabled in those runs, and is not current JY901S or PR #11 hardware evidence.
 
 ## Status labels
 
@@ -65,13 +67,15 @@ fully transmitted. The telemetry has an independent sequence space and is
 published on the first valid sample, on state change, or at most once per
 500 ms refresh interval; it has no independent transmit timer and never
 changes Servo or Safety state. The Console returns to `Unknown` on disconnect,
-APC liveness loss, invalid payload, or a stale telemetry interval of 1500 ms
+host-link liveness loss, invalid payload, or a stale telemetry interval of 1500 ms
 (three 500 ms Firmware refresh opportunities; provisional).
 
-The pure-C mapper/policy, Protocol V2 vectors, and Qt/controller regressions are
-**[Host Test: PASS]**. The current STM32CubeIDE Debug ARM configure/build is
-**[ARM Build: PASS]**, and the rebuilt current ELF was programmed and verified
-with **[Program Verify: PASS]**. Physical acceptance is now recorded as:
+For the PR #9 LeakStatus change, the pure-C mapper/policy, Protocol V2 vectors,
+and Qt/controller regressions are **[Host Test: PASS]**. Its recorded current
+STM32CubeIDE Debug ARM configure/build is **[ARM Build: PASS]**, and that PR #9
+ELF was programmed and verified with **[Program Verify: PASS]**. These rows are
+PR #9 evidence, not PR #11 image evidence. Physical acceptance is now recorded
+as:
 
 | Acceptance item | Status |
 |---|---|
@@ -91,7 +95,7 @@ At the PR #9 closeout, the remaining sensor sequence was JY901S IMU →
 depth/sensor board; the current JY901S phase is documented below. LeakStatus
 remains monitoring-only and is not connected to Servo or Safety actions.
 
-## JY901S listen-only bring-up — Hardware Verified / re-arm follow-up open
+## JY901S listen-only bring-up — Hardware Verified / UART quality follow-up open
 
 This phase adds only the receive and parser path:
 
@@ -136,18 +140,23 @@ state transition from a callback or error event that arrives while HAL is
 starting the next receive, so a newer pending event cannot be cleared as stale.
 No parser work or retry loop runs in the ISR.
 
-Validation is intentionally separated:
+The following is the PR #10 listen-only evidence matrix. Its ARM Build and
+Program Verify rows apply to the PR #10 bring-up ELF; they do not silently
+serve as independent PR #11 image evidence. The matching PR #11 Firmware + Qt
+run supplies the physical JY901S and end-to-end rows below.
 
 | Gate | Status |
 |---|---|
 | Host Test | **PASS**: parser, transport mock, ring-buffer, and all current Firmware regressions |
-| ARM Build | **PASS**: STM32 target build; 0 errors, 0 warnings; RAM 2680 B / 128 KB, FLASH 23260 B / 512 KB |
-| Program Verify | **PASS**: DAP/OpenOCD programming flow completed and reported `Verified OK` |
+| ARM Build | **PASS**: PR #10 STM32 target build; 0 errors, 0 warnings; RAM 2680 B / 128 KB, FLASH 23260 B / 512 KB |
+| Program Verify | **PASS**: PR #10 DAP/OpenOCD programming flow completed and reported `Verified OK` |
 | Hardware Verified | **PASS**: matching PR #11 Firmware + Qt run received live JY901S data end to end |
 | USART3 physical RX | **Hardware Verified**: PB11 / USART3 receive path and RX byte/ring diagnostics |
 | JY901S valid real frames | **Hardware Verified**: valid frames continued with zero overflow |
 | Acc/Gyro/Angle real data | **Hardware Verified**: live plausible Acc, stationary near-zero Gyro, responsive Angle |
-| Pending | Post-fix re-arm diagnostic regression, final body-frame mapping, and magnetic/yaw calibration |
+| Re-arm diagnostics | **Hardware Verified**: matching post-fix runs kept hard re-arm failures at 0; deferred `HAL_BUSY` is separate |
+| USART3 UART/checksum physical quality | **Pending / non-blocking**: aggregate UART and checksum errors remain observable; physical source not assigned |
+| Pending | Final body-frame mapping, magnetic/yaw calibration, and USART3 physical-link quality follow-up |
 
 On 2026-09-10, the hardware-verification checkout built
 `RoboBeetleFirmware.elf` at
@@ -165,11 +174,27 @@ that order. Do not add automatic JY901S configuration in response; a separate
 configuration/init phase requires evidence that the physical UART is working
 but the sensor's current persistent settings are not the expected ones.
 
-## PR #11 JY901S low-rate telemetry — Hardware Verified / re-arm follow-up open
+Post-fix short hardware regression evidence supplied for the matching PR #11
+Firmware and Qt build:
+
+- Run A: RX bytes 43295, headers 4006, valid frames 3831, checksum failures
+  175, overflow 0, hard re-arm failures 0, UART errors 180, Mag frames 958,
+  unsupported 0.
+- Run B: RX bytes 73444, headers 6815, valid frames 6448, checksum failures
+  366, overflow 0, hard re-arm failures 0, UART errors 376, Mag frames 1618,
+  unsupported 0.
+
+The runs kept RX bytes and valid frames increasing with zero overflow and zero
+hard re-arm failures. UART aggregate/subtype and checksum counters remain
+observable; this evidence does not assign their physical source or claim a
+clean USART3 link.
+
+## PR #11 JY901S low-rate telemetry — Hardware Verified / re-arm follow-up closed
 
 PR #11 consumes the read-only Acc/Gyro/Angle state and diagnostics established
 by the listen-only bring-up above. It publishes one fixed `ImuSnapshot`
-telemetry frame (`0x21`) through the existing Protocol V2 → USART1/APC220 path
+telemetry frame (`0x21`) through the existing Protocol V2 → STM32 USART1 → DAP
+UART/USB serial bridge → Windows COM13 host path
 and adds no JY901S configuration, raw UART passthrough, servo/safety linkage,
 body-frame transform, EKF, or depth work.
 
@@ -189,8 +214,9 @@ successful IMU publication, LeakStatus regains priority on the next shared due
 opportunity. Failed optional transmits are not marked published, so the pending
 policy remains retryable and repeated LeakStatus due events cannot starve IMU.
 At 9600 8-N-1, the maximum 68-byte IMU wire frame is within the documented
-low-rate budget; this is a software/budget result, not a physical APC220
-throughput claim.
+low-rate budget; this is a software/conservative host-link load result, not an
+APC220 throughput claim. The current physical host link is DAP UART/COM13;
+APC220 remains a legacy/future-separate transport.
 With the nominal accepted Heartbeat cadence, the effective ImuSnapshot refresh
 is up to approximately 1 Hz; delayed ACK opportunities or pending LeakStatus
 refreshes may reduce it, and no independent IMU transmit timer is used.
@@ -201,18 +227,37 @@ PR #11 software evidence is recorded separately from PR #10's target evidence:
 |---|---|
 | Host Test | **PASS**: all current Firmware regressions, telemetry codec/scheduler tests, and Console tests |
 | ARM Build | **PASS**: matching PR #11 Firmware build used for the reported hardware run |
-| Program Verify | **Pending**: no standalone programming/verify record is included in this closeout |
-| Hardware Verified | **PASS**: JY901S → USART3/PB11 → ring/parser → Acc/Gyro/Angle → Protocol V2/APC220 → Qt |
-| Re-arm diagnostics follow-up | **Pending**: the pre-fix `rx_rearm_failure_count = 166240` snapshot requires one short post-fix hardware regression |
+| Program Verify | **Pending**: no standalone PR #11 programming/verify record is included in this closeout |
+| Hardware Verified | **PASS**: JY901S → USART3/PB11 → ring/parser → Acc/Gyro/Angle → ImuSnapshot → STM32 USART1 → DAP UART/COM13 → Qt |
+| Re-arm diagnostics follow-up | **PASS / resolved**: post-fix Run A and Run B both reported hard re-arm failures 0 |
+| USART3 UART/checksum physical quality | **Pending / non-blocking**: aggregate/subtype UART and checksum errors remain observable |
+| Pending | Final body-frame mapping and magnetic/yaw calibration |
 
-The reported hardware snapshot was RX bytes `131663`, headers `11967`, valid
-frames `11957`, checksum errors `10`, overflow `0`, UART errors `20`, Mag
-frames `2989`, and unsupported frames `0`. The aggregate UART error count is
-kept observable with its per-flag transport counters; it is not treated as a
-parser or Protocol V2 failure. The single Qt `Invalid length` event is recorded
-as an observation only: existing Console stream tests cover split and sticky
-(concatenated/back-to-back) Protocol V2 frames, while CRC errors and timeouts
-remained zero. No wire-format or Qt redesign is justified by that one event.
+The initial pre-fix hardware snapshot was RX bytes `131663`, headers `11967`,
+valid frames `11957`, checksum errors `10`, overflow `0`, UART errors `20`, Mag
+frames `2989`, unsupported frames `0`, and displayed `rx_rearm_failure_count`
+`166240`. The root cause was diagnostic semantics, not proof that all of those
+attempts were hard failures: the old implementation counted every return other
+than `HAL_OK` and did not retain the HAL status. In this repository's STM32F4
+HAL, `HAL_UART_Receive_IT()` returns `HAL_BUSY` whenever `RxState` is not
+`HAL_UART_STATE_READY`, while the normal one-byte `UART_Receive_IT()` path sets
+`RxState` to `READY` before invoking `HAL_UART_RxCpltCallback`. Thus a normal
+completion callback is not, by itself, evidence of a busy transition, and the
+pre-fix aggregate cannot be retrospectively decomposed; a busy result can still
+occur when an arm overlaps another active receive or an error/foreground state
+transition. PR #11 now lets callbacks only mark pending work, performs one
+foreground re-arm attempt per poll, counts `HAL_BUSY` as deferred, and reserves
+the hard-failure counter for `HAL_ERROR` and other non-success statuses. A
+generation re-check prevents a newer callback/error event from being cleared by
+a stale success path.
+
+The post-fix Run A/Run B values are recorded in the listen-only section above.
+UART aggregate and per-flag error counters remain observable and are not
+silently reset or treated as a parser or Protocol V2 failure. The single Qt
+`Invalid length` event remains an observation only: existing Console tests
+cover split and sticky/concatenated (back-to-back) frames, while CRC errors and
+timeouts remained zero. No wire-format or Qt redesign is justified by that one
+event.
 
 The existing fixed 56-byte ImuSnapshot wire format is unchanged. The transport's
 deferred `HAL_BUSY` counter is internal; the existing payload field continues to
@@ -274,12 +319,22 @@ servo_service → servo_driver_stm32
         └─ TIM4_CH2 / PD13 → RearLeft
 ```
 
-The interrupt handler delegates to the HAL. The HAL completion callback performs only a ring-buffer push and re-arms the next one-byte interrupt receive. Protocol parsing, command dispatch, ACK encoding, blocking UART transmit, and PWM control occur in the main-loop context, not in the UART ISR.
+In parallel, the sensor path is:
+
+```text
+JY901S TX → PB11 / USART3_RX → one-byte interrupt receive
+  → independent 256-byte ring → 11-byte parser
+  → Acc/Gyro/Angle state + diagnostics
+  → ImuSnapshot telemetry policy → existing USART1 host link
+```
+
+The interrupt handler delegates to the HAL. The HAL completion and error callbacks perform only the byte/error accounting and mark the USART3 receive as needing re-arm; foreground transport maintenance makes at most one non-blocking re-arm attempt per poll. Protocol parsing, command dispatch, ACK encoding, blocking UART transmit, and PWM control occur in the main-loop context, not in the UART ISR.
 
 The current communication split is:
 
 - **[Implemented]** `Core/Communication/ring_buffer.c/.h` owns the fixed 128-byte single-producer/single-consumer ring. It reserves one slot (127-byte effective capacity) and silently rejects a push while full, preserving the original behavior.
 - **[Implemented]** `Core/Communication/uart_transport_stm32.c/.h` owns the one-byte RX staging byte, USART1 receive interrupt arm/re-arm, ring interaction, main-loop byte retrieval, and the blocking `HAL_UART_Transmit(..., 100U)` wrapper.
+- **[Hardware Verified]** `Core/Communication/jy901s_transport_stm32.c/.h` owns the independent USART3/PB11 receive staging/ring path and diagnostics; `Core/Sensors/jy901s_parser.c/.h` owns the pure-C 11-byte decode and Acc/Gyro/Angle state. PR #11 adds the low-rate ImuSnapshot producer without changing the listen-only sensor input.
 - **[Hardware Verified]** `Core/App/app_main.c/.h` owns the application orchestration: Protocol V2 wire accumulation and decode integration, ACK/result transmission, diagnostics, module instances, initialization order, RX draining, and post-drain Safety timeout action. It calls existing Protocol, UART, Safety, Servo, and dispatcher modules without implementing their policies or touching TIM registers directly.
 - **[Implemented]** `Core/Servo/servo_descriptor.c/.h` owns the pure-C semantic ID, capability, calibration-envelope, and abstract timer/channel table.
 - **[Implemented]** `Core/Servo/servo_calibration.c/.h` owns per-descriptor integer angle-to-pulse mapping.
@@ -298,12 +353,12 @@ The App/Main extraction in PR #6 is now **[Hardware Verified]**. STM32CubeIDE bu
 
 ## UART receive and transmit audit
 
-- **[Implemented]** The USART1/APC220 `ring_buffer` storage is 128 bytes with `uint16_t` head/tail indices. JY901S uses a separate 256-byte storage instance.
+- **[Implemented]** The current USART1 host-link `ring_buffer` storage is 128 bytes with `uint16_t` head/tail indices. JY901S uses a separate 256-byte storage instance. APC220 is a legacy transport record, not the current host hardware.
 - The empty/full distinction reserves one slot, so usable capacity is **127 bytes**.
-- On the USART1/APC220 full buffer, `ring_buffer_push()` silently drops the new byte. That legacy transport has no overflow flag/counter and no host-visible error; the JY901S transport has independent overflow diagnostics.
+- On the current USART1 host-link full buffer, `ring_buffer_push()` silently drops the new byte. That existing transport has no overflow flag/counter and no host-visible error; the JY901S transport has independent overflow diagnostics.
 - Head and tail remain volatile, with the same one-byte ISR producer / main-loop consumer model as the original implementation.
-- The USART1/APC220 `uart_transport_stm32` calls `HAL_UART_Receive_IT()` at startup and re-arms it in the callback; no blocking receive remains.
-- Return values from the legacy USART1/APC220 initial and callback receive-arm calls are ignored. USART3/JY901S records re-arm failures and retries once from foreground maintenance.
+- The current USART1 `uart_transport_stm32` calls `HAL_UART_Receive_IT()` at startup and re-arms it in the callback; no blocking receive remains. The recent host hardware for this path is DAP UART/COM13; the APC220 profile is historical.
+- Return values from the existing USART1 initial and callback receive-arm calls are ignored. USART3/JY901S separates deferred `HAL_BUSY` from hard re-arm failures and recovers from foreground maintenance.
 - The transport calls `HAL_UART_Transmit(..., 100U)` only while main-loop dispatch sends an ACK. It is blocking but not ISR-blocking. At 9600 8-N-1 a short ACK frame normally takes milliseconds, yet a stalled transmit can block the loop for up to 100 ms.
 
 ## Protocol V2
@@ -458,7 +513,7 @@ Do not split the already isolated Protocol V2 codec further during Phase 1, add 
 
 - P1: the HAL-coupled App/Main layer has no dedicated host integration test; target build and physical regression are the verification gate.
 - P1: the one-entry duplicate cache is deliberately minimal and is not a general replay window.
-- P1: JY901S overflow, RX re-arm, and UART error diagnostics are volatile/debug-visible only; they are not exposed through Protocol V2 telemetry.
+- P1: JY901S overflow, RX re-arm, and UART error diagnostics are volatile/debug-visible only; the corrected hard/deferred re-arm semantics are verified, while USART3 physical-link quality remains pending; these diagnostics are not exposed through Protocol V2 telemetry.
 - P1: blocking UART ACK transmit shares the watchdog/parser loop.
 - P2: Error `0x03` remains reserved; command failures currently use the frozen ACK result enum.
 - P2: diagnostics are volatile counters only and are not exposed as telemetry.

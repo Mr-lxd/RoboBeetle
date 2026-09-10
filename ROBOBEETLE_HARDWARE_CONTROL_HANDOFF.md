@@ -1,5 +1,10 @@
 # RoboBeetle 硬件控制交接审计
 
+本次收口对应的近期 Servo、LeakStatus 与 JY901S 实机运行均使用：
+`Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1`
+（9600 8-N-1）。APC220 仅保留为早期/legacy transport 记录，未参与近期
+验证，也不是当前启用的硬件链路。
+
 ## 2026-09-10 Leak detection sensor bring-up（PR #9，end-to-end Hardware Verified）
 
 本阶段在 PR #8 五舵机分支之后采用 stacked branch，实现第一条最小数字漏水检测路径及其 monitoring-only Protocol V2/Qt 显示，不改变 Servo 行为或 Safety 行为。漏水模块由 3.3 V 供电，与 STM32 共地；数字输出 `D0` 接 STM32 `PA11`，模拟输出 `A0` 暂不使用。PA11 → Firmware → Protocol V2 → Qt 的完整路径已经完成实机验收。
@@ -22,7 +27,7 @@ leak module D0
 - `GPIO_NOPULL` 是 bring-up assumption，不是已验证的电气结论；资料尚未可靠确认 D0 输出级是推挽还是开漏。若实机显示浮动/不稳定，另行依据测量结果决定 pull 配置。
 - 轮询只更新内部状态；LeakStatus 是无 ACK 的 monitoring-only telemetry，不触发 Servo disable、Emergency Stop、报警或其它 Safety 动作。
 - Firmware 只在 accepted Heartbeat 的正常 ACK 已完整发送后，在首次有效采样、状态变化或 500 ms refresh opportunity 发布一帧；telemetry 使用独立序列空间，不进入 command pending/ACK matching。
-- Qt 将 `0=UNKNOWN`、`1=DRY`、`2=WET` 显示为 `Leak: Unknown`、`Leak: Dry`、`LEAK DETECTED`；断开、APC liveness loss、非法 payload 或 1500 ms（3 × 500 ms opportunity，provisional）无更新时回到 Unknown。
+- Qt 将 `0=UNKNOWN`、`1=DRY`、`2=WET` 显示为 `Leak: Unknown`、`Leak: Dry`、`LEAK DETECTED`；断开、当前 host-link liveness loss、非法 payload 或 1500 ms（3 × 500 ms opportunity，provisional）无更新时回到 Unknown。
 
 ### 验证分层
 
@@ -48,7 +53,7 @@ leak module D0
 
 传感器 bring-up 顺序固定为：`Leak detection (including LeakStatus telemetry) → JY901S IMU → depth/sensor board`。在 PR #9 LeakStatus closeout 的历史记录中，JY901S 与 Depth 尚未开始；当前 JY901S phase 见下节，Depth 仍未开始。
 
-## 2026-09-10 JY901S listen-only bring-up（Hardware Verified / re-arm follow-up open）
+## 2026-09-10 JY901S listen-only bring-up（Hardware Verified / UART quality follow-up open）
 
 本轮只实现 JY901S 的 RX/parser-only 路径，不发送任何传感器配置命令：
 
@@ -85,21 +90,28 @@ USART3 的 RX callback/error callback 只记录事件并标记 needs-rearm；for
 `HAL_UART_Receive_IT(..., 1U)`。`HAL_BUSY` 单独计入 deferred counter，只有
 `HAL_ERROR` 等真正失败才进入 hard re-arm failure counter。ISR 不解析、不阻塞、
 不循环重试。foreground 状态转换带 generation re-check，避免 HAL 开启下一次
-接收期间到达的 callback/error 事件被成功路径清掉。USART1/APC220 的已有 RX、
-ring 和 transmit 行为保持不变。
+接收期间到达的 callback/error 事件被成功路径清掉。当前 USART1 host-link
+（DAP UART/COM13）的已有 RX、ring 和 transmit 行为保持不变；APC220 为
+legacy transport 记录。
 
-### 本轮验证分层
+### PR #10 listen-only evidence matrix
+
+以下 ARM Build 与 Program Verify 只适用于 PR #10 bring-up ELF；它们不自动
+覆盖 PR #11 image。matching PR #11 Firmware + Qt run 提供本节的 JY901S
+physical RX 与 end-to-end Hardware Verified 证据。
 
 | 项目 | 状态 |
 |---|---|
 | Host Test | **PASS**：parser、USART3 transport mock、ring-buffer 与全部当前 Firmware regressions |
-| ARM Build | **PASS**：STM32 target build，0 errors、0 warnings；RAM 2680 B / 128 KB，FLASH 23260 B / 512 KB |
-| Program Verify | **PASS**：DAP/OpenOCD programming flow 完成并报告 `Verified OK` |
+| ARM Build | **PASS**：PR #10 STM32 target build，0 errors、0 warnings；RAM 2680 B / 128 KB，FLASH 23260 B / 512 KB |
+| Program Verify | **PASS**：PR #10 DAP/OpenOCD programming flow 完成并报告 `Verified OK` |
 | Hardware Verified | **PASS**：matching PR #11 Firmware + Qt run 完成 JY901S 实机端到端观测 |
 | USART3 physical RX | **Hardware Verified**：PB11 / USART3 RX、ring path 与持续接收 |
 | JY901S valid real frames | **Hardware Verified**：valid frame counter 持续增加、overflow 为 0 |
 | Acc/Gyro/Angle real data | **Hardware Verified**：Acc 合理、静止 Gyro 接近零、Angle 正确响应 |
-| Pending | 修复后的 re-arm diagnostics 短时回归、最终 body-frame mapping、magnetic/yaw calibration |
+| Re-arm diagnostics | **Hardware Verified**：matching PR #11 post-fix runs 的 hard re-arm failures 均为 0；HAL_BUSY deferred 独立统计 |
+| USART3 UART/checksum physical quality | **Pending / non-blocking**：UART/checksum 计数可见，物理来源尚未由本证据确定 |
+| Pending | 最终 body-frame mapping、magnetic/yaw calibration，以及 USART3 physical-link quality follow-up |
 
 2026-09-10，用户在 hardware-verification checkout 完成了当前
 `RoboBeetleFirmware.elf` 的 STM32 target build：0 errors、0 warnings，RAM
@@ -111,9 +123,22 @@ ring 和 transmit 行为保持不变。
 ARM Build 与 Program Verify；matching PR #11 Firmware + Qt 实机运行另外提供
 了本节所记录的 JY901S physical RX 与 Acc/Gyro/Angle Hardware Verified 结果。
 
+matching PR #11 Firmware + Qt 的 post-fix short hardware regression：
+
+- Run A：RX bytes 43295，headers 4006，valid frames 3831，checksum failures
+  175，overflow 0，hard re-arm failures 0，UART errors 180，Mag frames 958，
+  unsupported 0。
+- Run B：RX bytes 73444，headers 6815，valid frames 6448，checksum failures
+  366，overflow 0，hard re-arm failures 0，UART errors 376，Mag frames 1618，
+  unsupported 0。
+
+两次运行中 RX bytes 与 valid frames 持续增加，overflow 与 hard re-arm failures
+均为 0。UART aggregate/subtype 与 checksum errors 保持可观测；本记录不把
+USART3 physical-link quality 解释为无错误，也不推断错误物理来源。
+
 本轮不涉及 Protocol V2 IMU telemetry、Qt IMU display、Depth sensor、Safety、自动 JY901S configuration 或 body-frame calibration。
 
-## 2026-09-10 PR #11 JY901S low-rate telemetry + Qt monitor（Hardware Verified / re-arm follow-up open）
+## 2026-09-10 PR #11 JY901S low-rate telemetry + Qt monitor（Hardware Verified / re-arm follow-up closed）
 
 本阶段从 PR #10 的 listen-only bring-up HEAD 叠加，只消费已经存在的
 JY901S Acc/Gyro/Angle 内部状态，不改变 USART3 RX/parser 路径，也不向
@@ -122,7 +147,7 @@ JY901S 发送任何配置、保存、重启、校准或其它 command。新增�
 ```text
 JY901S parser state + diagnostics
   → fixed Protocol V2 ImuSnapshot `0x21`
-  → existing USART1 / APC220 telemetry opportunity
+  → existing STM32 USART1 host link / DAP UART/COM13
   → Qt RobotController / ImuMonitor
   → IMU — JY901S read-only panel
 ```
@@ -132,14 +157,14 @@ JY901S parser state + diagnostics
 - `ImuSnapshot` 使用独立 telemetry sequence，不进入 command/ACK matching；不发送 raw JY901S frame、ASCII 或平台相关 struct memcpy。
 - payload 固定 56 bytes：schema `0x01`、Acc/Gyro/Angle validity flags、little-endian fixed-point values，以及 USART3/parser diagnostics counters。Acc 为 mg，Gyro 为 0.1 dps，Angle 为 0.01 degree；无效 domain 编码为零。
 - Firmware 只在 accepted Heartbeat 的正常 ACK 已完成发送后评估 IMU policy；每次 opportunity 最多发送一个 non-ACK telemetry frame。首次同时 due 时 LeakStatus `0x20` 优先；LeakStatus 成功发送后，如果 ImuSnapshot `0x21` 仍 due，则下一次同时 due 的 opportunity 发送 IMU，即使 LeakStatus 再次 due。IMU 成功发送后 LeakStatus 恢复优先；失败发送不 mark published，重复的 LeakStatus due 不会永久饿死 IMU。
-- IMU policy interval 为 1 s；成功发送后才 mark published。在 nominal accepted Heartbeat cadence 下，ImuSnapshot 的实际有效刷新率 up to approximately 1 Hz；ACK opportunity 延迟或 LeakStatus pending refresh 会使实际速率更低。56-byte payload 的最大 wire frame 为 68 bytes；9600 8-N-1 下按现有 APC220/Heartbeat/Leak 预算计算，不宣称实机吞吐已验证；不增加独立 IMU TX timer。
-- APC220 不增加独立 IMU TX timer；IMU 不会创建、释放、重试或重排 ACK pending request。USART1/APC220 与 LeakStatus 行为保持不变。
+- IMU policy interval 为 1 s；成功发送后才 mark published。在 nominal accepted Heartbeat cadence 下，ImuSnapshot 的实际有效刷新率 up to approximately 1 Hz；ACK opportunity 延迟或 LeakStatus pending refresh 会使实际速率更低。56-byte payload 的最大 wire frame 为 68 bytes；9600 8-N-1 下按现有 Protocol V2 host-link/Heartbeat/Leak 预算计算，不宣称实机吞吐已验证；不增加独立 IMU TX timer。
+- 当前 DAP UART/COM13 host link 不增加独立 IMU TX timer；IMU 不会创建、释放、重试或重排 ACK pending request。USART1 host-link 与 LeakStatus 行为保持不变，Apc220HalfDuplex 仅保留为 legacy-named conservative policy。
 
 ### Qt 监视器边界
 
 `IMU — JY901S` 面板只显示 status、Acc、Gyro、Euler Angle 与 bring-up
 diagnostics，不包含 3D、历史曲线、校准、控制动作或 raw passthrough。
-状态为 `Unknown`（未收到/断链/APC liveness loss）、`Receiving`（合法帧）、
+状态为 `Unknown`（未收到/断链/host-link liveness loss）、`Receiving`（合法帧）、
 `Stale`（3500 ms 无合法更新）或 `Error`（非法 payload）。Stale、Error、
 断链与 liveness loss 都清空 live snapshot；单独无效的 Acc/Gyro/Angle domain
 显示 `--`，不能把旧值继续显示为当前值。IMU frame 不影响 ACK 或 Leak state。
@@ -151,24 +176,39 @@ diagnostics，不包含 3D、历史曲线、校准、控制动作或 raw passthr
 | Host Test | **PASS**：全部当前 Firmware regressions（含 Leak sensor / Leak telemetry policy）、JY901S telemetry codec/scheduler、Console protocol/controller/descriptor/IMU/MainWindow tests |
 | ARM Build | **PASS**：matching PR #11 Firmware build 用于本次实机运行 |
 | Program Verify | **Pending**：本次 closeout 未提供独立 programming/verify 记录 |
-| Hardware Verified | **PASS**：JY901S → USART3/PB11 → ring/parser → Acc/Gyro/Angle → Protocol V2/APC220 → Qt |
-| Re-arm diagnostics follow-up | **Pending**：旧快照中的 `rx_rearm_failure_count = 166240` 需一次修复后的短时实机回归 |
+| Hardware Verified | **PASS**：JY901S → USART3/PB11 → ring/parser → Acc/Gyro/Angle → ImuSnapshot → STM32 USART1 → DAP UART/COM13 → Qt |
+| Re-arm diagnostics follow-up | **PASS / resolved**：post-fix Run A、Run B 的 hard re-arm failures 均为 0 |
+| USART3 UART/checksum physical quality | **Pending / non-blocking**：aggregate/subtype UART 与 checksum errors 保持可观测 |
+| Pending | 最终 body-frame mapping 与 magnetic/yaw calibration |
 | PR #10 listen-only ARM/Program evidence | **PASS**：仅适用于 PR #10 记录的 bring-up ELF，不自动覆盖 PR #11 |
 
 本次 matching PR #11 Firmware + Qt 实机结果：IMU status = `Receiving`；Acc
-实时且物理合理；静止时 Gyro 接近零；Angle 实时响应。诊断快照为 RX bytes
-`131663`、headers `11967`、valid frames `11957`、checksum errors `10`、
-overflow `0`、UART errors `20`、Mag frames `2989`、unsupported `0`。UART
-aggregate 与各错误子计数继续保留可观测性。Qt 单次 `RX rejected: Invalid
-length` 先记录为 observation；现有 Console sticky/concatenated frame tests
-已覆盖该类连续帧边界，CRC errors 与 timeouts 均为 `0`，目前不进行协议重设计。
+实时且物理合理；静止时 Gyro 接近零；Angle 实时响应。初始 pre-fix 诊断快照为
+RX bytes `131663`、headers `11967`、valid frames `11957`、checksum errors
+`10`、overflow `0`、UART errors `20`、Mag frames `2989`、unsupported `0`，
+并显示 `rx_rearm_failure_count = 166240`。根因是诊断语义，而不是证明这
+166240 次都是真正 hard failure：旧实现把所有非 `HAL_OK` 返回都计入同一个
+counter，且没有保留 HAL status。本仓库 STM32F4 HAL 的
+`HAL_UART_Receive_IT()` 在 `RxState` 不是 `HAL_UART_STATE_READY` 时返回
+`HAL_BUSY`；但正常 one-byte `UART_Receive_IT()` 路径会在调用
+`HAL_UART_RxCpltCallback` 前先把 `RxState` 置为 `READY`。因此正常完成
+callback 本身不能证明发生了“HAL 尚未完成导致的 BUSY”，旧 aggregate 也
+无法事后拆分；在与其它 active receive 或 error/foreground 状态切换重叠时，
+仍可能观察到 busy。PR #11 让 callback 只标记 pending，由 foreground 每次
+poll 最多尝试一次 re-arm；`HAL_BUSY` 单独计为 deferred，`HAL_ERROR` 及其它
+非成功状态才计入 hard failure；generation re-check 防止较新的 callback/error
+event 被旧的成功路径清掉。
+
+Post-fix short hardware regression 已关闭该 follow-up：Run A 的 hard re-arm
+failures 为 0；Run B 的 hard re-arm failures 也为 0，且 RX bytes/valid frames
+持续增加、overflow 为 0。UART aggregate、各 subtype 与 checksum counters
+继续保持可观测；不把 USART3 physical-link quality 解释为无错误，也不推断
+其物理来源。Qt 单次 `RX rejected: Invalid length` 仍是 observation；现有
+Console sticky/concatenated frame tests 已覆盖连续帧边界，CRC errors 与
+timeouts 均为 `0`，目前不进行协议重设计。
 
 最终 robot body-frame mapping 与 magnetic/yaw calibration 仍为 **[Pending]**。
-
-本阶段完成后停在 Review，等待一次短时 post-fix hardware regression。该回归
-仍只观察 USART3 RX byte/ring/header/valid/checksum/Mag/unsupported/overflow 与
-re-arm/UART diagnostics，再判断是否关闭本 follow-up；不得因任何单次异常而
-在本阶段加入自动 configuration/init。
+不得因任何单次异常在本阶段加入自动 JY901S configuration/init。
 
 ## 2026-09-09 Depth PWM calibration window follow-up（PR #8）
 
@@ -210,9 +250,9 @@ PR #8 将 Firmware 与 Qt 各自维护的 descriptor table 冻结为同一组五
 
 TIM3/TIM4 当前均约 333 Hz、1 μs tick（PSC=15、ARR=3002）。FrontAxis 卖家参数记录为 500–2500 μs、中心候选 1500 μs、工作电压 4.8–7.4 V、可控行程 0–270°、死区 4 μs；这些是电气/绝对能力元数据，当前用户命令窗口为 provisional 500–2500 μs endpoint exploration，并非最终机械安全端点。1500 μs 只是 provisional startup/center candidate，不是 calibrated Neutral，也不是 Hardware Verified；扩展窗口的完整端点验收仍 Pending。卖家参数页写“是否防水：否”，商品照片/壳体却标示“Water proof Robot Servo”，因此 Waterproof capability = **[Unverified]**，在获得可靠 IP/密封证据前不得声明或安排直接浸水。
 
-多 bit Enable 采用 all-or-nothing：调用前已 enabled 的 requested channel 完全跳过，不产生 write/start/stop；任一新 channel start 失败时只 stop 本次 newly started channel，并保持调用前 logical/physical state。Console 中 pending Disable 是 motion-command barrier：受影响舵机的 PWM、Neutral、Set Angle 在 Controller 层即被拒绝，不写帧、不进入 APC220 queue；Disable Error/timeout 不会释放 Disable 之后的 stale motion。
+多 bit Enable 采用 all-or-nothing：调用前已 enabled 的 requested channel 完全跳过，不产生 write/start/stop；任一新 channel start 失败时只 stop 本次 newly started channel，并保持调用前 logical/physical state。Console 中 pending Disable 是 motion-command barrier：受影响舵机的 PWM、Neutral、Set Angle 在 Controller 层即被拒绝，不写帧、不进入当前 Protocol V2 host-link queue；Disable Error/timeout 不会释放 Disable 之后的 stale motion。
 
-### 当前 Firmware 路径（PR #8）
+### PR #8 pre-PR10 Firmware path（Historical Reference）
 
 ```text
 USART1 IRQ → HAL callback → uart_transport_stm32 → ring_buffer
@@ -229,13 +269,15 @@ USART1 IRQ → HAL callback → uart_transport_stm32 → ring_buffer
 
 历史 v0.4 的 Servo1/PA6 bring-up 对象是 `RearLeft`；PR #8 后 PA6/ID0 正式为 `FrontRight`，`RearLeft` 改为 PD13/TIM4_CH2。五舵机重新布线后，禁止旧 v0.4 Console/Firmware 与 PR #8 layout 交叉使用。Qt 的 `ServoId::Servo1` 若存在，仅是 deprecated source alias 指向 `FrontRight`；新 UI、日志、实现和文档必须使用 semantic name，且不保留 `Servo2` alias。
 
-## 2026-09-08 APC220 half-duplex scheduler hardware acceptance（PR #7）
+## [Historical Reference] 2026-09-08 APC220 half-duplex scheduler hardware acceptance（PR #7；当前未启用）
 
-### 当前状态
+### 历史状态（当前未启用）
 
 APC220 Half-Duplex Scheduler：**[Hardware Verified - Bench]**
 
 用户已完成当前桌面台架的完整实机验收：
+
+以下仅保留早期 APC220 桌面台架记录；不属于近期 COM13/DAP/USART1 验证，也不代表 APC220 是当前启用链路：
 
 - APC220 440 MHz 双端链路，以及 Qt → APC220 → STM32 → ACK → APC220 → Qt 完整闭环；
 - 60 s idle Heartbeat、Servo1 Enable + ACK、Neutral、0° → +10° → 0° → −10° → 0°、±45°、±90°；
@@ -279,7 +321,7 @@ APC220 Half-Duplex Scheduler：**[Hardware Verified - Bench]**
 
 PR #6 的 STM32CubeIDE Build、ST-LINK Download 和 Full physical regression 均 PASS。验收覆盖 cold boot/reset 后 Servo 不自动 Enable、Heartbeat、Enable/ACK、Neutral、Set Angle 0°/±10°/±45°/±90°、Set PWM 1520 us、Disable/Disable All、重新 Enable、Disconnect、严格超过 500 ms 的 safe disable、Reconnect 不自动 Enable、手动 Enable + ACK 恢复及第二次 Disconnect/Reconnect。
 
-### 当前 Firmware 路径
+### 2026-09-07 pre-PR10 Firmware path（Historical Reference）
 
 ```text
 USART1 IRQ
@@ -410,6 +452,11 @@ Console 的重试继续复用同一 sequence 和完整 wire frame。Firmware 保
 
 ### 当前总体架构
 
+当前实机 host-link 的权威路径是：
+`Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2`。
+APC220 只作为早期/legacy 记录保留；近期 Servo、LeakStatus 与 JY901S 运行
+没有使用 APC220。
+
 ```text
 [Implemented / Hardware Verified current direct path]
 Windows Laptop
@@ -418,13 +465,17 @@ Windows Laptop
       ├─ RobotController
       ├─ Protocol V2 codec / retry / monitor
       └─ SerialTransport
-            ↕ COM10 @ 9600 8-N-1 (COM10: development record)
+            ↕ Windows COM13 → DAP UART/USB serial bridge @ 9600 8-N-1
         STM32F407VET6 USART1 PA9/PA10
           ├─ IRQ + 128-byte ring buffer
           ├─ Protocol V2 dispatcher / ACK / heartbeat watchdog
           ├─ Leak D0 PA11 → LeakStatus `0x20` monitoring telemetry
           └─ five-servo descriptor/service/driver path
                 → TIM3/TIM4 PWM outputs
+
+JY901S TX → PB11 / USART3_RX → one-byte interrupt RX
+  → independent 256-byte ring → 11-byte parser
+  → Acc/Gyro/Angle state → ImuSnapshot telemetry → USART1 host-link
 
 [Planned future path]
 Windows Laptop Qt Console
@@ -443,6 +494,8 @@ Console 已把 UI、命令/ACK 状态机、协议编解码和字节传输分开�
 | MCU | STM32F407VET6，LQFP100 | 活动 `.ioc`、`STM32F407xx` 构建定义、启动/链接文件 |
 | SYS / SWD | HSI 16 MHz、PLL off；PA13 SWDIO、PA14 SWCLK | `.ioc` + `SystemClock_Config()` |
 | USART1 | PA9 TX、PA10 RX，9600、8-N-1、无流控 | `.ioc` + HAL 初始化/MSP |
+| 当前 host-link | Qt Console → Windows COM13 → DAP UART/USB serial bridge → USART1 | 最新 Servo、LeakStatus、JY901S 实机记录 |
+| JY901S RX | PB11 / USART3，one-byte interrupt RX，独立 256-byte ring | `.ioc` + HAL MSP/IRQ + matching PR #11 实机记录 |
 | USART1 NVIC | 已启用，0/0 优先级 | `.ioc` + `HAL_NVIC_SetPriority` |
 | TIM3_CH1 | PA6 / AF2，PWM mode 1，active high | `.ioc` + HAL MSP |
 | PWM 计数 | PSC=15，ARR=3002，CCR1 初始=1520 | `.ioc` + `MX_TIM3_Init()` |
@@ -502,7 +555,7 @@ Console timeout 为 200 ms，原发送后最多重试 3 次，并复用相同 se
 | 里程碑 | 代码交叉证据 |
 |---|---|
 | Qt 6 Console 可启动 | 已有 Qt 6.11.2 MinGW 构建产物 |
-| SerialTransport 工作，COM10 ↔ USART1 跑通 | 当前 SerialTransport/USART1 配置与开发记录一致 |
+| SerialTransport 工作，COM13 → DAP UART/USB serial bridge ↔ USART1 跑通 | 当前 SerialTransport/USART1 配置与最新开发记录一致；APC220 不是本次链路 |
 | STM32 → PC ASCII bring-up 曾验证 | 仅开发记录；ASCII 路径已不是当前 Protocol V2 主路径 |
 | PC ↔ STM32 UART 双向通信 | RX 中断链 + Firmware ACK TX 源码 |
 | USART interrupt + ring buffer | 当前源码直接实现；实机成功来自开发记录 |

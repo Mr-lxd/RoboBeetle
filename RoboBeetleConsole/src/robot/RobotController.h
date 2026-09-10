@@ -33,9 +33,9 @@ struct RobotControllerConfig {
     int heartbeatIntervalMs{100};
     int ackTimeoutMs{200};
     int maxRetries{3};
-    // APC220-only hard liveness budget measured from heartbeat dispatch.  The
-    // provisional profile leaves an explicit margin below the Firmware
-    // watchdog; DirectUart ignores this field.
+    // Conservative host-link hard liveness budget measured from heartbeat
+    // dispatch. The legacy-named profile leaves an explicit margin below the
+    // Firmware watchdog; DirectUart ignores this field.
     int heartbeatSafetyBudgetMs{490};
     // Three Firmware telemetry refresh opportunities (3 x 500 ms) are
     // required before a connected Console treats leak state as stale.

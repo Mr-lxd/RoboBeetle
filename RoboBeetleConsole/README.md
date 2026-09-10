@@ -1,6 +1,8 @@
 # RoboBeetleConsole
 
-RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the current direct Windows laptop → serial/APC220 → STM32 bring-up path. This document describes the implementation repaired and verified on 2026-09-10, including the PR #11 low-rate JY901S telemetry monitor; historical papers, slides, and legacy code are references only.
+RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the current direct Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link. This document describes the implementation repaired and verified on 2026-09-10, including the PR #11 low-rate JY901S telemetry monitor; historical papers, slides, and legacy code are references only.
+
+The recent Servo, LeakStatus, and JY901S hardware runs used the wired DAP UART/COM13 path above. APC220 is an earlier/legacy transport record, was not enabled in those runs, and is not current JY901S or PR #11 hardware evidence.
 
 ## Status labels
 
@@ -44,7 +46,7 @@ The Firmware publishes LeakStatus only after an accepted Heartbeat's normal
 ACK has finished transmitting, on the first valid sample, a state change, or a
 500 ms refresh. The Console treats the state as stale after 1500 ms (three
 500 ms refresh opportunities; provisional), and returns to `Unknown` on
-disconnect, APC220 liveness loss, invalid payload, or stale telemetry.
+disconnect, host-link liveness loss, invalid payload, or stale telemetry.
 This indicator is monitoring-only: it does not disable Servos, alter Safety,
 or auto-recover anything. The validation record is:
 
@@ -64,7 +66,7 @@ verifying that image restored the complete path. No numeric voltage or response
 time values are asserted here because none were recorded in the acceptance
 result. Leak monitoring remains independent of Servo and Safety behavior.
 
-## Current PR #11 JY901S telemetry monitor — Review / Hardware Verification Ready
+## Current PR #11 JY901S telemetry monitor — Hardware Verified / UART quality follow-up open
 
 The Console receives the Firmware `ImuSnapshot` (`0x21`) frame through the
 existing Protocol V2 decoder and keeps it separate from ACK matching and the
@@ -77,7 +79,7 @@ refreshes may reduce it. The Firmware does not use an independent IMU transmit
 timer.
 
 The `IMU — JY901S` panel is read-only and shows status, Acc, Gyro, Euler angle,
-and diagnostics. It displays `Unknown` before data or after transport/APC
+and diagnostics. It displays `Unknown` before data or after transport/host-link
 liveness loss, `Receiving` after a valid snapshot, `Stale` after 3500 ms without
 one, and `Error` after an invalid snapshot. Stale, invalid, disconnected, and
 liveness-lost states clear the values; invalid individual domains remain `--`.
@@ -92,17 +94,34 @@ programming evidence:
 | Firmware host regressions, telemetry codec/scheduler tests, and Qt tests | **[Host Test: PASS]** |
 | PR #11 STM32 target build | **[ARM Build: PASS]**: matching Firmware build was used for the reported hardware run |
 | PR #11 program/verify | **[Pending]**: no standalone programming/verify record is included here |
-| JY901S physical telemetry / end-to-end IMU data | **[Hardware Verified]**: live Acc/Gyro/Angle reached Qt through USART3, Protocol V2, and APC220 |
+| JY901S physical telemetry / end-to-end IMU data | **[Hardware Verified]**: live Acc/Gyro/Angle reached Qt through USART3, Protocol V2, STM32 USART1, and DAP UART/COM13 |
+| Re-arm diagnostics follow-up | **[Hardware Verified]**: post-fix Run A and Run B both reported hard re-arm failures 0; deferred `HAL_BUSY` remains separate |
+| USART3 UART/checksum physical quality | **[Pending / non-blocking]**: aggregate/subtype UART and checksum errors remain observable |
+| Final body-frame mapping / magnetic-yaw calibration | **[Pending]** |
 
-The reported diagnostics were RX bytes `131663`, headers `11967`, valid frames
-`11957`, checksum errors `10`, overflow `0`, UART errors `20`, Mag frames
-`2989`, and unsupported frames `0`. The pre-fix `166240` value was displayed
-from `rx_rearm_failure_count`; the implementation now separates deferred
-`HAL_BUSY` from hard failures and uses foreground recovery, so one short
-post-fix hardware regression remains **[Pending]**. The aggregate
-UART error count remains observable in Firmware diagnostics. A single Qt
-`Invalid length` event is an observation only; existing protocol tests cover
-split and sticky/concatenated frames, with no reproducible framing defect.
+The initial pre-fix diagnostics were RX bytes `131663`, headers `11967`, valid
+frames `11957`, checksum errors `10`, overflow `0`, UART errors `20`, Mag
+frames `2989`, unsupported frames `0`, and displayed
+`rx_rearm_failure_count = 166240`. The root cause was diagnostic semantics, not
+proof that all of those attempts were hard failures: the old implementation
+counted every return other than `HAL_OK` and did not retain the HAL status. In
+this repository's STM32F4 HAL, `HAL_UART_Receive_IT()` returns `HAL_BUSY` when
+`RxState` is not `HAL_UART_STATE_READY`, while the normal one-byte
+`UART_Receive_IT()` path sets `RxState` to `READY` before invoking
+`HAL_UART_RxCpltCallback`. A normal completion callback therefore is not, by
+itself, evidence of a busy transition, and the pre-fix aggregate cannot be
+retrospectively decomposed; a busy result can still occur when an arm overlaps
+another active receive or an error/foreground state transition. PR #11 now lets
+callbacks mark pending work, performs one foreground re-arm attempt per poll,
+counts `HAL_BUSY` as deferred, and reserves hard failures for `HAL_ERROR` and
+other non-success statuses. The post-fix short hardware runs kept hard re-arm
+failures at zero while RX bytes and valid frames continued increasing; their
+full values are recorded in the Firmware README and handoff.
+
+The aggregate UART error count and subtype counters remain observable. A single
+Qt `Invalid length` event is an observation only; existing protocol tests cover
+split and sticky/concatenated frames, with CRC errors and timeouts remaining
+zero. No protocol or Qt redesign is justified by that one event.
 
 The previously recorded PR #10 ARM Build and Program Verify PASS applies to
 the listen-only bring-up image. The matching PR #11 hardware run separately
@@ -116,7 +135,7 @@ and magnetic/yaw calibration remain **[Pending]**.
 - Qt Widgets UI with serial-port discovery, editable port selection, configurable baud rate, and a default of 9600 baud.
 - Connect, Disconnect, Refresh, per-servo Enable/Disable, Disable All, Neutral, and explicit Apply PWM controls.
 - Protocol V2 with COBS framing, `0x00` delimiter, CRC-16/CCITT-FALSE, little-endian fields, and a 64-byte maximum payload.
-- Explicit DirectUart and Apc220HalfDuplex link profiles. DirectUart retains the 100 ms heartbeat / 200 ms ACK timeout and multi-pending behavior; the APC220 stop-and-wait scheduler is **[Hardware Verified - Bench]**, while its 250 ms / 250 ms timing values remain **[Provisional]**.
+- Explicit DirectUart and Apc220HalfDuplex link profiles. DirectUart retains the 100 ms heartbeat / 200 ms ACK timeout and multi-pending behavior; the legacy-named Apc220HalfDuplex profile supplies the conservative stop-and-wait host-link policy used by the current DAP UART/COM13 bench run. Its 250 ms / 250 ms timing values remain **[Provisional]**; this does not verify an APC220 radio.
 - Up to three retransmissions after the original send, always reusing the original sequence and encoded frame.
 - ACK/Error reception, request-sequence matching, TX/RX hex display, packet/CRC/timeout counters, ACK status, and an event log.
 - Shared ACK result meanings `0..6`, with named rejection status in the monitor.
@@ -124,7 +143,7 @@ and magnetic/yaw calibration remain **[Pending]**.
 - Protocol codec/stream tests and controller behavior tests.
 - Set Angle UI for the four angle-capable semantic servos with descriptor-specific ranges; the UI converts to centidegrees and angle-to-pulse conversion remains authoritative in Firmware. FrontAxis is explicitly PWM-only while calibration is pending, with a shared 500–2500 μs command envelope.
 - Monitoring-only LeakStatus `0x20` indicator with Unknown/Dry/Wet states and stale/disconnect fail-to-Unknown behavior; the end-to-end path is **[Hardware Verified]**.
-- Monitoring-only JY901S `ImuSnapshot` `0x21` panel with explicit fixed-point display, diagnostics, Unknown/Receiving/Stale/Error lifecycle, and stale/liveness value invalidation; the matching PR #11 physical IMU path is **[Hardware Verified]**, with re-arm diagnostics follow-up still open.
+- Monitoring-only JY901S `ImuSnapshot` `0x21` panel with explicit fixed-point display, diagnostics, Unknown/Receiving/Stale/Error lifecycle, and stale/liveness value invalidation; the matching PR #11 physical IMU path and post-fix re-arm diagnostics are **[Hardware Verified]**, with USART3 UART/checksum physical-link quality, body-frame mapping, and magnetic/yaw calibration still pending.
 
 ### [Planned]
 
@@ -144,7 +163,7 @@ QApplication
       │   ├─ PacketCodec / StreamDecoder / CRC16
       │   ├─ profile-aware heartbeat timer
       │   ├─ pending ACK/retry scheduler
-      │   ├─ bounded APC220 command queue
+      │   ├─ bounded command queue (legacy-named Apc220HalfDuplex policy)
       │   ├─ logical enabled-mask state
       │   ├─ LeakStatus state / stale policy
       │   └─ ImuSnapshot state / stale policy
@@ -159,7 +178,7 @@ QApplication
 |---|---|
 | `main.cpp` | Creates the application, `SerialTransport`, `RobotController`, and `MainWindow`; injects serial-port discovery. |
 | `MainWindow` | Converts UI actions into controller calls and displays controller signals. It does not access `QSerialPort` or construct packets. |
-| `RobotController` | Owns command payload construction, sequence allocation, profile-aware heartbeat/ACK scheduling, APC220 queue state, logical servo enable state, range gates, monitoring-only LeakStatus and ImuSnapshot state/staleness, and monitor data. IMU frames never enter pending ACK state. |
+| `RobotController` | Owns command payload construction, sequence allocation, profile-aware heartbeat/ACK scheduling, bounded command-queue state, logical servo enable state, range gates, monitoring-only LeakStatus and ImuSnapshot state/staleness, and monitor data. IMU frames never enter pending ACK state. |
 | `ITransport` | Byte-stream open/close/write contract plus received-byte, state, and error signals. |
 | `SerialTransport` | Qt SerialPort adapter: port scan, 8-N-1, no flow control, async receive, buffered writes, and close-time flush attempt. |
 | `FakeTransport` | Deterministic byte transport used by controller tests. It is not a simulator of STM32 behavior. |
@@ -176,15 +195,15 @@ QApplication
 | COM scan | [Implemented] | `QSerialPortInfo::availablePorts()` returns sorted port names; Refresh reruns discovery. |
 | Baud rate | [Implemented] | Editable 1200–3,000,000; default 9600; connection uses 8 data bits, no parity, 1 stop bit, no flow control. |
 | Connect / Disconnect | [Implemented] | Connect opens the selected serial port. Disconnect first sends unacknowledged Disable All, then flushes/closes the port. |
-| Heartbeat | [Hardware Verified - Bench] / target [Provisional] | DirectUart sends every 100 ms. Apc220HalfDuplex sends a fresh heartbeat immediately after `Connected`, gates user commands until a matching successful ACK, then targets a 250 ms cadence when the stop-and-wait slot is free; due ticks coalesce while a heartbeat is in flight. |
-| ACK / retry / timeout | [Hardware Verified - Bench] / timing [Provisional] | DirectUart tracks multiple requests; Apc220HalfDuplex allows one ACK-requiring request in flight, queues up to `kApc220CommandQueueCapacity` user commands, prioritizes due heartbeat over ordinary command retry, and retries the identical frame at the profile timeout. |
+| Heartbeat | [Hardware Verified] host-link policy / target timing [Provisional] | DirectUart sends every 100 ms. The legacy-named Apc220HalfDuplex policy sends a fresh heartbeat immediately after `Connected`, gates user commands until a matching successful ACK, then targets a 250 ms cadence when the stop-and-wait slot is free; due ticks coalesce while a heartbeat is in flight. The current bench transport is DAP UART/COM13/USART1. |
+| ACK / retry / timeout | [Hardware Verified] host-link policy / timing [Provisional] | DirectUart tracks multiple requests; the legacy-named Apc220HalfDuplex policy allows one ACK-requiring request in flight, queues up to `kApc220CommandQueueCapacity` user commands, prioritizes due heartbeat over ordinary command retry, and retries the identical frame at the profile timeout. The current bench transport is DAP UART/COM13/USART1. |
 | Servo Enable / Disable | [Implemented] | UI logical enable changes only after a matching successful ACK. |
 | Disable All | [Implemented] | Sends the current supported mask `0x001F` for all five semantic channels. |
 | Neutral | [Implemented] | Sends `0x14` with the selected semantic servo mask after Enable ACK and with no pending Disable; FrontAxis exposes this as `Center 1500 us — Provisional`, not calibrated Neutral. |
 | Apply PWM | [Implemented] | Explicit button; slider movement alone does not transmit. Requires successful Enable ACK, no pending Disable, and descriptor command-range validation. |
 | Set Angle | [Implemented] | Angle-capable semantic servos use descriptor-specific input ranges and 0.1° steps; Qt converts to signed cdeg and calls `RobotController::setServoAngle()`. The control requires connection, support, Enable ACK, and no pending Disable request. FrontAxis is disabled. |
-| Leak status | [Hardware Verified] | Displays `Leak: Unknown`, `Leak: Dry`, or `LEAK DETECTED` from Protocol V2 `0x20`; disconnect, APC liveness loss, invalid payload, and stale telemetry return it to Unknown. Monitoring-only; no Servo/Safety action. |
-| JY901S IMU monitor | [Implemented] / physical data [Pending] | Displays `IMU — JY901S` status, valid fixed-point Acc/Gyro/Angle domains, and diagnostics from Protocol V2 `0x21`; Unknown/invalid/Stale/liveness loss clear values. Read-only; no 3D/history/control/configuration. |
+| Leak status | [Hardware Verified] | Displays `Leak: Unknown`, `Leak: Dry`, or `LEAK DETECTED` from Protocol V2 `0x20`; disconnect, host-link liveness loss, invalid payload, and stale telemetry return it to Unknown. Monitoring-only; no Servo/Safety action. |
+| JY901S IMU monitor | [Implemented] / physical data [Hardware Verified] | Displays `IMU — JY901S` status, valid fixed-point Acc/Gyro/Angle domains, and diagnostics from Protocol V2 `0x21`; Unknown/invalid/Stale/liveness loss clear values. Read-only; no 3D/history/control/configuration. |
 | Protocol monitor | [Implemented] | Displays latest TX/RX chunks, packet counts, CRC errors, timeouts, latest matching-ACK RTT, ACK state, and up to 1000 log blocks. |
 
 ## Historical Servo1 hardware acceptance (2026-09-06)
@@ -221,7 +240,7 @@ The angle controls are implemented for the four angle-capable semantic servos an
 - Startup never enables a servo.
 - PWM and Neutral are rejected locally until Servo Enable has received a matching result-0 ACK.
 - Semantic angle entry and Set Angle are enabled only while connected, supported, angle-capable, after the matching Servo Enable result-0 ACK, and while no Disable request is pending; Disable/Disable All/disconnect close that UI gate immediately.
-- Losing the transport or receiving an APC220 transport error clears in-flight requests, queued commands, heartbeat intent, decoder state, and the Console's logical enable mask, then stops the scheduler. Reconnect starts from a disabled state with one fresh heartbeat and never auto-enables a servo.
+- Losing the transport or receiving a host-link transport error clears in-flight requests, queued commands, heartbeat intent, decoder state, and the Console's logical enable mask, then stops the scheduler. Reconnect starts from a disabled state with one fresh heartbeat and never auto-enables a servo.
 - Disconnect/application close attempts Disable All, but deliberately does not wait for its ACK before closing. A successful local serial write is not proof that STM32 acted on it.
 - Unexpected link loss can only log that Disable All could not be delivered. The STM32 watchdog is the actual link-loss safety boundary.
 - Retries reuse the same sequence and frame. Firmware caches the most recent successful non-Heartbeat request by sequence and type and replays its ACK without repeating the Servo action; Heartbeats refresh liveness without evicting that action cache.
@@ -253,19 +272,23 @@ STM32 Protocol V2 dispatcher
   → TIM HAL driver
 ```
 
-## Link profiles and APC220 scheduling
+## Link profiles and conservative host-link scheduling
 
-`RobotControllerConfig::bringUpProvisional()` remains the DirectUart baseline used by existing controller tests and direct serial integrations. The application selects `RobotControllerConfig::apc220Provisional()` so the physical laptop → APC220 → STM32 path uses the **[Hardware Verified - Bench]** stop-and-wait scheduler. Its 250 ms heartbeat target and 250 ms ACK timeout remain **[Provisional]** link parameters.
+`RobotControllerConfig::bringUpProvisional()` remains the DirectUart baseline used by existing controller tests and direct serial integrations. The application selects `RobotControllerConfig::apc220Provisional()` so the current wired Qt Console → COM13 → DAP UART/USB serial bridge → STM32 USART1 path uses the conservative stop-and-wait scheduler. This is a software/load-policy result; APC220 is not the current physical transport and its 250 ms heartbeat target and 250 ms ACK timeout remain **[Provisional]** profile parameters.
 
-In Apc220HalfDuplex mode, only one ACK-requiring frame is active. Servo user commands that arrive while it is active wait in the bounded `kApc220CommandQueueCapacity` queue. Heartbeat timer ticks set a single due flag; they never accumulate. When a heartbeat is due alongside a command retry, the heartbeat goes first and the command retry retains its original sequence and encoded frame. Any transport reset clears the in-flight request, queue, heartbeat due flag, and logical enable/pending state.
+In Apc220HalfDuplex mode, only one ACK-requiring frame is active. Servo user commands that arrive while it is active wait in the bounded `kApc220CommandQueueCapacity` queue. Heartbeat timer ticks set a single due flag; they never accumulate. When a heartbeat is due alongside a command retry, the heartbeat goes first and the command retry retains its original sequence and encoded frame. Any transport reset clears the in-flight request, queue, heartbeat due flag, and logical enable/pending state. The profile name is retained for compatibility; the recent hardware evidence used the DAP UART/COM13 host link.
 
-The monitor exposes `ProtocolMonitor::lastAckRttMs`, and the UI displays the latest matching-ACK RTT for diagnosing the high-latency link. APC220 matching heartbeat rejection/mismatch/timeout keeps the liveness gate closed until a later heartbeat succeeds.
+The monitor exposes `ProtocolMonitor::lastAckRttMs`, and the UI displays the latest matching-ACK RTT for diagnosing the host link. Matching heartbeat rejection/mismatch/timeout keeps the liveness gate closed until a later heartbeat succeeds.
 
 The bring-up evidence and link-isolation lessons are recorded in the root [engineering lessons](../docs/engineering-lessons.md).
 
-## APC220 scheduler hardware acceptance (2026-09-08)
+## [Historical Reference] APC220 scheduler hardware acceptance (2026-09-08; current hardware not APC220)
 
 **APC220 Half-Duplex Scheduler: [Hardware Verified - Bench]**
+
+This section preserves the earlier APC220 desktop-bench record. It is not the
+current DAP UART/COM13/USART1 evidence and does not make APC220 part of the
+currently enabled hardware path.
 
 The user-accepted desktop-bench regression covered the 440 MHz two-module link and the complete Qt → APC220 → STM32 → ACK → APC220 → Qt path:
 
