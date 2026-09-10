@@ -18,6 +18,16 @@
 
 /* 0xFFFF represents an unknown or saturated age on the wire. */
 #define DEPTH_TELEMETRY_SAMPLE_AGE_UNKNOWN UINT16_MAX
+
+/*
+ * Firmware-side sensor freshness is separate from the one-second telemetry
+ * publication interval and from the Qt host packet StaleTimeoutMs.
+ * Vendor line cadence is not specified, so this provisional 3000 ms bound
+ * allows three current one-second publication intervals before a valid depth
+ * sample is no longer used for live telemetry. The timeout is intentionally
+ * explicit so it can be revised when the vendor cadence is measured.
+ */
+#define DEPTH_TELEMETRY_SENSOR_FRESHNESS_TIMEOUT_MS 3000U
 #define DEPTH_TELEMETRY_INTERVAL_MS 1000U
 
 /* Names matching the protocol's DepthSnapshot terminology. */
@@ -64,6 +74,11 @@ bool depth_telemetry_decode(
     size_t payload_length,
     depth_telemetry_source_t *source,
     depth_telemetry_diagnostics_t *diagnostics);
+
+bool depth_telemetry_sensor_sample_is_current(
+    bool parser_sample_valid,
+    uint32_t last_valid_sample_ms,
+    uint32_t now_ms);
 
 typedef struct
 {

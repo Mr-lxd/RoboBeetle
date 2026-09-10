@@ -235,6 +235,20 @@ bool depth_telemetry_decode(
     return true;
 }
 
+bool depth_telemetry_sensor_sample_is_current(
+    bool parser_sample_valid,
+    uint32_t last_valid_sample_ms,
+    uint32_t now_ms)
+{
+    if (!parser_sample_valid)
+    {
+        return false;
+    }
+
+    return (uint32_t)(now_ms - last_valid_sample_ms) <
+           DEPTH_TELEMETRY_SENSOR_FRESHNESS_TIMEOUT_MS;
+}
+
 void depth_telemetry_policy_init(
     depth_telemetry_policy_t *policy)
 {

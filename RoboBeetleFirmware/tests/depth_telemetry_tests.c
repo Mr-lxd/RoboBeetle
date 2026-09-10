@@ -423,6 +423,58 @@ static void test_policy_null_arguments_are_safe(void)
            "policy init must clear the success marker");
 }
 
+static void test_sensor_freshness_policy_expires_and_recovers(void)
+{
+    const uint32_t sample_ms = 1000U;
+    const uint32_t just_before_timeout_ms =
+        sample_ms + DEPTH_TELEMETRY_SENSOR_FRESHNESS_TIMEOUT_MS - 1U;
+    const uint32_t at_timeout_ms =
+        sample_ms + DEPTH_TELEMETRY_SENSOR_FRESHNESS_TIMEOUT_MS;
+    const uint32_t fresh_sample_ms = at_timeout_ms + 100U;
+
+    expect(depth_telemetry_sensor_sample_is_current(
+               true,
+               sample_ms,
+               just_before_timeout_ms),
+           "valid depth sample must remain current before timeout");
+    expect(!depth_telemetry_sensor_sample_is_current(
+                true,
+                sample_ms,
+                at_timeout_ms),
+           "valid depth sample must become stale at timeout");
+    expect(!depth_telemetry_sensor_sample_is_current(
+                true,
+                sample_ms,
+                fresh_sample_ms),
+           "old depth sample must remain stale after timeout");
+    expect(depth_telemetry_sensor_sample_is_current(
+               true,
+               fresh_sample_ms,
+               fresh_sample_ms),
+           "new valid depth sample must recover freshness");
+    expect(!depth_telemetry_sensor_sample_is_current(
+                false,
+                fresh_sample_ms,
+                fresh_sample_ms),
+           "invalid parser state must not report a current sample");
+}
+
+static void test_sensor_freshness_policy_is_wrap_safe(void)
+{
+    const uint32_t sample_ms = UINT32_MAX - 500U;
+
+    expect(depth_telemetry_sensor_sample_is_current(
+               true,
+               sample_ms,
+               2498U),
+           "wrapped depth sample age below timeout must remain current");
+    expect(!depth_telemetry_sensor_sample_is_current(
+                true,
+                sample_ms,
+                2499U),
+           "wrapped depth sample age at timeout must be stale");
+}
+
 int main(void)
 {
     test_constants_and_golden_payload();
@@ -434,6 +486,8 @@ int main(void)
     test_policy_is_due_at_first_opportunity_and_interval_boundary();
     test_policy_elapsed_comparison_is_wrap_safe();
     test_policy_null_arguments_are_safe();
+    test_sensor_freshness_policy_expires_and_recovers();
+    test_sensor_freshness_policy_is_wrap_safe();
 
     if (failures == 0)
     {
