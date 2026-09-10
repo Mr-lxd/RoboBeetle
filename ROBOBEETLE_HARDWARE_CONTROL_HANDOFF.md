@@ -111,6 +111,7 @@ physical RX 与 end-to-end Hardware Verified 证据。
 | Acc/Gyro/Angle real data | **Hardware Verified**：Acc 合理、静止 Gyro 接近零、Angle 正确响应 |
 | Re-arm diagnostics | **Hardware Verified**：matching PR #11 post-fix runs 的 hard re-arm failures 均为 0；HAL_BUSY deferred 独立统计 |
 | USART3 UART/checksum physical quality | **Pending / non-blocking**：UART/checksum 计数可见，物理来源尚未由本证据确定 |
+| 0x54 Mag recognition | **Hardware Verified**：Mag frames 被识别为 known-but-ignored，unsupported 为 0 |
 | Pending | 最终 body-frame mapping、magnetic/yaw calibration，以及 USART3 physical-link quality follow-up |
 
 2026-09-10，用户在 hardware-verification checkout 完成了当前
@@ -275,7 +276,7 @@ USART1 IRQ → HAL callback → uart_transport_stm32 → ring_buffer
 
 APC220 Half-Duplex Scheduler：**[Hardware Verified - Bench]**
 
-用户已完成当前桌面台架的完整实机验收：
+以下仅保留早期 APC220 桌面台架的历史记录；它不属于近期 COM13/DAP/USART1 的硬件验证，也不代表 APC220 是当前启用的链路：
 
 以下仅保留早期 APC220 桌面台架记录；不属于近期 COM13/DAP/USART1 验证，也不代表 APC220 是当前启用链路：
 
