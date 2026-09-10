@@ -1,8 +1,8 @@
 # RoboBeetle 硬件控制交接审计
 
-## 2026-09-09 Leak detection sensor bring-up（PR #9，软件实现；实机验收待完成）
+## 2026-09-10 Leak detection sensor bring-up（PR #9，end-to-end Hardware Verified）
 
-本阶段在 PR #8 五舵机分支之后采用 stacked branch，实现第一条最小数字漏水检测路径及其 monitoring-only Protocol V2/Qt 显示，不改变 Servo 行为或 Safety 行为。漏水模块由 3.3 V 供电，与 STM32 共地；数字输出 `D0` 接 STM32 `PA11`，模拟输出 `A0` 暂不使用。
+本阶段在 PR #8 五舵机分支之后采用 stacked branch，实现第一条最小数字漏水检测路径及其 monitoring-only Protocol V2/Qt 显示，不改变 Servo 行为或 Safety 行为。漏水模块由 3.3 V 供电，与 STM32 共地；数字输出 `D0` 接 STM32 `PA11`，模拟输出 `A0` 暂不使用。PA11 → Firmware → Protocol V2 → Qt 的完整路径已经完成实机验收。
 
 ### 当前实现
 
@@ -30,33 +30,23 @@ leak module D0
 |---|---|
 | Leak HIGH→Dry / LOW→Wet 纯 C 逻辑 | **Host Test: PASS** |
 | Firmware ARM Build | **ARM Build: PASS**（STM32CubeIDE GNU Tools for STM32 14.3.1，CMake Debug configure/build；生成 `RoboBeetleFirmware.elf`） |
-| Program Verify | **Pending**，本阶段未执行烧录/校验 |
-| PA11 Dry/Wet 电平与极性 | **Pending Hardware Verification** |
-| 实际漏水响应/恢复/稳定性 | **Pending Hardware Verification** |
+| Program Verify | **Program Verify: PASS**（重建当前 ELF 后完成烧录与校验） |
+| PA11 Dry/Wet 检测路径 | **Hardware Verified** |
+| Protocol V2 LeakStatus `0x20` 实链路 | **Hardware Verified** |
+| Qt Leak indicator | **Hardware Verified** |
+| 端到端 Leak monitoring | **Hardware Verified** |
 | Leak Safety Supervisor response | **Pending / Not Implemented** |
-| Protocol V2 LeakStatus `0x20` codec/controller path | **Host Test: PASS; Hardware Pending** |
-| Qt leak visualization / stale-disconnect behavior | **Host Test: PASS; Hardware Pending** |
+| Protocol V2 LeakStatus `0x20` codec/controller path | **Host Test: PASS; Hardware Verified** |
+| Qt leak visualization / stale-disconnect behavior | **Host Test: PASS; Hardware Verified** |
 
-### Leak 首次实机步骤
+### Leak 实机验收记录
 
-1. 将漏水模块接到 3.3 V，模块 GND 与 STM32 GND 共地。
-2. 将 `D0` 接 `PA11`；`A0` 保持悬空/不连接。
-3. 在干燥状态测量并记录 `D0` 电压和 GPIO 逻辑值（预期 HIGH，但尚未 Hardware Verified）。
-4. 只润湿漏水线缆的计划感测段，观察并记录 `D0` 是否变为 LOW、响应延迟和是否有抖动。
-5. 擦干/移除水分，记录恢复延迟、最终逻辑值和是否回到 HIGH。
-6. 观察 Qt Leak indicator 的 Unknown → Dry/Wet → Unknown（断开/超时）状态；不要在本阶段把漏水状态接入自动停机或 Servo 安全动作；不要直接浸水，除非模块与整机密封能力已有独立证据。
+1. 重新构建当前 Firmware ELF，完成 Program Verify；先前持续显示 `Leak: Unknown` 的问题由错误/过期 build artifact provenance 引起。
+2. 使用已验证的当前镜像运行 PA11 leak detection，确认干/湿状态能沿 Firmware `leak_sensor` 路径进入 LeakStatus telemetry。
+3. 通过真实 Protocol V2 链路观察 Qt indicator 状态变化，确认 LeakStatus 不产生 ACK、不触发 Servo 或 Safety 动作。
+4. 本次验收未记录数值电压或响应时间；这些数值不应从本次 PASS 结论中推导。
 
-请记录：
-
-```text
-Dry GPIO level / D0 voltage = ?
-Wet GPIO level / D0 voltage = ?
-Wet response delay = ?
-Dry recovery delay = ?
-Chatter / unstable transitions = ?
-```
-
-传感器 bring-up 顺序固定为：`Leak detection (including LeakStatus telemetry) → JY901S IMU → depth/sensor board`。先做 Leak 是因为它是最小的数字输入路径，可先验证 GPIO/电平/状态抽象，再扩展其它传感器；LeakStatus 协议和 Qt 指示器虽已实现，端到端硬件证据仍待补齐。
+传感器 bring-up 顺序固定为：`Leak detection (including LeakStatus telemetry) → JY901S IMU → depth/sensor board`。LeakStatus 端到端证据现已补齐；JY901S 与 Depth 尚未开始。
 
 ## 2026-09-09 Depth PWM calibration window follow-up（PR #8）
 
@@ -356,7 +346,7 @@ USART1_IRQHandler
 - ACK 使用 `HAL_UART_Transmit(..., 100 ms)`，是 main-loop 阻塞发送，不在 ISR 中。
 - 有效 Heartbeat 更新本地 `last_heartbeat_rx_ms` 并设置 `host_alive`。
 - 超过 500 ms 未收到有效 Heartbeat 时停止 Servo1 PWM、清空 enable mask；恢复后必须重新 Heartbeat + Enable。
-- 没有独立硬件看门狗、Emergency Stop、漏水安全响应、电池/过流输入或持久故障记录；Leak D0 目前按轮询方式更新内部状态，并通过 PR #9 的 `LeakStatus (0x20)` 做 monitoring-only 遥测。该遥测不触发 Servo/Safety 动作，PA11 电平和端到端漏水行为仍 Pending。
+- 没有独立硬件看门狗、Emergency Stop、漏水安全响应、电池/过流输入或持久故障记录；Leak D0 按轮询方式更新内部状态，并通过 PR #9 的 `LeakStatus (0x20)` 做 monitoring-only 遥测。该遥测不触发 Servo/Safety 动作；PA11 → LeakStatus → Qt 端到端路径已 Hardware Verified。
 
 ### Console ↔ Firmware Protocol V2 结论
 

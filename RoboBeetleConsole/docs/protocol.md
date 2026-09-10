@@ -1,6 +1,6 @@
 # RoboBeetle Protocol V2 — Phase 1 Baseline
 
-This document describes the Console and Firmware sources repaired and clean-built on 2026-09-09, plus the Console APC220 scheduler adaptation and PR #9 leak-status telemetry. **[Implemented]** refers to code presence and software verification; the pre-PR8 Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]** for its historical layout. PR #7 scheduler behavior is **[Hardware Verified - Bench]** on the tested desktop setup; its timing parameters remain **[Provisional]**. The PR #8 five-servo implementation is software-verified, while its target hardware regression and PA11 leak end-to-end behavior remain pending.
+This document describes the Console and Firmware sources repaired and clean-built on 2026-09-10, plus the Console APC220 scheduler adaptation and PR #9 leak-status telemetry. **[Implemented]** refers to code presence and software verification; the pre-PR8 Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]** for its historical layout. PR #7 scheduler behavior is **[Hardware Verified - Bench]** on the tested desktop setup; its timing parameters remain **[Provisional]**. PR #8's Servo/Depth bench findings are recorded in the canonical handoff, with Depth endpoint calibration still pending; PR #9 LeakStatus end-to-end monitoring is now **[Hardware Verified]**.
 
 Evidence labels used across the project are **[Implemented]** (current source), **[Hardware Verified]** (development-record hardware evidence), **[Provisional]** (bring-up value/incomplete contract), **[Planned]** (future work), and **[Historical Reference]** (old papers/code only). This protocol document relies primarily on Implemented evidence; hardware milestones and historical context are kept in the project READMEs and root handoff.
 
@@ -115,8 +115,12 @@ telemetry timer or Safety/Servo action is introduced. The Console accepts only
 the one-byte values, records the last telemetry time, and returns its display to
 `Unknown` on disconnect, APC220 liveness loss, invalid payload, or after 1500 ms
 (three 500 ms refresh opportunities; provisional) without a valid update.
-PA11 electrical levels, physical wet/dry response, and the end-to-end path are
-**[Pending Hardware Verification]**.
+The PA11 leak detection path, Protocol V2 real-link exchange, and Qt indicator
+were **[Hardware Verified]** in the recorded end-to-end acceptance. The prior
+persistent `Leak: Unknown` result was traced to programming/build artifact
+provenance; rebuilding the correct current ELF and programming and verifying it
+restored the complete path. No numeric voltage or response-time values are
+asserted here because none were recorded in that acceptance.
 
 ### Set Servo PWM — `0x12`
 
@@ -165,7 +169,7 @@ This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware v
 | Set Servo PWM | `0x12` | Sends count 1, semantic ID, pulse LE; applies descriptor command envelope | Accepts exactly count 1 and a supported semantic ID; host-alive/enabled/range gates; writes mapped timer CCR | `uint8,uint8,uint16` | Yes | **Consistent for all five IDs; FrontAxis is PWM-only at 500–2500 μs, endpoint verification pending** |
 | Set Servo Angle | `0x13` | Controller and Qt UI send count 1, angle-capable semantic ID, signed cdeg LE; UI is gated by connection, Enable ACK, and no pending Disable | Maps each accepted descriptor angle with `int32_t` arithmetic; FrontAxis is rejected | `uint8,uint8,int16` | Yes | **Implemented; new five-servo hardware verification pending** |
 | Neutral | `0x14` | Sends the selected semantic mask after local enable | Requires live host, valid mask, and enabled selected channels; writes descriptor neutral pulses without disabling | `uint16 mask` | Yes | **Implemented; FrontAxis neutral remains provisional** |
-| LeakStatus | `0x20` | Receives one-byte monitoring telemetry and updates Unknown/Dry/Wet indicator; never creates an ACK pending entry | Samples PA11 and emits after accepted Heartbeat ACK, first/change/500 ms refresh; no ACK and no Servo/Safety action | `uint8 state` | No | **Implemented; physical/end-to-end verification pending** |
+| LeakStatus | `0x20` | Receives one-byte monitoring telemetry and updates Unknown/Dry/Wet indicator; never creates an ACK pending entry | Samples PA11 and emits after accepted Heartbeat ACK, first/change/500 ms refresh; no ACK and no Servo/Safety action | `uint8 state` | No | **Implemented; end-to-end monitoring [Hardware Verified]** |
 
 ## Sequence, ACK, retry, and duplicate behavior
 

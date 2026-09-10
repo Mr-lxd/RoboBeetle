@@ -1,6 +1,6 @@
 # RoboBeetle Engineering Lessons
 
-This note records the evidence and boundaries behind the Console PR #7 scheduler adaptation, the PR #8 five-servo semantic bring-up, and the PR #9 leak-sensor telemetry bring-up. The scheduler is **[Hardware Verified - Bench]** on the tested desktop setup, while the PR #8 five-servo layout and the PA11 leak input/telemetry path remain pending their respective target hardware evidence.
+This note records the evidence and boundaries behind the Console PR #7 scheduler adaptation, the PR #8 five-servo semantic bring-up, and the PR #9 leak-sensor telemetry bring-up. The scheduler is **[Hardware Verified - Bench]** on the tested desktop setup. PR #8 retains explicit partial-bench **[Hardware Verified]** findings for the installed servo paths and **[Pending Hardware Verification]** for the remaining Depth endpoints. PR #9's PA11 leak input, Protocol V2 LeakStatus path, Qt indicator, and end-to-end monitoring are now **[Hardware Verified]** after the correct current ELF was rebuilt, programmed, and verified.
 
 ## Keep programming and runtime links separate
 
@@ -104,17 +104,28 @@ APC liveness loss, invalid payload, or a provisional 1500 ms stale interval
 (three 500 ms Firmware refresh opportunities). It is monitoring-only and must
 not be wired to automatic stop behavior in this phase. Host tests can therefore
 establish polarity, wire compatibility, and stale-state handling without
-pretending to verify PA11 voltage or water response. The remaining order is
-physical leak verification → JY901S IMU → depth/sensor board; telemetry and the
-Qt indicator are implemented but their end-to-end hardware evidence is pending.
+pretending to verify PA11 voltage or water response. The recorded PR #9 evidence
+now separates the levels explicitly: pure-C/Qt checks are **[Host Test: PASS]**,
+the STM32 target compile is **[ARM Build: PASS]**, the rebuilt current ELF was
+programmed and checked as **[Program Verify: PASS]**, and PA11 detection,
+Protocol V2 LeakStatus real-link exchange, the Qt indicator, and end-to-end Leak
+monitoring are **[Hardware Verified]**. Leak-triggered Safety action remains
+**[Pending / Not Implemented]**. The remaining order is physical leak evidence
+(now complete) → JY901S IMU → depth/sensor board; JY901S and the Depth sensor
+work have not started.
 
-The Firmware Debug ARM configure/build is **[ARM Build: PASS]** with the
-STM32CubeIDE GNU Tools for STM32 14.3.1 toolchain, but no image was programmed
-or verified here. The first physical check must record dry and wet GPIO
-levels/voltages, wet response delay, dry recovery delay, and any chatter. Until
-those observations are supplied, PA11 polarity and wet/dry detection remain
-**[Pending Hardware Verification]**; do not connect the state to automatic stop
-behavior.
+## Firmware image provenance is part of hardware verification
+
+The earlier persistent `Leak: Unknown` result was caused by build/programming
+artifact provenance rather than a new Protocol V2 or sensor-path defect. Rebuild
+the correct current source into the matching ELF, program that image, verify the
+programmed image, and only then interpret the real-link result. Once that
+provenance was corrected, the complete PA11 → Firmware → LeakStatus → Qt path
+worked and passed end-to-end hardware acceptance. Do not invent or infer numeric
+voltage or response-time values when they were not recorded. Keep **Host Test**,
+**ARM Build**, **Program Verify**, **Hardware Verified**, and **Pending** as
+separate evidence levels; a host test or target compile alone cannot establish
+physical sensor behavior.
 
 ## Keep sensor telemetry inside an existing liveness window
 

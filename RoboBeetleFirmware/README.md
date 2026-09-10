@@ -1,6 +1,6 @@
 # RoboBeetleFirmware
 
-RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for Laptop/Qt ↔ USART1 ↔ STM32 Protocol V2 bring-up, the five-servo semantic descriptor path, and the PR #9 leak-status telemetry path. This README records the merged hardware-verified modularization baseline and the PR #8/PR #9 software implementation; the five-servo target regression and leak sensor end-to-end behavior remain pending target hardware evidence.
+RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for Laptop/Qt ↔ USART1 ↔ STM32 Protocol V2 bring-up, the five-servo semantic descriptor path, and the PR #9 leak-status telemetry path. This README records the merged hardware-verified modularization baseline, the PR #8 Servo/Depth bench findings, and the PR #9 leak-status hardware acceptance. Depth endpoint calibration remains pending; the LeakStatus path is now hardware verified.
 
 ## Status labels
 
@@ -35,7 +35,7 @@ This is a hardware-layout compatibility break. Historical v0.4 `Servo1`/PA6 brin
 
 PR #8 software descriptor, service, and dispatch regressions are the implementation gate. Five-servo target build/download and physical motion verification are still **[Pending Hardware Verification]**; the earlier Servo1-only hardware milestones remain historical evidence for the old layout.
 
-## Current sensor bring-up: leak D0 on PA11
+## PR #9 leak-status telemetry: leak D0 on PA11 — [Hardware Verified]
 
 The first sensor phase adds a polled digital leak input and a monitoring-only
 Protocol V2 telemetry path. The module is
@@ -69,19 +69,27 @@ APC liveness loss, invalid payload, or a stale telemetry interval of 1500 ms
 (three 500 ms Firmware refresh opportunities; provisional).
 
 The pure-C mapper/policy, Protocol V2 vectors, and Qt/controller regressions are
-**[Host Test: PASS]**; PA11 voltage, polarity, response/recovery time, chatter,
-Program Verify, and physical leak detection/telemetry remain **[Pending
-Hardware Verification]**.
-The Firmware Debug ARM configure/build is **[ARM Build: PASS]** with the
-STM32CubeIDE GNU Tools for STM32 14.3.1 toolchain; no image was programmed or
-verified in this session. Host Test and ARM Build do not establish physical
-sensor behavior.
+**[Host Test: PASS]**. The current STM32CubeIDE Debug ARM configure/build is
+**[ARM Build: PASS]**, and the rebuilt current ELF was programmed and verified
+with **[Program Verify: PASS]**. Physical acceptance is now recorded as:
 
-The remaining sensor sequence is physical leak verification → JY901S IMU →
-depth/sensor board. Leak Protocol V2 telemetry and the Qt indicator are now
-implemented, but their end-to-end hardware behavior remains pending. Leak is
-first because it is the smallest digital-input path and establishes a
-low-complexity sensor bring-up baseline.
+| Acceptance item | Status |
+|---|---|
+| PA11 leak detection path | **[Hardware Verified]** |
+| Protocol V2 `LeakStatus (0x20)` real-link exchange | **[Hardware Verified]** |
+| Qt Leak indicator | **[Hardware Verified]** |
+| End-to-end Leak monitoring | **[Hardware Verified]** |
+| Leak Safety response | **[Pending / Not Implemented]** |
+
+The earlier persistent `Leak: Unknown` observation was caused by programming/build
+artifact provenance. After rebuilding the correct current ELF and programming and
+verifying that image, the complete PA11 → Firmware → Protocol V2 → Qt path worked
+as intended. No numeric voltage or response-time values are asserted here because
+they were not part of the recorded acceptance result.
+
+The remaining sensor sequence is JY901S IMU → depth/sensor board; neither has
+started in this closeout. LeakStatus remains monitoring-only and is not connected
+to Servo or Safety actions.
 
 ## Active target and CubeMX configuration
 
@@ -331,4 +339,4 @@ PR #5 adds only the pure-C `Core/Communication/protocol_dispatcher` module, its 
 
 PR #6 adds only the `Core/App/app_main.c/.h` orchestration layer, its user-maintained CMake source/include entries, the `main.c` delegation points, and this documentation. Protocol V2 wire framing, ACK encoding/transmit, duplicate cache, UART transport, Safety policy, Servo behavior/calibration, `.ioc`, generated CubeMX CMake, and peripheral initialization values remain unchanged. App/Main extraction is now **[Hardware Verified]**: STM32CubeIDE Build PASS, ST-LINK Download PASS, and Full physical regression PASS.
 
-PR #9 adds the pure-C leak-state telemetry policy, the Protocol V2 `LeakStatus (0x20)` frame, and a monitoring-only Qt indicator. Firmware samples PA11 and publishes after an accepted Heartbeat ACK on first/change/500 ms refresh opportunities; Console stale/disconnect/liveness loss returns the indicator to Unknown. Host tests and the ARM build pass, while PA11 electrical behavior, physical leak response, Program Verify, and end-to-end telemetry remain **[Pending Hardware Verification]**. No leak state is connected to Servo or Safety actions.
+PR #9 adds the pure-C leak-state telemetry policy, the Protocol V2 `LeakStatus (0x20)` frame, and a monitoring-only Qt indicator. Firmware samples PA11 and publishes after an accepted Heartbeat ACK on first/change/500 ms refresh opportunities; Console stale/disconnect/liveness loss returns the indicator to Unknown. Host Test, ARM Build, Program Verify, PA11 detection, real-link telemetry, Qt indication, and end-to-end Leak monitoring are now **[Hardware Verified]**. The acceptance also confirmed that rebuilding/programming/verifying the correct current ELF resolved the earlier persistent Unknown display; no numeric voltage or response-time claim is made. No leak state is connected to Servo or Safety actions.
