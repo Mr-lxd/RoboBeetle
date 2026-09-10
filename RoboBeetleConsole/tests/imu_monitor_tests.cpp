@@ -7,6 +7,7 @@
 
 #include <array>
 #include <optional>
+#include <cstdio>
 
 namespace {
 
@@ -15,7 +16,7 @@ int failures = 0;
 void expect(bool condition, const char *message)
 {
     if (!condition) {
-        qCritical("FAIL: %s", message);
+        std::fprintf(stderr, "FAIL: %s\n", message);
         ++failures;
     }
 }
@@ -85,8 +86,15 @@ void test_payload_round_trip_and_golden_bytes()
     }
 
     const rb::Packet packet{rb::MessageType::ImuSnapshot, 0x1234, payload};
-    const rb::DecodeResult wireDecoded =
-        rb::PacketCodec::decodeWire(rb::PacketCodec::encodeWire(packet));
+    const QByteArray wire = rb::PacketCodec::encodeWire(packet);
+    const QByteArray goldenWire = QByteArray::fromHex(
+        "0852420221341238080107d2043cf601027b03e8ff0105d20415ff0127"
+        "5453525104030201141312112423222164636261747372718483828134"
+        "333231444342415c1f00");
+    expect(wire == goldenWire,
+           "ImuSnapshot Protocol V2 golden wire frame differs");
+    const rb::DecodeResult wireDecoded = rb::PacketCodec::decodeWire(
+        wire.first(wire.size() - 1));
     expect(wireDecoded.ok() && wireDecoded.packet == packet,
            "ImuSnapshot Protocol V2 wire round trip differs");
 }
@@ -108,9 +116,17 @@ void test_payload_validation_and_partial_validity()
            "reserved validity flags must be rejected");
 
     payload = rb::ImuSnapshot::encodePayload(expected);
+    payload[1] = static_cast<char>(rb::ImuSnapshot::GyroValid
+                                   | rb::ImuSnapshot::AngleValid);
     payload[2] = 1;
     expect(!rb::ImuSnapshot::decodePayload(payload).has_value(),
            "nonzero fixed-point data for invalid Acc must be rejected");
+
+    payload = rb::ImuSnapshot::encodePayload(expected);
+    payload[2] = static_cast<char>(0x81);
+    payload[3] = static_cast<char>(0x3e);
+    expect(!rb::ImuSnapshot::decodePayload(payload).has_value(),
+           "Acc values beyond the documented range must be rejected");
 
     rb::ImuSnapshot partial = expected;
     partial.validityFlags = rb::ImuSnapshot::GyroValid;
