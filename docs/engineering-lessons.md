@@ -162,3 +162,30 @@ The Qt descriptor keeps `FrontAxis` as the internal compatibility identifier, bu
 - A 256-byte storage ring has 255 bytes of usable capacity under the empty-slot convention; the observed RX byte rate and overflow counter determine whether that is sufficient for a persistent output mask/rate.
 - Host Test, ARM Build, Program Verify, Hardware Verified, and Pending are evidence categories; one cannot be inferred from another.
 - A successful target build and DAP/OpenOCD `Verified OK` establish ARM Build and Program Verify for the intended ELF, but they do not establish that a JY901S is physically transmitting valid frames. Record the ELF path, artifact timestamp, programming/verify result, and sensor-runtime evidence separately so image provenance is auditable.
+
+## Low-rate telemetry must fit an existing exchange window
+
+The PR #11 ImuSnapshot uses one fixed 56-byte payload and a separate telemetry
+sequence, but it is published only after an accepted Heartbeat ACK completes.
+The selector allows at most one optional non-ACK frame per opportunity and gives
+LeakStatus priority. This keeps low-rate monitoring from competing with the
+APC220 stop-and-wait command/ACK slot or creating an independent burst source.
+The 68-byte maximum IMU wire frame and the combined nominal budget are recorded
+as estimates; they are not physical RF throughput evidence.
+
+## Fixed-point schemas are an interoperability boundary
+
+The ImuSnapshot payload documents every offset, width, endianness, scale, range,
+rounding rule, validity rule, and schema version. Explicit little-endian fixed
+point plus golden vectors avoids ABI/packing and floating-point differences
+between pure-C Firmware and Qt/C++. Invalid or stale domains are cleared at the
+monitor boundary, so diagnostics can remain visible without presenting old
+sensor values as live.
+
+## Telemetry isolation needs regression evidence
+
+The Console controller must treat ImuSnapshot like monitoring telemetry: it must
+not satisfy an ACK, release a pending Servo command, alter LeakStatus, or enter
+the APC220 command queue. A dedicated controller regression and a Qt lifecycle
+test make those negative guarantees executable while preserving the existing
+USART1/APC220 and LeakStatus tests.

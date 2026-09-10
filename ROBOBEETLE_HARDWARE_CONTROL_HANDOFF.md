@@ -107,6 +107,52 @@ Acc/Gyro/Angle 实际数据仍为 Pending，不能标记 Hardware Verified。
 
 本轮不涉及 Protocol V2 IMU telemetry、Qt IMU display、Depth sensor、Safety、自动 JY901S configuration 或 body-frame calibration。
 
+## 2026-09-10 PR #11 JY901S low-rate telemetry + Qt monitor（Review / Hardware Verification Ready）
+
+本阶段从 PR #10 的 listen-only bring-up HEAD 叠加，只消费已经存在的
+JY901S Acc/Gyro/Angle 内部状态，不改变 USART3 RX/parser 路径，也不向
+JY901S 发送任何配置、保存、重启、校准或其它 command。新增链路为：
+
+```text
+JY901S parser state + diagnostics
+  → fixed Protocol V2 ImuSnapshot `0x21`
+  → existing USART1 / APC220 telemetry opportunity
+  → Qt RobotController / ImuMonitor
+  → IMU — JY901S read-only panel
+```
+
+### 固定协议与调度
+
+- `ImuSnapshot` 使用独立 telemetry sequence，不进入 command/ACK matching；不发送 raw JY901S frame、ASCII 或平台相关 struct memcpy。
+- payload 固定 56 bytes：schema `0x01`、Acc/Gyro/Angle validity flags、little-endian fixed-point values，以及 USART3/parser diagnostics counters。Acc 为 mg，Gyro 为 0.1 dps，Angle 为 0.01 degree；无效 domain 编码为零。
+- Firmware 只在 accepted Heartbeat 的正常 ACK 已完成发送后评估 IMU policy；每次 opportunity 最多发送一个 non-ACK telemetry frame。LeakStatus `0x20` 优先，只有 LeakStatus 不 due 时才选择 ImuSnapshot `0x21`。
+- IMU policy interval 为 1 s；成功发送后才 mark published。56-byte payload 的最大 wire frame 为 68 bytes；9600 8-N-1 下按现有 APC220/Heartbeat/Leak 预算计算，不宣称实机吞吐已验证。
+- APC220 不增加独立 IMU TX timer；IMU 不会创建、释放、重试或重排 ACK pending request。USART1/APC220 与 LeakStatus 行为保持不变。
+
+### Qt 监视器边界
+
+`IMU — JY901S` 面板只显示 status、Acc、Gyro、Euler Angle 与 bring-up
+diagnostics，不包含 3D、历史曲线、校准、控制动作或 raw passthrough。
+状态为 `Unknown`（未收到/断链/APC liveness loss）、`Receiving`（合法帧）、
+`Stale`（3500 ms 无合法更新）或 `Error`（非法 payload）。Stale、Error、
+断链与 liveness loss 都清空 live snapshot；单独无效的 Acc/Gyro/Angle domain
+显示 `--`，不能把旧值继续显示为当前值。IMU frame 不影响 ACK 或 Leak state。
+
+### PR #11 验证分层
+
+| 项目 | 状态 |
+|---|---|
+| Host Test | **PASS**：全部当前 Firmware regressions（含 Leak sensor / Leak telemetry policy）、JY901S telemetry codec/scheduler、Console protocol/controller/descriptor/IMU/MainWindow tests |
+| ARM Build | **Pending**：需在 PR #11 branch 对新增 target sources 重新执行 ARM build |
+| Program Verify | **Pending**：本轮明确不烧录 PR #11 image |
+| Hardware Verified | **Pending**：没有物理 JY901S telemetry、USART1/APC220 新链路或 Qt IMU 实机结论 |
+| PR #10 listen-only ARM/Program evidence | **PASS**：仅适用于 PR #10 记录的 bring-up ELF，不自动覆盖 PR #11 |
+
+本阶段完成后停在 Review / Hardware Verification Ready。下一步实机验证
+只能先观察 USART3 RX byte/ring/header/valid/checksum/Mag/unsupported/overflow
+等既有诊断，再判断当前 JY901S 持久化配置；不得因没有合法帧而在本阶段加入
+自动 configuration/init。
+
 ## 2026-09-09 Depth PWM calibration window follow-up（PR #8）
 
 ### 当前状态

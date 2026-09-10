@@ -1,6 +1,6 @@
 # RoboBeetle Protocol V2 — Phase 1 Baseline
 
-This document describes the Console and Firmware sources repaired and clean-built on 2026-09-10, plus the Console APC220 scheduler adaptation and PR #9 leak-status telemetry. **[Implemented]** refers to code presence and software verification; the pre-PR8 Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]** for its historical layout. PR #7 scheduler behavior is **[Hardware Verified - Bench]** on the tested desktop setup; its timing parameters remain **[Provisional]**. PR #8's Servo/Depth bench findings are recorded in the canonical handoff, with Depth endpoint calibration still pending; PR #9 LeakStatus end-to-end monitoring is now **[Hardware Verified]**.
+This document describes the Console and Firmware sources repaired and clean-built on 2026-09-10, plus the Console APC220 scheduler adaptation, PR #9 leak-status telemetry, and PR #11 low-rate JY901S telemetry. **[Implemented]** refers to code presence and software verification; the pre-PR8 Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]** for its historical layout. PR #7 scheduler behavior is **[Hardware Verified - Bench]** on the tested desktop setup; its timing parameters remain **[Provisional]**. PR #8's Servo/Depth bench findings are recorded in the canonical handoff, with Depth endpoint calibration still pending; PR #9 LeakStatus end-to-end monitoring is **[Hardware Verified]**, while PR #11 physical JY901S telemetry remains **[Pending]**.
 
 Evidence labels used across the project are **[Implemented]** (current source), **[Hardware Verified]** (development-record hardware evidence), **[Provisional]** (bring-up value/incomplete contract), **[Planned]** (future work), and **[Historical Reference]** (old papers/code only). This protocol document relies primarily on Implemented evidence; hardware milestones and historical context are kept in the project READMEs and root handoff.
 
@@ -122,6 +122,59 @@ provenance; rebuilding the correct current ELF and programming and verifying it
 restored the complete path. No numeric voltage or response-time values are
 asserted here because none were recorded in that acceptance.
 
+### ImuSnapshot — `0x21`
+
+`ImuSnapshot` is an unacknowledged, monitoring-only frame published through the
+existing Protocol V2 → USART1/APC220 path. Its Firmware sequence comes from the
+independent telemetry sequence space; it never enters command pending/ACK
+matching and never triggers Servo or Safety behavior.
+
+The payload is exactly 56 bytes. All multi-byte fields are little-endian, and
+no C/C++ struct is copied directly to the wire:
+
+| Offset | Size | Field | Encoding |
+|---:|---:|---|---|
+| `0` | 1 | schema version | `uint8`, currently `0x01` |
+| `1` | 1 | validity flags | bit 0 Acc, bit 1 Gyro, bit 2 Angle; bits 3–7 zero |
+| `2` | 6 | Acc X/Y/Z | signed `int16 LE`, mg, nearest integer, ties away from zero |
+| `8` | 6 | Gyro X/Y/Z | signed `int16 LE`, 0.1 dps, nearest integer, ties away from zero |
+| `14` | 6 | Roll/Pitch/Yaw | signed `int16 LE`, 0.01 degree, nearest integer, ties away from zero |
+| `20` | 4 | USART3 RX bytes | `uint32 LE` |
+| `24` | 4 | parser header count | `uint32 LE` |
+| `28` | 4 | valid frame count | `uint32 LE` |
+| `32` | 4 | checksum error count | `uint32 LE` |
+| `36` | 4 | ring overflow count | `uint32 LE` |
+| `40` | 4 | RX re-arm failure count | `uint32 LE` |
+| `44` | 4 | UART error count | `uint32 LE` |
+| `48` | 4 | known Mag frame count | `uint32 LE` |
+| `52` | 4 | unsupported valid frame count | `uint32 LE` |
+
+The Firmware producer clamps a valid fixed-point value to the signed `int16`
+representation. The documented Console ranges are Acc ±16000 mg, Gyro ±20000
+deci-dps (±2000 dps), and Angle ±18000 centidegrees (±180 degrees). If a
+validity bit is clear, the three corresponding values are encoded as zero and
+the Console displays `--`; partial-valid snapshots are allowed. The Console
+rejects unknown schema/flags, nonzero values in an invalid domain, and values
+outside these ranges. NaN is not a live value and is encoded as zero by the
+Firmware producer.
+
+The 56-byte payload produces a 66-byte logical frame, at most a 67-byte COBS
+body, and at most a 68-byte wire frame including the delimiter. At 9600 8-N-1,
+one 1 Hz snapshot uses at most 68 serial bytes per second. Combining the
+nominal four Heartbeat+ACK opportunities per second, up to two LeakStatus
+refreshes per second, and one IMU snapshot per second is approximately 222
+wire bytes per second using endpoint worst-case sizes, before RF turnaround and
+application overhead. This is a budget estimate, not a physical throughput
+claim.
+
+Firmware evaluates the one-second IMU policy only after an accepted Heartbeat
+has completed its normal ACK transmission. It selects at most one optional
+frame per opportunity: LeakStatus `0x20` first, then ImuSnapshot `0x21`, then
+none. LeakStatus and IMU policies are marked published only after their own
+transmit succeeds. There is no independent IMU transmit timer, so a due IMU
+frame waits for the next eligible Heartbeat opportunity after a priority
+LeakStatus frame.
+
 ### Set Servo PWM — `0x12`
 
 ```text
@@ -170,6 +223,7 @@ This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware v
 | Set Servo Angle | `0x13` | Controller and Qt UI send count 1, angle-capable semantic ID, signed cdeg LE; UI is gated by connection, Enable ACK, and no pending Disable | Maps each accepted descriptor angle with `int32_t` arithmetic; FrontAxis is rejected | `uint8,uint8,int16` | Yes | **Implemented; new five-servo hardware verification pending** |
 | Neutral | `0x14` | Sends the selected semantic mask after local enable | Requires live host, valid mask, and enabled selected channels; writes descriptor neutral pulses without disabling | `uint16 mask` | Yes | **Implemented; FrontAxis neutral remains provisional** |
 | LeakStatus | `0x20` | Receives one-byte monitoring telemetry and updates Unknown/Dry/Wet indicator; never creates an ACK pending entry | Samples PA11 and emits after accepted Heartbeat ACK, first/change/500 ms refresh; no ACK and no Servo/Safety action | `uint8 state` | No | **Implemented; end-to-end monitoring [Hardware Verified]** |
+| ImuSnapshot | `0x21` | Decodes fixed 56-byte monitoring telemetry into `ImuMonitor`; never creates or releases an ACK pending entry; displays Unknown/Receiving/Stale/Error and clears invalid/stale values | Encodes current JY901S state and diagnostics after accepted Heartbeat ACK, at most one optional frame per opportunity, after LeakStatus priority | 56-byte fixed schema | No | **Implemented / Host Test: PASS; physical JY901S telemetry [Pending]** |
 
 ## Sequence, ACK, retry, and duplicate behavior
 
@@ -187,6 +241,7 @@ This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware v
 - This is intentionally a one-entry Phase 1 cache, not a sequence window. A different successful non-Heartbeat request replaces it. With only the last entry retained, 16-bit wrap does not collide with an ancient request after intervening successful commands.
 - Console removes a pending request on a matching ACK even if the result is invalid; an ACK type mismatch or rejection is displayed and not retried. A mismatched Error is not allowed to release a request. In APC220 mode a released non-Heartbeat request opens the single in-flight slot, while a heartbeat type mismatch/rejection keeps liveness false and schedules the next heartbeat without dispatching queued user commands.
 - Firmware does not acknowledge frames that fail COBS, size, Magic, Version, or CRC validation because a trustworthy request identity is unavailable.
+- ImuSnapshot is intentionally unacknowledged. Its sequence is telemetry-only; receiving it cannot satisfy, release, retry, reorder, or mutate any command/ACK pending request. The Console additionally ignores it while APC220 heartbeat liveness is not ready.
 
 Duplicate handling is the most important protocol-level safety gap before adding a lossy two-hop Laptop ↔ Pi ↔ STM32 path.
 
@@ -218,6 +273,7 @@ Duplicate handling is the most important protocol-level safety gap before adding
 - The measured APC220 RTT of approximately 167–173 ms is an input to test scenarios, not a formal guarantee: 250 + 170 = 420 ms is only an illustrative nominal observation. The local admission boundary is the 490 ms dispatch-anchored **Console host-side/local safety admission budget**; ordinary work is admitted only when its configured worst-case timeout plus retry polling still fits, leaving 10 ms below the 500 ms watchdog boundary. This policy is not a Windows-plus-RF hard-real-time guarantee, and actual radio/host jitter still requires hardware validation.
 - On the first missed APC220 Heartbeat ACK, the Console clears its logical enabled state and stale actuator queue before Firmware can diverge at its watchdog boundary. Heartbeat retries may continue, but recovery does not replay old actions; after recovery a new valid Heartbeat and a new Servo Enable ACK are required before PWM/Angle commands can succeed.
 - PWM is not started at boot. TIM3/TIM4 CCRs are initialized from the descriptor table, but waveforms start only on accepted Servo Enable.
+- The low-rate JY901S ImuSnapshot policy is one second and runs only in an existing accepted-Heartbeat opportunity. LeakStatus has priority and at most one non-ACK telemetry frame is sent after each completed Heartbeat ACK. The Console marks IMU values stale after 3500 ms without a valid snapshot and clears the live values; this is a monitoring policy, not a control or calibration path.
 
 The APC220 250 ms/250 ms values are a **[Provisional]** link adaptation target, not a Firmware watchdog change. The Console uses a stop-and-wait exchange to avoid overlapping frames on the half-duplex/high-latency path; heartbeat intent is coalesced while a command or retry is active and the actual wire cadence depends on ACK turnaround. Every matching ACK records the latest measured round-trip time in `ProtocolMonitor::lastAckRttMs` and the Qt monitor.
 

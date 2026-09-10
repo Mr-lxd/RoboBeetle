@@ -1,6 +1,6 @@
 # RoboBeetleConsole
 
-RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the current direct Windows laptop → serial/APC220 → STM32 bring-up path. This document describes the implementation repaired and verified on 2026-09-10; historical papers, slides, and legacy code are references only.
+RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the current direct Windows laptop → serial/APC220 → STM32 bring-up path. This document describes the implementation repaired and verified on 2026-09-10, including the PR #11 low-rate JY901S telemetry monitor; historical papers, slides, and legacy code are references only.
 
 ## Status labels
 
@@ -64,6 +64,36 @@ verifying that image restored the complete path. No numeric voltage or response
 time values are asserted here because none were recorded in the acceptance
 result. Leak monitoring remains independent of Servo and Safety behavior.
 
+## Current PR #11 JY901S telemetry monitor — Review / Hardware Verification Ready
+
+The Console receives the Firmware `ImuSnapshot` (`0x21`) frame through the
+existing Protocol V2 decoder and keeps it separate from ACK matching and the
+monitoring-only LeakStatus path. The payload is a fixed 56-byte schema with
+explicit little-endian fixed-point Acc (mg), Gyro (0.1 dps), and Angle (0.01
+degree) fields plus bring-up diagnostics counters.
+
+The `IMU — JY901S` panel is read-only and shows status, Acc, Gyro, Euler angle,
+and diagnostics. It displays `Unknown` before data or after transport/APC
+liveness loss, `Receiving` after a valid snapshot, `Stale` after 3500 ms without
+one, and `Error` after an invalid snapshot. Stale, invalid, disconnected, and
+liveness-lost states clear the values; invalid individual domains remain `--`.
+There is no 3D model, plot/history, calibration, control action, raw JY901S
+passthrough, or automatic JY901S configuration.
+
+PR #11 verification is intentionally separate from PR #10's real target
+programming evidence:
+
+| Evidence | Status |
+|---|---|
+| Firmware host regressions, telemetry codec/scheduler tests, and Qt tests | **[Host Test: PASS]** |
+| PR #11 STM32 target build | **[Pending]** until run on this branch |
+| PR #11 program/verify | **[Pending]**; no hardware programming in this phase |
+| JY901S physical telemetry / end-to-end IMU data | **[Pending]** |
+
+The previously recorded PR #10 ARM Build and Program Verify PASS applies to
+the listen-only bring-up image and does not claim that a physical JY901S is
+transmitting or that this new telemetry/UI path has been hardware verified.
+
 ## Current scope
 
 ### [Implemented]
@@ -79,12 +109,13 @@ result. Leak monitoring remains independent of Servo and Safety behavior.
 - Protocol codec/stream tests and controller behavior tests.
 - Set Angle UI for the four angle-capable semantic servos with descriptor-specific ranges; the UI converts to centidegrees and angle-to-pulse conversion remains authoritative in Firmware. FrontAxis is explicitly PWM-only while calibration is pending, with a shared 500–2500 μs command envelope.
 - Monitoring-only LeakStatus `0x20` indicator with Unknown/Dry/Wet states and stale/disconnect fail-to-Unknown behavior; the end-to-end path is **[Hardware Verified]**.
+- Monitoring-only JY901S `ImuSnapshot` `0x21` panel with explicit fixed-point display, diagnostics, Unknown/Receiving/Stale/Error lifecycle, and stale/liveness value invalidation; this PR's physical IMU path remains **[Pending]**.
 
 ### [Planned]
 
 - Raspberry Pi onboard service and `TcpTransport`.
 - Camera and FOMO/ONNX result visualization.
-- IMU, depth, battery, curves, and 3D attitude views.
+- Depth, battery, curves, and 3D attitude views. The current PR #11 IMU monitor is intentionally not a 3D/history view.
 - ROS 2, automatic control, CPG/PID integration, and telemetry models.
 - Emergency Stop. The current button is intentionally disabled because Protocol V2 has no such Phase 1 message.
 
@@ -100,10 +131,12 @@ QApplication
       │   ├─ pending ACK/retry scheduler
       │   ├─ bounded APC220 command queue
       │   ├─ logical enabled-mask state
-      │   └─ LeakStatus state / stale policy
+      │   ├─ LeakStatus state / stale policy
+      │   └─ ImuSnapshot state / stale policy
       └─ MainWindow
           ├─ connection controls
           ├─ five descriptor-driven servo panels
+          ├─ IMU — JY901S monitor
           └─ protocol monitor / event log
 ```
 
@@ -111,7 +144,7 @@ QApplication
 |---|---|
 | `main.cpp` | Creates the application, `SerialTransport`, `RobotController`, and `MainWindow`; injects serial-port discovery. |
 | `MainWindow` | Converts UI actions into controller calls and displays controller signals. It does not access `QSerialPort` or construct packets. |
-| `RobotController` | Owns command payload construction, sequence allocation, profile-aware heartbeat/ACK scheduling, APC220 queue state, logical servo enable state, range gates, monitoring-only LeakStatus state/staleness, and monitor data. |
+| `RobotController` | Owns command payload construction, sequence allocation, profile-aware heartbeat/ACK scheduling, APC220 queue state, logical servo enable state, range gates, monitoring-only LeakStatus and ImuSnapshot state/staleness, and monitor data. IMU frames never enter pending ACK state. |
 | `ITransport` | Byte-stream open/close/write contract plus received-byte, state, and error signals. |
 | `SerialTransport` | Qt SerialPort adapter: port scan, 8-N-1, no flow control, async receive, buffered writes, and close-time flush attempt. |
 | `FakeTransport` | Deterministic byte transport used by controller tests. It is not a simulator of STM32 behavior. |
@@ -136,6 +169,7 @@ QApplication
 | Apply PWM | [Implemented] | Explicit button; slider movement alone does not transmit. Requires successful Enable ACK, no pending Disable, and descriptor command-range validation. |
 | Set Angle | [Implemented] | Angle-capable semantic servos use descriptor-specific input ranges and 0.1° steps; Qt converts to signed cdeg and calls `RobotController::setServoAngle()`. The control requires connection, support, Enable ACK, and no pending Disable request. FrontAxis is disabled. |
 | Leak status | [Hardware Verified] | Displays `Leak: Unknown`, `Leak: Dry`, or `LEAK DETECTED` from Protocol V2 `0x20`; disconnect, APC liveness loss, invalid payload, and stale telemetry return it to Unknown. Monitoring-only; no Servo/Safety action. |
+| JY901S IMU monitor | [Implemented] / physical data [Pending] | Displays `IMU — JY901S` status, valid fixed-point Acc/Gyro/Angle domains, and diagnostics from Protocol V2 `0x21`; Unknown/invalid/Stale/liveness loss clear values. Read-only; no 3D/history/control/configuration. |
 | Protocol monitor | [Implemented] | Displays latest TX/RX chunks, packet counts, CRC errors, timeouts, latest matching-ACK RTT, ACK state, and up to 1000 log blocks. |
 
 ## Historical Servo1 hardware acceptance (2026-09-06)
@@ -268,11 +302,12 @@ $env:PATH = "D:\Qt\Tools\mingw1310_64\bin;D:\Qt\Tools\Ninja;D:\Qt\6.11.2\mingw_6
 
 Do not mix the MinGW Qt libraries with MSVC, LLVM-MinGW, the separately installed WinLibs toolchain, or Anaconda Qt.
 
-## Software verification status (2026-09-08 follow-up)
+## Software verification status (2026-09-10 PR #11 follow-up)
 
-- A fresh MinGW/Qt CMake configure and build succeeds without changing the project CMake structure.
+- A fresh MinGW/Qt CMake configure and build succeeds without changing the generated project structure; the host CTest set includes protocol, controller, descriptor, IMU lifecycle, and MainWindow IMU panel tests.
 - `protocol_tests`: **PASS**, including CRC/COBS regression, result enum values, Neutral, and −9000/0/+9000 cdeg golden vectors.
-- `robot_controller_tests`: **PASS**, including semantic five-servo descriptor boundaries, PWM boundaries (including FrontAxis 500/2500 acceptance and 499/2501 rejection), angle-capability/range gates, FrontAxis rejection, pending-Disable PWM/Neutral/Angle barriers across APC Error/timeout, Neutral ACK, ACK match/mismatch, identical-frame retry, APC220 first-heartbeat ACK gate, heartbeat coalescing and retry priority, bounded queue release, heartbeat rejection/timeout liveness, Error type validation, error-only/write-failure reset, and DirectUart multi-pending regression.
+- `robot_controller_tests`: **PASS**, including semantic five-servo descriptor boundaries, PWM boundaries (including FrontAxis 500/2500 acceptance and 499/2501 rejection), angle-capability/range gates, FrontAxis rejection, pending-Disable PWM/Neutral/Angle barriers across APC Error/timeout, Neutral ACK, ACK match/mismatch, identical-frame retry, APC220 first-heartbeat ACK gate, heartbeat coalescing and retry priority, bounded queue release, heartbeat rejection/timeout liveness, Error type validation, error-only/write-failure reset, DirectUart multi-pending regression, and IMU-frame isolation from ACK/Leak state.
+- `imu_monitor_tests` and `main_window_tests`: **PASS**, including fixed 56-byte Protocol V2 golden vectors, schema/flag/range validation, partial validity, Receiving/Stale/Error/Unknown lifecycle, fixed-point display, and clearing stale values.
 - Firmware was separately clean-built with the STM32 GCC toolchain. PR #7 user hardware regression passed on the desktop APC220 bench; the timing values remain a Console-side adaptation and the Firmware watchdog remains unchanged.
 
 ## Historical Servo1 hardware milestones (pre-PR #8)

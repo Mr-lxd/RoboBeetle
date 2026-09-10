@@ -1,6 +1,6 @@
 # RoboBeetleFirmware
 
-RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for Laptop/Qt ↔ USART1 ↔ STM32 Protocol V2 bring-up, the five-servo semantic descriptor path, and the PR #9 leak-status telemetry path. This README records the merged hardware-verified modularization baseline, the PR #8 Servo/Depth bench findings, and the PR #9 leak-status hardware acceptance. Depth endpoint calibration remains pending; the LeakStatus path is now hardware verified.
+RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for Laptop/Qt ↔ USART1 ↔ STM32 Protocol V2 bring-up, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, and the PR #11 low-rate JY901S telemetry path. This README records the merged hardware-verified modularization baseline, the PR #8 Servo/Depth bench findings, the PR #9 leak-status hardware acceptance, and the PR #10/PR #11 JY901S evidence boundaries. Depth endpoint calibration and physical JY901S reception remain pending; the LeakStatus path is hardware verified.
 
 ## Status labels
 
@@ -160,6 +160,43 @@ that order. Do not add automatic JY901S configuration in response; a separate
 configuration/init phase requires evidence that the physical UART is working
 but the sensor's current persistent settings are not the expected ones.
 
+## PR #11 JY901S low-rate telemetry — Review / Hardware Verification Ready
+
+PR #11 consumes the read-only Acc/Gyro/Angle state and diagnostics established
+by the listen-only bring-up above. It publishes one fixed `ImuSnapshot`
+telemetry frame (`0x21`) through the existing Protocol V2 → USART1/APC220 path
+and adds no JY901S configuration, raw UART passthrough, servo/safety linkage,
+body-frame transform, EKF, or depth work.
+
+The payload is exactly 56 bytes: schema `0x01`, Acc/Gyro/Angle validity flags,
+three groups of signed little-endian fixed-point `int16` values, and the
+USART3/parser diagnostics counters. Acc uses mg, Gyro uses 0.1 dps, and Angle
+uses 0.01 degrees. A domain whose validity flag is clear is encoded as zero.
+The frame uses the existing independent telemetry sequence and is never sent
+as an ACK-requiring request.
+
+Firmware evaluates the one-second IMU publication policy only after a normal
+Heartbeat ACK has completed. At most one optional telemetry frame is selected
+per accepted Heartbeat opportunity; LeakStatus `0x20` has priority, so an IMU
+snapshot is selected only when LeakStatus is not due. The first due IMU frame
+is sent at the next eligible opportunity, and the policy is marked only after
+the transmit succeeds. At 9600 8-N-1, the maximum 68-byte IMU wire frame is
+within the documented low-rate budget; this is a software/budget result, not a
+physical APC220 throughput claim.
+
+PR #11 software evidence is recorded separately from PR #10's target evidence:
+
+| Gate | Status |
+|---|---|
+| Host Test | **PASS**: all current Firmware regressions, telemetry codec/scheduler tests, and Console tests |
+| ARM Build | **Pending** until the PR #11 target build is run |
+| Program Verify | **Pending**; this phase is not to be programmed in this turn |
+| Hardware Verified | **Pending**: no physical JY901S telemetry claim |
+
+PR #10's STM32 ARM Build and Program Verify remain PASS for the listen-only
+bring-up ELF documented in the section above; that evidence does not silently
+close the new PR #11 telemetry target gate.
+
 ## Active target and CubeMX configuration
 
 The active configuration file is `RoboBeetleFirmware/RoboBeetleFirmware.ioc`. A separately referenced `D:\RoboBeetle\RoboBeetle.ioc` was not present during this audit.
@@ -224,6 +261,7 @@ The current communication split is:
 - **[Implemented]** `Core/Servo/servo_driver_stm32.c/.h` owns the HAL/TIM3/TIM4 channel adapter. It maps abstract descriptor selectors to timer handles and HAL channels and has no Protocol or heartbeat knowledge.
 - **[Implemented]** `Core/Sensors/leak_sensor.c/.h` owns the HAL-independent UNKNOWN/DRY/WET mapping; `leak_sensor_stm32.c/.h` only reads the configured PA11 GPIO.
 - **[Implemented]** `Core/Sensors/leak_telemetry_policy.c/.h` limits LeakStatus publication to first sample/state changes/500 ms refreshes. `Core/App/app_main.c` sends one-byte `0x20` telemetry only after a successful Heartbeat ACK; it does not connect leak state to Safety or Servo behavior.
+- **[Implemented / Software Verified]** `Core/Sensors/jy901s_telemetry.c/.h` encodes the fixed 56-byte `ImuSnapshot` payload with explicit little-endian fixed-point fields and bring-up diagnostics. `Core/Communication/imu_telemetry_policy.c/.h` and `telemetry_scheduler.c/.h` keep IMU publication at one second, after completed Heartbeat ACK, with LeakStatus priority and at most one optional frame per opportunity. The IMU path does not enter command/ACK matching or alter USART1 behavior.
 - **[Hardware Verified]** `Core/Safety/safety_supervisor.c/.h` owns host liveness, the last valid Heartbeat timestamp, strict timeout evaluation, and one-shot timeout transition reporting. It has no HAL, Protocol, UART, or Servo dependency.
 - **[Hardware Verified]** `Core/Communication/protocol_dispatcher.c/.h` owns decoded command payload validation, HostAlive gating, Servo service invocation/result mapping, Heartbeat semantics, and the one-entry successful-command cache. It has no HAL, UART, TIM3, or Console dependency.
 - **[Hardware Verified]** `main.c` keeps the CubeMX entry/configuration, `app_main_init`/`app_main_process` calls, and a small UART callback transport delegate. Protocol, Safety, Servo, ACK, diagnostics, and RX-drain orchestration live in `Core/App/app_main.c`.
@@ -251,7 +289,7 @@ Current constants:
 - Magic `52 42`, version `02`
 - Header 8 bytes, CRC 2 bytes, payload ≤64 bytes
 - `WireFrame = COBS(LogicalFrame) + 00`
-- Message IDs: Heartbeat `01`, ACK `02`, Error `03`, Servo Enable `10`, Servo Disable `11`, Set Servo PWM `12`, Set Servo Angle `13`, Neutral `14`, LeakStatus `20`
+- Message IDs: Heartbeat `01`, ACK `02`, Error `03`, Servo Enable `10`, Servo Disable `11`, Set Servo PWM `12`, Set Servo Angle `13`, Neutral `14`, LeakStatus `20`, ImuSnapshot `21`
 
 See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmware matrix. Important current behavior is:
 
@@ -260,6 +298,7 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 - Neutral validates liveness/mask/enabled state, writes each descriptor's neutral pulse, and leaves the selected channels enabled.
 - Set Angle is available only for the four calibrated SAVOX/GDW angle-capable descriptors; FrontAxis is PWM-only. Each angle is range-checked and mapped with `int32_t` intermediates.
 - LeakStatus `0x20` is a one-byte, unacknowledged monitoring frame (`UNKNOWN=0`, `DRY=1`, `WET=2`). Firmware sends it only after an accepted Heartbeat and completed ACK transmission, on first sample/state change or a 500 ms refresh; it has an independent telemetry sequence and does not trigger Safety or Servo actions.
+- ImuSnapshot `0x21` is a fixed 56-byte, unacknowledged monitoring frame. Firmware sends it only after an accepted Heartbeat ACK has completed, at most once per one-second policy interval and only when the LeakStatus slot is not due. It uses the independent telemetry sequence and carries explicit little-endian fixed-point Acc/Gyro/Angle values plus JY901S diagnostics; it does not trigger Safety, Servo, or JY901S configuration actions.
 - ACK result values are frozen as `OK=0`, `InvalidPayload=1`, `HostNotAlive=2`, `UnsupportedServo=3`, `ServoNotEnabled=4`, `OutOfRange=5`, and `HardwareFailure=6`.
 - Supported mask is exactly `0x001F`. Zero mask is invalid; any unknown bit fails with `UnsupportedServo`. Multi-bit Enable is all-or-nothing with rollback on a channel-start failure.
 - The most recent successful non-Heartbeat request is cached by sequence and type. Its retry replays the ACK without executing the Servo action again. Heartbeats refresh liveness but do not evict this cache.
@@ -334,7 +373,7 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Servo, Safety, and Sensors modules and their include directories. The Firmware host gate currently compiles and runs all 11 executable test sources: `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_descriptor_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, `tests/protocol_dispatcher_tests.c`, `tests/leak_sensor_tests.c`, `tests/servo_driver_stm32_tests.c`, `tests/jy901s_parser_tests.c`, and `tests/jy901s_transport_stm32_tests.c`. The leak sensor source is linked with `leak_telemetry_policy.c` because that existing test covers both behaviors. The HAL-adapter mapping test uses host stubs for PWM start/stop and explicitly verifies that HAL `TIM_CHANNEL_1 == 0` remains valid. `tests/app_main_jy901s_api_tests.c` is a separate compile-contract check; all are compiled manually with `-Wall -Wextra -Werror` plus the documented host HAL pointer-cast suppression where needed. These host checks complement, but do not replace, the real ARM target build.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Servo, Safety, and Sensors modules and their include directories. The Firmware host gate currently compiles and runs all 13 executable test sources: `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_descriptor_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, `tests/protocol_dispatcher_tests.c`, `tests/leak_sensor_tests.c`, `tests/servo_driver_stm32_tests.c`, `tests/jy901s_parser_tests.c`, `tests/jy901s_transport_stm32_tests.c`, `tests/jy901s_telemetry_tests.c`, and `tests/telemetry_scheduler_tests.c`. The leak sensor source is linked with `leak_telemetry_policy.c` because that existing test covers both behaviors. The HAL-adapter mapping test uses host stubs for PWM start/stop and explicitly verifies that HAL `TIM_CHANNEL_1 == 0` remains valid. `tests/app_main_jy901s_api_tests.c` is a separate compile-contract check; all are compiled manually with `-Wall -Wextra -Werror` plus the documented host HAL pointer-cast suppression where needed. These host checks complement, but do not replace, the real ARM target build.
 
 ## App/Main maintainability audit
 
