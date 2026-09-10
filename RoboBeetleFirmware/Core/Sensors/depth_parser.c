@@ -299,8 +299,8 @@ bool depth_parser_feed_byte(
 
     if (parser->discarding_overlong_line)
     {
-        if (parser->discarded_carriage_return &&
-            (byte == (uint8_t)'\n'))
+        /* Any LF terminates the discarded malformed line, including bare LF. */
+        if (byte == (uint8_t)'\n')
         {
             ++parser->stats.overlong_line_count;
             reset_line_collector(parser);

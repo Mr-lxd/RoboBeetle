@@ -77,8 +77,9 @@ static int32_t read_signed_le32(
 static uint16_t encode_sample_age(
     const depth_telemetry_source_t *source)
 {
-    if (!source->depth_valid && !source->temperature_valid)
+    if (!source->depth_valid)
     {
+        /* sample_age_ms describes the latest valid depth sample only. */
         return DEPTH_TELEMETRY_SAMPLE_AGE_UNKNOWN;
     }
 

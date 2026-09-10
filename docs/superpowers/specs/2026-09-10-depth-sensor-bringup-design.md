@@ -95,9 +95,9 @@ Every accepted line supplies both measurements. The separate validity bits are
 retained for an explicit wire contract and future sensor-side partial validity.
 The firmware does not apply a zero offset or density conversion of its own.
 
-`sample_age_ms` is calculated from the current tick and the latest valid sample.
-It is `0xFFFF` when no valid sample exists and otherwise saturates at `65535`;
-it never wraps into a value that makes an old sample look new.
+`sample_age_ms` is calculated from the current tick and the latest valid depth
+sample. It is `0xFFFF` when no valid depth sample exists and otherwise saturates
+at `65535`; it never wraps into a value that makes an old sample look new.
 
 ## Frozen Protocol V2 contract
 

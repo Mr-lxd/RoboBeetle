@@ -156,6 +156,13 @@ void testPayloadValidationAndInvalidFieldZeroRules()
                && partialDecoded->sampleAgeMs
                       == rb::DepthSnapshot::UnknownSampleAgeMs,
            "partially valid fields and unknown age must decode");
+
+    partial.sampleAgeMs = 1234;
+    const QByteArray temperatureOnlyPayload =
+        rb::DepthSnapshot::encodePayload(partial);
+    expect(temperatureOnlyPayload.sliced(8, 2)
+               == QByteArray::fromHex("ffff"),
+           "temperature-only data must not create a depth sample age");
 }
 
 void testMonitorLifecycleUsesLocalArrivalFreshness()

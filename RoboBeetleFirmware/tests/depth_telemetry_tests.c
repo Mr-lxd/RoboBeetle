@@ -103,7 +103,7 @@ static void test_invalid_values_and_age_saturation_are_encoded_safely(void)
         .temperature_valid = true,
         .depth_mm = 123456,
         .temperature_centi_c = -321,
-        .sample_age_ms = 70000U,
+        .sample_age_ms = 1234U,
     };
     depth_telemetry_diagnostics_t diagnostics = {0};
     uint8_t payload[DEPTH_TELEMETRY_PAYLOAD_LENGTH] = {0};
@@ -122,7 +122,19 @@ static void test_invalid_values_and_age_saturation_are_encoded_safely(void)
     expect(payload[6] == 0xBFU && payload[7] == 0xFEU,
            "valid signed temperature must use little endian encoding");
     expect(payload[8] == 0xFFU && payload[9] == 0xFFU,
-           "sample age must saturate at 0xFFFF");
+           "temperature-only data must not create a depth sample age");
+
+    source.depth_valid = true;
+    source.depth_mm = 123456;
+    source.sample_age_ms = 70000U;
+    expect(depth_telemetry_encode(
+               &source,
+               &diagnostics,
+               payload,
+               sizeof payload) == DEPTH_TELEMETRY_PAYLOAD_LENGTH,
+           "valid depth with an old sample must still encode");
+    expect(payload[8] == 0xFFU && payload[9] == 0xFFU,
+           "valid depth sample age must saturate at 0xFFFF");
 
     source.depth_valid = false;
     source.temperature_valid = false;

@@ -208,9 +208,9 @@ are little-endian and no C/C++ struct is copied directly to the wire:
 | `34` | 4 | UART errors | `uint32 LE` |
 
 When a validity bit is clear, its numeric field is encoded as zero and the
-receiver must ignore it. If no valid sample has ever been received, age is
-`0xffff`; otherwise the latest valid sample age is explicitly saturated to the
-`uint16` range and must not wrap around to appear fresh. The Qt monitor uses
+receiver must ignore it. If no valid depth sample has ever been received, age is
+`0xffff`; otherwise the latest valid depth sample age is explicitly saturated
+to the `uint16` range and must not wrap around to appear fresh. The Qt monitor uses
 local packet arrival and the existing telemetry lifecycle for liveness; it does
 not use `sample_age_ms` as its sole stale decision. The Console rejects an
 unknown schema, reserved flags, nonzero invalid numeric fields, or any payload

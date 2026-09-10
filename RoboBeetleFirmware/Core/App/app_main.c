@@ -379,7 +379,7 @@ static bool protocol_send_depth_snapshot(void)
     source.temperature_valid = state.temperature_valid;
     source.depth_mm = state.depth_mm;
     source.temperature_centi_c = state.temperature_centi_c;
-    source.sample_age_ms = (state.depth_valid || state.temperature_valid)
+    source.sample_age_ms = state.depth_valid
         ? (uint32_t)(now_ms - state.last_valid_sample_ms)
         : 0U;
 

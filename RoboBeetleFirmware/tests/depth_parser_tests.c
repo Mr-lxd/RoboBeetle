@@ -192,6 +192,37 @@ static void test_overlong_line_is_discarded_and_next_line_recovers(void)
     expect(stats.overlong_line_count == 1U, "overlong-line count differs");
 }
 
+static void test_overlong_bare_lf_recovers_next_line(void)
+{
+    uint8_t overlong[DEPTH_PARSER_MAX_LINE_LENGTH + 2U];
+    depth_parser_t parser;
+    depth_parser_state_t state;
+    depth_parser_stats_t stats;
+
+    for (size_t index = 0U; index < DEPTH_PARSER_MAX_LINE_LENGTH + 1U; ++index)
+    {
+        overlong[index] = (uint8_t)'X';
+    }
+    overlong[DEPTH_PARSER_MAX_LINE_LENGTH + 1U] = (uint8_t)'\n';
+
+    depth_parser_init(&parser);
+    for (size_t index = 0U; index < sizeof overlong; ++index)
+    {
+        (void)depth_parser_feed_byte(&parser, overlong[index], 1U);
+    }
+    (void)feed_text(&parser, "Depth:4.32m Temp:1.23C\r\n", 2U);
+
+    depth_parser_get_state(&parser, &state);
+    depth_parser_get_stats(&parser, &stats);
+    expect_sample(&state, 4320, 123, 2U);
+    expect(stats.valid_line_count == 1U,
+           "bare-LF recovery must preserve the next valid line");
+    expect(stats.parse_error_count == 0U,
+           "overlong bare-LF recovery must not add a parse error");
+    expect(stats.overlong_line_count == 1U,
+           "overlong bare-LF count differs");
+}
+
 static void test_invalid_line_does_not_replace_latest_sample(void)
 {
     depth_parser_t parser;
@@ -224,6 +255,7 @@ int main(void)
     test_exact_grammar_rejects_guesses_and_separators();
     test_fixed_point_overflow_is_rejected_without_state_change();
     test_overlong_line_is_discarded_and_next_line_recovers();
+    test_overlong_bare_lf_recovers_next_line();
     test_invalid_line_does_not_replace_latest_sample();
 
     if (failures == 0)

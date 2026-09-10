@@ -104,7 +104,7 @@ QByteArray DepthSnapshot::encodePayload(const DepthSnapshot &snapshot)
         writeLe16(payload, kTemperatureOffset,
                   static_cast<quint16>(snapshot.temperatureCentiC));
     }
-    const quint16 sampleAge = snapshot.depthValid() || snapshot.temperatureValid()
+    const quint16 sampleAge = snapshot.depthValid()
         ? snapshot.sampleAgeMs
         : UnknownSampleAgeMs;
     writeLe16(payload, kSampleAgeOffset, sampleAge);
