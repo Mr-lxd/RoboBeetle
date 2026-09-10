@@ -1,5 +1,8 @@
 #include "robot/ImuSnapshot.h"
 
+#include <array>
+#include <optional>
+
 namespace rb {
 namespace {
 

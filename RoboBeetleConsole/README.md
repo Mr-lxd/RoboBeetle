@@ -90,13 +90,24 @@ programming evidence:
 | Evidence | Status |
 |---|---|
 | Firmware host regressions, telemetry codec/scheduler tests, and Qt tests | **[Host Test: PASS]** |
-| PR #11 STM32 target build | **[FAIL]** — real hardware checkout previously failed on missing `<stddef.h>`; re-run required after fix |
-| PR #11 program/verify | **[Pending]**; no hardware programming in this phase |
-| JY901S physical telemetry / end-to-end IMU data | **[Pending]** |
+| PR #11 STM32 target build | **[ARM Build: PASS]**: matching Firmware build was used for the reported hardware run |
+| PR #11 program/verify | **[Pending]**: no standalone programming/verify record is included here |
+| JY901S physical telemetry / end-to-end IMU data | **[Hardware Verified]**: live Acc/Gyro/Angle reached Qt through USART3, Protocol V2, and APC220 |
+
+The reported diagnostics were RX bytes `131663`, headers `11967`, valid frames
+`11957`, checksum errors `10`, overflow `0`, UART errors `20`, Mag frames
+`2989`, and unsupported frames `0`. The pre-fix `166240` value was displayed
+from `rx_rearm_failure_count`; the implementation now separates deferred
+`HAL_BUSY` from hard failures and uses foreground recovery, so one short
+post-fix hardware regression remains **[Pending]**. The aggregate
+UART error count remains observable in Firmware diagnostics. A single Qt
+`Invalid length` event is an observation only; existing protocol tests cover
+split and sticky/concatenated frames, with no reproducible framing defect.
 
 The previously recorded PR #10 ARM Build and Program Verify PASS applies to
-the listen-only bring-up image and does not claim that a physical JY901S is
-transmitting or that this new telemetry/UI path has been hardware verified.
+the listen-only bring-up image. The matching PR #11 hardware run separately
+verified the physical JY901S-to-Qt monitoring path; final body-frame mapping
+and magnetic/yaw calibration remain **[Pending]**.
 
 ## Current scope
 
@@ -113,7 +124,7 @@ transmitting or that this new telemetry/UI path has been hardware verified.
 - Protocol codec/stream tests and controller behavior tests.
 - Set Angle UI for the four angle-capable semantic servos with descriptor-specific ranges; the UI converts to centidegrees and angle-to-pulse conversion remains authoritative in Firmware. FrontAxis is explicitly PWM-only while calibration is pending, with a shared 500–2500 μs command envelope.
 - Monitoring-only LeakStatus `0x20` indicator with Unknown/Dry/Wet states and stale/disconnect fail-to-Unknown behavior; the end-to-end path is **[Hardware Verified]**.
-- Monitoring-only JY901S `ImuSnapshot` `0x21` panel with explicit fixed-point display, diagnostics, Unknown/Receiving/Stale/Error lifecycle, and stale/liveness value invalidation; this PR's physical IMU path remains **[Pending]**.
+- Monitoring-only JY901S `ImuSnapshot` `0x21` panel with explicit fixed-point display, diagnostics, Unknown/Receiving/Stale/Error lifecycle, and stale/liveness value invalidation; the matching PR #11 physical IMU path is **[Hardware Verified]**, with re-arm diagnostics follow-up still open.
 
 ### [Planned]
 

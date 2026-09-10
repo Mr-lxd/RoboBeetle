@@ -5,6 +5,8 @@
 #include <QDateTime>
 
 #include <chrono>
+#include <optional>
+#include <utility>
 
 namespace rb {
 namespace {

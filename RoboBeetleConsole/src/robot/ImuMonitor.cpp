@@ -1,5 +1,7 @@
 #include "robot/ImuMonitor.h"
 
+#include <optional>
+
 namespace rb {
 
 void ImuMonitor::handlePacket(const Packet &packet, qint64 receivedAtMs)

@@ -1,6 +1,8 @@
 #include "ring_buffer.h"
 
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 static bool ring_buffer_is_configured(const ring_buffer_t *buffer)
 {

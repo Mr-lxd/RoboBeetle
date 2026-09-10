@@ -165,9 +165,11 @@ The Qt descriptor keeps `FrontAxis` as the internal compatibility identifier, bu
 
 ## JY901S listen-only lessons
 
-- One-byte UART reception needs a recoverable ownership state: a failed HAL re-arm cannot be left as a counter-only event. The ISR marks needs-rearm and the foreground retries once per poll, while UART error callbacks record flags and enter the same path.
+- The STM32F4 HAL completes a standard one-byte interrupt receive, restores `RxState` to `HAL_UART_STATE_READY`, and then invokes `HAL_UART_RxCpltCallback`. `FE`/`NE`/`PE` are non-blocking in this path and can leave an active receive; `ORE`/DMA errors block or abort reception. Treat those states according to the HAL contract rather than unconditionally clearing an active receive.
+- One-byte UART reception needs a recoverable ownership state: the RX/error callbacks only record the byte or error and mark `needs_rearm`; foreground maintenance retries once per poll. `HAL_BUSY` is deferred work and must not inflate the hard re-arm-failure counter; `HAL_ERROR` and other non-success statuses remain hard failures. A generation re-check is required around the foreground success transition so a callback/error event that races with HAL receive startup cannot be cleared. Keep separate deferred, aggregate, and per-flag UART diagnostics observable.
 - A legal frame type that is intentionally not decoded is different from an unknown frame type. JY901S `0x54` Mag is known-but-ignored and needs its own counter so default output does not look like an unsupported-protocol fault.
 - A 256-byte storage ring has 255 bytes of usable capacity under the empty-slot convention; the observed RX byte rate and overflow counter determine whether that is sufficient for a persistent output mask/rate.
+- A single Qt invalid-length observation with CRC and timeout counters still clear is not evidence for a Protocol V2 redesign. Keep split and sticky/concatenated-frame regressions in the gate and investigate only a reproducible decoder failure.
 - Host Test, ARM Build, Program Verify, Hardware Verified, and Pending are evidence categories; one cannot be inferred from another.
 - A successful target build and DAP/OpenOCD `Verified OK` establish ARM Build and Program Verify for the intended ELF, but they do not establish that a JY901S is physically transmitting valid frames. Record the ELF path, artifact timestamp, programming/verify result, and sensor-runtime evidence separately so image provenance is auditable.
 

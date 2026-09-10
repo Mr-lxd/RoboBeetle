@@ -16,6 +16,8 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <array>
+
 namespace rb {
 namespace {
 

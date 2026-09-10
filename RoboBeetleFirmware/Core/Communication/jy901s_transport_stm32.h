@@ -13,6 +13,7 @@ typedef struct
     uint32_t rx_pop_count;
     uint32_t rx_buffer_overflow_count;
     uint32_t rx_rearm_failure_count;
+    uint32_t rx_rearm_deferred_count;
     uint32_t uart_error_count;
     uint32_t uart_overrun_error_count;
     uint32_t uart_framing_error_count;

@@ -1,6 +1,6 @@
 # RoboBeetleFirmware
 
-RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for Laptop/Qt ↔ USART1 ↔ STM32 Protocol V2 bring-up, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, and the PR #11 low-rate JY901S telemetry path. This README records the merged hardware-verified modularization baseline, the PR #8 Servo/Depth bench findings, the PR #9 leak-status hardware acceptance, and the PR #10/PR #11 JY901S evidence boundaries. Depth endpoint calibration and physical JY901S reception remain pending; the LeakStatus path is hardware verified.
+RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for Laptop/Qt ↔ USART1 ↔ STM32 Protocol V2 bring-up, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, and the PR #11 low-rate JY901S telemetry path. This README records the merged hardware-verified modularization baseline, the PR #8 Servo/Depth bench findings, the PR #9 leak-status hardware acceptance, and the PR #10/PR #11 JY901S evidence boundaries. The JY901S physical receive and end-to-end monitoring path are now hardware verified; re-arm diagnostic follow-up, body-frame mapping, final magnetic/yaw calibration, and Depth endpoint calibration remain pending.
 
 ## Status labels
 
@@ -91,7 +91,7 @@ At the PR #9 closeout, the remaining sensor sequence was JY901S IMU →
 depth/sensor board; the current JY901S phase is documented below. LeakStatus
 remains monitoring-only and is not connected to Servo or Safety actions.
 
-## JY901S listen-only bring-up — Review / Hardware Verification Ready
+## JY901S listen-only bring-up — Hardware Verified / re-arm follow-up open
 
 This phase adds only the receive and parser path:
 
@@ -123,13 +123,18 @@ the product page lists 9600 baud and the default output expectations.
 
 USART3 diagnostics are available through the bring-up accessors and include
 `rx_byte_count`, successful ring pushes, foreground pops, ring overflow/drop,
-re-arm failures, aggregate and per-flag UART errors, parser header starts,
-valid checksum frames, checksum errors, Mag-known-ignore frames, unsupported
-types, per-domain frame counts, and the last valid-frame tick. If a callback
-re-arm fails or USART3 reports ORE/FE/NE/PE/DMA/other errors, the ISR only
-records the event and marks `needs_rearm`; `app_main_process` makes at most one
-non-blocking re-arm attempt per poll. No parser work or retry loop runs in the
-ISR.
+hard re-arm failures, deferred `HAL_BUSY` re-arms, aggregate and per-flag UART
+errors, parser header starts, valid checksum frames, checksum errors,
+Mag-known-ignore frames, unsupported types, per-domain frame counts, and the
+last valid-frame tick. The RX-complete and error callbacks only record bytes,
+errors, and ownership state; `app_main_process` performs at most one
+non-blocking re-arm attempt per poll. `HAL_BUSY` remains deferred and does not
+increment the hard-failure counter; `HAL_ERROR` and other non-success statuses
+do. FE/NE/PE preserve an active HAL receive, while ORE/DMA/unknown error states
+enter the foreground recovery path. A generation check protects the foreground
+state transition from a callback or error event that arrives while HAL is
+starting the next receive, so a newer pending event cannot be cleared as stale.
+No parser work or retry loop runs in the ISR.
 
 Validation is intentionally separated:
 
@@ -138,11 +143,11 @@ Validation is intentionally separated:
 | Host Test | **PASS**: parser, transport mock, ring-buffer, and all current Firmware regressions |
 | ARM Build | **PASS**: STM32 target build; 0 errors, 0 warnings; RAM 2680 B / 128 KB, FLASH 23260 B / 512 KB |
 | Program Verify | **PASS**: DAP/OpenOCD programming flow completed and reported `Verified OK` |
-| Hardware Verified | **Pending**: physical JY901S bench verification |
-| USART3 physical RX | **Pending** |
-| JY901S valid real frames | **Pending** |
-| Acc/Gyro/Angle real data | **Pending** |
-| Pending | Physical USART3 reception, wiring/electrical checks, and current sensor-configuration diagnosis |
+| Hardware Verified | **PASS**: matching PR #11 Firmware + Qt run received live JY901S data end to end |
+| USART3 physical RX | **Hardware Verified**: PB11 / USART3 receive path and RX byte/ring diagnostics |
+| JY901S valid real frames | **Hardware Verified**: valid frames continued with zero overflow |
+| Acc/Gyro/Angle real data | **Hardware Verified**: live plausible Acc, stationary near-zero Gyro, responsive Angle |
+| Pending | Post-fix re-arm diagnostic regression, final body-frame mapping, and magnetic/yaw calibration |
 
 On 2026-09-10, the hardware-verification checkout built
 `RoboBeetleFirmware.elf` at
@@ -151,8 +156,8 @@ with 0 errors and 0 warnings. The recorded artifact had a last-write time of
 2026-09-10 17:07:11. The DAP/OpenOCD flow used SWD 100 kHz, SYSRESETREQ,
 halt, program, verify, and reset-run, and reported `Programming Finished`,
 `Verify Started`, and `Verified OK`. These facts establish the ARM Build and
-Program Verify gates only; they do not establish physical JY901S reception or
-valid Acc/Gyro/Angle data.
+Program Verify gates for that recorded image. The subsequent matching PR #11
+Firmware + Qt run supplies the separate physical JY901S evidence recorded below.
 
 If no legal frame appears on the bench, first inspect RX bytes, ring-buffer
 activity, `0x55` headers, valid/checksum/error counters, and state updates in
@@ -160,7 +165,7 @@ that order. Do not add automatic JY901S configuration in response; a separate
 configuration/init phase requires evidence that the physical UART is working
 but the sensor's current persistent settings are not the expected ones.
 
-## PR #11 JY901S low-rate telemetry — Review / Hardware Verification Ready
+## PR #11 JY901S low-rate telemetry — Hardware Verified / re-arm follow-up open
 
 PR #11 consumes the read-only Acc/Gyro/Angle state and diagnostics established
 by the listen-only bring-up above. It publishes one fixed `ImuSnapshot`
@@ -195,9 +200,24 @@ PR #11 software evidence is recorded separately from PR #10's target evidence:
 | Gate | Status |
 |---|---|
 | Host Test | **PASS**: all current Firmware regressions, telemetry codec/scheduler tests, and Console tests |
-| ARM Build | **FAIL** — real hardware checkout previously failed on missing `<stddef.h>`; re-run required after fix |
-| Program Verify | **Pending**; this phase is not to be programmed in this turn |
-| Hardware Verified | **Pending**: no physical JY901S telemetry claim |
+| ARM Build | **PASS**: matching PR #11 Firmware build used for the reported hardware run |
+| Program Verify | **Pending**: no standalone programming/verify record is included in this closeout |
+| Hardware Verified | **PASS**: JY901S → USART3/PB11 → ring/parser → Acc/Gyro/Angle → Protocol V2/APC220 → Qt |
+| Re-arm diagnostics follow-up | **Pending**: the pre-fix `rx_rearm_failure_count = 166240` snapshot requires one short post-fix hardware regression |
+
+The reported hardware snapshot was RX bytes `131663`, headers `11967`, valid
+frames `11957`, checksum errors `10`, overflow `0`, UART errors `20`, Mag
+frames `2989`, and unsupported frames `0`. The aggregate UART error count is
+kept observable with its per-flag transport counters; it is not treated as a
+parser or Protocol V2 failure. The single Qt `Invalid length` event is recorded
+as an observation only: existing Console stream tests cover split and sticky
+(concatenated/back-to-back) Protocol V2 frames, while CRC errors and timeouts
+remained zero. No wire-format or Qt redesign is justified by that one event.
+
+The existing fixed 56-byte ImuSnapshot wire format is unchanged. The transport's
+deferred `HAL_BUSY` counter is internal; the existing payload field continues to
+mean hard re-arm failures only. Final robot body-frame mapping and magnetic/yaw
+calibration remain **[Pending]**.
 
 PR #10's STM32 ARM Build and Program Verify remain PASS for the listen-only
 bring-up ELF documented in the section above; that evidence does not silently

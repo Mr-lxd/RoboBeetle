@@ -5,6 +5,8 @@
 #include "jy901s_parser.h"
 #include "jy901s_transport_stm32.h"
 
+#include <stdint.h>
+
 void app_main_init(
     UART_HandleTypeDef *uart,
     UART_HandleTypeDef *jy901s_uart,

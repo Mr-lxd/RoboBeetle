@@ -48,7 +48,7 @@ leak module D0
 
 传感器 bring-up 顺序固定为：`Leak detection (including LeakStatus telemetry) → JY901S IMU → depth/sensor board`。在 PR #9 LeakStatus closeout 的历史记录中，JY901S 与 Depth 尚未开始；当前 JY901S phase 见下节，Depth 仍未开始。
 
-## 2026-09-10 JY901S listen-only bring-up（Review / Hardware Verification Ready）
+## 2026-09-10 JY901S listen-only bring-up（Hardware Verified / re-arm follow-up open）
 
 本轮只实现 JY901S 的 RX/parser-only 路径，不发送任何传感器配置命令：
 
@@ -80,7 +80,13 @@ JY901S TX
 6. `mag_frame_count` 与 `unsupported_frame_count` 的分类；
 7. Acc/Gyro/Angle valid flags、数值与 last-valid tick。
 
-USART3 的 RX re-arm failure 和 HAL UART error（ORE/FE/NE/PE/DMA/其它）只在 callback 中计数并标记 needs-rearm；foreground 的 `app_main_process` 通过一次轻量 poll 重新尝试 `HAL_UART_Receive_IT(..., 1U)`。ISR 不解析、不阻塞、不循环重试。USART1/APC220 的已有 RX、ring 和 transmit 行为保持不变。
+USART3 的 RX callback/error callback 只记录事件并标记 needs-rearm；foreground
+的 `app_main_process` 通过一次轻量 poll 重新尝试
+`HAL_UART_Receive_IT(..., 1U)`。`HAL_BUSY` 单独计入 deferred counter，只有
+`HAL_ERROR` 等真正失败才进入 hard re-arm failure counter。ISR 不解析、不阻塞、
+不循环重试。foreground 状态转换带 generation re-check，避免 HAL 开启下一次
+接收期间到达的 callback/error 事件被成功路径清掉。USART1/APC220 的已有 RX、
+ring 和 transmit 行为保持不变。
 
 ### 本轮验证分层
 
@@ -89,11 +95,11 @@ USART3 的 RX re-arm failure 和 HAL UART error（ORE/FE/NE/PE/DMA/其它）只�
 | Host Test | **PASS**：parser、USART3 transport mock、ring-buffer 与全部当前 Firmware regressions |
 | ARM Build | **PASS**：STM32 target build，0 errors、0 warnings；RAM 2680 B / 128 KB，FLASH 23260 B / 512 KB |
 | Program Verify | **PASS**：DAP/OpenOCD programming flow 完成并报告 `Verified OK` |
-| Hardware Verified | **Pending**：等待 JY901S 物理 RX 与数据实机验证 |
-| USART3 physical RX | **Pending** |
-| JY901S valid real frames | **Pending** |
-| Acc/Gyro/Angle real data | **Pending** |
-| Pending | 物理 RX、电气/接线、当前 JY901S 持久化配置诊断，以及后续独立 configuration/init phase |
+| Hardware Verified | **PASS**：matching PR #11 Firmware + Qt run 完成 JY901S 实机端到端观测 |
+| USART3 physical RX | **Hardware Verified**：PB11 / USART3 RX、ring path 与持续接收 |
+| JY901S valid real frames | **Hardware Verified**：valid frame counter 持续增加、overflow 为 0 |
+| Acc/Gyro/Angle real data | **Hardware Verified**：Acc 合理、静止 Gyro 接近零、Angle 正确响应 |
+| Pending | 修复后的 re-arm diagnostics 短时回归、最终 body-frame mapping、magnetic/yaw calibration |
 
 2026-09-10，用户在 hardware-verification checkout 完成了当前
 `RoboBeetleFirmware.elf` 的 STM32 target build：0 errors、0 warnings，RAM
@@ -101,13 +107,13 @@ USART3 的 RX re-arm failure 和 HAL UART error（ORE/FE/NE/PE/DMA/其它）只�
 `D:\RoboBeetle\RoboBeetleFirmware\build\Debug\RoboBeetleFirmware.elf`，
 记录的 LastWriteTime 为 2026-09-10 17:07:11。随后使用 DAP/OpenOCD（SWD
 100 kHz、SYSRESETREQ、halt、program、verify、reset-run）完成编程与校验，
-记录为 `Programming Finished`、`Verify Started`、`Verified OK`。这些证据只
-关闭 ARM Build 与 Program Verify；USART3 物理接收、合法 JY901S frame 以及
-Acc/Gyro/Angle 实际数据仍为 Pending，不能标记 Hardware Verified。
+记录为 `Programming Finished`、`Verify Started`、`Verified OK`。这些证据关闭
+ARM Build 与 Program Verify；matching PR #11 Firmware + Qt 实机运行另外提供
+了本节所记录的 JY901S physical RX 与 Acc/Gyro/Angle Hardware Verified 结果。
 
 本轮不涉及 Protocol V2 IMU telemetry、Qt IMU display、Depth sensor、Safety、自动 JY901S configuration 或 body-frame calibration。
 
-## 2026-09-10 PR #11 JY901S low-rate telemetry + Qt monitor（Review / Hardware Verification Ready）
+## 2026-09-10 PR #11 JY901S low-rate telemetry + Qt monitor（Hardware Verified / re-arm follow-up open）
 
 本阶段从 PR #10 的 listen-only bring-up HEAD 叠加，只消费已经存在的
 JY901S Acc/Gyro/Angle 内部状态，不改变 USART3 RX/parser 路径，也不向
@@ -143,15 +149,26 @@ diagnostics，不包含 3D、历史曲线、校准、控制动作或 raw passthr
 | 项目 | 状态 |
 |---|---|
 | Host Test | **PASS**：全部当前 Firmware regressions（含 Leak sensor / Leak telemetry policy）、JY901S telemetry codec/scheduler、Console protocol/controller/descriptor/IMU/MainWindow tests |
-| ARM Build | **FAIL**：real hardware checkout previously failed on missing `<stddef.h>`；修复后需重新执行 ARM build |
-| Program Verify | **Pending**：本轮明确不烧录 PR #11 image |
-| Hardware Verified | **Pending**：没有物理 JY901S telemetry、USART1/APC220 新链路或 Qt IMU 实机结论 |
+| ARM Build | **PASS**：matching PR #11 Firmware build 用于本次实机运行 |
+| Program Verify | **Pending**：本次 closeout 未提供独立 programming/verify 记录 |
+| Hardware Verified | **PASS**：JY901S → USART3/PB11 → ring/parser → Acc/Gyro/Angle → Protocol V2/APC220 → Qt |
+| Re-arm diagnostics follow-up | **Pending**：旧快照中的 `rx_rearm_failure_count = 166240` 需一次修复后的短时实机回归 |
 | PR #10 listen-only ARM/Program evidence | **PASS**：仅适用于 PR #10 记录的 bring-up ELF，不自动覆盖 PR #11 |
 
-本阶段完成后停在 Review / Hardware Verification Ready。下一步实机验证
-只能先观察 USART3 RX byte/ring/header/valid/checksum/Mag/unsupported/overflow
-等既有诊断，再判断当前 JY901S 持久化配置；不得因没有合法帧而在本阶段加入
-自动 configuration/init。
+本次 matching PR #11 Firmware + Qt 实机结果：IMU status = `Receiving`；Acc
+实时且物理合理；静止时 Gyro 接近零；Angle 实时响应。诊断快照为 RX bytes
+`131663`、headers `11967`、valid frames `11957`、checksum errors `10`、
+overflow `0`、UART errors `20`、Mag frames `2989`、unsupported `0`。UART
+aggregate 与各错误子计数继续保留可观测性。Qt 单次 `RX rejected: Invalid
+length` 先记录为 observation；现有 Console sticky/concatenated frame tests
+已覆盖该类连续帧边界，CRC errors 与 timeouts 均为 `0`，目前不进行协议重设计。
+
+最终 robot body-frame mapping 与 magnetic/yaw calibration 仍为 **[Pending]**。
+
+本阶段完成后停在 Review，等待一次短时 post-fix hardware regression。该回归
+仍只观察 USART3 RX byte/ring/header/valid/checksum/Mag/unsupported/overflow 与
+re-arm/UART diagnostics，再判断是否关闭本 follow-up；不得因任何单次异常而
+在本阶段加入自动 configuration/init。
 
 ## 2026-09-09 Depth PWM calibration window follow-up（PR #8）
 
