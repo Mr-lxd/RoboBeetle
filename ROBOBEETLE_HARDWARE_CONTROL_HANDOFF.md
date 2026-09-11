@@ -1,6 +1,6 @@
 # RoboBeetle 硬件控制交接审计
 
-本次收口对应的近期 Servo、LeakStatus 与 JY901S 实机运行均使用：
+本次收口对应的近期 Servo、LeakStatus、JY901S 与 Depth 实机运行均使用：
 `Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1`
 （9600 8-N-1）。APC220 仅保留为早期/legacy transport 记录，未参与近期
 验证，也不是当前启用的硬件链路。
@@ -157,7 +157,7 @@ JY901S parser state + diagnostics
 
 - `ImuSnapshot` 使用独立 telemetry sequence，不进入 command/ACK matching；不发送 raw JY901S frame、ASCII 或平台相关 struct memcpy。
 - payload 固定 56 bytes：schema `0x01`、Acc/Gyro/Angle validity flags、little-endian fixed-point values，以及 USART3/parser diagnostics counters。Acc 为 mg，Gyro 为 0.1 dps，Angle 为 0.01 degree；无效 domain 编码为零。
-- Firmware 只在 accepted Heartbeat 的正常 ACK 已完成发送后评估 IMU policy；每次 opportunity 最多发送一个 non-ACK telemetry frame。首次同时 due 时 LeakStatus `0x20` 优先；LeakStatus 成功发送后，如果 ImuSnapshot `0x21` 仍 due，则下一次同时 due 的 opportunity 发送 IMU，即使 LeakStatus 再次 due。IMU 成功发送后 LeakStatus 恢复优先；失败发送不 mark published，重复的 LeakStatus due 不会永久饿死 IMU。
+- Firmware 只在 accepted Heartbeat 的正常 ACK 已完成发送后评估 IMU/Depth policy；每次 opportunity 最多发送一个 non-ACK telemetry frame。只要 LeakStatus `0x20` due 就立即优先；Leak 不 due 时，在仍 due 的 ImuSnapshot `0x21` 与 DepthSnapshot `0x22` 之间公平轮转。失败发送不 mark published，保持该 policy 可重试。
 - IMU policy interval 为 1 s；成功发送后才 mark published。在 nominal accepted Heartbeat cadence 下，ImuSnapshot 的实际有效刷新率 up to approximately 1 Hz；ACK opportunity 延迟或 LeakStatus pending refresh 会使实际速率更低。56-byte payload 的最大 wire frame 为 68 bytes；9600 8-N-1 下按现有 Protocol V2 host-link/Heartbeat/Leak 预算计算，不宣称实机吞吐已验证；不增加独立 IMU TX timer。
 - 当前 DAP UART/COM13 host link 不增加独立 IMU TX timer；IMU 不会创建、释放、重试或重排 ACK pending request。USART1 host-link 与 LeakStatus 行为保持不变，Apc220HalfDuplex 仅保留为 legacy-named conservative policy。
 
@@ -210,6 +210,87 @@ timeouts 均为 `0`，目前不进行协议重设计。
 
 最终 robot body-frame mapping 与 magnetic/yaw calibration 仍为 **[Pending]**。
 不得因任何单次异常在本阶段加入自动 JY901S configuration/init。
+
+## 2026-09-11 Depth Sensor / ROVMAKER decoder bring-up（stable connection Hardware Verified; connector/calibration pending）
+
+本阶段实现 ROVMAKER 水深传感器解码板的 listen-only 接收与 monitoring-only
+遥测，不发送任何 decoder-board configuration、保存、重启、校准或其它命令：
+
+```text
+ROVMAKER decoder board
+  → STM32 PC7 / USART6_RX（115200 8-N-1）
+  → one-byte interrupt RX
+  → 独立 512-byte ring buffer（511-byte effective capacity）
+  → bounded ASCII line parser
+  → DepthSnapshot `0x22`
+  → existing USART1 host link / DAP UART/COM13
+  → Qt `Depth Sensor — ROVMAKER` read-only monitor
+```
+
+STM32 同时按生成式配置保留 PC6 / USART6_TX，但应用层不发送解码板命令。
+官方 [ROVMAKER 解算板手册](https://docs.rovmaker.cn/产品手册/水深传感器产品手册/深度传感器解算板V1.0.html)
+记录了 115200 8-N-1、canonical line
+`Depth:XX.XXm Temp:XX.XXC\r\n`，以及精确示例
+`Depth:1.21m Temp=25.27C`。因此 parser 只兼容完整的 `Temp:` 与 `Temp=`
+两种格式；不接受猜测的 compact `T=...D=...`、任意 separator、substring、
+bare LF 或 trailing data。该手册还要求板和传感器在水面通电，以环境空气压
+建立深度零点；这是厂商操作指导，不是本机器人实机验证结果。
+
+物理安装边界按以下拓扑记录：湿侧 pressure face/probe → pressure hull 的
+sealed penetration/threaded installation → pressure hull 内部 cable → 干侧
+ROVMAKER decoder board → STM32 PC7/USART6_RX。稳定连接下的 USART6 接收、
+DepthSnapshot、DAP/COM13 与 Qt 端到端功能路径已 **[Hardware Verified]**；
+这里不推断具体 O-ring、螺纹或密封结构。传感器到解码板的连接器/线束在被
+触碰或扰动时曾导致异常值或 Qt Stale，重新压紧/就位后恢复，因此连接器
+retention、strain relief、布线检查、适用的 sealing 与装配后 continuity/
+stability test 仍为 **[Pending mechanical/electrical integration follow-up]**，
+不将其归因于 Firmware，也不声明其已达到 production-ready。zeroing、最终
+installed reference point、fresh/seawater density、body installation offset
+与 pool accuracy 同样保持 **[Pending]**。本地 `ms5837.py` 仅是 Raspberry Pi
+直连 MS5837 的 I2C/PROM/ADC/补偿/density 参考，不证明解码板 UART 格式、
+cadence 或电气接口，Firmware 不引入第二条 I2C 路径。
+
+稳定连接实测记录：Qt 状态为 `Receiving`，depth 连续更新，temperature 约
+24 °C 且数值合理，sample age 持续刷新，RX bytes 与 valid lines 持续增加，
+parse errors 约为 0/极低，overflow 与 hard re-arm 均为 0。该记录证明功能
+路径，不替代连接器可靠性、安装密封或绝对深度标定。
+
+### DepthSnapshot contract
+
+`DepthSnapshot` 是 unacknowledged、独立 telemetry sequence 的 Protocol V2
+消息，message ID `0x22`，payload 固定 38 bytes，schema `1`，little-endian。
+byte 0 为 schema；byte 1 的 bit 0/1 分别为 depth/temperature valid，其他位
+必须为零；bytes 2–5 为 `depth_mm:int32`，6–7 为
+`temperature_centi_c:int16`，8–9 为 `sample_age_ms:uint16`（无 sample 或
+saturation 为 `0xffff`），10–37 为七个 `uint32` diagnostics：RX bytes、
+valid lines、parse errors、overlong lines、RX ring overflows、hard re-arm
+failures、UART errors。无效 numeric field 必须编码为零；Qt 以本地 packet
+arrival 与既定 telemetry lifecycle 判断 liveness，不单独依赖 sample age。
+
+Depth telemetry 不满足 ACK、不改变 LeakStatus、不进入 Servo command queue，
+也不改变 Safety 行为。Firmware 使用 provisional 3000 ms sensor freshness，
+超时后清除 depth/temperature valid 并将数值编码为 0，但保留 diagnostics；
+该策略独立于一秒 publication 与 Qt host-packet stale timeout。调度上 due
+LeakStatus 立即优先，Leak 不 due 时只在 IMU/Depth 之间公平轮转。现有
+Protocol V2/USART1/JY901S/Leak 路径保持原边界。
+
+### 验证分层
+
+| 项目 | 状态 |
+|---|---|
+| Host Test | **PASS**：全部当前 Firmware regressions、Depth parser/transport/codec、Console CTest 与 Depth monitor/controller/MainWindow tests |
+| Console CTest | **PASS** |
+| HAL / `.ioc` / C portability checks | **PASS**：生成式 USART6 配置与直接标准头审计通过 |
+| ARM Build | **PASS**：matching PR #12 STM32CubeIDE/CMake Debug target build，0 errors / 0 warnings |
+| Program Verify | **PASS**：known-good DAP/OpenOCD flow 报告 `Programming Finished`、`Verify Started`、`Verified OK` |
+| Hardware Verified | **PASS**：stable connection 下 ROVMAKER decoder → PC7/USART6 → DepthSnapshot → USART1/DAP/COM13 → Qt |
+| Sensor-to-decoder connector/harness robustness | **Pending**：触碰/扰动会造成异常值或 Stale，需机械/电气集成 follow-up |
+| Absolute depth calibration / installed reference | **Pending** |
+| External GitHub Review | **Resolved for PR #12 closeout** |
+
+本阶段与旧的 `FrontAxis`/Depth 舵机 PWM calibration window 是两条不同的
+范围：旧记录中的 Depth 是舵机语义/机械标定；本节的 Depth Sensor 是新的
+ROVMAKER 串口传感器输入。两者不共享硬件验证结论。
 
 ## 2026-09-09 Depth PWM calibration window follow-up（PR #8）
 

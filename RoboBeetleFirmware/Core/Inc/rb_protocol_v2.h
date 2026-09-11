@@ -35,7 +35,8 @@ typedef enum
 
     /* Unacknowledged robot-status telemetry (not a command). */
     RBP2_MSG_LEAK_STATUS = 0x20,
-    RBP2_MSG_IMU_SNAPSHOT = 0x21
+    RBP2_MSG_IMU_SNAPSHOT = 0x21,
+    RBP2_MSG_DEPTH_SNAPSHOT = 0x22
 
 } rbp2_message_type_t;
 

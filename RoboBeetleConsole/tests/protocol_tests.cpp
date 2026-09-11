@@ -61,6 +61,9 @@ void testGoldenVectors()
     static_assert(static_cast<quint8>(rb::AckResult::OutOfRange) == 5);
     static_assert(static_cast<quint8>(rb::AckResult::HardwareFailure) == 6);
     static_assert(static_cast<quint8>(rb::MessageType::LeakStatus) == 0x20);
+    static_assert(static_cast<quint8>(rb::MessageType::DepthSnapshot) == 0x22);
+    expect(rb::isKnownMessageType(0x22), "DepthSnapshot must be a known message type");
+    expect(!rb::isKnownMessageType(0x23), "unassigned message type must remain unknown");
 
     expectGoldenVector(rb::MessageType::Heartbeat, 1, hex("78563412"),
                        "06524202010102040778563412442800");

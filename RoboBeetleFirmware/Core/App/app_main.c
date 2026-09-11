@@ -14,6 +14,9 @@
 #include "jy901s_telemetry.h"
 #include "jy901s_transport_stm32.h"
 #include "uart_transport_stm32.h"
+#include "depth_parser.h"
+#include "depth_telemetry.h"
+#include "depth_transport_stm32.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -52,8 +55,10 @@ static leak_sensor_t leak_sensor;
 static leak_sensor_stm32_t leak_sensor_reader;
 static leak_telemetry_policy_t leak_telemetry_policy;
 static imu_telemetry_policy_t imu_telemetry_policy;
+static depth_telemetry_policy_t depth_telemetry_policy;
 static telemetry_scheduler_t telemetry_scheduler;
 static jy901s_parser_t jy901s_parser;
+static depth_parser_t depth_parser;
 static volatile uint32_t jy901s_last_valid_frame_ms;
 
 static bool protocol_send_ack(
@@ -65,6 +70,8 @@ static bool protocol_send_leak_status(
     leak_sensor_state_t state);
 
 static bool protocol_send_imu_snapshot(void);
+
+static bool protocol_send_depth_snapshot(void);
 
 static void protocol_feed_byte(
     uint8_t byte)
@@ -136,11 +143,16 @@ static void protocol_feed_byte(
                             &imu_telemetry_policy,
                             now_ms,
                             JY901S_IMU_TELEMETRY_INTERVAL_MS);
+                    const bool depth_due =
+                        depth_telemetry_policy_is_due(
+                            &depth_telemetry_policy,
+                            now_ms);
 
                     switch (telemetry_scheduler_select(
                                 &telemetry_scheduler,
                                 leak_due,
-                                imu_due))
+                                imu_due,
+                                depth_due))
                     {
                         case TELEMETRY_SLOT_LEAK_STATUS:
                             if (protocol_send_leak_status(state))
@@ -164,6 +176,18 @@ static void protocol_feed_byte(
                                 telemetry_scheduler_mark_success(
                                     &telemetry_scheduler,
                                     TELEMETRY_SLOT_IMU_SNAPSHOT);
+                            }
+                            break;
+
+                        case TELEMETRY_SLOT_DEPTH_SNAPSHOT:
+                            if (protocol_send_depth_snapshot())
+                            {
+                                depth_telemetry_policy_mark_success(
+                                    &depth_telemetry_policy,
+                                    now_ms);
+                                telemetry_scheduler_mark_success(
+                                    &telemetry_scheduler,
+                                    TELEMETRY_SLOT_DEPTH_SNAPSHOT);
                             }
                             break;
 
@@ -336,9 +360,78 @@ static bool protocol_send_imu_snapshot(void)
                (uint16_t)wire_length) == HAL_OK;
 }
 
+static bool protocol_send_depth_snapshot(void)
+{
+    depth_parser_state_t state;
+    depth_parser_stats_t parser_stats;
+    depth_transport_stm32_diagnostics_t transport_stats;
+    depth_telemetry_source_t source;
+    depth_telemetry_diagnostics_t diagnostics;
+    uint8_t payload[DEPTH_TELEMETRY_PAYLOAD_LENGTH];
+    uint8_t wire[RBP2_MAX_WIRE_SIZE];
+    const uint32_t now_ms = HAL_GetTick();
+
+    depth_parser_get_state(&depth_parser, &state);
+    depth_parser_get_stats(&depth_parser, &parser_stats);
+    depth_transport_stm32_get_diagnostics(&transport_stats);
+
+    const bool sample_is_current =
+        depth_telemetry_sensor_sample_is_current(
+            state.depth_valid,
+            state.last_valid_sample_ms,
+            now_ms);
+
+    source.depth_valid = state.depth_valid && sample_is_current;
+    source.temperature_valid = state.temperature_valid && sample_is_current;
+    source.depth_mm = source.depth_valid ? state.depth_mm : 0;
+    source.temperature_centi_c =
+        source.temperature_valid ? state.temperature_centi_c : 0;
+    source.sample_age_ms = state.depth_valid
+        ? (uint32_t)(now_ms - state.last_valid_sample_ms)
+        : 0U;
+
+    diagnostics.rx_byte_count = transport_stats.rx_byte_count;
+    diagnostics.valid_line_count = parser_stats.valid_line_count;
+    diagnostics.parse_error_count = parser_stats.parse_error_count;
+    diagnostics.overlong_line_count = parser_stats.overlong_line_count;
+    diagnostics.rx_buffer_overflow_count =
+        transport_stats.rx_buffer_overflow_count;
+    diagnostics.hard_rearm_failure_count =
+        transport_stats.hard_rearm_failure_count;
+    diagnostics.uart_error_count = transport_stats.uart_error_count;
+
+    if (depth_telemetry_encode(
+            &source,
+            &diagnostics,
+            payload,
+            sizeof payload) == 0U)
+    {
+        return false;
+    }
+
+    const size_t wire_length =
+        rbp2_encode_wire(
+            RBP2_MSG_DEPTH_SNAPSHOT,
+            protocol_telemetry_sequence++,
+            payload,
+            DEPTH_TELEMETRY_PAYLOAD_LENGTH,
+            wire,
+            sizeof wire);
+
+    if (wire_length == 0U)
+    {
+        return false;
+    }
+
+    return uart_transport_stm32_transmit(
+               wire,
+               (uint16_t)wire_length) == HAL_OK;
+}
+
 void app_main_init(
     UART_HandleTypeDef *uart,
     UART_HandleTypeDef *jy901s_uart,
+    UART_HandleTypeDef *depth_uart,
     TIM_HandleTypeDef *tim3,
     TIM_HandleTypeDef *tim4,
     GPIO_TypeDef *leak_gpio_port,
@@ -366,9 +459,12 @@ void app_main_init(
     uart_transport_stm32_init(uart);
     jy901s_parser_init(&jy901s_parser);
     imu_telemetry_policy_init(&imu_telemetry_policy);
+    depth_parser_init(&depth_parser);
+    depth_telemetry_policy_init(&depth_telemetry_policy);
     telemetry_scheduler_init(&telemetry_scheduler);
     jy901s_last_valid_frame_ms = 0U;
     jy901s_transport_stm32_init(jy901s_uart);
+    depth_transport_stm32_init(depth_uart);
 }
 
 void app_main_process(void)
@@ -376,6 +472,7 @@ void app_main_process(void)
     uint8_t byte;
 
     jy901s_transport_stm32_poll();
+    depth_transport_stm32_poll();
 
     leak_sensor_update_from_gpio_level(
         &leak_sensor,
@@ -396,6 +493,14 @@ void app_main_process(void)
         {
             jy901s_last_valid_frame_ms = HAL_GetTick();
         }
+    }
+
+    while (depth_transport_stm32_pop(&byte))
+    {
+        (void)depth_parser_feed_byte(
+            &depth_parser,
+            byte,
+            HAL_GetTick());
     }
 
     if (safety_supervisor_process(
@@ -432,4 +537,20 @@ void app_main_jy901s_get_transport_diagnostics(
 uint32_t app_main_jy901s_last_valid_frame_ms(void)
 {
     return jy901s_last_valid_frame_ms;
+}
+
+void app_main_depth_get_state(depth_parser_state_t *state)
+{
+    depth_parser_get_state(&depth_parser, state);
+}
+
+void app_main_depth_get_parser_stats(depth_parser_stats_t *stats)
+{
+    depth_parser_get_stats(&depth_parser, stats);
+}
+
+void app_main_depth_get_transport_diagnostics(
+    depth_transport_stm32_diagnostics_t *diagnostics)
+{
+    depth_transport_stm32_get_diagnostics(diagnostics);
 }

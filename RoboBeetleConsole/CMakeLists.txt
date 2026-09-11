@@ -28,6 +28,10 @@ add_library(RoboBeetleCore
     src/robot/ImuSnapshot.cpp
     src/robot/ImuMonitor.h
     src/robot/ImuMonitor.cpp
+    src/robot/DepthSnapshot.h
+    src/robot/DepthSnapshot.cpp
+    src/robot/DepthMonitor.h
+    src/robot/DepthMonitor.cpp
     src/robot/ServoDescriptor.h
     src/robot/ServoDescriptor.cpp
     src/robot/RobotController.h
@@ -62,6 +66,10 @@ if(BUILD_TESTING)
     add_executable(imu_monitor_tests tests/imu_monitor_tests.cpp)
     target_link_libraries(imu_monitor_tests PRIVATE RoboBeetleCore)
     add_test(NAME imu_monitor_tests COMMAND imu_monitor_tests)
+
+    add_executable(depth_monitor_tests tests/depth_monitor_tests.cpp)
+    target_link_libraries(depth_monitor_tests PRIVATE RoboBeetleCore)
+    add_test(NAME depth_monitor_tests COMMAND depth_monitor_tests)
 
     add_executable(main_window_tests
         tests/main_window_tests.cpp

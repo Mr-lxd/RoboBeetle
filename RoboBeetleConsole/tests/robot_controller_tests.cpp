@@ -1,4 +1,5 @@
 #include "protocol/PacketCodec.h"
+#include "robot/DepthSnapshot.h"
 #include "robot/LeakStatus.h"
 #include "robot/ImuSnapshot.h"
 #include "robot/RobotController.h"
@@ -114,6 +115,21 @@ void injectImuSnapshot(rb::FakeTransport &transport, quint16 sequence)
     const QByteArray payload = rb::ImuSnapshot::encodePayload(snapshot);
     transport.injectBytes(rb::PacketCodec::encodeWire(
         {rb::MessageType::ImuSnapshot, sequence, payload}));
+}
+
+void injectDepthSnapshot(rb::FakeTransport &transport, quint16 sequence)
+{
+    rb::DepthSnapshot snapshot;
+    snapshot.validityFlags = rb::DepthSnapshot::DepthValid
+        | rb::DepthSnapshot::TemperatureValid;
+    snapshot.depthMm = 1234;
+    snapshot.temperatureCentiC = 2534;
+    snapshot.sampleAgeMs = 25;
+    snapshot.diagnostics.rxByteCount = 100;
+    snapshot.diagnostics.validLineCount = 4;
+    transport.injectBytes(rb::PacketCodec::encodeWire(
+        {rb::MessageType::DepthSnapshot, sequence,
+         rb::DepthSnapshot::encodePayload(snapshot)}));
 }
 
 void installSynchronousAcks(rb::FakeTransport &transport,
@@ -287,6 +303,35 @@ void testImuSnapshotDoesNotTouchAckOrLeakState()
            "IMU telemetry must not satisfy a pending Enable ACK");
     expect(controller.leakState() == rb::LeakState::Unknown,
            "IMU telemetry must not alter LeakStatus state");
+
+    acknowledgeLast(transport);
+    expect(controller.isServoEnabled(rb::ServoId::FrontRight),
+           "the real matching ACK must still complete the pending Enable");
+}
+
+void testDepthSnapshotDoesNotTouchAckOrLeakState()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    expect(controller.enableServo(rb::ServoId::FrontRight),
+           "Depth isolation test should create a pending Enable");
+    const qsizetype writesBeforeDepth = transport.writes().size();
+    injectDepthSnapshot(transport, 0x6300);
+
+    expect(controller.depthState().status == rb::DepthStatus::Receiving
+               && controller.depthState().snapshot.has_value(),
+           "valid DepthSnapshot telemetry should update the monitor");
+    expect(transport.writes().size() == writesBeforeDepth,
+           "DepthSnapshot telemetry must not create a command write");
+    expect(!controller.isServoEnabled(rb::ServoId::FrontRight),
+           "DepthSnapshot telemetry must not satisfy a pending Enable ACK");
+    expect(controller.leakState() == rb::LeakState::Unknown,
+           "DepthSnapshot telemetry must not alter LeakStatus state");
 
     acknowledgeLast(transport);
     expect(controller.isServoEnabled(rb::ServoId::FrontRight),
@@ -2111,6 +2156,7 @@ int main(int argc, char **argv)
     testLeakStatusMappingAndPendingAckIsolation();
     testLeakStatusStaleAndDisconnectTransitions();
     testImuSnapshotDoesNotTouchAckOrLeakState();
+    testDepthSnapshotDoesNotTouchAckOrLeakState();
     testApcHeartbeatLossClearsLeakState();
     testAngleDegreesConvertToCentidegrees();
     testSetAngleBlockedDuringDisableRequest();

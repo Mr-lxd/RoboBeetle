@@ -1,6 +1,6 @@
 # RoboBeetle Protocol V2 — Phase 1 Baseline
 
-This document describes the Console and Firmware sources repaired and clean-built on 2026-09-10, plus the conservative host-link scheduler adaptation, PR #9 leak-status telemetry, and PR #11 low-rate JY901S telemetry. **[Implemented]** refers to code presence and software verification; the pre-PR8 Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]** for its historical layout. The current host-link evidence uses Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2; APC220 is an earlier/legacy transport record and was not used in the recent runs. PR #7 scheduler behavior remains **[Hardware Verified - Bench]** only for that historical APC220 setup; its timing parameters remain **[Provisional]**. PR #8's Servo/Depth bench findings are recorded in the canonical handoff, with Depth endpoint calibration still pending; PR #9 LeakStatus and PR #11 physical JY901S telemetry are **[Hardware Verified]** in their recorded boundaries.
+This document describes the Console and Firmware sources repaired and clean-built on 2026-09-11, plus the conservative host-link scheduler adaptation, PR #9 leak-status telemetry, PR #11 low-rate JY901S telemetry, and PR #12 ROVMAKER depth telemetry. **[Implemented]** refers to code presence and software verification; the pre-PR8 Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]** for its historical layout. The current host-link evidence uses Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2; APC220 is an earlier/legacy transport record and was not used in the recent runs. PR #7 scheduler behavior remains **[Hardware Verified - Bench]** only for that historical APC220 setup; its timing parameters remain **[Provisional]**. PR #8's Servo/Depth bench findings are recorded in the canonical handoff, with Depth actuator endpoint calibration still pending; PR #9 LeakStatus, PR #11 physical JY901S telemetry, and PR #12's stable-connection DepthSnapshot path are **[Hardware Verified]** in their recorded boundaries, while connector robustness and depth calibration remain pending.
 
 Evidence labels used across the project are **[Implemented]** (current source), **[Hardware Verified]** (development-record hardware evidence), **[Provisional]** (bring-up value/incomplete contract), **[Planned]** (future work), and **[Historical Reference]** (old papers/code only). This protocol document relies primarily on Implemented evidence; hardware milestones and historical context are kept in the project READMEs and root handoff.
 
@@ -174,12 +174,72 @@ IMU transmit timer.
 
 Firmware evaluates the one-second IMU policy only after an accepted Heartbeat
 has completed its normal ACK transmission. It selects at most one optional
-frame per opportunity. LeakStatus `0x20` wins the first shared due opportunity;
-after a successful LeakStatus publication, a still-due ImuSnapshot `0x21` wins
-the next shared opportunity even if LeakStatus is due again. After successful
-IMU publication, LeakStatus regains priority on the next shared due
-opportunity. A failed optional transmit is not marked published, so the
-pending policy remains retryable. There is no independent IMU transmit timer.
+frame per opportunity. A due LeakStatus `0x20` always wins the shared due
+opportunity. When LeakStatus is not due, the scheduler fairly rotates the due
+ImuSnapshot `0x21` and DepthSnapshot `0x22` slots. A failed optional transmit is
+not marked published, so the pending policy remains retryable. There is no
+independent IMU or depth transmit timer.
+
+### DepthSnapshot — `0x22`
+
+`DepthSnapshot` is an unacknowledged, monitoring-only frame from the
+listen-only ROVMAKER decoder-board path. Firmware publishes it only after an
+accepted Heartbeat ACK completes, at most one optional telemetry frame per
+opportunity, using a separate telemetry sequence. It never enters command/ACK
+matching or Servo/Safety behavior.
+
+The payload is exactly 38 bytes, schema version `0x01`; all multi-byte fields
+are little-endian and no C/C++ struct is copied directly to the wire:
+
+| Offset | Size | Field | Encoding |
+|---:|---:|---|---|
+| `0` | 1 | schema version | `uint8`, currently `0x01` |
+| `1` | 1 | validity flags | bit 0 depth valid, bit 1 temperature valid; bits 2–7 zero |
+| `2` | 4 | depth | signed `int32 LE`, millimetres |
+| `6` | 2 | temperature | signed `int16 LE`, centi-°C |
+| `8` | 2 | sample age | `uint16 LE`, milliseconds; `0xffff` means no valid sample or saturation |
+| `10` | 4 | RX bytes | `uint32 LE` |
+| `14` | 4 | valid lines | `uint32 LE` |
+| `18` | 4 | parse errors | `uint32 LE` |
+| `22` | 4 | overlong lines | `uint32 LE` |
+| `26` | 4 | RX buffer overflows | `uint32 LE` |
+| `30` | 4 | hard RX re-arm failures | `uint32 LE` |
+| `34` | 4 | UART errors | `uint32 LE` |
+
+The PR #12 stable-connection hardware run verified the functional path from the
+ROVMAKER decoder through USART6/PC7, Firmware, DepthSnapshot, USART1/DAP/COM13,
+and the Qt monitor. It showed continuously updating plausible depth/temperature
+values, refreshed sample age, increasing RX/valid-line counters, negligible
+parse errors, and zero overflow/hard re-arm failures. Disturbing the
+sensor-to-decoder cable/connector caused invalid readings or a temporary Stale
+state until reseating; connector retention, strain relief, wiring stability,
+and post-assembly continuity testing remain pending. This observation is not
+classified as a Firmware defect. Absolute zero, installed reference point,
+fresh/seawater density, installed offset, and pool accuracy also remain pending.
+
+When a validity bit is clear, its numeric field is encoded as zero and the
+receiver must ignore it. If no valid depth sample has ever been received, age is
+`0xffff`; otherwise the latest valid depth sample age is explicitly saturated
+to the `uint16` range and must not wrap around to appear fresh. The Qt monitor uses
+local packet arrival and the existing telemetry lifecycle for liveness; it does
+not use `sample_age_ms` as its sole stale decision. The Console rejects an
+unknown schema, reserved flags, nonzero invalid numeric fields, or any payload
+whose length is not exactly 38 bytes.
+
+The Firmware parser accepts the canonical vendor line
+`Depth:XX.XXm Temp:XX.XXC\r\n` and the vendor's documented example form
+`Depth:XX.XXm Temp=XX.XXC\r\n`. These are exact bounded grammars: the
+implementation does not accept guessed compact `T=...D=...`, arbitrary
+separators, substring matches, bare LF, or trailing data. The decoder path is
+listen-only and sends no configuration, save, restart, calibration, or other
+command. See the official [decoder-board manual](https://docs.rovmaker.cn/产品手册/水深传感器产品手册/深度传感器解算板V1.0.html)
+for the canonical format, example, and surface-power/air-zero instruction.
+
+Firmware separately applies a provisional 3000 ms sensor-sample freshness
+bound. At expiry it clears depth/temperature validity and zeroes those values
+in the snapshot while retaining all transport/parser diagnostics. This is
+separate from the one-second publication policy and Qt's 3500 ms host-packet
+stale timeout; Qt still uses telemetry lifecycle rather than sample age alone.
 
 ### Set Servo PWM — `0x12`
 
@@ -229,7 +289,8 @@ This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware v
 | Set Servo Angle | `0x13` | Controller and Qt UI send count 1, angle-capable semantic ID, signed cdeg LE; UI is gated by connection, Enable ACK, and no pending Disable | Maps each accepted descriptor angle with `int32_t` arithmetic; FrontAxis is rejected | `uint8,uint8,int16` | Yes | **Implemented; new five-servo hardware verification pending** |
 | Neutral | `0x14` | Sends the selected semantic mask after local enable | Requires live host, valid mask, and enabled selected channels; writes descriptor neutral pulses without disabling | `uint16 mask` | Yes | **Implemented; FrontAxis neutral remains provisional** |
 | LeakStatus | `0x20` | Receives one-byte monitoring telemetry and updates Unknown/Dry/Wet indicator; never creates an ACK pending entry | Samples PA11 and emits after accepted Heartbeat ACK, first/change/500 ms refresh; no ACK and no Servo/Safety action | `uint8 state` | No | **Implemented; end-to-end monitoring [Hardware Verified]** |
-| ImuSnapshot | `0x21` | Decodes fixed 56-byte monitoring telemetry into `ImuMonitor`; never creates or releases an ACK pending entry; displays Unknown/Receiving/Stale/Error and clears invalid/stale values | Encodes current JY901S state and diagnostics after accepted Heartbeat ACK, at most one optional frame per opportunity, with first-shared-opportunity LeakStatus priority and bounded fairness for a still-due IMU | 56-byte fixed schema | No | **Implemented / Host Test: PASS; physical JY901S telemetry [Hardware Verified]** |
+| ImuSnapshot | `0x21` | Decodes fixed 56-byte monitoring telemetry into `ImuMonitor`; never creates or releases an ACK pending entry; displays Unknown/Receiving/Stale/Error and clears invalid/stale values | Encodes current JY901S state and diagnostics after accepted Heartbeat ACK, at most one optional frame per opportunity, with due LeakStatus priority and fair rotation against a due DepthSnapshot when LeakStatus is not due | 56-byte fixed schema | No | **Implemented / Host Test: PASS; physical JY901S telemetry [Hardware Verified]** |
+| DepthSnapshot | `0x22` | Decodes fixed 38-byte monitoring telemetry into `DepthMonitor`; validates schema/flags/length and never creates or releases an ACK pending entry; sensor-invalid snapshots are Stale with values hidden while diagnostics remain visible | Parses the listen-only ROVMAKER decoder line, applies the provisional 3000 ms sensor freshness bound, and encodes validity-gated fixed-point fields and seven diagnostics counters after accepted Heartbeat ACK, at most one optional frame per opportunity | 38-byte fixed schema | No | **Implemented / Host Test: PASS; physical decoder path [Pending Hardware Verification]** |
 
 ## Sequence, ACK, retry, and duplicate behavior
 
@@ -279,7 +340,7 @@ Duplicate handling is the most important protocol-level safety gap before adding
 - The historical APC220 RTT of approximately 167–173 ms is an input to scheduler test scenarios, not a current DAP/COM13 measurement or formal guarantee: 250 + 170 = 420 ms is only an illustrative nominal observation. The local admission boundary is the 490 ms dispatch-anchored **Console host-side/local safety admission budget**; ordinary work is admitted only when its configured worst-case timeout plus retry polling still fits, leaving 10 ms below the 500 ms watchdog boundary. Host scheduling and future APC220 radio jitter require separate validation.
 - On the first missed host-link Heartbeat ACK, the Console clears its logical enabled state and stale actuator queue before Firmware can diverge at its watchdog boundary. Heartbeat retries may continue, but recovery does not replay old actions; after recovery a new valid Heartbeat and a new Servo Enable ACK are required before PWM/Angle commands can succeed.
 - PWM is not started at boot. TIM3/TIM4 CCRs are initialized from the descriptor table, but waveforms start only on accepted Servo Enable.
-- The low-rate JY901S ImuSnapshot policy is one second and runs only in an existing accepted-Heartbeat opportunity. LeakStatus wins the first shared due opportunity; after a successful LeakStatus publication, a still-due IMU gets the next shared opportunity, and LeakStatus regains priority after successful IMU publication. At most one non-ACK telemetry frame is sent after each completed Heartbeat ACK. The Console marks IMU values stale after 3500 ms without a valid snapshot and clears the live values; this is a monitoring policy, not a control or calibration path.
+- The low-rate JY901S ImuSnapshot and depth policies run only in an existing accepted-Heartbeat opportunity. A due LeakStatus always preempts the optional IMU/Depth slots; when LeakStatus is not due, the scheduler fairly rotates due IMU and Depth publications. At most one non-ACK telemetry frame is sent after each completed Heartbeat ACK. Firmware marks a sensor sample unusable after the provisional 3000 ms depth freshness bound, while the Console marks host telemetry stale after 3500 ms without a valid live packet; both are monitoring policies, not control or calibration paths.
 
 The 250 ms/250 ms values are a **[Provisional]** conservative host-link policy target, not a Firmware watchdog change. The current DAP UART/COM13/USART1 path uses a stop-and-wait exchange to avoid overlapping frames; heartbeat intent is coalesced while a command or retry is active and the actual wire cadence depends on ACK turnaround. The Apc220HalfDuplex name is retained for source compatibility and historical scheduler context; it is not evidence of a current APC220 radio. Every matching ACK records the latest measured round-trip time in `ProtocolMonitor::lastAckRttMs` and the Qt monitor.
 

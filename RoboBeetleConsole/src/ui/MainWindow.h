@@ -32,12 +32,14 @@ private:
     QWidget *createConnectionPanel();
     QWidget *createGlobalPanel();
     QWidget *createImuPanel();
+    QWidget *createDepthPanel();
     QWidget *createMonitorPanel();
     void setConnectedUi(bool connected);
     void refreshServoUi(int index);
     void setAngleUiEnabled(int index, bool enabled);
     void setLeakUiState(LeakState state);
     void setImuUiState(const ImuMonitorState &state);
+    void setDepthUiState(const DepthMonitorState &state);
     void appendLog(const QString &message);
     static QString stateText(TransportState state);
 
@@ -52,6 +54,11 @@ private:
     QLabel *imuGyro_{nullptr};
     QLabel *imuAngle_{nullptr};
     QLabel *imuDiagnostics_{nullptr};
+    QLabel *depthStatus_{nullptr};
+    QLabel *depthValue_{nullptr};
+    QLabel *depthTemperature_{nullptr};
+    QLabel *depthAge_{nullptr};
+    QLabel *depthDiagnostics_{nullptr};
     std::array<QSpinBox *, kServoCount> pwmSpins_{};
     std::array<QSlider *, kServoCount> pwmSliders_{};
     std::array<QDoubleSpinBox *, kServoCount> angleSpins_{};

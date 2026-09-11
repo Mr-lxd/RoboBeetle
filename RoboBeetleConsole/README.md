@@ -1,8 +1,8 @@
 # RoboBeetleConsole
 
-RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the current direct Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link. This document describes the implementation repaired and verified on 2026-09-10, including the PR #11 low-rate JY901S telemetry monitor; historical papers, slides, and legacy code are references only.
+RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the current direct Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link. This document describes the implementation repaired and verified on 2026-09-11, including the PR #11 low-rate JY901S telemetry monitor and the PR #12 ROVMAKER DepthSnapshot monitor; historical papers, slides, and legacy code are references only.
 
-The recent Servo, LeakStatus, and JY901S hardware runs used the wired DAP UART/COM13 path above. APC220 is an earlier/legacy transport record, was not enabled in those runs, and is not current JY901S or PR #11 hardware evidence.
+The recent Servo, LeakStatus, JY901S, and Depth hardware runs used the wired DAP UART/COM13 path above. APC220 is an earlier/legacy transport record, was not enabled in those runs, and is not current JY901S or PR #11/PR #12 hardware evidence.
 
 ## Status labels
 
@@ -128,6 +128,50 @@ the listen-only bring-up image. The matching PR #11 hardware run separately
 verified the physical JY901S-to-Qt monitoring path; final body-frame mapping
 and magnetic/yaw calibration remain **[Pending]**.
 
+## Current Depth Sensor / ROVMAKER monitor — Hardware Verified with stable connection; connector/calibration pending
+
+The Console accepts the unacknowledged Protocol V2 `DepthSnapshot` (`0x22`)
+from the listen-only ROVMAKER decoder-board path. The read-only `Depth Sensor —
+ROVMAKER` panel displays `Unknown`, `Receiving`, `Stale`, or `Error`, plus
+validity-gated depth, temperature, sample age, and transport/parser counters.
+It uses local packet arrival for its telemetry lifecycle and does not treat the
+wire sample age as a standalone liveness decision. Sensor-invalid snapshots
+enter `Stale`, render measurement values as `--`, and retain received
+diagnostics for troubleshooting; disconnected and host-link-liveness-lost
+states reset to `Unknown`.
+
+The frozen payload is schema `1`, little-endian, fixed 38 bytes: flags at byte
+1; signed `depth_mm` at bytes 2–5; signed `temperature_centi_c` at bytes 6–7;
+`sample_age_ms` at bytes 8–9; and the seven `uint32` diagnostics fields at
+bytes 10–37. Invalid numeric fields must be zero and an unknown/saturated age is
+`0xFFFF`. The Console rejects nonzero invalid fields, reserved flags, unknown
+schema, and non-38-byte payloads. Depth telemetry never satisfies an ACK, alters
+LeakStatus, queues a Servo command, or changes Safety behavior.
+
+The Firmware applies a provisional 3000 ms sensor-sample freshness bound,
+separate from its one-second publication policy and the Qt host-packet
+`StaleTimeoutMs` of 3500 ms. The depth monitor and matching stable physical
+decoder-board → USART6/PC7 → Protocol V2 → DAP/COM13 path are
+**[Hardware Verified]**. A stable run showed `Receiving`, continuously updated
+depth, plausible temperature near 24 °C, refreshed sample age, increasing RX
+bytes/valid lines, very low parse errors, zero overflow, and zero hard re-arm
+failures.
+
+Disturbing the sensor-to-decoder cable/connector caused invalid/unrealistic
+values or loss of valid samples until reseating restored the stream. Connector
+and harness robustness is therefore **[Pending mechanical/electrical
+integration follow-up]**; it is not classified as a proven Firmware bug or a
+production-ready connector result. Final zero/reference point, freshwater and
+seawater density calibration, installed offset, and pool accuracy remain
+**[Pending]**. No decoder configuration command is sent by this phase.
+
+The intended installation boundary is wet pressure face/probe → sealed hull
+penetration/threaded installation → pressure hull → cable → dry ROVMAKER
+decoder → USART6. Exact seal/thread details are not specified here. The vendor
+decoder manual's surface-power/air-zero instruction is recorded as guidance;
+the local `ms5837.py` direct-I2C implementation is reference material only and
+is not a second Firmware sensor path.
+
 ## Current scope
 
 ### [Implemented]
@@ -144,12 +188,13 @@ and magnetic/yaw calibration remain **[Pending]**.
 - Set Angle UI for the four angle-capable semantic servos with descriptor-specific ranges; the UI converts to centidegrees and angle-to-pulse conversion remains authoritative in Firmware. FrontAxis is explicitly PWM-only while calibration is pending, with a shared 500–2500 μs command envelope.
 - Monitoring-only LeakStatus `0x20` indicator with Unknown/Dry/Wet states and stale/disconnect fail-to-Unknown behavior; the end-to-end path is **[Hardware Verified]**.
 - Monitoring-only JY901S `ImuSnapshot` `0x21` panel with explicit fixed-point display, diagnostics, Unknown/Receiving/Stale/Error lifecycle, and stale/liveness value invalidation; the matching PR #11 physical IMU path and post-fix re-arm diagnostics are **[Hardware Verified]**, with USART3 UART/checksum physical-link quality, body-frame mapping, and magnetic/yaw calibration still pending.
+- Monitoring-only ROVMAKER `DepthSnapshot` `0x22` panel with fixed-point depth/temperature, validity flags, sample age, parser/transport diagnostics, and Unknown/Receiving/Stale/Error lifecycle. Software and host tests are **[Host Test: PASS]**; the stable physical decoder path is **[Hardware Verified]**, while connector/harness robustness and final calibration remain **[Pending]**.
 
 ### [Planned]
 
 - Raspberry Pi onboard service and `TcpTransport`.
 - Camera and FOMO/ONNX result visualization.
-- Depth, battery, curves, and 3D attitude views. The current PR #11 IMU monitor is intentionally not a 3D/history view.
+- Battery, curves, and 3D attitude views. The current PR #11 IMU monitor is intentionally not a 3D/history view.
 - ROS 2, automatic control, CPG/PID integration, and telemetry models.
 - Emergency Stop. The current button is intentionally disabled because Protocol V2 has no such Phase 1 message.
 
@@ -166,11 +211,13 @@ QApplication
       │   ├─ bounded command queue (legacy-named Apc220HalfDuplex policy)
       │   ├─ logical enabled-mask state
       │   ├─ LeakStatus state / stale policy
-      │   └─ ImuSnapshot state / stale policy
+      │   ├─ ImuSnapshot state / stale policy
+      │   └─ DepthSnapshot state / stale policy
       └─ MainWindow
           ├─ connection controls
           ├─ five descriptor-driven servo panels
           ├─ IMU — JY901S monitor
+          ├─ Depth Sensor — ROVMAKER monitor
           └─ protocol monitor / event log
 ```
 
@@ -178,7 +225,7 @@ QApplication
 |---|---|
 | `main.cpp` | Creates the application, `SerialTransport`, `RobotController`, and `MainWindow`; injects serial-port discovery. |
 | `MainWindow` | Converts UI actions into controller calls and displays controller signals. It does not access `QSerialPort` or construct packets. |
-| `RobotController` | Owns command payload construction, sequence allocation, profile-aware heartbeat/ACK scheduling, bounded command-queue state, logical servo enable state, range gates, monitoring-only LeakStatus and ImuSnapshot state/staleness, and monitor data. IMU frames never enter pending ACK state. |
+| `RobotController` | Owns command payload construction, sequence allocation, profile-aware heartbeat/ACK scheduling, bounded command-queue state, logical servo enable state, range gates, monitoring-only LeakStatus, ImuSnapshot, and DepthSnapshot state/staleness, and monitor data. Sensor frames never enter pending ACK state. |
 | `ITransport` | Byte-stream open/close/write contract plus received-byte, state, and error signals. |
 | `SerialTransport` | Qt SerialPort adapter: port scan, 8-N-1, no flow control, async receive, buffered writes, and close-time flush attempt. |
 | `FakeTransport` | Deterministic byte transport used by controller tests. It is not a simulator of STM32 behavior. |
@@ -204,6 +251,7 @@ QApplication
 | Set Angle | [Implemented] | Angle-capable semantic servos use descriptor-specific input ranges and 0.1° steps; Qt converts to signed cdeg and calls `RobotController::setServoAngle()`. The control requires connection, support, Enable ACK, and no pending Disable request. FrontAxis is disabled. |
 | Leak status | [Hardware Verified] | Displays `Leak: Unknown`, `Leak: Dry`, or `LEAK DETECTED` from Protocol V2 `0x20`; disconnect, host-link liveness loss, invalid payload, and stale telemetry return it to Unknown. Monitoring-only; no Servo/Safety action. |
 | JY901S IMU monitor | [Implemented] / physical data [Hardware Verified] | Displays `IMU — JY901S` status, valid fixed-point Acc/Gyro/Angle domains, and diagnostics from Protocol V2 `0x21`; Unknown/invalid/Stale/liveness loss clear values. Read-only; no 3D/history/control/configuration. |
+| ROVMAKER depth monitor | [Hardware Verified] with stable connection | Displays `Depth Sensor — ROVMAKER` lifecycle, validity-gated depth/temperature, sample age, and parser/transport diagnostics from Protocol V2 `0x22`. Read-only; no decoder configuration or control action. Connector robustness and calibration remain pending. |
 | Protocol monitor | [Implemented] | Displays latest TX/RX chunks, packet counts, CRC errors, timeouts, latest matching-ACK RTT, ACK state, and up to 1000 log blocks. |
 
 ## Historical Servo1 hardware acceptance (2026-09-06)
