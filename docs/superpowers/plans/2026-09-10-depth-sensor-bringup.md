@@ -122,8 +122,34 @@ Coordinator integrates the Qt slice:
 3. Run an independent code review. Fix actionable findings and rerun affected
    gates. Review must specifically check that no decoder command is sent and
    no existing USART1/USART3 behavior changed.
-4. Commit implementation in reviewable checkpoints, push the exact feature
-   branch, and open one PR against `main`. Do not merge.
-5. Stop with `READY FOR EXTERNAL GITHUB REVIEW` and
-   `External GitHub Review: Pending`. Program Verify and Hardware Verified stay
-   Pending until the user performs the real hardware run.
+4. For the initial software phase, commit implementation in reviewable
+   checkpoints, push the exact feature branch, and open one PR against `main`.
+   That phase stops before merge and before user hardware verification.
+5. The initial phase stopped with `READY FOR EXTERNAL GITHUB REVIEW` and
+   `External GitHub Review: Pending`; the subsequent user hardware result and
+   PR closeout are recorded in the section below.
+
+## Closeout validation — 2026-09-11
+
+The user subsequently completed the real target run for the matching PR #12
+image. STM32CubeIDE/CMake Debug ARM Build completed with 0 errors and 0
+warnings, and the known-good DAP/OpenOCD flow reported `Programming Finished`,
+`Verify Started`, and `Verified OK`.
+
+The stable functional path
+`ROVMAKER decoder → USART6/PC7 → bounded parser → DepthSnapshot 0x22 →
+USART1/DAP/COM13 → Qt` is **[Hardware Verified]**. The run showed Receiving,
+continuously updating plausible depth/temperature, refreshed sample age,
+increasing RX/valid-line counters, negligible parse errors, zero overflow, and
+zero hard re-arm failures. Disturbing the sensor-to-decoder cable/connector
+caused invalid readings or Stale until reseating; connector retention, strain
+relief, wiring stability, sealing as applicable, and post-assembly
+continuity/stability testing remain **[Pending]** and are not classified as a
+Firmware defect. Absolute zero, installed reference point, freshwater/seawater
+density, installed offset, and pool accuracy remain **[Pending]**.
+
+The verified host link is `Qt Console → Windows COM13 → DAP UART/USB serial
+bridge → STM32 USART1`; APC220 remains a legacy/inactive transport record.
+This closeout changes documentation and validation metadata only; it does not
+add decoder commands, a direct-I2C Firmware path, Raspberry Pi/ROS work, or
+calibration offsets.

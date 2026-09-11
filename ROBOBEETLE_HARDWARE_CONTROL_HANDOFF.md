@@ -1,6 +1,6 @@
 # RoboBeetle 硬件控制交接审计
 
-本次收口对应的近期 Servo、LeakStatus 与 JY901S 实机运行均使用：
+本次收口对应的近期 Servo、LeakStatus、JY901S 与 Depth 实机运行均使用：
 `Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1`
 （9600 8-N-1）。APC220 仅保留为早期/legacy transport 记录，未参与近期
 验证，也不是当前启用的硬件链路。
@@ -211,7 +211,7 @@ timeouts 均为 `0`，目前不进行协议重设计。
 最终 robot body-frame mapping 与 magnetic/yaw calibration 仍为 **[Pending]**。
 不得因任何单次异常在本阶段加入自动 JY901S configuration/init。
 
-## 2026-09-11 Depth Sensor / ROVMAKER decoder bring-up（software implemented; Hardware Verification pending）
+## 2026-09-11 Depth Sensor / ROVMAKER decoder bring-up（stable connection Hardware Verified; connector/calibration pending）
 
 本阶段实现 ROVMAKER 水深传感器解码板的 listen-only 接收与 monitoring-only
 遥测，不发送任何 decoder-board configuration、保存、重启、校准或其它命令：
@@ -238,11 +238,22 @@ bare LF 或 trailing data。该手册还要求板和传感器在水面通电，�
 
 物理安装边界按以下拓扑记录：湿侧 pressure face/probe → pressure hull 的
 sealed penetration/threaded installation → pressure hull 内部 cable → 干侧
-ROVMAKER decoder board → STM32 PC7/USART6_RX。这里不推断具体 O-ring、螺纹或
-密封结构；电平、供电/地、安装、zeroing、density、cadence 与端到端响应仍为
-**[Pending Hardware Verification]**。本地 `ms5837.py` 仅是 Raspberry Pi 直连
-MS5837 的 I2C/PROM/ADC/补偿/density 参考，不证明解码板 UART 格式、cadence 或
-电气接口，Firmware 不引入第二条 I2C 路径。
+ROVMAKER decoder board → STM32 PC7/USART6_RX。稳定连接下的 USART6 接收、
+DepthSnapshot、DAP/COM13 与 Qt 端到端功能路径已 **[Hardware Verified]**；
+这里不推断具体 O-ring、螺纹或密封结构。传感器到解码板的连接器/线束在被
+触碰或扰动时曾导致异常值或 Qt Stale，重新压紧/就位后恢复，因此连接器
+retention、strain relief、布线检查、适用的 sealing 与装配后 continuity/
+stability test 仍为 **[Pending mechanical/electrical integration follow-up]**，
+不将其归因于 Firmware，也不声明其已达到 production-ready。zeroing、最终
+installed reference point、fresh/seawater density、body installation offset
+与 pool accuracy 同样保持 **[Pending]**。本地 `ms5837.py` 仅是 Raspberry Pi
+直连 MS5837 的 I2C/PROM/ADC/补偿/density 参考，不证明解码板 UART 格式、
+cadence 或电气接口，Firmware 不引入第二条 I2C 路径。
+
+稳定连接实测记录：Qt 状态为 `Receiving`，depth 连续更新，temperature 约
+24 °C 且数值合理，sample age 持续刷新，RX bytes 与 valid lines 持续增加，
+parse errors 约为 0/极低，overflow 与 hard re-arm 均为 0。该记录证明功能
+路径，不替代连接器可靠性、安装密封或绝对深度标定。
 
 ### DepthSnapshot contract
 
@@ -270,10 +281,12 @@ Protocol V2/USART1/JY901S/Leak 路径保持原边界。
 | Host Test | **PASS**：全部当前 Firmware regressions、Depth parser/transport/codec、Console CTest 与 Depth monitor/controller/MainWindow tests |
 | Console CTest | **PASS** |
 | HAL / `.ioc` / C portability checks | **PASS**：生成式 USART6 配置与直接标准头审计通过 |
-| ARM Build | **Pending**：本环境无 `arm-none-eabi-gcc`；须在 STM32CubeIDE/真实 target checkout 重跑 |
-| Program Verify | **Pending**：本阶段未烧录 |
-| Hardware Verified | **Pending**：等待 decoder-board 电平、PC7/USART6 实收、zeroing、density/cadence 与端到端深度数据实测 |
-| External GitHub Review | **Pending** |
+| ARM Build | **PASS**：matching PR #12 STM32CubeIDE/CMake Debug target build，0 errors / 0 warnings |
+| Program Verify | **PASS**：known-good DAP/OpenOCD flow 报告 `Programming Finished`、`Verify Started`、`Verified OK` |
+| Hardware Verified | **PASS**：stable connection 下 ROVMAKER decoder → PC7/USART6 → DepthSnapshot → USART1/DAP/COM13 → Qt |
+| Sensor-to-decoder connector/harness robustness | **Pending**：触碰/扰动会造成异常值或 Stale，需机械/电气集成 follow-up |
+| Absolute depth calibration / installed reference | **Pending** |
+| External GitHub Review | **Resolved for PR #12 closeout** |
 
 本阶段与旧的 `FrontAxis`/Depth 舵机 PWM calibration window 是两条不同的
 范围：旧记录中的 Depth 是舵机语义/机械标定；本节的 Depth Sensor 是新的

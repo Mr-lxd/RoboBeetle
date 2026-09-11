@@ -1,6 +1,6 @@
 # RoboBeetle Protocol V2 — Phase 1 Baseline
 
-This document describes the Console and Firmware sources repaired and clean-built on 2026-09-10, plus the conservative host-link scheduler adaptation, PR #9 leak-status telemetry, and PR #11 low-rate JY901S telemetry. **[Implemented]** refers to code presence and software verification; the pre-PR8 Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]** for its historical layout. The current host-link evidence uses Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2; APC220 is an earlier/legacy transport record and was not used in the recent runs. PR #7 scheduler behavior remains **[Hardware Verified - Bench]** only for that historical APC220 setup; its timing parameters remain **[Provisional]**. PR #8's Servo/Depth bench findings are recorded in the canonical handoff, with Depth endpoint calibration still pending; PR #9 LeakStatus and PR #11 physical JY901S telemetry are **[Hardware Verified]** in their recorded boundaries.
+This document describes the Console and Firmware sources repaired and clean-built on 2026-09-11, plus the conservative host-link scheduler adaptation, PR #9 leak-status telemetry, PR #11 low-rate JY901S telemetry, and PR #12 ROVMAKER depth telemetry. **[Implemented]** refers to code presence and software verification; the pre-PR8 Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]** for its historical layout. The current host-link evidence uses Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2; APC220 is an earlier/legacy transport record and was not used in the recent runs. PR #7 scheduler behavior remains **[Hardware Verified - Bench]** only for that historical APC220 setup; its timing parameters remain **[Provisional]**. PR #8's Servo/Depth bench findings are recorded in the canonical handoff, with Depth actuator endpoint calibration still pending; PR #9 LeakStatus, PR #11 physical JY901S telemetry, and PR #12's stable-connection DepthSnapshot path are **[Hardware Verified]** in their recorded boundaries, while connector robustness and depth calibration remain pending.
 
 Evidence labels used across the project are **[Implemented]** (current source), **[Hardware Verified]** (development-record hardware evidence), **[Provisional]** (bring-up value/incomplete contract), **[Planned]** (future work), and **[Historical Reference]** (old papers/code only). This protocol document relies primarily on Implemented evidence; hardware milestones and historical context are kept in the project READMEs and root handoff.
 
@@ -205,6 +205,17 @@ are little-endian and no C/C++ struct is copied directly to the wire:
 | `26` | 4 | RX buffer overflows | `uint32 LE` |
 | `30` | 4 | hard RX re-arm failures | `uint32 LE` |
 | `34` | 4 | UART errors | `uint32 LE` |
+
+The PR #12 stable-connection hardware run verified the functional path from the
+ROVMAKER decoder through USART6/PC7, Firmware, DepthSnapshot, USART1/DAP/COM13,
+and the Qt monitor. It showed continuously updating plausible depth/temperature
+values, refreshed sample age, increasing RX/valid-line counters, negligible
+parse errors, and zero overflow/hard re-arm failures. Disturbing the
+sensor-to-decoder cable/connector caused invalid readings or a temporary Stale
+state until reseating; connector retention, strain relief, wiring stability,
+and post-assembly continuity testing remain pending. This observation is not
+classified as a Firmware defect. Absolute zero, installed reference point,
+fresh/seawater density, installed offset, and pool accuracy also remain pending.
 
 When a validity bit is clear, its numeric field is encoded as zero and the
 receiver must ignore it. If no valid depth sample has ever been received, age is

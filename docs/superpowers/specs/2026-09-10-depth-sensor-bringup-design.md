@@ -175,7 +175,7 @@ gates discover and run every existing Firmware regression, all Console CTests,
 new depth tests, direct-standard-header checks, `.ioc`/generated-HAL syntax
 checks, and `git diff --check`. No hardware is programmed by Codex.
 
-Final labels are kept separate:
+The initial implementation phase kept these labels separate:
 
 ```text
 Host Test: evidence from host tests
@@ -184,6 +184,10 @@ Program Verify: Pending until the user programs and checks the board
 Hardware Verified: Pending until the user supplies real depth hardware evidence
 ```
 
+The user-supplied hardware result and the updated closeout labels are recorded
+in the closeout validation section below; the implementation boundary itself
+still forbids Codex from programming hardware.
+
 Electrical signal level, physical sealed mounting, the vendor surface-zero
 procedure, actual decoder cadence, seawater density selection, and body-frame
 mapping are explicitly documented as hardware/future verification items. The
@@ -191,3 +195,26 @@ local Raspberry Pi `ms5837.py` source is sensor-level direct-I2C reference only;
 it does not justify a second Firmware I2C implementation. A future
 laptop/network-or-tether → onboard Raspberry Pi/ROS 2 → local serial → STM32
 split remains architecture documentation, not implementation in this phase.
+
+## Closeout validation — 2026-09-11
+
+The user-supplied real-hardware result for PR #12 records ARM Build **PASS**
+(STM32CubeIDE/CMake Debug, 0 errors / 0 warnings) and Program Verify **PASS**
+(`Programming Finished`, `Verify Started`, `Verified OK`). The stable functional
+path from the ROVMAKER decoder through USART6/PC7, Firmware, DepthSnapshot
+`0x22`, USART1/DAP/COM13, and the Qt monitor is **[Hardware Verified]**.
+
+The stable run showed `Receiving`, continuously updating plausible values,
+temperature near 24 °C, refreshed sample age, increasing RX/valid-line counts,
+negligible parse errors, zero overflow, and zero hard re-arm failures. A loose
+or disturbed sensor-to-decoder connector caused invalid readings or a temporary
+Stale state until reseating. Connector retention, strain relief, wiring
+inspection, sealing as applicable, post-assembly continuity/stability, absolute
+zero, installed reference point, freshwater/seawater density, installed offset,
+and pool accuracy remain **[Pending]**. This observation is not classified as a
+Firmware bug and does not establish production-ready connector integrity.
+
+The verified current host path is Qt Console → Windows COM13 → DAP UART/USB
+serial bridge → STM32 USART1; APC220 remains legacy/inactive. No decoder
+configuration command, direct-I2C Firmware path, or calibration offset was
+added during closeout.

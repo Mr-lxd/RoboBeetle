@@ -266,7 +266,7 @@ PR #10's STM32 ARM Build and Program Verify remain PASS for the listen-only
 bring-up ELF documented in the section above; that evidence does not silently
 close the new PR #11 telemetry target gate.
 
-## Current Depth Sensor / ROVMAKER decoder bring-up — software implemented; hardware pending
+## Current Depth Sensor / ROVMAKER decoder bring-up — Hardware Verified with stable connection; connector/calibration pending
 
 This phase adds a listen-only ROVMAKER decoder-board path without sending any
 decoder configuration command:
@@ -282,13 +282,26 @@ USART6 is configured as 115200 8-N-1 TX/RX with PC6 TX and PC7 RX. The
 application does not send decoder commands, change output rate, or configure
 the board. The intended physical topology is the wet pressure face/probe →
 sealed hull penetration/threaded installation → pressure hull → cable → dry
-ROVMAKER decoder board → PC7/USART6; the exact seal/thread design, electrical
-levels, power/ground wiring, zeroing, density setting, and output cadence remain
-**[Pending Hardware Verification]**. The official
+ROVMAKER decoder board → PC7/USART6. The stable physical receive and
+end-to-end telemetry path is **[Hardware Verified]**. The exact seal/thread
+design, production connector retention, strain relief, final installation,
+zeroing, density setting, cadence characterization, and absolute accuracy
+remain **[Pending]**. The official
 [ROVMAKER decoder-board manual](https://docs.rovmaker.cn/产品手册/水深传感器产品手册/深度传感器解算板V1.0.html)
 instructs that the board and sensor be powered at the water surface so the
 ambient air pressure establishes the zero output. This is vendor guidance, not
-physical verification of this robot's installation.
+final calibration of this robot's installation.
+
+During the stable-connection bench run, Depth status was `Receiving`, values
+updated continuously, temperature was approximately 24 °C and plausible,
+sample age refreshed, RX bytes and valid lines increased, parse errors stayed
+approximately zero/very low, and overflow and hard re-arm failures were zero.
+Disturbing the sensor-to-decoder cable/connector caused invalid or lost samples
+until the connection was reseated; this is **[Pending mechanical/electrical
+integration follow-up]**, not a proven Firmware defect or a production-ready
+connector assessment. Final assembly requires connector retention, strain
+relief, wiring inspection, sealing as applicable, and a post-assembly
+continuity/stability test.
 
 The local `ms5837.py` reference was also inspected. It implements direct
 Raspberry Pi I2C access to the MS5837 (PROM/CRC, ADC conversion, compensation,
@@ -349,11 +362,11 @@ enters command ACK matching, Servo, Safety, or decoder control.
 | Gate | Status |
 |---|---|
 | Host Test | **PASS**: all 17 Firmware executable regressions, `app_main` API syntax, and Console CTest |
-| ARM Build | **Pending**: no `arm-none-eabi-gcc` toolchain is available in this environment; real target build required |
-| Program Verify | **Pending**: no hardware was programmed in this phase |
-| Hardware Verified | **Pending**: decoder-board physical path and end-to-end DepthSnapshot remain unverified |
-| External GitHub Review | **Pending** |
-| Pending | decoder electrical level, power/ground, zeroing/density/cadence, physical depth/temperature response, and final calibration |
+| ARM Build | **PASS**: STM32CubeIDE/CMake Debug target build completed with 0 errors / 0 warnings |
+| Program Verify | **PASS**: known-good DAP/OpenOCD flow reported `Programming Finished`, `Verify Started`, and `Verified OK` |
+| Hardware Verified | **PASS**: stable decoder-board → USART6/PC7 → DepthSnapshot → DAP/COM13 → Qt path; connector/harness robustness remains pending |
+| External GitHub Review | **Resolved for PR #12 closeout** |
+| Pending | connector retention/strain relief/wiring stability, final installed zero/reference point, freshwater/seawater density calibration, body installation offset, and water-pool accuracy |
 
 ## Active target and CubeMX configuration
 
