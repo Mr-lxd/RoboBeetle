@@ -1,5 +1,8 @@
 #include "robot/ServoDescriptor.h"
 
+#include <array>
+#include <cstddef>
+
 namespace rb {
 namespace {
 

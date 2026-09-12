@@ -1,6 +1,8 @@
 #include "servo_descriptor.h"
 
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 _Static_assert(SERVO_ID_FRONT_RIGHT == 0U, "FrontRight ID must be zero");
 _Static_assert(SERVO_ID_FRONT_LEFT == 1U, "FrontLeft ID must be one");

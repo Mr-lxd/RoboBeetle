@@ -2,6 +2,10 @@
 
 #include "servo_calibration.h"
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
 static const servo_descriptor_t *servo_service_descriptor(
     uint8_t servo_id)
 {
