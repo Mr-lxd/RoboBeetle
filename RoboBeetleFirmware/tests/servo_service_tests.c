@@ -121,6 +121,26 @@ static unsigned int count_event(
     return count;
 }
 
+static bool last_write_pulse(
+    const fake_driver_t *driver,
+    uint8_t servo_id,
+    uint16_t *pulse_us)
+{
+    for (unsigned int index = driver->event_count; index > 0U; --index)
+    {
+        const unsigned int event_index = index - 1U;
+
+        if ((driver->events[event_index] == 'W') &&
+            (driver->event_servo[event_index] == servo_id))
+        {
+            *pulse_us = driver->event_pulse[event_index];
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static void test_mask_validation(void)
 {
     fake_driver_t driver;
@@ -172,6 +192,12 @@ static void test_enable_each_servo_and_independent_bits(void)
 
     expect(servo_service_enabled_mask(&service) == 0x001FU,
            "enabling five independent bits should produce 0x001f");
+
+    uint16_t front_axis_enable_pulse = 0U;
+    expect(last_write_pulse(&driver, SERVO_ID_FRONT_AXIS,
+                            &front_axis_enable_pulse) &&
+               front_axis_enable_pulse == 1745U,
+           "FrontAxis Enable must write 1745 us");
 }
 
 static void test_multi_enable_rolls_back_on_start_failure(void)
@@ -254,18 +280,18 @@ static void test_command_ranges_and_capabilities(void)
                SERVO_SERVICE_RESULT_OUT_OF_RANGE,
            "SAVOX above +45 degrees must be rejected");
 
-    expect(servo_service_set_pwm(&service, SERVO_ID_REAR_RIGHT, 1019U) ==
+    expect(servo_service_set_pwm(&service, SERVO_ID_REAR_RIGHT, 819U) ==
                SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "GDW 1019 us must be rejected");
-    expect(servo_service_set_pwm(&service, SERVO_ID_REAR_RIGHT, 1020U) ==
+           "GDW temporary window 819 us must be rejected");
+    expect(servo_service_set_pwm(&service, SERVO_ID_REAR_RIGHT, 820U) ==
                SERVO_SERVICE_RESULT_OK,
-           "GDW 1020 us must be accepted");
-    expect(servo_service_set_pwm(&service, SERVO_ID_REAR_RIGHT, 2020U) ==
+           "GDW temporary window 820 us must be accepted");
+    expect(servo_service_set_pwm(&service, SERVO_ID_REAR_RIGHT, 2220U) ==
                SERVO_SERVICE_RESULT_OK,
-           "GDW 2020 us must be accepted");
-    expect(servo_service_set_pwm(&service, SERVO_ID_REAR_RIGHT, 2021U) ==
+           "GDW temporary window 2220 us must be accepted");
+    expect(servo_service_set_pwm(&service, SERVO_ID_REAR_RIGHT, 2221U) ==
                SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "GDW 2021 us must be rejected");
+           "GDW temporary window 2221 us must be rejected");
     expect(servo_service_set_angle(&service, SERVO_ID_REAR_RIGHT, -4500) ==
                SERVO_SERVICE_RESULT_OK,
            "GDW -45 degrees must be accepted");
@@ -279,21 +305,36 @@ static void test_command_ranges_and_capabilities(void)
                SERVO_SERVICE_RESULT_OUT_OF_RANGE,
            "GDW above +45 degrees must be rejected");
 
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 499U) ==
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 1059U) ==
                SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "FrontAxis 499 us must be rejected");
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 500U) ==
+           "FrontAxis 1059 us must be rejected");
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 1060U) ==
                SERVO_SERVICE_RESULT_OK,
-           "FrontAxis 500 us must be accepted");
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 2500U) ==
+           "FrontAxis 1060 us must be accepted");
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 1745U) ==
                SERVO_SERVICE_RESULT_OK,
-           "FrontAxis 2500 us must be accepted");
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 2501U) ==
+           "FrontAxis 1745 us must be accepted");
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 2430U) ==
+               SERVO_SERVICE_RESULT_OK,
+           "FrontAxis 2430 us must be accepted");
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 2431U) ==
                SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "FrontAxis 2501 us must be rejected");
+           "FrontAxis 2431 us must be rejected");
+    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_AXIS, -9001) ==
+               SERVO_SERVICE_RESULT_OUT_OF_RANGE,
+           "FrontAxis below -90 degrees must be rejected");
+    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_AXIS, -9000) ==
+               SERVO_SERVICE_RESULT_OK,
+           "FrontAxis -90 degrees must be accepted");
     expect(servo_service_set_angle(&service, SERVO_ID_FRONT_AXIS, 0) ==
-               SERVO_SERVICE_RESULT_UNSUPPORTED_SERVO,
-           "FrontAxis SetAngle must remain unsupported");
+               SERVO_SERVICE_RESULT_OK,
+           "FrontAxis zero degrees must be accepted");
+    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_AXIS, 9000) ==
+               SERVO_SERVICE_RESULT_OK,
+           "FrontAxis +90 degrees must be accepted");
+    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_AXIS, 9001) ==
+               SERVO_SERVICE_RESULT_OUT_OF_RANGE,
+           "FrontAxis above +90 degrees must be rejected");
 }
 
 static void test_unenabled_and_invalid_commands(void)
@@ -333,6 +374,11 @@ static void test_neutral_disable_and_disable_all(void)
     expect(servo_service_neutral(&service, 0x001FU) ==
                SERVO_SERVICE_RESULT_OK,
            "Neutral should accept all enabled servos");
+    uint16_t front_axis_neutral_pulse = 0U;
+    expect(last_write_pulse(&driver, SERVO_ID_FRONT_AXIS,
+                            &front_axis_neutral_pulse) &&
+               front_axis_neutral_pulse == 1745U,
+           "FrontAxis Neutral must write 1745 us");
     expect(driver.write_calls >= 10U,
            "Neutral should write one pulse for each requested servo");
     expect(servo_service_disable(&service, 0x0002U) ==
