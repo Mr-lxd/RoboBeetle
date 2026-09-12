@@ -81,7 +81,7 @@ Once Disable is accepted and awaiting ACK, new PWM, Neutral, and Set Angle comma
 
 ## Separate electrical capability from the command exploration window
 
-The FrontAxis/Depth actuator is a bench actuator calibration: `1060 us = -90 degrees face down`, `1745 us = 0 degrees vertical paddling`, and `2430 us = +90 degrees face up`, with measured 180 degree sweep. Software PWM limits are `1060–2430 us`, software angle limits are `-90 to +90 degrees`, Neutral is `1745 us`, and Console `calibrationPending=false`. This actuator contract is separate from the ROVMAKER depth sensor and does not establish hydrodynamic optimization, installed trim, autonomous depth-control calibration, magnetic/yaw calibration, or final body-frame calibration. RearRight/RearLeft retain electrical calibration `520/1520/2520 us` and software angle range `±45 degrees`, while `820–2220 us` is only a temporary PWM exploration window; those temporary values are not final `±45 degrees` endpoint calibration and final rear calibration remains Pending.
+The pre-2026-09-12 observation of approximately `1100–2500 us` and angle-pending status is historical only; it is superseded by the current contract below. The FrontAxis/Depth actuator is a bench actuator calibration: `1060 us = -90 degrees face down`, `1745 us = 0 degrees vertical paddling`, and `2430 us = +90 degrees face up`, with measured 180 degree sweep. Software PWM limits are `1060–2430 us`, software angle limits are `-90 to +90 degrees`, Neutral is `1745 us`, and Console `calibrationPending=false`. This actuator contract is separate from the ROVMAKER depth sensor and does not establish hydrodynamic optimization, installed trim, autonomous depth-control calibration, magnetic/yaw calibration, or final body-frame calibration. RearRight/RearLeft retain electrical calibration `520/1520/2520 us` and software angle range `±45 degrees`, while `820–2220 us` is only a temporary PWM exploration window; those temporary values are not final `±45 degrees` endpoint calibration and final rear calibration remains Pending.
 
 ## Treat FrontAxis/Depth bench calibration as evidence-bounded
 
@@ -153,7 +153,7 @@ During single-channel bring-up, a known-good RearLeft actuator rotated on the Re
 
 ## Keep validation levels explicit
 
-Record each result as one of: `Host Test` (desktop unit/regression test), `ARM Build` (target compiler build), `Program Verify` (DAP/ST-LINK image verification), `Hardware Verified` (physical behavior explicitly observed), or `Pending` (not yet evidenced). The PR #8 Depth window expansion has a bench observation of approximately 1100–2500 μs travel and below-1100 μs ACK timeouts, but the command window, safe endpoints, practical center, and angle behavior remain Pending until the complete mechanical assembly is checked. Do not collapse these levels into a single “tested” label.
+Record each result as one of: `Host Test` (desktop unit/regression test), `ARM Build` (target compiler build), `Program Verify` (DAP/ST-LINK image verification), `Hardware Verified` (physical behavior explicitly observed), or `Pending` (not yet evidenced). The pre-2026-09-12 PR #8 Depth window expansion record is historical: it observed approximately 1100–2500 μs travel and below-1100 μs ACK timeouts, and its angle-pending/provisional-window wording is superseded by the current FrontAxis/Depth contract above. Do not collapse these levels into a single “tested” label.
 
 ## Record layout compatibility breaks explicitly
 

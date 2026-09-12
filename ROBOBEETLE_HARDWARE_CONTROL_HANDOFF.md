@@ -400,19 +400,19 @@ APC220 Half-Duplex Scheduler：**[Hardware Verified - Bench]**
 
 本轮仅完成当前桌面环境的 Hardware Verification；实验室水池边、距离、天线姿态和户外 RF characterization 尚未完成。490 ms 是 Console host-side/local safety admission budget，是本地调度准入策略，不是 Windows + RF hard-real-time guarantee。
 
-## 2026-09-07 Firmware modularization hardware acceptance
+## [Historical Reference] 2026-09-07 Firmware modularization hardware acceptance（PR #2–#6 old images）
 
-本节是当前 Firmware 结构和验收状态的权威摘要。PR #2 至 PR #6 均已完成 STM32CubeIDE 构建、ST-LINK 下载和对应实机回归；下方更早的审计/基线章节保留作为 Historical Reference，不代表当前 `main.c` 架构或未完成状态。
+本节仅是 PR #2 至 PR #6 old images 的历史证据，不是当前 Firmware 结构和验收状态的权威摘要。其 PR #3 Servo Service / Calibration 与 PR #6 App/Main 的 Hardware Verified 结论只适用于各自 old image；它们不验证当前 `feature/servo-calibration-depth-limits` branch image，也不改变本 feature 的 ARM Build、Program Verify、Hardware Verified = **[Pending]** 状态。下方更早的审计/基线章节继续保留作为 Historical Reference。
 
-### 当前模块状态
+### PR #2–#6 old-image historical module status
 
 - UART Transport / Ring Buffer — **[Hardware Verified]**（PR #2）
-- Servo Service / Calibration / STM32 Driver — **[Hardware Verified]**（PR #3）
+- Servo Service / Calibration / STM32 Driver — **[Historical Hardware Verified]**（PR #3 old image only；不验证当前 feature/branch image）
 - Safety Supervisor — **[Hardware Verified]**（PR #4）
 - Protocol Dispatcher — **[Hardware Verified]**（PR #5）
-- App/Main orchestration — **[Hardware Verified]**（PR #6）
+- App/Main orchestration — **[Historical Hardware Verified]**（PR #6 old image only；不验证当前 feature/branch image）
 
-PR #6 的 STM32CubeIDE Build、ST-LINK Download 和 Full physical regression 均 PASS。验收覆盖 cold boot/reset 后 Servo 不自动 Enable、Heartbeat、Enable/ACK、Neutral、Set Angle 0°/±10°/±45°/±90°、Set PWM 1520 us、Disable/Disable All、重新 Enable、Disconnect、严格超过 500 ms 的 safe disable、Reconnect 不自动 Enable、手动 Enable + ACK 恢复及第二次 Disconnect/Reconnect。
+PR #6 old image 的 STM32CubeIDE Build、ST-LINK Download 和 Full physical regression 均 PASS。验收覆盖 cold boot/reset 后 Servo 不自动 Enable、Heartbeat、Enable/ACK、Neutral、Set Angle 0°/±10°/±45°/±90°、Set PWM 1520 us、Disable/Disable All、重新 Enable、Disconnect、严格超过 500 ms 的 safe disable、Reconnect 不自动 Enable、手动 Enable + ACK 恢复及第二次 Disconnect/Reconnect；该 PASS 不验证当前 feature/branch image。
 
 ### 2026-09-07 pre-PR10 Firmware path（Historical Reference）
 
