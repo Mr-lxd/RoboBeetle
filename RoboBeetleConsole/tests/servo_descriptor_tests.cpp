@@ -37,7 +37,7 @@ void expectGdw(const rb::ServoDescriptor &descriptor)
     expect(descriptor.electricalMinPwmUs == 520 && descriptor.neutralPwmUs == 1520
                && descriptor.electricalMaxPwmUs == 2520,
            "GDW electrical calibration must match");
-    expect(descriptor.commandMinPwmUs == 1020 && descriptor.commandMaxPwmUs == 2020,
+    expect(descriptor.commandMinPwmUs == 820 && descriptor.commandMaxPwmUs == 2220,
            "GDW command envelope must match");
     expect(descriptor.commandMinAngleCdeg == -4500
                && descriptor.commandMaxAngleCdeg == 4500,
@@ -86,14 +86,18 @@ int main()
     expectSavoX(table[1]);
     expect(table[2].hardwareName == std::string_view("HDKJ S3150D"),
            "FrontAxis hardware name must match");
-    expect(!table[2].angleSupported && table[2].calibrationPending,
-           "FrontAxis must remain PWM-only and calibration pending");
-    expect(table[2].electricalMinPwmUs == 500 && table[2].neutralPwmUs == 1500
-               && table[2].electricalMaxPwmUs == 2500,
-           "FrontAxis electrical metadata must remain 500/1500/2500 us");
-    expect(table[2].commandMinPwmUs == 500 && table[2].commandMaxPwmUs == 2500
-               && table[2].neutralPwmUs == 1500,
-           "FrontAxis PWM bring-up envelope must match");
+    expect(table[2].angleSupported && !table[2].calibrationPending,
+           "FrontAxis must support calibrated angles and have calibration complete");
+    expect(table[2].electricalMinPwmUs == 1060 && table[2].neutralPwmUs == 1745
+               && table[2].electricalMaxPwmUs == 2430,
+           "FrontAxis electrical calibration must match 1060/1745/2430 us");
+    expect(table[2].electricalMinAngleCdeg == -9000
+               && table[2].electricalMaxAngleCdeg == 9000,
+           "FrontAxis calibration angle envelope must match +/-90 degrees");
+    expect(table[2].commandMinPwmUs == 1060 && table[2].commandMaxPwmUs == 2430
+               && table[2].commandMinAngleCdeg == -9000
+               && table[2].commandMaxAngleCdeg == 9000,
+           "FrontAxis command envelope must match calibrated limits");
     expectGdw(table[3]);
     expectGdw(table[4]);
 

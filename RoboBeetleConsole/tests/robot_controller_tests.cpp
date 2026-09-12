@@ -781,7 +781,7 @@ void testNeutralEncodingAndAck()
            "successful neutral ACK must be matched to its request");
 }
 
-void testFrontAxisIsPwmOnly()
+void testFrontAxisUsesCalibratedPwmAndAngles()
 {
     rb::FakeTransport transport;
     rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
@@ -791,24 +791,51 @@ void testFrontAxisIsPwmOnly()
     const rb::ServoDescriptor *descriptor = rb::servoDescriptor(rb::ServoId::FrontAxis);
     expect(descriptor != nullptr && descriptor->supported,
            "FrontAxis must be supported");
-    expect(descriptor != nullptr && !descriptor->angleSupported,
-           "FrontAxis must remain PWM-only");
+    expect(descriptor != nullptr && descriptor->angleSupported,
+           "FrontAxis must support calibrated angles");
+    expect(descriptor != nullptr && !descriptor->calibrationPending,
+           "FrontAxis calibration must not remain pending");
     expect(controller.enableServo(rb::ServoId::FrontAxis),
            "FrontAxis enable should be sent");
     acknowledgeLast(transport);
-    const qsizetype beforeAngle = transport.writes().size();
-    expect(!controller.setServoPwm(rb::ServoId::FrontAxis, 499),
-           "FrontAxis PWM below 500 us must be rejected");
-    expect(controller.setServoPwm(rb::ServoId::FrontAxis, 500),
-           "FrontAxis PWM 500 us must be accepted");
-    expect(controller.setServoPwm(rb::ServoId::FrontAxis, 2500),
-           "FrontAxis PWM 2500 us must be accepted");
-    expect(!controller.setServoPwm(rb::ServoId::FrontAxis, 2501),
-           "FrontAxis PWM above 2500 us must be rejected");
-    expect(!controller.setServoAngle(rb::ServoId::FrontAxis, 0),
-           "FrontAxis Set Angle must always be rejected");
-    expect(transport.writes().size() == beforeAngle + 2,
-           "FrontAxis angle rejection must not write a frame");
+    const qsizetype beforeCommands = transport.writes().size();
+    expect(!controller.setServoPwm(rb::ServoId::FrontAxis, 1059),
+           "FrontAxis PWM below 1060 us must be rejected");
+    expect(controller.setServoPwm(rb::ServoId::FrontAxis, 1060),
+           "FrontAxis PWM 1060 us must be accepted");
+    expect(lastPacket(transport).type == rb::MessageType::SetServoPwm
+               && lastPacket(transport).payload == QByteArray::fromHex("02002404"),
+           "FrontAxis PWM 1060 us must encode semantic ID 2 and little-endian pulse");
+    acknowledgeLast(transport);
+    expect(controller.setServoPwm(rb::ServoId::FrontAxis, 2430),
+           "FrontAxis PWM 2430 us must be accepted");
+    expect(lastPacket(transport).type == rb::MessageType::SetServoPwm
+               && lastPacket(transport).payload == QByteArray::fromHex("02007a09"),
+           "FrontAxis PWM 2430 us must encode semantic ID 2 and little-endian pulse");
+    acknowledgeLast(transport);
+    expect(!controller.setServoPwm(rb::ServoId::FrontAxis, 2431),
+           "FrontAxis PWM above 2430 us must be rejected");
+    expect(!controller.setServoAngle(rb::ServoId::FrontAxis, -9001),
+           "FrontAxis angle below -90 degrees must be rejected");
+    expect(controller.setServoAngle(rb::ServoId::FrontAxis, -9000),
+           "FrontAxis -90 degrees must be accepted");
+    expect(lastPacket(transport).type == rb::MessageType::SetServoAngle,
+           "FrontAxis -90 degrees must use SetServoAngle");
+    acknowledgeLast(transport);
+    expect(controller.setServoAngle(rb::ServoId::FrontAxis, 0),
+           "FrontAxis zero degrees must be accepted");
+    expect(lastPacket(transport).type == rb::MessageType::SetServoAngle,
+           "FrontAxis zero degrees must use SetServoAngle");
+    acknowledgeLast(transport);
+    expect(controller.setServoAngle(rb::ServoId::FrontAxis, 9000),
+           "FrontAxis +90 degrees must be accepted");
+    expect(lastPacket(transport).type == rb::MessageType::SetServoAngle,
+           "FrontAxis +90 degrees must use SetServoAngle");
+    acknowledgeLast(transport);
+    expect(!controller.setServoAngle(rb::ServoId::FrontAxis, 9001),
+           "FrontAxis angle above +90 degrees must be rejected");
+    expect(transport.writes().size() == beforeCommands + 5,
+           "FrontAxis rejected commands must not write frames");
 }
 
 void testSemanticServoCommandBoundaries()
@@ -824,9 +851,9 @@ void testSemanticServoCommandBoundaries()
     const BoundaryCase cases[] = {
         {rb::ServoId::FrontRight, 1050, 1950, -4500, 4500, true},
         {rb::ServoId::FrontLeft, 1050, 1950, -4500, 4500, true},
-        {rb::ServoId::FrontAxis, 500, 2500, 0, 0, false},
-        {rb::ServoId::RearRight, 1020, 2020, -4500, 4500, true},
-        {rb::ServoId::RearLeft, 1020, 2020, -4500, 4500, true},
+        {rb::ServoId::FrontAxis, 1060, 2430, -9000, 9000, true},
+        {rb::ServoId::RearRight, 820, 2220, -4500, 4500, true},
+        {rb::ServoId::RearLeft, 820, 2220, -4500, 4500, true},
     };
 
     for (const BoundaryCase &boundary : cases) {
@@ -2174,7 +2201,7 @@ int main(int argc, char **argv)
     testSetAngleEncodingAndBounds();
     testDisconnectAttemptsDisableAll();
     testNeutralEncodingAndAck();
-    testFrontAxisIsPwmOnly();
+    testFrontAxisUsesCalibratedPwmAndAngles();
     testSemanticServoCommandBoundaries();
     testAckRejectionAndMatching();
     testRetryReusesIdenticalSequenceAndFrame();
