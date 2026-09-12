@@ -292,7 +292,7 @@ Protocol V2/USART1/JY901S/Leak 路径保持原边界。
 范围：旧记录中的 Depth 是舵机语义/机械标定；本节的 Depth Sensor 是新的
 ROVMAKER 串口传感器输入。两者不共享硬件验证结论。
 
-## 2026-09-12 Servo calibration and software-limit update（PR #8）
+## 2026-09-12 Servo calibration and software-limit update（PR #13）
 
 ### 当前状态
 
