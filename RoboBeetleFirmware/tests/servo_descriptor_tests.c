@@ -80,8 +80,8 @@ static void test_descriptor_table(void)
     expect(table[SERVO_ID_FRONT_RIGHT].channel == SERVO_CHANNEL_1,
            "FrontRight channel differs");
     expect_calibration(&table[SERVO_ID_FRONT_RIGHT],
-                       1000U, 1500U, 2000U, -5000, 5000,
-                       1050U, 1950U, -4500, 4500);
+                       1000U, 1450U, 1900U, -4500, 4500,
+                       1000U, 1900U, -4500, 4500);
 
     expect(table[SERVO_ID_FRONT_LEFT].id == SERVO_ID_FRONT_LEFT,
            "FrontLeft row ID differs");
@@ -96,8 +96,8 @@ static void test_descriptor_table(void)
     expect(table[SERVO_ID_FRONT_LEFT].channel == SERVO_CHANNEL_2,
            "FrontLeft channel differs");
     expect_calibration(&table[SERVO_ID_FRONT_LEFT],
-                       1000U, 1500U, 2000U, -5000, 5000,
-                       1050U, 1950U, -4500, 4500);
+                       2020U, 1580U, 1140U, -4500, 4500,
+                       1140U, 2020U, -4500, 4500);
 
     expect(table[SERVO_ID_FRONT_AXIS].id == SERVO_ID_FRONT_AXIS,
            "FrontAxis row ID differs");
@@ -128,8 +128,8 @@ static void test_descriptor_table(void)
     expect(table[SERVO_ID_REAR_RIGHT].channel == SERVO_CHANNEL_1,
            "RearRight channel differs");
     expect_calibration(&table[SERVO_ID_REAR_RIGHT],
-                       520U, 1520U, 2520U, -9000, 9000,
-                       820U, 2220U, -4500, 4500);
+                       1110U, 1570U, 2030U, -4500, 4500,
+                       1110U, 2030U, -4500, 4500);
 
     expect(table[SERVO_ID_REAR_LEFT].id == SERVO_ID_REAR_LEFT,
            "RearLeft row ID differs");
@@ -144,8 +144,8 @@ static void test_descriptor_table(void)
     expect(table[SERVO_ID_REAR_LEFT].channel == SERVO_CHANNEL_2,
            "RearLeft channel differs");
     expect_calibration(&table[SERVO_ID_REAR_LEFT],
-                       520U, 1520U, 2520U, -9000, 9000,
-                       820U, 2220U, -4500, 4500);
+                       1940U, 1450U, 960U, -4500, 4500,
+                       960U, 1940U, -4500, 4500);
 
     expect(servo_descriptor_for_id(SERVO_ID_FRONT_RIGHT) ==
                &table[SERVO_ID_FRONT_RIGHT],
