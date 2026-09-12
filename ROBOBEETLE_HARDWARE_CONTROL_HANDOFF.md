@@ -292,29 +292,40 @@ Protocol V2/USART1/JY901S/Leak 路径保持原边界。
 范围：旧记录中的 Depth 是舵机语义/机械标定；本节的 Depth Sensor 是新的
 ROVMAKER 串口传感器输入。两者不共享硬件验证结论。
 
-## 2026-09-09 Depth PWM calibration window follow-up（PR #8）
+## 2026-09-12 Servo calibration and software-limit update（PR #8）
 
 ### 当前状态
 
-本轮只扩大 `FrontAxis`/Depth 的 PWM-only command envelope；Firmware 与 Qt 两张独立 descriptor table 现在均为 `500–2500 μs`。卖家/电气能力元数据仍为 `500/1500/2500 μs`，只用于描述舵机的电气/绝对能力，不代表最终机械安全范围。`1500 μs` 仍是 provisional bring-up center candidate，不是 true mechanical center 或已标定 Neutral；`angle_supported=false` 保持不变，Depth Set Angle 仍不可用。当前台架观察到约 `1100–2500 μs` 可产生约 180° 的机构翻转，低于约 `1100 μs` 的命令容易出现 ACK timeout，因此当前暂不继续向下探测；完整机械装配完成前，最终 safe min/max、practical center 和 angle mapping 均延期。用户界面显示名固定为 ASCII `FrontRight`、`FrontLeft`、`Depth`、`RearRight`、`RearLeft`；内部 `FrontAxis` 标识不变。
+本轮冻结的是 `FrontAxis`/用户界面 `Depth` 的 bench actuator calibration，不是单独的 ROVMAKER depth sensor。`FrontAxis/Depth` is a bench actuator calibration: `1060 us = -90 degrees face down`, `1745 us = 0 degrees vertical paddling`, `2430 us = +90 degrees face up`; measured 180 degree sweep. Software PWM command limits are `1060–2430 us`; software angle limits are `-90 to +90 degrees`; Neutral is `1745 us`; Console `calibrationPending` is `false`。这组事实不代表 hydrodynamic optimization、installed trim、autonomous depth-control calibration、magnetic/yaw calibration 或 final body-frame calibration。
 
-既有硬件事实保持不变：
+`RearRight`/`RearLeft` 只开放 temporary PWM exploration window `820–2220 us`；两者仍保留 electrical calibration `520/1520/2520 us` 和 software angle range `±45 degrees`。`820/2220 us` 不是 final `±45 degrees` endpoint calibration，final rear calibration remains **[Pending]**。`FrontRight`/`FrontLeft` unchanged。Firmware 与 Console 两张独立 descriptor table 必须保持上述值一致。
+
+既有硬件事实保持不变（以下来自既有记录，不是本 feature 新 Firmware image 的 ARM Build、Program Verify 或 Hardware Verified 证据）：
 
 - `FrontRight`：**[Hardware Verified]**；
 - `FrontLeft`：**[Hardware Verified]**；
 - `RearLeft`：**[Hardware Verified]**；
 - `RearRight` STM32/A12 PWM output path：**[Hardware Verified]**；原 RearRight servo actuator/线束为 hardware fault，计划更换，不属于 Firmware bug。
-- Depth 在 `1480/1500/1520 μs` 的运动方向：**[Hardware Verified]**（PWM 减小 → front A 上翻，PWM 增大 → front A 下翻）。
+- Depth 在 `1480/1500/1520 μs` 的既有台架运动方向观察（PWM 减小 → front A 上翻，PWM 增大 → front A 下翻）不覆盖本轮新标定或新 Firmware image 验证。
 
-本次新增开放的 `500–2500 μs` 全行程、机械端点、safe min/max、practical center、PWM-to-angle calibration 和 angle control 均为 **[Pending Hardware Verification]**；该窗口是 endpoint exploration window，不是最终 mechanically safe endpoints。当前台架的约 `1100–2500 μs` 机构翻转观察和低于约 `1100 μs` 的 ACK timeout 现象属于新实测记录，不构成最终机械端点标定，也不授权继续探测更低脉宽。`1500 μs` 仍不是最终机械中心。本环境记录纯 C Host Test 与 Firmware ARM Build；Program Verify 和本轮新窗口的 Hardware Verification 不在本次会话中宣称通过。
+用户提供的上述脉宽/姿态/行程测量证据等级是 **[Bench Hardware Calibrated]**。本 feature 的新 Firmware image 没有独立的 ARM Build、Program Verify 或 Hardware Verified 证据；因此三项均保持 **[Pending]**。不得把既有 PR 或旧 image 的 PASS 复制到本 feature 状态；Host Test、ARM Build、Program Verify、Hardware Verified 和 Bench Hardware Calibrated 仍是不同证据类别。
 
-### 下一轮 Depth 实机计划
+### 下一轮 FrontAxis/Depth 执行器验证计划
 
-仅连接 Depth，机构卸载并脱开舵盘/连杆。基于当前约 `1100–2500 μs` 台架观察和低于约 `1100 μs` 的 ACK timeout，当前不要继续探测低于约 `1100 μs` 的命令。后续完整机械装配后的安全计划应从 `1500 μs` 开始，在确认不顶死且保留 margin 的前提下逐步探索；必须记录 ACK、平稳性、机械干涉、持续嗡鸣、停止运动、连杆受力和发热。最终安全端点须在真实机械硬限位内保留 margin；1500 μs 仍仅为 provisional bring-up center，不是最终机械中心。
+后续目标验证必须使用本 feature 对应的新 Firmware image：先完成 ARM Build，再 Program Verify，最后在台架 exercise `-90/0/+90 degrees`、`1060/1745/2430 us` 以及 Neutral `1745 us`。在这些步骤有独立记录前，不能将软件限位、角度动作或 Neutral 标为 Hardware Verified。该验证只针对 FrontAxis/Depth 执行器，不是 ROVMAKER 深度传感器，也不覆盖 hydrodynamics、installed trim、autonomous depth control、magnetic/yaw 或 final body-frame calibration。
 
 ### 验证分层与烧录提醒
 
-`Host Test`、`ARM Build`、`Program Verify`、`Hardware Verified`、`Pending` 是不同证据层级，不能用笼统的 “tested” 互相替代。已验证的 DAP/OpenOCD 稳定流程为 `SWD clock 100 kHz → SYSRESETREQ → halt → program → verify`；若烧录后 UART 异常，先完整断电再上电，不加入软件 workaround。
+`Host Test`、`ARM Build`、`Program Verify`、`Hardware Verified`、`Bench Hardware Calibrated`、`Pending` 是不同证据层级，不能用笼统的 “tested” 互相替代。当前 feature evidence matrix：
+
+| 项目 | 状态 |
+|---|---|
+| User-provided / bench actuator measurements | **Bench Hardware Calibrated** |
+| This feature's new Firmware image — ARM Build | **Pending** |
+| This feature's new Firmware image — Program Verify | **Pending** |
+| This feature's new Firmware image — Hardware Verified | **Pending** |
+
+已验证的 DAP/OpenOCD 稳定流程为 `SWD clock 100 kHz → SYSRESETREQ → halt → program → verify`；若烧录后 UART 异常，先完整断电再上电，不加入软件 workaround。
 
 ## 2026-09-08 五舵机语义 descriptor bring-up（PR #8，待实机验收）
 
@@ -326,11 +337,11 @@ PR #8 将 Firmware 与 Qt 各自维护的 descriptor table 冻结为同一组五
 |---:|---|---|---|
 | `0` / `0x0001` | `FrontRight` | SAVOX SW-0250MG+，TIM3_CH1 / PA6 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
 | `1` / `0x0002` | `FrontLeft` | SAVOX SW-0250MG+，TIM3_CH2 / PA7 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
-| `2` / `0x0004` | `Depth` (`FrontAxis` internal ID) | HDKJ S3150D，TIM3_CH3 / PB0 | 电气 500/1500/2500 μs；命令仅 500–2500 μs；Set Angle disabled；`Calibration Pending` |
-| `3` / `0x0008` | `RearRight` | GDW IPX896HV，TIM4_CH1 / PD12 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
-| `4` / `0x0010` | `RearLeft` | GDW IPX896HV，TIM4_CH2 / PD13 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
+| `2` / `0x0004` | `Depth` (`FrontAxis` internal ID) | HDKJ S3150D，TIM3_CH3 / PB0 | Bench calibration 1060/1745/2430 μs；software PWM 1060–2430 μs；software angle −90…+90°；Neutral 1745 μs；Console `calibrationPending=false` |
+| `3` / `0x0008` | `RearRight` | GDW IPX896HV，TIM4_CH1 / PD12 | Temporary PWM exploration 820–2220 μs；software angle −45…+45°；electrical calibration 520/1520/2520 μs |
+| `4` / `0x0010` | `RearLeft` | GDW IPX896HV，TIM4_CH2 / PD13 | Temporary PWM exploration 820–2220 μs；software angle −45…+45°；electrical calibration 520/1520/2520 μs |
 
-TIM3/TIM4 当前均约 333 Hz、1 μs tick（PSC=15、ARR=3002）。FrontAxis 卖家参数记录为 500–2500 μs、中心候选 1500 μs、工作电压 4.8–7.4 V、可控行程 0–270°、死区 4 μs；这些是电气/绝对能力元数据，当前用户命令窗口为 provisional 500–2500 μs endpoint exploration，并非最终机械安全端点。1500 μs 只是 provisional startup/center candidate，不是 calibrated Neutral，也不是 Hardware Verified；扩展窗口的完整端点验收仍 Pending。卖家参数页写“是否防水：否”，商品照片/壳体却标示“Water proof Robot Servo”，因此 Waterproof capability = **[Unverified]**，在获得可靠 IP/密封证据前不得声明或安排直接浸水。
+TIM3/TIM4 当前均约 333 Hz、1 μs tick（PSC=15、ARR=3002）。`FrontAxis/Depth` 的 bench actuator calibration 是 `1060 us = -90 degrees face down`、`1745 us = 0 degrees vertical paddling`、`2430 us = +90 degrees face up`，measured 180 degree sweep；software PWM command limits 为 `1060–2430 us`，software angle limits 为 `-90 to +90 degrees`，Neutral 为 `1745 us`，Console `calibrationPending=false`。这不是 ROVMAKER depth sensor 的 calibration，也不代表 hydrodynamic optimization、installed trim、autonomous depth-control calibration、magnetic/yaw calibration 或 final body-frame calibration。RearRight/RearLeft 的 `820–2220 us` 仅是 temporary PWM exploration window，不是 final `±45 degrees` endpoint calibration；`520/1520/2520 us` electrical calibration、`±45 degrees` software angle range 保持不变，final rear calibration remains **[Pending]**。FrontRight/FrontLeft unchanged。卖家参数页写“是否防水：否”，商品照片/壳体却标示“Water proof Robot Servo”，因此 Waterproof capability = **[Unverified]**，在获得可靠 IP/密封证据前不得声明或安排直接浸水。
 
 多 bit Enable 采用 all-or-nothing：调用前已 enabled 的 requested channel 完全跳过，不产生 write/start/stop；任一新 channel start 失败时只 stop 本次 newly started channel，并保持调用前 logical/physical state。Console 中 pending Disable 是 motion-command barrier：受影响舵机的 PWM、Neutral、Set Angle 在 Controller 层即被拒绝，不写帧、不进入当前 Protocol V2 host-link queue；Disable Error/timeout 不会释放 Disable 之后的 stale motion。
 

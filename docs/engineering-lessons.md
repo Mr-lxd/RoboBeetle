@@ -10,7 +10,7 @@ If OpenOCD reports a target-side Flash algorithm failure, treat that as a progra
 
 ## Host verification cannot replace the ARM target build
 
-Host-side pure-C tests and syntax checks can pass while the STM32CubeIDE `arm-none-eabi-gcc` build fails. Transitive includes differ between toolchains and can hide a missing direct standard-header dependency; each translation unit must include the standard header that defines the symbols it uses. The STM32CubeIDE target build captured the missing `<stddef.h>` dependency for `NULL` in `servo_calibration.c`, which host checks had not exposed.
+Host compiler success does not guarantee target translation-unit portability or hardware verification. Host-side pure-C tests and syntax checks can pass while the STM32CubeIDE `arm-none-eabi-gcc` build fails, and neither host result proves that an image was programmed or exercised. Transitive includes differ between toolchains and can hide a missing direct standard-header dependency; each translation unit must include the standard header that defines the symbols it uses. The STM32CubeIDE target build captured the missing `<stddef.h>` dependency for `NULL` in `servo_calibration.c`, which host checks had not exposed.
 
 Treat this as an implementation and review checklist item: do not rely on
 transitive includes for standard-library symbols or types. Every C translation
@@ -69,7 +69,7 @@ Budget the complete exchange, not just MCU handler time: host serialization, DAP
 
 ## Keep descriptor tables independent at a C/C++ boundary
 
-The five-servo bring-up keeps a pure-C Firmware `servo_descriptor` table and an independent Qt/C++ table. Both freeze `FrontRight=0`, `FrontLeft=1`, `FrontAxis=2`, `RearRight=3`, `RearLeft=4`, and supported mask `0x001F`, while separate tests compare the capability and calibration contract. This avoids coupling HAL headers to Qt and makes descriptor drift a visible test failure. HAL timer/channel constants belong only in `servo_driver_stm32`, which maps abstract selectors to `TIM_HandleTypeDef *` and HAL channels.
+The five-servo bring-up keeps a pure-C Firmware `servo_descriptor` table and an independent Qt/C++ table. Keep both tables in parity: compare IDs, supported mask, capability, calibration, neutral, software PWM limits, software angle limits, and Console `calibrationPending` state. This avoids coupling HAL headers to Qt and makes descriptor drift a visible test failure. HAL timer/channel constants belong only in `servo_driver_stm32`, which maps abstract selectors to `TIM_HandleTypeDef *` and HAL channels.
 
 ## Multi-servo Enable must be transactional
 
@@ -81,11 +81,11 @@ Once Disable is accepted and awaiting ACK, new PWM, Neutral, and Set Angle comma
 
 ## Separate electrical capability from the command exploration window
 
-The HDKJ S3150D seller values `500/1500/2500 μs` describe electrical/absolute capability metadata. They do not by themselves establish a final mechanical-safe user command range. The PR #8 follow-up keeps Firmware and Qt descriptors aligned at a provisional `500–2500 μs` PWM-only endpoint-exploration window. This window is **[Pending Hardware Verification]**, not the final mechanically safe endpoint range. The current bench observation was approximately `1100–2500 μs` for approximately 180 degrees of mechanism travel; commands below approximately `1100 μs` tended to cause ACK timeouts, so further probing below approximately `1100 μs` is paused. Final mechanical safe min/max, practical center, and angle mapping remain deferred until the complete mechanical assembly is installed. `1500 μs` remains a provisional bring-up center candidate, not a true mechanical center or calibrated Neutral; `angle_supported=false` and Set Angle rejection remain unchanged. Only the supplied `1480/1500/1520 μs` direction observation is **[Hardware Verified]**. Full travel, safe endpoints, practical center, and angle mapping remain **[Pending Hardware Verification]** and must be checked with the assembled mechanism and explicit safety margin.
+The FrontAxis/Depth actuator is a bench actuator calibration: `1060 us = -90 degrees face down`, `1745 us = 0 degrees vertical paddling`, and `2430 us = +90 degrees face up`, with measured 180 degree sweep. Software PWM limits are `1060–2430 us`, software angle limits are `-90 to +90 degrees`, Neutral is `1745 us`, and Console `calibrationPending=false`. This actuator contract is separate from the ROVMAKER depth sensor and does not establish hydrodynamic optimization, installed trim, autonomous depth-control calibration, magnetic/yaw calibration, or final body-frame calibration. RearRight/RearLeft retain electrical calibration `520/1520/2520 us` and software angle range `±45 degrees`, while `820–2220 us` is only a temporary PWM exploration window; those temporary values are not final `±45 degrees` endpoint calibration and final rear calibration remains Pending.
 
-## Treat FrontAxis center as a bring-up candidate, not calibration
+## Treat FrontAxis/Depth bench calibration as evidence-bounded
 
-The HDKJ S3150D FrontAxis descriptor separates seller-provided electrical capability (500/1500/2500 μs, 4.8–7.4 V, 0–270° travel, 4 μs dead band) from the provisional 500–2500 μs bring-up command envelope. It remains SetAngle-disabled, and 1500 μs is only a provisional startup/center candidate. The supplied 1480/1500/1520 direction observation is Hardware Verified; the approximately 1100–2500 μs bench travel observation, expanded window, and endpoint calibration are not. Commands below approximately 1100 μs tended to cause ACK timeouts and should not be probed further for now. Final safe endpoints and practical center require the complete mechanical assembly and explicit margin. The seller page also conflicts with the product shell/photo on waterproofing, so waterproof capability remains **[Unverified]** and direct immersion is prohibited until reliable IP/sealing evidence is available.
+The user-provided/bench measurements are **[Bench Hardware Calibrated]** only. The new feature Firmware image remains **[Pending]** for ARM Build, Program Verify, and Hardware Verified until independently built, programmed, and exercised; prior PR or old-image PASS does not transfer. Do not turn this actuator calibration into a hydrodynamic, installed-trim, autonomous-depth-control, magnetic/yaw, or final body-frame claim. Waterproof capability remains **[Unverified]** and direct immersion is prohibited until reliable IP/sealing evidence is available.
 
 ## Start sensor bring-up with the smallest digital path
 

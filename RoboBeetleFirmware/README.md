@@ -1,6 +1,6 @@
 # RoboBeetleFirmware
 
-RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for the Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, and the PR #11 low-rate JY901S telemetry path. This README records the merged hardware-verified modularization baseline, the PR #8 Servo/Depth bench findings, the PR #9 leak-status hardware acceptance, and the PR #10/PR #11 JY901S evidence boundaries. The JY901S physical receive and end-to-end monitoring path are now hardware verified; USART3 UART/checksum physical-link quality, body-frame mapping, final magnetic/yaw calibration, and Depth endpoint calibration remain pending.
+RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for the Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, and the PR #11 low-rate JY901S telemetry path. This README records the merged hardware-verified modularization baseline, the PR #8 Servo/Depth bench findings, the PR #9 leak-status hardware acceptance, and the PR #10/PR #11 JY901S evidence boundaries. The JY901S physical receive and end-to-end monitoring path are now hardware verified; the new FrontAxis/Depth actuator values are bench-calibrated but this feature image's ARM Build, Program Verify, and Hardware Verified evidence remain pending; separate ROVMAKER depth-sensor calibration, USART3 UART/checksum physical-link quality, body-frame mapping, and final magnetic/yaw calibration remain pending.
 
 The recent Servo, LeakStatus, and JY901S hardware runs used the wired DAP UART/COM13 host path above. APC220 is an earlier/legacy transport record, was not enabled in those runs, and is not current JY901S or PR #11 hardware evidence.
 
@@ -9,6 +9,7 @@ The recent Servo, LeakStatus, and JY901S hardware runs used the wired DAP UART/C
 - **[Implemented]** Confirmed in current source or active `.ioc`.
 - **[Implemented / Software Verified]** Confirmed in current source and host-side software checks; this label does not claim target hardware execution.
 - **[Hardware Verified]** Reported in the current development record; source alone cannot prove physical execution.
+- **[Bench Hardware Calibrated]** User-provided or bench actuator measurements; this does not prove the current Firmware image was built, programmed, or exercised.
 - **[Provisional]** Bring-up values or incomplete calibration.
 - **[Planned]** Recommended future work, not current behavior.
 - **[Historical Reference]** Old F407ZE, STM32, Simulink, CPG, paper, slide, or resource-tree material that is not the current firmware.
@@ -23,15 +24,15 @@ The current implementation freezes five semantic IDs and the supported mask at `
 |---:|---|---|---|
 | `0` / `0x0001` | `FrontRight` | SAVOX SW-0250MG+, TIM3_CH1 / PA6 | PWM 1050–1950 μs; angle −45…+45°; electrical 1000/1500/2000 μs |
 | `1` / `0x0002` | `FrontLeft` | SAVOX SW-0250MG+, TIM3_CH2 / PA7 | PWM 1050–1950 μs; angle −45…+45°; electrical 1000/1500/2000 μs |
-| `2` / `0x0004` | `Depth` (`FrontAxis` internal ID) | HDKJ S3150D, TIM3_CH3 / PB0 | Electrical metadata 500/1500/2500 μs; PWM command envelope 500–2500 μs; angle disabled; 1500 μs is provisional |
-| `3` / `0x0008` | `RearRight` | GDW IPX896HV, TIM4_CH1 / PD12 | PWM 1020–2020 μs; angle −45…+45°; electrical 520/1520/2520 μs |
-| `4` / `0x0010` | `RearLeft` | GDW IPX896HV, TIM4_CH2 / PD13 | PWM 1020–2020 μs; angle −45…+45°; electrical 520/1520/2520 μs |
+| `2` / `0x0004` | `Depth` (`FrontAxis` internal ID) | HDKJ S3150D, TIM3_CH3 / PB0 | Bench calibration 1060/1745/2430 μs; software PWM 1060–2430 μs; software angle −90…+90°; Neutral 1745 μs; Console `calibrationPending=false` |
+| `3` / `0x0008` | `RearRight` | GDW IPX896HV, TIM4_CH1 / PD12 | Temporary PWM exploration 820–2220 μs; software angle −45…+45°; electrical calibration 520/1520/2520 μs |
+| `4` / `0x0010` | `RearLeft` | GDW IPX896HV, TIM4_CH2 / PD13 | Temporary PWM exploration 820–2220 μs; software angle −45…+45°; electrical calibration 520/1520/2520 μs |
 
 TIM3 and TIM4 run at approximately 333 Hz with a 1 μs tick (PSC=15, ARR=3002). `servo_descriptor` is pure C and HAL-independent: it stores abstract timer/channel selectors, never `TIM_CHANNEL_x` constants. `servo_driver_stm32` is the only layer that maps those selectors to `TIM_HandleTypeDef *` and HAL channel values.
 
-`FrontAxis` calibration is **[Calibration Pending]**. Seller-provided electrical metadata is 500–2500 μs pulse width, 1500 μs center candidate, 4.8–7.4 V operating voltage, 0–270° controllable travel, and 4 μs dead band. These values describe electrical/absolute capability metadata; they do not by themselves establish a final mechanically safe command range. The matching Firmware/Qt command envelope is the provisional 500–2500 μs PWM-only endpoint-exploration window. This `500–2500 μs` window is **[Pending Hardware Verification]**, not the final mechanically safe endpoint range. On the current bench, approximately 1100–2500 μs produced approximately the intended 180-degree mechanism travel, while commands below approximately 1100 μs tended to cause ACK timeouts; do not continue probing below approximately 1100 μs for now. Final mechanical safe min/max, practical center, and angle mapping remain deferred until the complete mechanical assembly is installed. The supplied 1480/1500/1520 direction check is Hardware Verified, but 1500 μs remains only a provisional bring-up center candidate, not the final mechanical center. Set Angle is intentionally rejected for this actuator. User-facing labels use exact ASCII names (`FrontRight`, `FrontLeft`, `Depth`, `RearRight`, `RearLeft`) while `FrontAxis` remains an internal identifier. Waterproof capability is **[Unverified]**: the seller parameter page says “not waterproof,” while the product photo/shell says “Water proof Robot Servo.” Do not claim or test direct immersion without reliable IP/sealing evidence.
+`FrontAxis/Depth` is a **[Bench Hardware Calibrated]** actuator calibration: `1060 us = -90 degrees face down`, `1745 us = 0 degrees vertical paddling`, and `2430 us = +90 degrees face up`; measured 180 degree sweep. Software PWM command limits are `1060–2430 us`; software angle limits are `-90 to +90 degrees`; Neutral is `1745 us`; Console `calibrationPending` is `false`. This is the bench actuator, not the separate ROVMAKER depth sensor. It does not establish hydrodynamic optimization, installed trim, autonomous depth-control calibration, magnetic/yaw calibration, or final body-frame calibration. The Firmware and Console descriptor tables must retain these values together. FrontRight and FrontLeft are unchanged. Waterproof capability is **[Unverified]**: the seller parameter page says “not waterproof,” while the product photo/shell says “Water proof Robot Servo.” Do not claim or test direct immersion without reliable IP/sealing evidence.
 
-Current supplied bring-up evidence keeps `FrontRight`, `FrontLeft`, and `RearLeft` **[Hardware Verified]**; the `RearRight` STM32/A12 PWM path is **[Hardware Verified]**, while the original RearRight actuator/lead is a hardware fault scheduled for replacement. Depth direction at 1480/1500/1520 μs is **[Hardware Verified]** only; the observed approximately 1100–2500 μs bench travel and the expanded 500–2500 μs endpoint-exploration window remain **[Pending Hardware Verification]**. Commands below approximately 1100 μs are not to be probed further in the current setup.
+The user-provided FrontAxis/Depth measurements are **[Bench Hardware Calibrated]**. This feature's new Firmware image has not been independently ARM-built, programmed/verified, or exercised on hardware here, so **ARM Build**, **Program Verify**, and **Hardware Verified** remain **[Pending]**. Do not copy prior PR or old-image PASS into this feature status. RearRight and RearLeft expose only the temporary `820–2220 us` PWM exploration window; their `520/1520/2520 us` electrical calibration and `±45 degrees` software angle range remain, but `820/2220 us` are not final `±45 degrees` endpoint calibration and final rear calibration remains **[Pending]**. FrontRight and FrontLeft are unchanged.
 
 Enable accepts a multi-bit mask only with all-or-nothing semantics. Requested channels already present in the pre-call enabled mask are idempotent and receive no pulse write, start, or stop. If any newly requested channel fails to start, only channels newly started by that call are stopped and the pre-call enabled state—including the physical pulse of an already-running channel—is preserved. Disable and Disable All retain fail-closed/best-effort stop behavior.
 
@@ -414,7 +415,7 @@ main-loop ACK generation / UART TX
 servo_service → servo_driver_stm32
         ├─ TIM3_CH1 / PA6 → FrontRight
         ├─ TIM3_CH2 / PA7 → FrontLeft
-        ├─ TIM3_CH3 / PB0 → FrontAxis (PWM-only)
+        ├─ TIM3_CH3 / PB0 → FrontAxis (calibrated PWM/angle)
         ├─ TIM4_CH1 / PD12 → RearRight
         └─ TIM4_CH2 / PD13 → RearLeft
 ```
@@ -477,7 +478,7 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 - Heartbeat, ACK, semantic five-servo Enable/Disable, and per-descriptor Set PWM agree with the Console.
 - Error is declared but never sent by Firmware.
 - Neutral validates liveness/mask/enabled state, writes each descriptor's neutral pulse, and leaves the selected channels enabled.
-- Set Angle is available only for the four calibrated SAVOX/GDW angle-capable descriptors; FrontAxis is PWM-only. Each angle is range-checked and mapped with `int32_t` intermediates.
+- Set Angle is available for all five calibrated angle-capable descriptors, including FrontAxis/Depth with software limits `-90 to +90 degrees`; each angle is range-checked and mapped with `int32_t` intermediates.
 - LeakStatus `0x20` is a one-byte, unacknowledged monitoring frame (`UNKNOWN=0`, `DRY=1`, `WET=2`). Firmware sends it only after an accepted Heartbeat and completed ACK transmission, on first sample/state change or a 500 ms refresh; it has an independent telemetry sequence and does not trigger Safety or Servo actions.
 - ImuSnapshot `0x21` is a fixed 56-byte, unacknowledged monitoring frame. Firmware sends it only after an accepted Heartbeat ACK has completed, at most once per one-second policy interval, with due LeakStatus priority and fair rotation against a due DepthSnapshot when LeakStatus is not due. It uses the independent telemetry sequence and carries explicit little-endian fixed-point Acc/Gyro/Angle values plus JY901S diagnostics; it does not trigger Safety, Servo, or JY901S configuration actions.
 - ACK result values are frozen as `OK=0`, `InvalidPayload=1`, `HostNotAlive=2`, `UnsupportedServo=3`, `ServoNotEnabled=4`, `OutOfRange=5`, and `HardwareFailure=6`.
