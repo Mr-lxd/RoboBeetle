@@ -296,9 +296,18 @@ ROVMAKER 串口传感器输入。两者不共享硬件验证结论。
 
 ### 当前状态
 
-本轮冻结的是 `FrontAxis`/用户界面 `Depth` 的 bench actuator calibration，不是单独的 ROVMAKER depth sensor。`FrontAxis/Depth` is a bench actuator calibration: `1060 us = -90 degrees face down`, `1745 us = 0 degrees vertical paddling`, `2430 us = +90 degrees face up`; measured 180 degree sweep. Software PWM command limits are `1060–2430 us`; software angle limits are `-90 to +90 degrees`; Neutral is `1745 us`; Console `calibrationPending` is `false`。这组事实不代表 hydrodynamic optimization、installed trim、autonomous depth-control calibration、magnetic/yaw calibration 或 final body-frame calibration。
+本轮冻结四个划水舵机统一的 logical joint angle convention：`0 degrees = mechanical neutral`；`+45 degrees = paddle 往后拨，产生前进推进方向`；`-45 degrees = 相反方向`。未来 gait/CPG 只输出 logical angle；左右镜像与 PWM 增减方向由 Servo calibration 层处理。该 contract 不涉及 CPG、gait 或 motion command 实现。
 
-`RearRight`/`RearLeft` 只开放 temporary PWM exploration window `820–2220 us`；两者仍保留 electrical calibration `520/1520/2520 us` 和 software angle range `±45 degrees`。`820/2220 us` 不是 final `±45 degrees` endpoint calibration，final rear calibration remains **[Pending]**。`FrontRight`/`FrontLeft` unchanged。Firmware 与 Console 两张独立 descriptor table 必须保持上述值一致。
+| Servo | -45 deg / -4500 cdeg | 0 deg / Neutral | +45 deg / +4500 cdeg | raw PWM command limits | evidence |
+|---|---:|---:|---:|---:|---|
+| `FrontRight` | `1000 us` — **[Symmetry-Derived / User Accepted]** | `1450 us` — **[Bench Measured]** | `1900 us` — **[Bench Measured]** | `1000–1900 us` | final paddle descriptor |
+| `FrontLeft` | `2020 us` — **[Symmetry-Derived / User Accepted]** | `1580 us` — **[Bench Measured]** | `1140 us` — **[Bench Measured]** | `1140–2020 us` | final paddle descriptor; PWM decreases with positive logical angle |
+| `RearRight` | `1110 us` — **[Bench Hardware Verified]** | `1570 us` — **[Bench Hardware Verified]** | `2030 us` — **[Bench Hardware Verified]** | `1110–2030 us` | final paddle descriptor |
+| `RearLeft` | `1940 us` — **[Bench Hardware Verified]** | `1450 us` — **[Bench Hardware Verified]** | `960 us` — **[Bench Hardware Verified]** | `960–1940 us` | final paddle descriptor; PWM decreases with positive logical angle |
+
+`FrontAxis`/用户界面 `Depth` 保持 PR #13 已批准的独立 actuator calibration，不是单独的 ROVMAKER depth sensor：`1060 us = -90 degrees face down`, `1745 us = 0 degrees vertical paddling`, `2430 us = +90 degrees face up`; measured 180 degree sweep. Software PWM command limits are `1060–2430 us`; software angle limits are `-90 to +90 degrees`; Neutral is `1745 us`; Console `calibrationPending` is `false`。这组事实不代表 hydrodynamic optimization、installed trim、autonomous depth-control calibration、magnetic/yaw calibration 或 final body-frame calibration。
+
+Firmware 与 Console 两张独立 descriptor table 必须完全一致。对于 `FrontLeft`/`RearLeft`，calibration endpoint 顺序可以是下降的 `pulse(-45) → pulse(0) → pulse(+45)`，但 raw PWM numeric validation 必须使用升序 bounds；不得假设 `min_pulse < neutral < max_pulse`。
 
 既有硬件事实保持不变（以下来自既有记录，不是本 feature 新 Firmware image 的 ARM Build、Program Verify 或 Hardware Verified 证据）：
 
@@ -308,11 +317,13 @@ ROVMAKER 串口传感器输入。两者不共享硬件验证结论。
 - `RearRight` STM32/A12 PWM output path：**[Historical Hardware Verified]**（既有记录/old image only；不验证本 feature image）；原 RearRight servo actuator/线束为 hardware fault，计划更换，不属于 Firmware bug。
 - Depth 在 `1480/1500/1520 μs` 的既有台架运动方向观察（PWM 减小 → front A 上翻，PWM 增大 → front A 下翻）不覆盖本轮新标定或新 Firmware image 验证。
 
-用户提供的上述脉宽/姿态/行程测量证据等级是 **[Bench Hardware Calibrated]**。本 feature 的新 Firmware image 没有独立的 ARM Build、Program Verify 或 Hardware Verified 证据；因此三项均保持 **[Pending]**。不得把既有 PR 或旧 image 的 PASS 复制到本 feature 状态；Host Test、ARM Build、Program Verify、Hardware Verified 和 Bench Hardware Calibrated 仍是不同证据类别。
+上述 evidence labels 逐点适用：FrontRight 的 `1000 us` 与 FrontLeft 的 `2020 us` 是 **[Symmetry-Derived / User Accepted]**，不是 Hardware Verified；RearRight/RearLeft 三点是用户完成实机检查后的 **[Bench Hardware Verified]**。本 feature 的新 Firmware image 没有独立的 ARM Build、Program Verify 或整机 Hardware Verified 证据；因此三项均保持 **[Pending]**。不得把既有 PR 或旧 image 的 PASS 复制到本 feature 状态；Host Test、ARM Build、Program Verify、Hardware Verified、Bench Hardware Calibrated 和 Symmetry-Derived / User Accepted 仍是不同证据类别。
 
-### 下一轮 FrontAxis/Depth 执行器验证计划
+未来数据流仅记录为 architecture boundary：`Motion Command → Gait / CPG Generator → Logical Joint Target → ServoService set_angle → Servo Calibration → PWM`。本 PR 不实现 gait、CPG、Motion command 或 Qt gait controls。
 
-后续目标验证必须使用本 feature 对应的新 Firmware image：先完成 ARM Build，再 Program Verify，最后在台架 exercise `-90/0/+90 degrees`、`1060/1745/2430 us` 以及 Neutral `1745 us`。在这些步骤有独立记录前，不能将软件限位、角度动作或 Neutral 标为 Hardware Verified。该验证只针对 FrontAxis/Depth 执行器，不是 ROVMAKER 深度传感器，也不覆盖 hydrodynamics、installed trim、autonomous depth control、magnetic/yaw 或 final body-frame calibration。
+### 下一轮五舵机执行器验证计划
+
+后续目标验证必须使用本 feature 对应的新 Firmware image：先完成 ARM Build，再 Program Verify，最后在台架 exercise 四个 paddle 的 `-45/0/+45 degrees`、各自 exact PWM endpoints、raw PWM boundaries 和 Neutral，以及 `FrontAxis/Depth` 的 `-90/0/+90 degrees`、`1060/1745/2430 us` 和 Neutral `1745 us`。在这些步骤有独立记录前，不能把本 feature image 的软件限位、角度动作或 Neutral 标为整机 Hardware Verified。该验证不覆盖 ROVMAKER 深度传感器、hydrodynamics、installed trim、autonomous depth control、magnetic/yaw 或 final body-frame calibration。
 
 ### 验证分层与烧录提醒
 
@@ -320,7 +331,9 @@ ROVMAKER 串口传感器输入。两者不共享硬件验证结论。
 
 | 项目 | 状态 |
 |---|---|
-| User-provided / bench actuator measurements | **[Bench Hardware Calibrated]** |
+| FrontRight / FrontLeft endpoint evidence | **[Bench Measured]** plus symmetry-derived endpoints **[Symmetry-Derived / User Accepted]** |
+| RearRight / RearLeft three-point bench evidence | **[Bench Hardware Verified]** |
+| FrontAxis/Depth user-provided actuator measurements | **[Bench Hardware Calibrated]** |
 | This feature's new Firmware image — ARM Build | **[Pending]** |
 | This feature's new Firmware image — Program Verify | **[Pending]** |
 | This feature's new Firmware image — Hardware Verified | **[Pending]** |
