@@ -259,7 +259,7 @@ QApplication
 
 This evidence belongs to the pre-PR #8 Servo1/PA6 layout and remains valid only for that historical wiring.
 
-The merged Servo1 Set Angle path is **[Hardware Verified]** on the current bring-up hardware:
+The merged Servo1 Set Angle path is **[Historical Hardware Verified]** for the pre-PR #8 old image and wiring only; this explicitly excludes the current `feature/servo-calibration-depth-limits` image:
 
 - Actuator: GDW IPX896HV on `TIM3_CH1 / PA6`, approximately 333 Hz.
 - Protocol V2 Set Angle `0x13`: 0°, +10°, 0°, −10°, 0°, ±45°, and ±90° all passed the controlled acceptance.
@@ -274,15 +274,15 @@ The following Servo1/Servo2 notes describe the pre-PR #8 Console and are retaine
 - The current supported mask is exactly `0x001F`; the five semantic masks are documented in the PR #8 section above.
 - **[Provisional]** Current Console limits are 520–2520 μs with neutral 1520 μs.
 - **[Provisional]** Servo1 angle command range is −9000…+9000 cdeg (−90.0…+90.0° in the Qt input). The Console transmits this physical unit without converting it to PWM.
-- **[Hardware Verified]** The current Servo1 hardware path is GDW IPX896HV on `TIM3_CH1 / PA6` at approximately 333 Hz; the piecewise mapping is still an approximate bring-up calibration: −9000→520 μs, 0→1520 μs, +9000→2520 μs.
-- Protocol V2 Set Angle `0x13`, its Controller path, and the Qt UI are **[Hardware Verified]** for the acceptance values above. There is still no persisted or multi-servo calibration model.
+- **[Historical Hardware Verified]** The old-image Servo1 hardware path was GDW IPX896HV on `TIM3_CH1 / PA6` at approximately 333 Hz; the piecewise mapping was an approximate bring-up calibration: −9000→520 μs, 0→1520 μs, +9000→2520 μs. This does not verify the current feature image.
+- Protocol V2 Set Angle `0x13`, its Controller path, and the Qt UI are **[Historical Hardware Verified]** for the old-image acceptance values above only; this does not verify the current feature image. There is still no persisted or multi-servo calibration model.
 - **[Historical Reference — pre-PR #8 old image]** `MainWindow` built five descriptor-driven panels. FrontAxis was supported for bounded PWM bring-up but remained angle-disabled while calibration was pending; this old-image behavior does not describe the current FrontAxis/Depth contract.
 
 **[Historical Reference — pre-PR #8 old image]** The angle controls were implemented for the four angle-capable semantic servos and were enabled only when the transport was connected, the descriptor was supported, the servo had a successful Enable ACK, and no Disable request was pending. Disable, Disable All, and disconnect immediately disabled the angle controls. FrontAxis could not send angle commands until calibration was completed and verified. This old-image behavior is retained only for traceability; the current contract is FrontAxis/Depth angle-supported with `calibrationPending=false`, `-90 to +90 degrees`, and `1060–2430 us`.
 
-**Neutral — [Hardware Verified]**: the current development record confirms that Neutral returns Servo1 to mechanical zero near 1520 μs. The PWM input currently represents the user's debug input value; it is not guaranteed to mirror the last hardware-confirmed position after Neutral or another command.
+**Neutral — [Historical Hardware Verified]**: the old-image development record confirms that Neutral returned Servo1 to mechanical zero near 1520 μs. This does not verify the current feature image. The PWM input currently represents the user's debug input value; it is not guaranteed to mirror the last hardware-confirmed position after Neutral or another command.
 
-**Set Angle real servo motion — [Hardware Verified]**: the controlled Servo1 acceptance passed at 0°, ±10°, ±45°, and ±90°. The mapping remains provisional rather than a final precision calibration.
+**Set Angle real servo motion — [Historical Hardware Verified]**: the controlled old-image Servo1 acceptance passed at 0°, ±10°, ±45°, and ±90°. This does not verify the current feature image; the mapping remains provisional rather than a final precision calibration.
 
 ## Safety behavior and limitations
 
@@ -399,6 +399,6 @@ Do not mix the MinGW Qt libraries with MSVC, LLVM-MinGW, the separately installe
 
 ## Historical Servo1 hardware milestones (pre-PR #8)
 
-The pre-PR #8 development record marks the following as **[Hardware Verified]** for the historical Servo1/PA6 layout: Qt 6 Console startup; SerialTransport on COM10; USART1 bidirectional traffic; interrupt RX plus ring buffer; Protocol V2 COBS/CRC; heartbeat; STM32 ACK reception in Qt; normal TX/RX packets with CRC error count remaining zero during the recorded run; Servo Enable/Disable; heartbeat watchdog; Set Servo PWM updating TIM3 CCR; TIM3 PWM driving Servo1; Neutral near 1520 μs; Protocol V2 Set Angle `0x13` and the Qt Set Angle UI at 0°, ±10°, ±45°, and ±90°; the corresponding Disable/Enable/ACK/Disable All/Disconnect/Reconnect safety-state behavior; and real GDW IPX896HV motion. These records do not verify the PR #8 five-servo rewiring.
+The pre-PR #8 development record marks the following as **[Historical Hardware Verified]** for the historical Servo1/PA6 layout: Qt 6 Console startup; SerialTransport on COM10; USART1 bidirectional traffic; interrupt RX plus ring buffer; Protocol V2 COBS/CRC; heartbeat; STM32 ACK reception in Qt; normal TX/RX packets with CRC error count remaining zero during the recorded run; Servo Enable/Disable; heartbeat watchdog; Set Servo PWM updating TIM3 CCR; TIM3 PWM driving Servo1; Neutral near 1520 μs; Protocol V2 Set Angle `0x13` and the Qt Set Angle UI at 0°, ±10°, ±45°, and ±90°; the corresponding Disable/Enable/ACK/Disable All/Disconnect/Reconnect safety-state behavior; and real GDW IPX896HV motion. These old-image records do not verify the PR #8 five-servo rewiring or the current feature image.
 
 These milestones are recorded from the development/handoff record, not inferred from source. The current provisional correspondence is approximately −90°=520 μs, 0°=1520 μs, +90°=2520 μs; it remains an approximate bring-up calibration, not final precision calibration.

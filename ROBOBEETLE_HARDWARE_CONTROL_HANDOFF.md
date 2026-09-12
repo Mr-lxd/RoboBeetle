@@ -302,10 +302,10 @@ ROVMAKER 串口传感器输入。两者不共享硬件验证结论。
 
 既有硬件事实保持不变（以下来自既有记录，不是本 feature 新 Firmware image 的 ARM Build、Program Verify 或 Hardware Verified 证据）：
 
-- `FrontRight`：**[Hardware Verified]**；
-- `FrontLeft`：**[Hardware Verified]**；
-- `RearLeft`：**[Hardware Verified]**；
-- `RearRight` STM32/A12 PWM output path：**[Hardware Verified]**；原 RearRight servo actuator/线束为 hardware fault，计划更换，不属于 Firmware bug。
+- `FrontRight`：**[Historical Hardware Verified]**（既有记录/old image only；不验证本 feature image）；
+- `FrontLeft`：**[Historical Hardware Verified]**（既有记录/old image only；不验证本 feature image）；
+- `RearLeft`：**[Historical Hardware Verified]**（既有记录/old image only；不验证本 feature image）；
+- `RearRight` STM32/A12 PWM output path：**[Historical Hardware Verified]**（既有记录/old image only；不验证本 feature image）；原 RearRight servo actuator/线束为 hardware fault，计划更换，不属于 Firmware bug。
 - Depth 在 `1480/1500/1520 μs` 的既有台架运动方向观察（PWM 减小 → front A 上翻，PWM 增大 → front A 下翻）不覆盖本轮新标定或新 Firmware image 验证。
 
 用户提供的上述脉宽/姿态/行程测量证据等级是 **[Bench Hardware Calibrated]**。本 feature 的新 Firmware image 没有独立的 ARM Build、Program Verify 或 Hardware Verified 证据；因此三项均保持 **[Pending]**。不得把既有 PR 或旧 image 的 PASS 复制到本 feature 状态；Host Test、ARM Build、Program Verify、Hardware Verified 和 Bench Hardware Calibrated 仍是不同证据类别。
@@ -320,16 +320,16 @@ ROVMAKER 串口传感器输入。两者不共享硬件验证结论。
 
 | 项目 | 状态 |
 |---|---|
-| User-provided / bench actuator measurements | **Bench Hardware Calibrated** |
-| This feature's new Firmware image — ARM Build | **Pending** |
-| This feature's new Firmware image — Program Verify | **Pending** |
-| This feature's new Firmware image — Hardware Verified | **Pending** |
+| User-provided / bench actuator measurements | **[Bench Hardware Calibrated]** |
+| This feature's new Firmware image — ARM Build | **[Pending]** |
+| This feature's new Firmware image — Program Verify | **[Pending]** |
+| This feature's new Firmware image — Hardware Verified | **[Pending]** |
 
 已验证的 DAP/OpenOCD 稳定流程为 `SWD clock 100 kHz → SYSRESETREQ → halt → program → verify`；若烧录后 UART 异常，先完整断电再上电，不加入软件 workaround。
 
-## 2026-09-08 五舵机语义 descriptor bring-up（PR #8，待实机验收）
+## [Historical Reference] 2026-09-08 五舵机语义 descriptor bring-up（PR #8 snapshot；current contract updated 2026-09-12）
 
-### 当前状态
+### 历史状态（2026-09-08 snapshot）
 
 PR #8 将 Firmware 与 Qt 各自维护的 descriptor table 冻结为同一组五舵机语义 ID，supported mask 固定为 `0x001F`。descriptor drift 由两端独立测试分别拦截；Firmware 的 `servo_descriptor` 保持 pure C / HAL-independent，抽象 timer/channel 由 `servo_driver_stm32` 映射为 HAL handle 和 channel 常量。
 
@@ -337,11 +337,11 @@ PR #8 将 Firmware 与 Qt 各自维护的 descriptor table 冻结为同一组五
 |---:|---|---|---|
 | `0` / `0x0001` | `FrontRight` | SAVOX SW-0250MG+，TIM3_CH1 / PA6 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
 | `1` / `0x0002` | `FrontLeft` | SAVOX SW-0250MG+，TIM3_CH2 / PA7 | PWM 1050–1950 μs；Set Angle −45…+45°；电气 1000/1500/2000 μs |
-| `2` / `0x0004` | `Depth` (`FrontAxis` internal ID) | HDKJ S3150D，TIM3_CH3 / PB0 | Bench calibration 1060/1745/2430 μs；software PWM 1060–2430 μs；software angle −90…+90°；Neutral 1745 μs；Console `calibrationPending=false` |
-| `3` / `0x0008` | `RearRight` | GDW IPX896HV，TIM4_CH1 / PD12 | Temporary PWM exploration 820–2220 μs；software angle −45…+45°；electrical calibration 520/1520/2520 μs |
-| `4` / `0x0010` | `RearLeft` | GDW IPX896HV，TIM4_CH2 / PD13 | Temporary PWM exploration 820–2220 μs；software angle −45…+45°；electrical calibration 520/1520/2520 μs |
+| `2` / `0x0004` | `FrontAxis` / 升潜前足轴 | HDKJ S3150D，TIM3_CH3 / PB0 | 电气 500/1500/2500 μs；命令仅 500–2500 μs；Set Angle disabled；`Calibration Pending` |
+| `3` / `0x0008` | `RearRight` | GDW IPX896HV，TIM4_CH1 / PD12 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
+| `4` / `0x0010` | `RearLeft` | GDW IPX896HV，TIM4_CH2 / PD13 | PWM 1020–2020 μs；Set Angle −45…+45°；电气 520/1520/2520 μs |
 
-TIM3/TIM4 当前均约 333 Hz、1 μs tick（PSC=15、ARR=3002）。`FrontAxis/Depth` 的 bench actuator calibration 是 `1060 us = -90 degrees face down`、`1745 us = 0 degrees vertical paddling`、`2430 us = +90 degrees face up`，measured 180 degree sweep；software PWM command limits 为 `1060–2430 us`，software angle limits 为 `-90 to +90 degrees`，Neutral 为 `1745 us`，Console `calibrationPending=false`。这不是 ROVMAKER depth sensor 的 calibration，也不代表 hydrodynamic optimization、installed trim、autonomous depth-control calibration、magnetic/yaw calibration 或 final body-frame calibration。RearRight/RearLeft 的 `820–2220 us` 仅是 temporary PWM exploration window，不是 final `±45 degrees` endpoint calibration；`520/1520/2520 us` electrical calibration、`±45 degrees` software angle range 保持不变，final rear calibration remains **[Pending]**。FrontRight/FrontLeft unchanged。卖家参数页写“是否防水：否”，商品照片/壳体却标示“Water proof Robot Servo”，因此 Waterproof capability = **[Unverified]**，在获得可靠 IP/密封证据前不得声明或安排直接浸水。
+TIM3/TIM4 当前均约 333 Hz、1 μs tick（PSC=15、ARR=3002）。FrontAxis 卖家参数记录为 500–2500 μs、中心候选 1500 μs、工作电压 4.8–7.4 V、可控行程 0–270°、死区 4 μs；这些是电气/绝对能力元数据，当前用户命令窗口为 provisional 500–2500 μs endpoint exploration，并非最终机械安全端点。1500 μs 只是 provisional startup/center candidate，不是 calibrated Neutral，也不是 Hardware Verified；扩展窗口的完整端点验收仍 Pending。卖家参数页写“是否防水：否”，商品照片/壳体却标示“Water proof Robot Servo”，因此 Waterproof capability = **[Unverified]**，在获得可靠 IP/密封证据前不得声明或安排直接浸水。
 
 多 bit Enable 采用 all-or-nothing：调用前已 enabled 的 requested channel 完全跳过，不产生 write/start/stop；任一新 channel start 失败时只 stop 本次 newly started channel，并保持调用前 logical/physical state。Console 中 pending Disable 是 motion-command barrier：受影响舵机的 PWM、Neutral、Set Angle 在 Controller 层即被拒绝，不写帧、不进入当前 Protocol V2 host-link queue；Disable Error/timeout 不会释放 Disable 之后的 stale motion。
 
@@ -356,7 +356,7 @@ USART1 IRQ → HAL callback → uart_transport_stm32 → ring_buffer
   → TIM4_CH2/PD13 RearLeft
 ```
 
-本 PR 的 descriptor/service/driver/dispatcher 软件验证是实现门槛；五舵机 target build/download 与 physical regression 在用户验收前保持 **[Pending Hardware Verification]**。历史 PR #1、PR #3/6 的 Servo1/PA6 硬件证据不自动覆盖新布局。
+本 2026-09-08 snapshot 的 descriptor/service/driver/dispatcher 软件验证是实现门槛；ARM Build：**[Pending]**；Program Verify：**[Pending]**；Hardware Verified：**[Pending]**。历史 PR #1、PR #3/6 的 Servo1/PA6 硬件证据不自动覆盖新布局，也不验证 2026-09-12 current feature image。
 
 ### Layout compatibility break（必须显式隔离）
 
@@ -454,14 +454,14 @@ Heartbeat
 
 ## 2026-09-06 Servo1 Set Angle Qt UI + hardware acceptance（已合并 main）
 
-> 本节记录从 `origin/main` 的 `v0.1.0-servo1-bringup` 基线创建、经 PR #1 合并到 `main` 的小型 Console 功能。仅修改 Console UI/helper/tests 与文档；未修改 Firmware、`.ioc`、Protocol V2 帧格式、Servo calibration 或 CMake 结构。
+> 本节记录从 `origin/main` 的 `v0.1.0-servo1-bringup` 基线创建、经 PR #1 合并到 `main` 的小型 Console 功能。仅修改 Console UI/helper/tests 与文档；未修改 Firmware、`.ioc`、Protocol V2 帧格式、Servo calibration 或 CMake 结构。以下均为 old-image/historical wiring evidence，不验证当前 `feature/servo-calibration-depth-limits` image。
 
 ### 状态标签
 
-- **Neutral — [Hardware Verified]**：现有开发记录确认点击 Neutral 后 Servo1 回到机械零位附近（约 1520 μs）。
-- **Set Angle protocol/controller — [Hardware Verified]**：`0x13` 使用 `count=1, servo_id=0, angle_cdeg:int16 LE`；Console 只发送 cdeg，Firmware 继续负责 cdeg→PWM。
-- **Set Angle Qt UI — [Hardware Verified]**：Servo1 使用 −90.0…+90.0°、0.1° 步进、默认 0.0° 的 `QDoubleSpinBox`；仅在已连接、Servo1 supported、Enable ACK 且无 pending Disable 时可操作。Disable、Disable All 或断开会立即关闭角度控件；Servo2 仍为 `Unsupported / Planned`。
-- **Set Angle real servo motion — [Hardware Verified]**：受控实机验收在 0°、±10°、±45°、±90° 全部通过。
+- **Neutral — [Historical Hardware Verified]**：既有 old-image 开发记录确认点击 Neutral 后 Servo1 回到机械零位附近（约 1520 μs）。
+- **Set Angle protocol/controller — [Historical Hardware Verified]**：`0x13` 使用 `count=1, servo_id=0, angle_cdeg:int16 LE`；Console 只发送 cdeg，Firmware 继续负责 cdeg→PWM。
+- **Set Angle Qt UI — [Historical Hardware Verified]**：Servo1 使用 −90.0…+90.0°、0.1° 步进、默认 0.0° 的 `QDoubleSpinBox`；仅在已连接、Servo1 supported、Enable ACK 且无 pending Disable 时可操作。Disable、Disable All 或断开会立即关闭角度控件；Servo2 仍为 `Unsupported / Planned`。
+- **Set Angle real servo motion — [Historical Hardware Verified]**：受控 old-image 实机验收在 0°、±10°、±45°、±90° 全部通过。
 
 PWM 输入框目前表示用户的调试输入值；Neutral ACK 后不会把它同步成“当前实际位置”，也不承诺始终等于硬件已确认位置。Commanded State / Telemetry UI 留待后续独立设计。
 

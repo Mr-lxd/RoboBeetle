@@ -1,6 +1,6 @@
 # RoboBeetleFirmware
 
-RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for the Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, and the PR #11 low-rate JY901S telemetry path. This README records the merged hardware-verified modularization baseline, the PR #8 Servo/Depth bench findings, the PR #9 leak-status hardware acceptance, and the PR #10/PR #11 JY901S evidence boundaries. The JY901S physical receive and end-to-end monitoring path are now hardware verified; the new FrontAxis/Depth actuator values are bench-calibrated but this feature image's ARM Build, Program Verify, and Hardware Verified evidence remain pending; separate ROVMAKER depth-sensor calibration, USART3 UART/checksum physical-link quality, body-frame mapping, and final magnetic/yaw calibration remain pending.
+RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for the Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, and the PR #11 low-rate JY901S telemetry path. This README records the merged hardware-verified modularization baseline, the PR #8 Servo/Depth bench findings, the PR #9 leak-status hardware acceptance, and the PR #10/PR #11 JY901S evidence boundaries. The JY901S physical receive and end-to-end monitoring path are now hardware verified; the new FrontAxis/Depth actuator values are bench-calibrated, while this feature image's ARM Build, Program Verify, and Hardware Verified statuses remain **[Pending]**; separate ROVMAKER depth-sensor calibration, USART3 UART/checksum physical-link quality, body-frame mapping, and final magnetic/yaw calibration remain pending.
 
 The recent Servo, LeakStatus, and JY901S hardware runs used the wired DAP UART/COM13 host path above. APC220 is an earlier/legacy transport record, was not enabled in those runs, and is not current JY901S or PR #11 hardware evidence.
 
@@ -38,7 +38,7 @@ Enable accepts a multi-bit mask only with all-or-nothing semantics. Requested ch
 
 This is a hardware-layout compatibility break. Historical v0.4 `Servo1`/PA6 bring-up referred to `RearLeft`; PR #8 formally assigns PA6/ID 0 to `FrontRight` and assigns `RearLeft` to PD13/TIM4_CH2. Do not mix a pre-PR8 Console/Firmware binary with the PR8 five-servo wiring. The Qt `Servo1` name is only a deprecated source-compatibility alias for `FrontRight`; new firmware code uses semantic names.
 
-PR #8 software descriptor, service, and dispatch regressions are the implementation gate. Five-servo target build/download and physical motion verification are still **[Pending Hardware Verification]**; the earlier Servo1-only hardware milestones remain historical evidence for the old layout.
+PR #8 software descriptor, service, and dispatch regressions are the implementation gate. For this feature, ARM Build: **[Pending]**; Program Verify: **[Pending]**; Hardware Verified: **[Pending]**. The earlier Servo1-only hardware milestones remain historical evidence for the old layout.
 
 ## PR #9 leak-status telemetry: leak D0 on PA11 — [Hardware Verified]
 
@@ -415,7 +415,7 @@ main-loop ACK generation / UART TX
 servo_service → servo_driver_stm32
         ├─ TIM3_CH1 / PA6 → FrontRight
         ├─ TIM3_CH2 / PA7 → FrontLeft
-        ├─ TIM3_CH3 / PB0 → FrontAxis (calibrated PWM/angle)
+        ├─ TIM3_CH3 / PB0 → FrontAxis/Depth (bench-calibrated PWM/angle; angle-supported)
         ├─ TIM4_CH1 / PD12 → RearRight
         └─ TIM4_CH2 / PD13 → RearLeft
 ```
@@ -478,7 +478,7 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 - Heartbeat, ACK, semantic five-servo Enable/Disable, and per-descriptor Set PWM agree with the Console.
 - Error is declared but never sent by Firmware.
 - Neutral validates liveness/mask/enabled state, writes each descriptor's neutral pulse, and leaves the selected channels enabled.
-- Set Angle is available for all five calibrated angle-capable descriptors, including FrontAxis/Depth with software limits `-90 to +90 degrees`; each angle is range-checked and mapped with `int32_t` intermediates.
+- Set Angle is available for all five angle-supported descriptors, including FrontAxis/Depth with bench-calibrated software limits `-90 to +90 degrees`; each angle is range-checked and mapped with `int32_t` intermediates. RearRight/RearLeft final calibration remains **[Pending]**.
 - LeakStatus `0x20` is a one-byte, unacknowledged monitoring frame (`UNKNOWN=0`, `DRY=1`, `WET=2`). Firmware sends it only after an accepted Heartbeat and completed ACK transmission, on first sample/state change or a 500 ms refresh; it has an independent telemetry sequence and does not trigger Safety or Servo actions.
 - ImuSnapshot `0x21` is a fixed 56-byte, unacknowledged monitoring frame. Firmware sends it only after an accepted Heartbeat ACK has completed, at most once per one-second policy interval, with due LeakStatus priority and fair rotation against a due DepthSnapshot when LeakStatus is not due. It uses the independent telemetry sequence and carries explicit little-endian fixed-point Acc/Gyro/Angle values plus JY901S diagnostics; it does not trigger Safety, Servo, or JY901S configuration actions.
 - ACK result values are frozen as `OK=0`, `InvalidPayload=1`, `HostNotAlive=2`, `UnsupportedServo=3`, `ServoNotEnabled=4`, `OutOfRange=5`, and `HardwareFailure=6`.
@@ -536,7 +536,7 @@ The UART transport/ring-buffer extraction in this refactor was **[Historical Har
 ## PR #8 software verification status
 
 - Pure-C descriptor, calibration, Servo service, ring-buffer, safety, and Protocol Dispatcher regressions pass with warnings treated as errors.
-- The five-servo descriptor/service/dispatcher changes are software-verified; STM32CubeIDE target build, ST-LINK download, and physical five-servo regression remain **[Pending Hardware Verification]** for the PR8 wiring.
+- The five-servo descriptor/service/dispatcher changes are software-verified; for the PR8 wiring, ARM Build: **[Pending]**; Program Verify: **[Pending]**; Hardware Verified: **[Pending]**.
 - The target commands remain:
 
 ```powershell
