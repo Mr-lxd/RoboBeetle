@@ -86,4 +86,3 @@ FrontLeft and RearLeft intentionally have decreasing pulse values as logical ang
 2. Verify local HEAD equals the remote branch HEAD, the worktree is clean, and PR #13 remains OPEN and unmerged against main.
 3. Report the previous HEAD, new commit SHA, remote SHA, exact calibration and neutral tables, midpoint and boundary test evidence, regression results, evidence labels, ARM status, and PR #13 state.
 4. End with READY FOR EXTERNAL GITHUB REVIEW and stop.
-
