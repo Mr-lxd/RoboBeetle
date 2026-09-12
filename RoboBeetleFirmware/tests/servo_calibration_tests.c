@@ -1,6 +1,7 @@
 #include "servo_calibration.h"
 #include "servo_descriptor.h"
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 
