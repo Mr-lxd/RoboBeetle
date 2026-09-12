@@ -406,7 +406,7 @@ APC220 Half-Duplex Scheduler：**[Hardware Verified - Bench]**
 
 ### PR #2–#6 old-image historical module status
 
-- UART Transport / Ring Buffer — **[Hardware Verified]**（PR #2）
+- UART Transport / Ring Buffer — **[Historical Hardware Verified]**（PR #2 old image only；不验证当前 feature/branch image）
 - Servo Service / Calibration / STM32 Driver — **[Historical Hardware Verified]**（PR #3 old image only；不验证当前 feature/branch image）
 - Safety Supervisor — **[Hardware Verified]**（PR #4）
 - Protocol Dispatcher — **[Hardware Verified]**（PR #5）
