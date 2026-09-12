@@ -531,7 +531,7 @@ The following Servo1-only notes describe the pre-PR #8 PA6/RearLeft layout and a
 
 The current development record states that Qt → Set Servo PWM → TIM3 CCR was observed, TIM3_CH1 drove Servo1, the GDW IPX896HV produced real motion, and the horn was mechanically centered. These are development-record claims, not conclusions produced by static code inspection.
 
-The UART transport/ring-buffer extraction in this refactor is now **[Hardware Verified]**. STM32CubeIDE target build passed, ST-LINK download completed with “Download verified successfully”, and physical UART/Servo regression passed for Connect + Heartbeat, Enable + ACK, Neutral, +10°, 0°, −10°, Disable, Disconnect, reconnect without automatic Enable, and manual Enable + ACK recovery. The existing Servo1 and Set Angle hardware verification remains valid.
+The UART transport/ring-buffer extraction in this refactor was **[Historical Hardware Verified]** for the PR #2 old image only. STM32CubeIDE target build passed, ST-LINK download completed with “Download verified successfully”, and physical UART/Servo regression passed for Connect + Heartbeat, Enable + ACK, Neutral, +10°, 0°, −10°, Disable, Disconnect, reconnect without automatic Enable, and manual Enable + ACK recovery. The existing Servo1 and Set Angle hardware verification remains valid for that old image; this evidence does not verify the current `feature/servo-calibration-depth-limits` branch/image. For the current feature, ARM Build, Program Verify, and Hardware Verified remain **[Pending]** as stated in the current five-servo section above.
 
 ## PR #8 software verification status
 

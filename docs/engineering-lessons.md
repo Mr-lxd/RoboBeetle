@@ -153,7 +153,7 @@ During single-channel bring-up, a known-good RearLeft actuator rotated on the Re
 
 ## Keep validation levels explicit
 
-Record each result as one of: `Host Test` (desktop unit/regression test), `ARM Build` (target compiler build), `Program Verify` (DAP/ST-LINK image verification), `Hardware Verified` (physical behavior explicitly observed), or `Pending` (not yet evidenced). The pre-2026-09-12 PR #8 Depth window expansion record is historical: it observed approximately 1100–2500 μs travel and below-1100 μs ACK timeouts, and its angle-pending/provisional-window wording is superseded by the current FrontAxis/Depth contract above. Do not collapse these levels into a single “tested” label.
+Record each result as one of: `Host Test` (desktop unit/regression test), `ARM Build` (target compiler build), `Program Verify` (DAP/ST-LINK image verification), `Hardware Verified` (physical behavior explicitly observed), `[Bench Hardware Calibrated]` (user-provided/bench actuator measurement), or `Pending` (not yet evidenced). For the current FrontAxis/Depth feature, the user-provided actuator measurements are **[Bench Hardware Calibrated]**; ARM Build, Program Verify, and Hardware Verified remain **[Pending]** until independently built, programmed, and exercised. The pre-2026-09-12 PR #8 Depth window expansion record is historical: it observed approximately 1100–2500 μs travel and below-1100 μs ACK timeouts, and its angle-pending/provisional-window wording is superseded by the current FrontAxis/Depth contract above. Do not collapse these levels into a single “tested” label.
 
 ## Record layout compatibility breaks explicitly
 

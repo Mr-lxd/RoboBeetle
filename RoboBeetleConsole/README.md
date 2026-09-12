@@ -276,9 +276,9 @@ The following Servo1/Servo2 notes describe the pre-PR #8 Console and are retaine
 - **[Provisional]** Servo1 angle command range is −9000…+9000 cdeg (−90.0…+90.0° in the Qt input). The Console transmits this physical unit without converting it to PWM.
 - **[Hardware Verified]** The current Servo1 hardware path is GDW IPX896HV on `TIM3_CH1 / PA6` at approximately 333 Hz; the piecewise mapping is still an approximate bring-up calibration: −9000→520 μs, 0→1520 μs, +9000→2520 μs.
 - Protocol V2 Set Angle `0x13`, its Controller path, and the Qt UI are **[Hardware Verified]** for the acceptance values above. There is still no persisted or multi-servo calibration model.
-- `MainWindow` now builds five descriptor-driven panels. FrontAxis is supported for bounded PWM bring-up but remains angle-disabled while calibration is pending.
+- **[Historical Reference — pre-PR #8 old image]** `MainWindow` built five descriptor-driven panels. FrontAxis was supported for bounded PWM bring-up but remained angle-disabled while calibration was pending; this old-image behavior does not describe the current FrontAxis/Depth contract.
 
-The angle controls are implemented for the four angle-capable semantic servos and are enabled only when the transport is connected, the descriptor is supported, the servo has a successful Enable ACK, and no Disable request is pending. Disable, Disable All, and disconnect immediately disable the angle controls. FrontAxis cannot send angle commands until calibration is completed and verified.
+**[Historical Reference — pre-PR #8 old image]** The angle controls were implemented for the four angle-capable semantic servos and were enabled only when the transport was connected, the descriptor was supported, the servo had a successful Enable ACK, and no Disable request was pending. Disable, Disable All, and disconnect immediately disabled the angle controls. FrontAxis could not send angle commands until calibration was completed and verified. This old-image behavior is retained only for traceability; the current contract is FrontAxis/Depth angle-supported with `calibrationPending=false`, `-90 to +90 degrees`, and `1060–2430 us`.
 
 **Neutral — [Hardware Verified]**: the current development record confirms that Neutral returns Servo1 to mechanical zero near 1520 μs. The PWM input currently represents the user's debug input value; it is not guaranteed to mirror the last hardware-confirmed position after Neutral or another command.
 
@@ -389,11 +389,11 @@ $env:PATH = "D:\Qt\Tools\mingw1310_64\bin;D:\Qt\Tools\Ninja;D:\Qt\6.11.2\mingw_6
 
 Do not mix the MinGW Qt libraries with MSVC, LLVM-MinGW, the separately installed WinLibs toolchain, or Anaconda Qt.
 
-## Software verification status (2026-09-10 PR #11 follow-up)
+## [Historical Reference] Software verification status (2026-09-10 PR #11 follow-up; pre-servo-calibration old image)
 
 - A fresh MinGW/Qt CMake configure and build succeeds without changing the generated project structure; the host CTest set includes protocol, controller, descriptor, IMU lifecycle, and MainWindow IMU panel tests.
 - `protocol_tests`: **PASS**, including CRC/COBS regression, result enum values, Neutral, and −9000/0/+9000 cdeg golden vectors.
-- `robot_controller_tests`: **PASS**, including semantic five-servo descriptor boundaries, PWM boundaries (including FrontAxis 500/2500 acceptance and 499/2501 rejection), angle-capability/range gates, FrontAxis rejection, pending-Disable PWM/Neutral/Angle barriers across APC Error/timeout, Neutral ACK, ACK match/mismatch, identical-frame retry, APC220 first-heartbeat ACK gate, heartbeat coalescing and retry priority, bounded queue release, heartbeat rejection/timeout liveness, Error type validation, error-only/write-failure reset, DirectUart multi-pending regression, and IMU-frame isolation from ACK/Leak state.
+- **[Historical Reference — pre-servo-calibration old image]** `robot_controller_tests`: **PASS**, including semantic five-servo descriptor boundaries, PWM boundaries (including FrontAxis 500/2500 acceptance and 499/2501 rejection), angle-capability/range gates, FrontAxis rejection, pending-Disable PWM/Neutral/Angle barriers across APC Error/timeout, Neutral ACK, ACK match/mismatch, identical-frame retry, APC220 first-heartbeat ACK gate, heartbeat coalescing and retry priority, bounded queue release, heartbeat rejection/timeout liveness, Error type validation, error-only/write-failure reset, DirectUart multi-pending regression, and IMU-frame isolation from ACK/Leak state. These FrontAxis boundaries and rejection checks belong to that old image and do not describe the current 1060–2430 us angle-supported contract.
 - `imu_monitor_tests` and `main_window_tests`: **PASS**, including fixed 56-byte Protocol V2 golden vectors, schema/flag/range validation, partial validity, Receiving/Stale/Error/Unknown lifecycle, fixed-point display, and clearing stale values.
 - Firmware was separately clean-built with the STM32 GCC toolchain. PR #7 user hardware regression passed on the desktop APC220 bench; the timing values remain a Console-side adaptation and the Firmware watchdog remains unchanged.
 
