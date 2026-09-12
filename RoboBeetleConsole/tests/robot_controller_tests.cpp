@@ -924,11 +924,11 @@ void testSemanticServoCommandBoundaries()
         bool angleSupported;
     };
     const BoundaryCase cases[] = {
-        {rb::ServoId::FrontRight, 1050, 1950, -4500, 4500, true},
-        {rb::ServoId::FrontLeft, 1050, 1950, -4500, 4500, true},
+        {rb::ServoId::FrontRight, 1000, 1900, -4500, 4500, true},
+        {rb::ServoId::FrontLeft, 1140, 2020, -4500, 4500, true},
         {rb::ServoId::FrontAxis, 1060, 2430, -9000, 9000, true},
-        {rb::ServoId::RearRight, 820, 2220, -4500, 4500, true},
-        {rb::ServoId::RearLeft, 820, 2220, -4500, 4500, true},
+        {rb::ServoId::RearRight, 1110, 2030, -4500, 4500, true},
+        {rb::ServoId::RearLeft, 960, 1940, -4500, 4500, true},
     };
 
     for (const BoundaryCase &boundary : cases) {

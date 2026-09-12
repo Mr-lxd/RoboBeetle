@@ -16,28 +16,54 @@ void expect(bool condition, const char *message)
     }
 }
 
-void expectSavoX(const rb::ServoDescriptor &descriptor)
+void expectSavoX(
+    const rb::ServoDescriptor &descriptor,
+    int electricalMinPwmUs,
+    int neutralPwmUs,
+    int electricalMaxPwmUs,
+    int commandMinPwmUs,
+    int commandMaxPwmUs)
 {
     expect(descriptor.hardwareName == std::string_view("SAVOX SW-0250MG+"),
            "SAVOX hardware name must match");
-    expect(descriptor.electricalMinPwmUs == 1000 && descriptor.neutralPwmUs == 1500
-               && descriptor.electricalMaxPwmUs == 2000,
+    expect(descriptor.angleSupported && !descriptor.calibrationPending,
+           "SAVOX calibration must support angles and be complete");
+    expect(descriptor.electricalMinPwmUs == electricalMinPwmUs
+               && descriptor.neutralPwmUs == neutralPwmUs
+               && descriptor.electricalMaxPwmUs == electricalMaxPwmUs,
            "SAVOX electrical calibration must match");
-    expect(descriptor.commandMinPwmUs == 1050 && descriptor.commandMaxPwmUs == 1950,
+    expect(descriptor.electricalMinAngleCdeg == -4500
+               && descriptor.electricalMaxAngleCdeg == 4500,
+           "SAVOX calibration angle envelope must match +/-45 degrees");
+    expect(descriptor.commandMinPwmUs == commandMinPwmUs
+               && descriptor.commandMaxPwmUs == commandMaxPwmUs,
            "SAVOX command envelope must match");
     expect(descriptor.commandMinAngleCdeg == -4500
                && descriptor.commandMaxAngleCdeg == 4500,
            "SAVOX command angle envelope must match");
 }
 
-void expectGdw(const rb::ServoDescriptor &descriptor)
+void expectGdw(
+    const rb::ServoDescriptor &descriptor,
+    int electricalMinPwmUs,
+    int neutralPwmUs,
+    int electricalMaxPwmUs,
+    int commandMinPwmUs,
+    int commandMaxPwmUs)
 {
     expect(descriptor.hardwareName == std::string_view("GDW IPX896HV"),
            "GDW hardware name must match");
-    expect(descriptor.electricalMinPwmUs == 520 && descriptor.neutralPwmUs == 1520
-               && descriptor.electricalMaxPwmUs == 2520,
+    expect(descriptor.angleSupported && !descriptor.calibrationPending,
+           "GDW calibration must support angles and be complete");
+    expect(descriptor.electricalMinPwmUs == electricalMinPwmUs
+               && descriptor.neutralPwmUs == neutralPwmUs
+               && descriptor.electricalMaxPwmUs == electricalMaxPwmUs,
            "GDW electrical calibration must match");
-    expect(descriptor.commandMinPwmUs == 820 && descriptor.commandMaxPwmUs == 2220,
+    expect(descriptor.electricalMinAngleCdeg == -4500
+               && descriptor.electricalMaxAngleCdeg == 4500,
+           "GDW calibration angle envelope must match +/-45 degrees");
+    expect(descriptor.commandMinPwmUs == commandMinPwmUs
+               && descriptor.commandMaxPwmUs == commandMaxPwmUs,
            "GDW command envelope must match");
     expect(descriptor.commandMinAngleCdeg == -4500
                && descriptor.commandMaxAngleCdeg == 4500,
@@ -82,8 +108,8 @@ int main()
     expect(table[4].displayName == std::string_view("RearLeft"),
            "RearLeft display name must be ASCII and semantic");
 
-    expectSavoX(table[0]);
-    expectSavoX(table[1]);
+    expectSavoX(table[0], 1000, 1450, 1900, 1000, 1900);
+    expectSavoX(table[1], 2020, 1580, 1140, 1140, 2020);
     expect(table[2].hardwareName == std::string_view("HDKJ S3150D"),
            "FrontAxis hardware name must match");
     expect(table[2].angleSupported && !table[2].calibrationPending,
@@ -98,8 +124,8 @@ int main()
                && table[2].commandMinAngleCdeg == -9000
                && table[2].commandMaxAngleCdeg == 9000,
            "FrontAxis command envelope must match calibrated limits");
-    expectGdw(table[3]);
-    expectGdw(table[4]);
+    expectGdw(table[3], 1110, 1570, 2030, 1110, 2030);
+    expectGdw(table[4], 1940, 1450, 960, 960, 1940);
 
     expect(rb::servoDescriptor(rb::ServoId::FrontRight) == &table[0],
            "semantic descriptor lookup must return ID 0");
