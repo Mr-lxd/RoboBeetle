@@ -675,35 +675,35 @@ void testDisablePendingSuccessDisablesAngle()
            "Set Angle after successful Disable ACK must not write a frame");
 }
 
-void testProvisionalPwmCalibrationAndBounds()
+void testPwmCalibrationAndBounds()
 {
     rb::FakeTransport transport;
     const rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
     rb::RobotController controller(&transport, config);
     const rb::ServoDescriptor *descriptor = rb::servoDescriptor(rb::ServoId::FrontRight);
     expect(descriptor != nullptr, "FrontRight descriptor must exist");
-    expect(descriptor->commandMinPwmUs == 1050, "SAVOX command minimum must be 1050 us");
-    expect(descriptor->neutralPwmUs == 1500, "SAVOX neutral must be 1500 us");
-    expect(descriptor->commandMaxPwmUs == 1950, "SAVOX command maximum must be 1950 us");
+    expect(descriptor->commandMinPwmUs == 1000, "SAVOX command minimum must be 1000 us");
+    expect(descriptor->neutralPwmUs == 1450, "SAVOX neutral must be 1450 us");
+    expect(descriptor->commandMaxPwmUs == 1900, "SAVOX command maximum must be 1900 us");
     controller.connectTransport({"COM_TEST", 9600});
     transport.simulateConnected();
     controller.enableServo(rb::ServoId::Servo1);
     acknowledgeLast(transport);
     const qsizetype before = transport.writes().size();
 
-    expect(!controller.setServoPwm(rb::ServoId::Servo1, 1049),
+    expect(!controller.setServoPwm(rb::ServoId::Servo1, 999),
            "SAVOX PWM below command range must be rejected");
-    expect(!controller.setServoPwm(rb::ServoId::Servo1, 1951),
+    expect(!controller.setServoPwm(rb::ServoId::Servo1, 1901),
            "SAVOX PWM above command range must be rejected");
     expect(transport.writes().size() == before, "rejected commands must not write frames");
 
-    expect(controller.setServoPwm(rb::ServoId::Servo1, 1050),
+    expect(controller.setServoPwm(rb::ServoId::Servo1, 1000),
            "SAVOX PWM minimum boundary must be accepted");
-    expect(lastPacket(transport).payload == QByteArray::fromHex("01001a04"),
+    expect(lastPacket(transport).payload == QByteArray::fromHex("0100e803"),
            "SAVOX PWM minimum must be encoded as count, FrontRight, uint16 LE");
-    expect(controller.setServoPwm(rb::ServoId::Servo1, 1950),
+    expect(controller.setServoPwm(rb::ServoId::Servo1, 1900),
            "SAVOX PWM maximum boundary must be accepted");
-    expect(lastPacket(transport).payload == QByteArray::fromHex("01009e07"),
+    expect(lastPacket(transport).payload == QByteArray::fromHex("01006c07"),
            "SAVOX PWM maximum must be encoded as count, FrontRight, uint16 LE");
 }
 
@@ -2302,7 +2302,7 @@ int main(int argc, char **argv)
     testDisablePendingTimeoutRestoresAngle();
     testDisablePendingDisconnectClearsState();
     testDisablePendingSuccessDisablesAngle();
-    testProvisionalPwmCalibrationAndBounds();
+    testPwmCalibrationAndBounds();
     testSetAngleEncodingAndBounds();
     testDisconnectAttemptsDisableAll();
     testNeutralEncodingAndAck();
