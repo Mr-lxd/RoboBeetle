@@ -824,7 +824,7 @@ void testFrontAxisUsesCalibratedPwmAndAngles()
     if (pwmMinAccepted && pwmMinWrote) {
         const rb::Packet packet = lastPacket(transport);
         expect(packet.type == rb::MessageType::SetServoPwm
-                   && packet.payload == QByteArray::fromHex("02002404"),
+                   && packet.payload == QByteArray::fromHex("01022404"),
                "FrontAxis PWM 1060 us must encode semantic ID 2 and little-endian pulse");
         acknowledgeLast(transport);
     }
@@ -839,7 +839,7 @@ void testFrontAxisUsesCalibratedPwmAndAngles()
     if (pwmMaxAccepted && pwmMaxWrote) {
         const rb::Packet packet = lastPacket(transport);
         expect(packet.type == rb::MessageType::SetServoPwm
-                   && packet.payload == QByteArray::fromHex("02007e09"),
+                   && packet.payload == QByteArray::fromHex("01027e09"),
                "FrontAxis PWM 2430 us must encode semantic ID 2 and little-endian pulse");
         acknowledgeLast(transport);
     }
@@ -868,7 +868,7 @@ void testFrontAxisUsesCalibratedPwmAndAngles()
     if (angleMinAccepted && angleMinWrote) {
         const rb::Packet packet = lastPacket(transport);
         expect(packet.type == rb::MessageType::SetServoAngle
-                   && packet.payload == QByteArray::fromHex("0200d8dc"),
+                   && packet.payload == QByteArray::fromHex("0102d8dc"),
                "FrontAxis -90 degrees must encode semantic ID 2 and little-endian angle");
         acknowledgeLast(transport);
     }
@@ -883,7 +883,7 @@ void testFrontAxisUsesCalibratedPwmAndAngles()
     if (angleZeroAccepted && angleZeroWrote) {
         const rb::Packet packet = lastPacket(transport);
         expect(packet.type == rb::MessageType::SetServoAngle
-                   && packet.payload == QByteArray::fromHex("02000000"),
+                   && packet.payload == QByteArray::fromHex("01020000"),
                "FrontAxis zero degrees must encode semantic ID 2 and little-endian angle");
         acknowledgeLast(transport);
     }
@@ -898,7 +898,7 @@ void testFrontAxisUsesCalibratedPwmAndAngles()
     if (angleMaxAccepted && angleMaxWrote) {
         const rb::Packet packet = lastPacket(transport);
         expect(packet.type == rb::MessageType::SetServoAngle
-                   && packet.payload == QByteArray::fromHex("02002823"),
+                   && packet.payload == QByteArray::fromHex("01022823"),
                "FrontAxis +90 degrees must encode semantic ID 2 and little-endian angle");
         acknowledgeLast(transport);
     }
