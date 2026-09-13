@@ -1,6 +1,6 @@
 # RoboBeetleConsole
 
-RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the current direct Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link. This document describes the implementation repaired and verified on 2026-09-11, including the PR #11 low-rate JY901S telemetry monitor and the PR #12 ROVMAKER DepthSnapshot monitor; historical papers, slides, and legacy code are references only.
+RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the current direct Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link. This document describes the implementation repaired and verified on 2026-09-11, including the PR #11 low-rate JY901S telemetry monitor and the PR #12 ROVMAKER DepthSnapshot monitor; PR #13 carries the final four-paddle descriptor contract, while the new Firmware image remains pending target and hardware evidence; historical papers, slides, and legacy code are references only.
 
 The recent Servo, LeakStatus, JY901S, and Depth hardware runs used the wired DAP UART/COM13 path above. APC220 is an earlier/legacy transport record, was not enabled in those runs, and is not current JY901S or PR #11/PR #12 hardware evidence.
 
@@ -9,29 +9,34 @@ The recent Servo, LeakStatus, JY901S, and Depth hardware runs used the wired DAP
 - **[Implemented]** Confirmed in the current source tree.
 - **[Hardware Verified]** Reported by the current development record and handoff notes; this is stronger than a plan but is not derivable from source alone.
 - **[Hardware Verified - Bench]** Hardware evidence collected on the current desktop bench; it does not imply distance, antenna-orientation, poolside, or outdoor RF characterization.
+- **[Bench Hardware Calibrated]** User-provided or bench actuator measurements; this does not prove the current Firmware image was built, programmed, or exercised.
 - **[Provisional]** Temporary bring-up values or incomplete interfaces that must not be treated as final calibration.
 - **[Planned]** Intended future work that is not implemented.
 - **[Historical Reference]** Information from old papers, slides, Simulink, CPG, or STM32 projects; it does not describe the current runtime unless independently reconfirmed.
 
-## Current PR #8 five-servo semantic bring-up
+## Current five-servo semantic descriptor contract (PR #13; PR #8 wiring baseline)
 
 The Qt Console now uses an independent descriptor table for the five semantic IDs. The supported mask is fixed at `0x001F`; a matching pure-C Firmware descriptor table is checked separately by tests so the C/C++ boundary stays explicit.
 
 | ID / mask | Semantic actuator | Hardware | Qt capability |
 |---:|---|---|---|
-| `0` / `0x0001` | `FrontRight` | SAVOX SW-0250MG+, TIM3_CH1 / PA6 | PWM 1050–1950 μs; angle −45…+45° |
-| `1` / `0x0002` | `FrontLeft` | SAVOX SW-0250MG+, TIM3_CH2 / PA7 | PWM 1050–1950 μs; angle −45…+45° |
-| `2` / `0x0004` | `Depth` (`FrontAxis` internal ID) | HDKJ S3150D, TIM3_CH3 / PB0 | Electrical 500/1500/2500 μs; PWM command 500–2500 μs; **Calibration Pending**; Set Angle disabled |
-| `3` / `0x0008` | `RearRight` | GDW IPX896HV, TIM4_CH1 / PD12 | PWM 1020–2020 μs; angle −45…+45° |
-| `4` / `0x0010` | `RearLeft` | GDW IPX896HV, TIM4_CH2 / PD13 | PWM 1020–2020 μs; angle −45…+45° |
+| `0` / `0x0001` | `FrontRight` | SAVOX SW-0250MG+, TIM3_CH1 / PA6 | PWM 1000–1900 μs; angle −45…+45°; calibration 1000/1450/1900 μs; Neutral 1450 μs |
+| `1` / `0x0002` | `FrontLeft` | SAVOX SW-0250MG+, TIM3_CH2 / PA7 | PWM 1140–2020 μs; angle −45…+45°; calibration 2020/1580/1140 μs; Neutral 1580 μs; angle-inverted PWM |
+| `2` / `0x0004` | `Depth` (`FrontAxis` internal ID) | HDKJ S3150D, TIM3_CH3 / PB0 | Bench calibration 1060/1745/2430 μs; software PWM 1060–2430 μs; software angle −90…+90°; Neutral 1745 μs; `calibrationPending=false` |
+| `3` / `0x0008` | `RearRight` | GDW IPX896HV, TIM4_CH1 / PD12 | PWM 1110–2030 μs; angle −45…+45°; calibration 1110/1570/2030 μs; Neutral 1570 μs |
+| `4` / `0x0010` | `RearLeft` | GDW IPX896HV, TIM4_CH2 / PD13 | PWM 960–1940 μs; angle −45…+45°; calibration 1940/1450/960 μs; Neutral 1450 μs; angle-inverted PWM |
 
-`ServoId::Servo1` remains only as a deprecated historical source-compatibility alias for `FrontRight`; there is deliberately no `Servo2` alias. User-facing panel labels are the exact ASCII names `FrontRight`, `FrontLeft`, `Depth`, `RearRight`, and `RearLeft`; the internal semantic identifier remains `FrontAxis`. FrontAxis's seller-provided electrical metadata is 500–2500 μs with a 1500 μs center candidate; these values describe electrical/absolute capability and do not by themselves establish a final mechanical safety range. Qt and Firmware now enforce the same provisional 500–2500 μs PWM-only endpoint-exploration window. This `500–2500 μs` window is **[Pending Hardware Verification]** and is not the final mechanically safe endpoint range. Its button is labelled `Center 1500 us — Provisional`; this reuses the Neutral protocol command without claiming a calibrated or Hardware Verified mechanical center. Only the supplied 1480/1500/1520 direction check is Hardware Verified; the expanded window and endpoints remain pending. The next unloaded exploration uses `1500,1400,1300,1200,1100,1000,900,800,700,600,500`, returns to 1500, then `1500,1600,1700,1800,1900,2000,2100,2200,2300,2400,2500`, with smaller steps near resistance.
+`ServoId::Servo1` remains only as a deprecated historical source-compatibility alias for `FrontRight`; there is deliberately no `Servo2` alias. User-facing panel labels are the exact ASCII names `FrontRight`, `FrontLeft`, `Depth`, `RearRight`, and `RearLeft`; the internal semantic identifier remains `FrontAxis`. The four paddle servos share one logical convention: `0 degrees` is mechanical neutral, `+45 degrees` is the backward paddle stroke that produces forward propulsion, and `-45 degrees` is the opposite direction. The exact mappings are FrontRight `-4500/0/+4500 cdeg → 1000/1450/1900 us`, FrontLeft `-4500/0/+4500 cdeg → 2020/1580/1140 us`, RearRight `-4500/0/+4500 cdeg → 1110/1570/2030 us`, and RearLeft `-4500/0/+4500 cdeg → 1940/1450/960 us`. The left-side mappings intentionally decrease PWM as logical angle increases; the UI keeps raw PWM sliders in ascending numeric ranges `1000–1900`, `1140–2020`, `1110–2030`, and `960–1940 us`. The Firmware and Console descriptor tables must retain these values together.
+
+`FrontAxis/Depth` remains unchanged: it is a **[Bench Hardware Calibrated]** actuator calibration with `1060 us = -90 degrees face down`, `1745 us = 0 degrees vertical paddling`, and `2430 us = +90 degrees face up`; measured 180 degree sweep. Software PWM command limits are `1060–2430 us`; software angle limits are `-90 to +90 degrees`; Neutral is `1745 us`; Console `calibrationPending` is `false`. This is the bench actuator, not the separate ROVMAKER depth sensor. It does not establish hydrodynamic optimization, installed trim, autonomous depth-control calibration, magnetic/yaw calibration, or final body-frame calibration.
 
 FrontAxis waterproof capability is **[Unverified]**. The seller parameter page says it is not waterproof, while the product photo/shell says “Water proof Robot Servo.” Until reliable IP/sealing evidence exists, the project must not describe the actuator as suitable for direct immersion.
 
-Current supplied bring-up evidence keeps `FrontRight`, `FrontLeft`, and `RearLeft` **[Hardware Verified]**; the `RearRight` STM32/A12 PWM path is **[Hardware Verified]**, while the original RearRight actuator/lead is a hardware fault scheduled for replacement. Depth direction at 1480/1500/1520 μs is **[Hardware Verified]** only; the expanded 500–2500 μs window and endpoint calibration remain **[Pending Hardware Verification]**.
+PR #13 evidence is deliberately split: FrontRight `1450/1900 us` are **[Bench Measured]** and `1000 us` is **[Symmetry-Derived / User Accepted]**; FrontLeft `1580/1140 us` are **[Bench Measured]** and `2020 us` is **[Symmetry-Derived / User Accepted]**; RearRight `1110/1570/2030 us` and RearLeft `1940/1450/960 us` are **[Bench Hardware Verified]** user bench results. These labels describe the supplied actuator evidence, not this branch's image execution. This feature image has not been independently ARM-built, programmed/verified, or exercised on hardware here, so **ARM Build**, **Program Verify**, and **Hardware Verified** remain **[Pending]**. Do not copy prior PR or old-image PASS into this feature status.
 
-This is a hardware-layout compatibility break: the historical v0.4 Servo1/PA6 bring-up object was `RearLeft`, while PR #8 formally assigns PA6/ID0 to `FrontRight` and `RearLeft` to PD13/TIM4_CH2. Do not mix pre-PR8 Console/Firmware binaries with the PR8 five-servo wiring. PR #8 software verification is complete when the descriptor and controller tests pass; target hardware regression for the new layout remains pending.
+Future gait/CPG layers must emit logical joint angles and pass them through `Motion Command → Gait / CPG Generator → Logical Joint Target → ServoService set_angle → Servo Calibration → PWM`. Neutral differences, left/right inversion, and PWM conversion stay in the Servo calibration layer. This PR documents that boundary only; it does not implement gait, CPG, motion commands, or Qt gait controls.
+
+This is a hardware-layout compatibility break: the historical v0.4 Servo1/PA6 bring-up object was `RearLeft`, while PR #8 formally assigns PA6/ID0 to `FrontRight` and `RearLeft` to PD13/TIM4_CH2. Do not mix pre-PR8 Console/Firmware binaries with the PR8 five-servo wiring. PR #13 software verification covers the final descriptor and controller contract; target hardware regression for the new descriptor values remains pending.
 
 ## Current PR #9 leak-status telemetry — [Hardware Verified]
 
@@ -185,7 +190,7 @@ is not a second Firmware sensor path.
 - Shared ACK result meanings `0..6`, with named rejection status in the monitor.
 - `ITransport` abstraction with real `SerialTransport` and test-only `FakeTransport` implementations.
 - Protocol codec/stream tests and controller behavior tests.
-- Set Angle UI for the four angle-capable semantic servos with descriptor-specific ranges; the UI converts to centidegrees and angle-to-pulse conversion remains authoritative in Firmware. FrontAxis is explicitly PWM-only while calibration is pending, with a shared 500–2500 μs command envelope.
+- Set Angle UI for all five angle-capable semantic servos with descriptor-specific ranges; the UI converts to centidegrees and angle-to-pulse conversion remains authoritative in Firmware. FrontAxis/Depth uses the calibrated `-90 to +90 degrees` software angle range and `1060–2430 us` PWM command limits.
 - Monitoring-only LeakStatus `0x20` indicator with Unknown/Dry/Wet states and stale/disconnect fail-to-Unknown behavior; the end-to-end path is **[Hardware Verified]**.
 - Monitoring-only JY901S `ImuSnapshot` `0x21` panel with explicit fixed-point display, diagnostics, Unknown/Receiving/Stale/Error lifecycle, and stale/liveness value invalidation; the matching PR #11 physical IMU path and post-fix re-arm diagnostics are **[Hardware Verified]**, with USART3 UART/checksum physical-link quality, body-frame mapping, and magnetic/yaw calibration still pending.
 - Monitoring-only ROVMAKER `DepthSnapshot` `0x22` panel with fixed-point depth/temperature, validity flags, sample age, parser/transport diagnostics, and Unknown/Receiving/Stale/Error lifecycle. Software and host tests are **[Host Test: PASS]**; the stable physical decoder path is **[Hardware Verified]**, while connector/harness robustness and final calibration remain **[Pending]**.
@@ -246,9 +251,9 @@ QApplication
 | ACK / retry / timeout | [Hardware Verified] host-link policy / timing [Provisional] | DirectUart tracks multiple requests; the legacy-named Apc220HalfDuplex policy allows one ACK-requiring request in flight, queues up to `kApc220CommandQueueCapacity` user commands, prioritizes due heartbeat over ordinary command retry, and retries the identical frame at the profile timeout. The current bench transport is DAP UART/COM13/USART1. |
 | Servo Enable / Disable | [Implemented] | UI logical enable changes only after a matching successful ACK. |
 | Disable All | [Implemented] | Sends the current supported mask `0x001F` for all five semantic channels. |
-| Neutral | [Implemented] | Sends `0x14` with the selected semantic servo mask after Enable ACK and with no pending Disable; FrontAxis exposes this as `Center 1500 us — Provisional`, not calibrated Neutral. |
+| Neutral | [Implemented] | Sends `0x14` with the selected semantic servo mask after Enable ACK and with no pending Disable; FrontAxis/Depth uses Neutral `1745 us`. |
 | Apply PWM | [Implemented] | Explicit button; slider movement alone does not transmit. Requires successful Enable ACK, no pending Disable, and descriptor command-range validation. |
-| Set Angle | [Implemented] | Angle-capable semantic servos use descriptor-specific input ranges and 0.1° steps; Qt converts to signed cdeg and calls `RobotController::setServoAngle()`. The control requires connection, support, Enable ACK, and no pending Disable request. FrontAxis is disabled. |
+| Set Angle | [Implemented] | All five angle-capable semantic servos use descriptor-specific input ranges and 0.1° steps; Qt converts to signed cdeg and calls `RobotController::setServoAngle()`. The control requires connection, support, Enable ACK, and no pending Disable request; FrontAxis/Depth is limited to `-90 to +90 degrees`. |
 | Leak status | [Hardware Verified] | Displays `Leak: Unknown`, `Leak: Dry`, or `LEAK DETECTED` from Protocol V2 `0x20`; disconnect, host-link liveness loss, invalid payload, and stale telemetry return it to Unknown. Monitoring-only; no Servo/Safety action. |
 | JY901S IMU monitor | [Implemented] / physical data [Hardware Verified] | Displays `IMU — JY901S` status, valid fixed-point Acc/Gyro/Angle domains, and diagnostics from Protocol V2 `0x21`; Unknown/invalid/Stale/liveness loss clear values. Read-only; no 3D/history/control/configuration. |
 | ROVMAKER depth monitor | [Hardware Verified] with stable connection | Displays `Depth Sensor — ROVMAKER` lifecycle, validity-gated depth/temperature, sample age, and parser/transport diagnostics from Protocol V2 `0x22`. Read-only; no decoder configuration or control action. Connector robustness and calibration remain pending. |
@@ -258,7 +263,7 @@ QApplication
 
 This evidence belongs to the pre-PR #8 Servo1/PA6 layout and remains valid only for that historical wiring.
 
-The merged Servo1 Set Angle path is **[Hardware Verified]** on the current bring-up hardware:
+The merged Servo1 Set Angle path is **[Historical Hardware Verified]** for the pre-PR #8 old image and wiring only; this explicitly excludes the current `feature/servo-calibration-depth-limits` image:
 
 - Actuator: GDW IPX896HV on `TIM3_CH1 / PA6`, approximately 333 Hz.
 - Protocol V2 Set Angle `0x13`: 0°, +10°, 0°, −10°, 0°, ±45°, and ±90° all passed the controlled acceptance.
@@ -273,15 +278,15 @@ The following Servo1/Servo2 notes describe the pre-PR #8 Console and are retaine
 - The current supported mask is exactly `0x001F`; the five semantic masks are documented in the PR #8 section above.
 - **[Provisional]** Current Console limits are 520–2520 μs with neutral 1520 μs.
 - **[Provisional]** Servo1 angle command range is −9000…+9000 cdeg (−90.0…+90.0° in the Qt input). The Console transmits this physical unit without converting it to PWM.
-- **[Hardware Verified]** The current Servo1 hardware path is GDW IPX896HV on `TIM3_CH1 / PA6` at approximately 333 Hz; the piecewise mapping is still an approximate bring-up calibration: −9000→520 μs, 0→1520 μs, +9000→2520 μs.
-- Protocol V2 Set Angle `0x13`, its Controller path, and the Qt UI are **[Hardware Verified]** for the acceptance values above. There is still no persisted or multi-servo calibration model.
-- `MainWindow` now builds five descriptor-driven panels. FrontAxis is supported for bounded PWM bring-up but remains angle-disabled while calibration is pending.
+- **[Historical Hardware Verified]** The old-image Servo1 hardware path was GDW IPX896HV on `TIM3_CH1 / PA6` at approximately 333 Hz; the piecewise mapping was an approximate bring-up calibration: −9000→520 μs, 0→1520 μs, +9000→2520 μs. This does not verify the current feature image.
+- Protocol V2 Set Angle `0x13`, its Controller path, and the Qt UI are **[Historical Hardware Verified]** for the old-image acceptance values above only; this does not verify the current feature image. There is still no persisted or multi-servo calibration model.
+- **[Historical Reference — pre-PR #8 old image]** `MainWindow` built five descriptor-driven panels. FrontAxis was supported for bounded PWM bring-up but remained angle-disabled while calibration was pending; this old-image behavior does not describe the current FrontAxis/Depth contract.
 
-The angle controls are implemented for the four angle-capable semantic servos and are enabled only when the transport is connected, the descriptor is supported, the servo has a successful Enable ACK, and no Disable request is pending. Disable, Disable All, and disconnect immediately disable the angle controls. FrontAxis cannot send angle commands until calibration is completed and verified.
+**[Historical Reference — pre-PR #8 old image]** The angle controls were implemented for the four angle-capable semantic servos and were enabled only when the transport was connected, the descriptor was supported, the servo had a successful Enable ACK, and no Disable request was pending. Disable, Disable All, and disconnect immediately disabled the angle controls. FrontAxis could not send angle commands until calibration was completed and verified. This old-image behavior is retained only for traceability; the current contract is FrontAxis/Depth angle-supported with `calibrationPending=false`, `-90 to +90 degrees`, and `1060–2430 us`.
 
-**Neutral — [Hardware Verified]**: the current development record confirms that Neutral returns Servo1 to mechanical zero near 1520 μs. The PWM input currently represents the user's debug input value; it is not guaranteed to mirror the last hardware-confirmed position after Neutral or another command.
+**Neutral — [Historical Hardware Verified]**: the old-image development record confirms that Neutral returned Servo1 to mechanical zero near 1520 μs. This does not verify the current feature image. The PWM input currently represents the user's debug input value; it is not guaranteed to mirror the last hardware-confirmed position after Neutral or another command.
 
-**Set Angle real servo motion — [Hardware Verified]**: the controlled Servo1 acceptance passed at 0°, ±10°, ±45°, and ±90°. The mapping remains provisional rather than a final precision calibration.
+**Set Angle real servo motion — [Historical Hardware Verified]**: the controlled old-image Servo1 acceptance passed at 0°, ±10°, ±45°, and ±90°. This does not verify the current feature image; the mapping remains provisional rather than a final precision calibration.
 
 ## Safety behavior and limitations
 
@@ -293,7 +298,7 @@ The angle controls are implemented for the four angle-capable semantic servos an
 - Unexpected link loss can only log that Disable All could not be delivered. The STM32 watchdog is the actual link-loss safety boundary.
 - Retries reuse the same sequence and frame. Firmware caches the most recent successful non-Heartbeat request by sequence and type and replays its ACK without repeating the Servo action; Heartbeats refresh liveness without evicting that action cache.
 - Firmware invalidates the duplicate cache on heartbeat watchdog timeout, preserving the requirement for a new explicit Enable after reconnect.
-- The Console and Firmware validate the frozen five-bit descriptor mask; unknown IDs/bits are rejected without partial action, and FrontAxis Set Angle is rejected as PWM-only.
+- The Console and Firmware validate the frozen five-bit descriptor mask; unknown IDs/bits are rejected without partial action, and FrontAxis/Depth Set Angle is accepted within its calibrated `-90 to +90 degrees` range.
 
 ## Fit for Laptop ↔ Raspberry Pi ↔ STM32
 
@@ -388,16 +393,16 @@ $env:PATH = "D:\Qt\Tools\mingw1310_64\bin;D:\Qt\Tools\Ninja;D:\Qt\6.11.2\mingw_6
 
 Do not mix the MinGW Qt libraries with MSVC, LLVM-MinGW, the separately installed WinLibs toolchain, or Anaconda Qt.
 
-## Software verification status (2026-09-10 PR #11 follow-up)
+## [Historical Reference] Software verification status (2026-09-10 PR #11 follow-up; pre-servo-calibration old image)
 
 - A fresh MinGW/Qt CMake configure and build succeeds without changing the generated project structure; the host CTest set includes protocol, controller, descriptor, IMU lifecycle, and MainWindow IMU panel tests.
 - `protocol_tests`: **PASS**, including CRC/COBS regression, result enum values, Neutral, and −9000/0/+9000 cdeg golden vectors.
-- `robot_controller_tests`: **PASS**, including semantic five-servo descriptor boundaries, PWM boundaries (including FrontAxis 500/2500 acceptance and 499/2501 rejection), angle-capability/range gates, FrontAxis rejection, pending-Disable PWM/Neutral/Angle barriers across APC Error/timeout, Neutral ACK, ACK match/mismatch, identical-frame retry, APC220 first-heartbeat ACK gate, heartbeat coalescing and retry priority, bounded queue release, heartbeat rejection/timeout liveness, Error type validation, error-only/write-failure reset, DirectUart multi-pending regression, and IMU-frame isolation from ACK/Leak state.
+- **[Historical Reference — pre-servo-calibration old image]** `robot_controller_tests`: **PASS**, including semantic five-servo descriptor boundaries, PWM boundaries (including FrontAxis 500/2500 acceptance and 499/2501 rejection), angle-capability/range gates, FrontAxis rejection, pending-Disable PWM/Neutral/Angle barriers across APC Error/timeout, Neutral ACK, ACK match/mismatch, identical-frame retry, APC220 first-heartbeat ACK gate, heartbeat coalescing and retry priority, bounded queue release, heartbeat rejection/timeout liveness, Error type validation, error-only/write-failure reset, DirectUart multi-pending regression, and IMU-frame isolation from ACK/Leak state. These FrontAxis boundaries and rejection checks belong to that old image and do not describe the current 1060–2430 us angle-supported contract.
 - `imu_monitor_tests` and `main_window_tests`: **PASS**, including fixed 56-byte Protocol V2 golden vectors, schema/flag/range validation, partial validity, Receiving/Stale/Error/Unknown lifecycle, fixed-point display, and clearing stale values.
 - Firmware was separately clean-built with the STM32 GCC toolchain. PR #7 user hardware regression passed on the desktop APC220 bench; the timing values remain a Console-side adaptation and the Firmware watchdog remains unchanged.
 
 ## Historical Servo1 hardware milestones (pre-PR #8)
 
-The pre-PR #8 development record marks the following as **[Hardware Verified]** for the historical Servo1/PA6 layout: Qt 6 Console startup; SerialTransport on COM10; USART1 bidirectional traffic; interrupt RX plus ring buffer; Protocol V2 COBS/CRC; heartbeat; STM32 ACK reception in Qt; normal TX/RX packets with CRC error count remaining zero during the recorded run; Servo Enable/Disable; heartbeat watchdog; Set Servo PWM updating TIM3 CCR; TIM3 PWM driving Servo1; Neutral near 1520 μs; Protocol V2 Set Angle `0x13` and the Qt Set Angle UI at 0°, ±10°, ±45°, and ±90°; the corresponding Disable/Enable/ACK/Disable All/Disconnect/Reconnect safety-state behavior; and real GDW IPX896HV motion. These records do not verify the PR #8 five-servo rewiring.
+The pre-PR #8 development record marks the following as **[Historical Hardware Verified]** for the historical Servo1/PA6 layout: Qt 6 Console startup; SerialTransport on COM10; USART1 bidirectional traffic; interrupt RX plus ring buffer; Protocol V2 COBS/CRC; heartbeat; STM32 ACK reception in Qt; normal TX/RX packets with CRC error count remaining zero during the recorded run; Servo Enable/Disable; heartbeat watchdog; Set Servo PWM updating TIM3 CCR; TIM3 PWM driving Servo1; Neutral near 1520 μs; Protocol V2 Set Angle `0x13` and the Qt Set Angle UI at 0°, ±10°, ±45°, and ±90°; the corresponding Disable/Enable/ACK/Disable All/Disconnect/Reconnect safety-state behavior; and real GDW IPX896HV motion. These old-image records do not verify the PR #8 five-servo rewiring or the current feature image.
 
 These milestones are recorded from the development/handoff record, not inferred from source. The current provisional correspondence is approximately −90°=520 μs, 0°=1520 μs, +90°=2520 μs; it remains an approximate bring-up calibration, not final precision calibration.

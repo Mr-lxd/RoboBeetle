@@ -127,7 +127,7 @@ static void test_servo_enable_for_ch1_channels(
     expect(servo_service_enable(&service, 0x0001U) ==
                SERVO_SERVICE_RESULT_OK,
            "FrontRight ServoEnable must not fail for HAL channel zero");
-    expect(tim3_registers->CCR1 == 1500U,
+    expect(tim3_registers->CCR1 == 1450U,
            "FrontRight enable must write TIM3_CH1 neutral pulse");
 
     (void)memset(&service, 0, sizeof(service));
@@ -135,7 +135,7 @@ static void test_servo_enable_for_ch1_channels(
     expect(servo_service_enable(&service, 0x0008U) ==
                SERVO_SERVICE_RESULT_OK,
            "RearRight ServoEnable must not fail for HAL channel zero");
-    expect(tim4_registers->CCR1 == 1520U,
+    expect(tim4_registers->CCR1 == 1570U,
            "RearRight enable must write TIM4_CH1 neutral pulse");
 }
 

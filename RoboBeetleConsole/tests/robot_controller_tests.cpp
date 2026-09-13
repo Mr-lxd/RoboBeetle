@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <iostream>
+#include <limits>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -674,35 +675,35 @@ void testDisablePendingSuccessDisablesAngle()
            "Set Angle after successful Disable ACK must not write a frame");
 }
 
-void testProvisionalPwmCalibrationAndBounds()
+void testPwmCalibrationAndBounds()
 {
     rb::FakeTransport transport;
     const rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
     rb::RobotController controller(&transport, config);
     const rb::ServoDescriptor *descriptor = rb::servoDescriptor(rb::ServoId::FrontRight);
     expect(descriptor != nullptr, "FrontRight descriptor must exist");
-    expect(descriptor->commandMinPwmUs == 1050, "SAVOX command minimum must be 1050 us");
-    expect(descriptor->neutralPwmUs == 1500, "SAVOX neutral must be 1500 us");
-    expect(descriptor->commandMaxPwmUs == 1950, "SAVOX command maximum must be 1950 us");
+    expect(descriptor->commandMinPwmUs == 1000, "SAVOX command minimum must be 1000 us");
+    expect(descriptor->neutralPwmUs == 1450, "SAVOX neutral must be 1450 us");
+    expect(descriptor->commandMaxPwmUs == 1900, "SAVOX command maximum must be 1900 us");
     controller.connectTransport({"COM_TEST", 9600});
     transport.simulateConnected();
     controller.enableServo(rb::ServoId::Servo1);
     acknowledgeLast(transport);
     const qsizetype before = transport.writes().size();
 
-    expect(!controller.setServoPwm(rb::ServoId::Servo1, 1049),
+    expect(!controller.setServoPwm(rb::ServoId::Servo1, 999),
            "SAVOX PWM below command range must be rejected");
-    expect(!controller.setServoPwm(rb::ServoId::Servo1, 1951),
+    expect(!controller.setServoPwm(rb::ServoId::Servo1, 1901),
            "SAVOX PWM above command range must be rejected");
     expect(transport.writes().size() == before, "rejected commands must not write frames");
 
-    expect(controller.setServoPwm(rb::ServoId::Servo1, 1050),
+    expect(controller.setServoPwm(rb::ServoId::Servo1, 1000),
            "SAVOX PWM minimum boundary must be accepted");
-    expect(lastPacket(transport).payload == QByteArray::fromHex("01001a04"),
+    expect(lastPacket(transport).payload == QByteArray::fromHex("0100e803"),
            "SAVOX PWM minimum must be encoded as count, FrontRight, uint16 LE");
-    expect(controller.setServoPwm(rb::ServoId::Servo1, 1950),
+    expect(controller.setServoPwm(rb::ServoId::Servo1, 1900),
            "SAVOX PWM maximum boundary must be accepted");
-    expect(lastPacket(transport).payload == QByteArray::fromHex("01009e07"),
+    expect(lastPacket(transport).payload == QByteArray::fromHex("01006c07"),
            "SAVOX PWM maximum must be encoded as count, FrontRight, uint16 LE");
 }
 
@@ -781,7 +782,7 @@ void testNeutralEncodingAndAck()
            "successful neutral ACK must be matched to its request");
 }
 
-void testFrontAxisIsPwmOnly()
+void testFrontAxisUsesCalibratedPwmAndAngles()
 {
     rb::FakeTransport transport;
     rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
@@ -791,24 +792,125 @@ void testFrontAxisIsPwmOnly()
     const rb::ServoDescriptor *descriptor = rb::servoDescriptor(rb::ServoId::FrontAxis);
     expect(descriptor != nullptr && descriptor->supported,
            "FrontAxis must be supported");
-    expect(descriptor != nullptr && !descriptor->angleSupported,
-           "FrontAxis must remain PWM-only");
-    expect(controller.enableServo(rb::ServoId::FrontAxis),
-           "FrontAxis enable should be sent");
+    expect(descriptor != nullptr && descriptor->angleSupported,
+           "FrontAxis must support calibrated angles");
+    expect(descriptor != nullptr && !descriptor->calibrationPending,
+           "FrontAxis calibration must not remain pending");
+    const qsizetype beforeEnable = transport.writes().size();
+    const bool enableSent = controller.enableServo(rb::ServoId::FrontAxis);
+    expect(enableSent, "FrontAxis enable should be sent");
+    const bool enableWrote = transport.writes().size() == beforeEnable + 1;
+    expect(!enableSent || enableWrote,
+           "FrontAxis enable acceptance must produce exactly one wire frame");
+    if (!enableSent || !enableWrote) {
+        return;
+    }
     acknowledgeLast(transport);
-    const qsizetype beforeAngle = transport.writes().size();
-    expect(!controller.setServoPwm(rb::ServoId::FrontAxis, 499),
-           "FrontAxis PWM below 500 us must be rejected");
-    expect(controller.setServoPwm(rb::ServoId::FrontAxis, 500),
-           "FrontAxis PWM 500 us must be accepted");
-    expect(controller.setServoPwm(rb::ServoId::FrontAxis, 2500),
-           "FrontAxis PWM 2500 us must be accepted");
-    expect(!controller.setServoPwm(rb::ServoId::FrontAxis, 2501),
-           "FrontAxis PWM above 2500 us must be rejected");
-    expect(!controller.setServoAngle(rb::ServoId::FrontAxis, 0),
-           "FrontAxis Set Angle must always be rejected");
-    expect(transport.writes().size() == beforeAngle + 2,
-           "FrontAxis angle rejection must not write a frame");
+    const qsizetype beforeCommands = transport.writes().size();
+    const qsizetype beforePwmBelow = transport.writes().size();
+    const bool pwmBelowAccepted = controller.setServoPwm(rb::ServoId::FrontAxis, 1059);
+    expect(!pwmBelowAccepted,
+           "FrontAxis PWM below 1060 us must be rejected");
+    expect(transport.writes().size() == beforePwmBelow,
+           "rejected FrontAxis PWM below 1060 us must not write a frame");
+
+    const qsizetype beforePwmMin = transport.writes().size();
+    const bool pwmMinAccepted = controller.setServoPwm(rb::ServoId::FrontAxis, 1060);
+    expect(pwmMinAccepted,
+           "FrontAxis PWM 1060 us must be accepted");
+    const bool pwmMinWrote = transport.writes().size() == beforePwmMin + 1;
+    expect(!pwmMinAccepted || pwmMinWrote,
+           "accepted FrontAxis PWM 1060 us must produce exactly one wire frame");
+    if (pwmMinAccepted && pwmMinWrote) {
+        const rb::Packet packet = lastPacket(transport);
+        expect(packet.type == rb::MessageType::SetServoPwm
+                   && packet.payload == QByteArray::fromHex("01022404"),
+               "FrontAxis PWM 1060 us must encode semantic ID 2 and little-endian pulse");
+        acknowledgeLast(transport);
+    }
+
+    const qsizetype beforePwmMax = transport.writes().size();
+    const bool pwmMaxAccepted = controller.setServoPwm(rb::ServoId::FrontAxis, 2430);
+    expect(pwmMaxAccepted,
+           "FrontAxis PWM 2430 us must be accepted");
+    const bool pwmMaxWrote = transport.writes().size() == beforePwmMax + 1;
+    expect(!pwmMaxAccepted || pwmMaxWrote,
+           "accepted FrontAxis PWM 2430 us must produce exactly one wire frame");
+    if (pwmMaxAccepted && pwmMaxWrote) {
+        const rb::Packet packet = lastPacket(transport);
+        expect(packet.type == rb::MessageType::SetServoPwm
+                   && packet.payload == QByteArray::fromHex("01027e09"),
+               "FrontAxis PWM 2430 us must encode semantic ID 2 and little-endian pulse");
+        acknowledgeLast(transport);
+    }
+
+    const qsizetype beforePwmAbove = transport.writes().size();
+    const bool pwmAboveAccepted = controller.setServoPwm(rb::ServoId::FrontAxis, 2431);
+    expect(!pwmAboveAccepted,
+           "FrontAxis PWM above 2430 us must be rejected");
+    expect(transport.writes().size() == beforePwmAbove,
+           "rejected FrontAxis PWM above 2430 us must not write a frame");
+
+    const qsizetype beforeAngleBelow = transport.writes().size();
+    const bool angleBelowAccepted = controller.setServoAngle(rb::ServoId::FrontAxis, -9001);
+    expect(!angleBelowAccepted,
+           "FrontAxis angle below -90 degrees must be rejected");
+    expect(transport.writes().size() == beforeAngleBelow,
+           "rejected FrontAxis angle below -90 degrees must not write a frame");
+
+    const qsizetype beforeAngleMin = transport.writes().size();
+    const bool angleMinAccepted = controller.setServoAngle(rb::ServoId::FrontAxis, -9000);
+    expect(angleMinAccepted,
+           "FrontAxis -90 degrees must be accepted");
+    const bool angleMinWrote = transport.writes().size() == beforeAngleMin + 1;
+    expect(!angleMinAccepted || angleMinWrote,
+           "accepted FrontAxis -90 degrees must produce exactly one wire frame");
+    if (angleMinAccepted && angleMinWrote) {
+        const rb::Packet packet = lastPacket(transport);
+        expect(packet.type == rb::MessageType::SetServoAngle
+                   && packet.payload == QByteArray::fromHex("0102d8dc"),
+               "FrontAxis -90 degrees must encode semantic ID 2 and little-endian angle");
+        acknowledgeLast(transport);
+    }
+
+    const qsizetype beforeAngleZero = transport.writes().size();
+    const bool angleZeroAccepted = controller.setServoAngle(rb::ServoId::FrontAxis, 0);
+    expect(angleZeroAccepted,
+           "FrontAxis zero degrees must be accepted");
+    const bool angleZeroWrote = transport.writes().size() == beforeAngleZero + 1;
+    expect(!angleZeroAccepted || angleZeroWrote,
+           "accepted FrontAxis zero degrees must produce exactly one wire frame");
+    if (angleZeroAccepted && angleZeroWrote) {
+        const rb::Packet packet = lastPacket(transport);
+        expect(packet.type == rb::MessageType::SetServoAngle
+                   && packet.payload == QByteArray::fromHex("01020000"),
+               "FrontAxis zero degrees must encode semantic ID 2 and little-endian angle");
+        acknowledgeLast(transport);
+    }
+
+    const qsizetype beforeAngleMax = transport.writes().size();
+    const bool angleMaxAccepted = controller.setServoAngle(rb::ServoId::FrontAxis, 9000);
+    expect(angleMaxAccepted,
+           "FrontAxis +90 degrees must be accepted");
+    const bool angleMaxWrote = transport.writes().size() == beforeAngleMax + 1;
+    expect(!angleMaxAccepted || angleMaxWrote,
+           "accepted FrontAxis +90 degrees must produce exactly one wire frame");
+    if (angleMaxAccepted && angleMaxWrote) {
+        const rb::Packet packet = lastPacket(transport);
+        expect(packet.type == rb::MessageType::SetServoAngle
+                   && packet.payload == QByteArray::fromHex("01022823"),
+               "FrontAxis +90 degrees must encode semantic ID 2 and little-endian angle");
+        acknowledgeLast(transport);
+    }
+
+    const qsizetype beforeAngleAbove = transport.writes().size();
+    const bool angleAboveAccepted = controller.setServoAngle(rb::ServoId::FrontAxis, 9001);
+    expect(!angleAboveAccepted,
+           "FrontAxis angle above +90 degrees must be rejected");
+    expect(transport.writes().size() == beforeAngleAbove,
+           "rejected FrontAxis angle above +90 degrees must not write a frame");
+    expect(transport.writes().size() == beforeCommands + 5,
+           "FrontAxis rejected commands must not write frames");
 }
 
 void testSemanticServoCommandBoundaries()
@@ -822,11 +924,11 @@ void testSemanticServoCommandBoundaries()
         bool angleSupported;
     };
     const BoundaryCase cases[] = {
-        {rb::ServoId::FrontRight, 1050, 1950, -4500, 4500, true},
-        {rb::ServoId::FrontLeft, 1050, 1950, -4500, 4500, true},
-        {rb::ServoId::FrontAxis, 500, 2500, 0, 0, false},
-        {rb::ServoId::RearRight, 1020, 2020, -4500, 4500, true},
-        {rb::ServoId::RearLeft, 1020, 2020, -4500, 4500, true},
+        {rb::ServoId::FrontRight, 1000, 1900, -4500, 4500, true},
+        {rb::ServoId::FrontLeft, 1140, 2020, -4500, 4500, true},
+        {rb::ServoId::FrontAxis, 1060, 2430, -9000, 9000, true},
+        {rb::ServoId::RearRight, 1110, 2030, -4500, 4500, true},
+        {rb::ServoId::RearLeft, 960, 1940, -4500, 4500, true},
     };
 
     for (const BoundaryCase &boundary : cases) {
@@ -840,12 +942,26 @@ void testSemanticServoCommandBoundaries()
         acknowledgeLast(transport);
         const qsizetype beforeCommands = transport.writes().size();
 
-        expect(!controller.setServoPwm(boundary.id,
-                                       static_cast<quint16>(boundary.pwmMin - 1)),
-               "PWM below the descriptor command envelope must be rejected");
-        expect(!controller.setServoPwm(boundary.id,
-                                       static_cast<quint16>(boundary.pwmMax + 1)),
-               "PWM above the descriptor command envelope must be rejected");
+        const qint64 pwmBelow = static_cast<qint64>(boundary.pwmMin) - 1;
+        const qint64 pwmAbove = static_cast<qint64>(boundary.pwmMax) + 1;
+        const bool pwmBelowRepresentable =
+            pwmBelow >= std::numeric_limits<quint16>::min()
+            && pwmBelow <= std::numeric_limits<quint16>::max();
+        const bool pwmAboveRepresentable =
+            pwmAbove >= std::numeric_limits<quint16>::min()
+            && pwmAbove <= std::numeric_limits<quint16>::max();
+        expect(pwmBelowRepresentable,
+               "PWM below-edge value must be representable as quint16");
+        expect(pwmAboveRepresentable,
+               "PWM above-edge value must be representable as quint16");
+        if (pwmBelowRepresentable) {
+            expect(!controller.setServoPwm(boundary.id, static_cast<quint16>(pwmBelow)),
+                   "PWM below the descriptor command envelope must be rejected");
+        }
+        if (pwmAboveRepresentable) {
+            expect(!controller.setServoPwm(boundary.id, static_cast<quint16>(pwmAbove)),
+                   "PWM above the descriptor command envelope must be rejected");
+        }
         expect(controller.setServoPwm(boundary.id, boundary.pwmMin),
                "descriptor PWM minimum must be accepted");
         rb::Packet packet = lastPacket(transport);
@@ -860,12 +976,28 @@ void testSemanticServoCommandBoundaries()
             expect(!controller.setServoAngle(boundary.id, 0),
                    "FrontAxis Set Angle must remain unsupported");
         } else {
-            expect(!controller.setServoAngle(boundary.id,
-                                             static_cast<qint16>(boundary.angleMin - 1)),
-                   "angle below -45 degrees must be rejected");
-            expect(!controller.setServoAngle(boundary.id,
-                                             static_cast<qint16>(boundary.angleMax + 1)),
-                   "angle above +45 degrees must be rejected");
+            const qint64 angleBelow = static_cast<qint64>(boundary.angleMin) - 1;
+            const qint64 angleAbove = static_cast<qint64>(boundary.angleMax) + 1;
+            const bool angleBelowRepresentable =
+                angleBelow >= std::numeric_limits<qint16>::min()
+                && angleBelow <= std::numeric_limits<qint16>::max();
+            const bool angleAboveRepresentable =
+                angleAbove >= std::numeric_limits<qint16>::min()
+                && angleAbove <= std::numeric_limits<qint16>::max();
+            expect(angleBelowRepresentable,
+                   "angle below-edge value must be representable as qint16");
+            expect(angleAboveRepresentable,
+                   "angle above-edge value must be representable as qint16");
+            if (angleBelowRepresentable) {
+                expect(!controller.setServoAngle(boundary.id,
+                                                 static_cast<qint16>(angleBelow)),
+                       "angle below the descriptor command envelope must be rejected");
+            }
+            if (angleAboveRepresentable) {
+                expect(!controller.setServoAngle(boundary.id,
+                                                 static_cast<qint16>(angleAbove)),
+                       "angle above the descriptor command envelope must be rejected");
+            }
             expect(controller.setServoAngle(boundary.id, boundary.angleMin),
                    "angle -45 degrees must be accepted");
             expect(controller.setServoAngle(boundary.id, 0),
@@ -2170,11 +2302,11 @@ int main(int argc, char **argv)
     testDisablePendingTimeoutRestoresAngle();
     testDisablePendingDisconnectClearsState();
     testDisablePendingSuccessDisablesAngle();
-    testProvisionalPwmCalibrationAndBounds();
+    testPwmCalibrationAndBounds();
     testSetAngleEncodingAndBounds();
     testDisconnectAttemptsDisableAll();
     testNeutralEncodingAndAck();
-    testFrontAxisIsPwmOnly();
+    testFrontAxisUsesCalibratedPwmAndAngles();
     testSemanticServoCommandBoundaries();
     testAckRejectionAndMatching();
     testRetryReusesIdenticalSequenceAndFrame();

@@ -1,6 +1,8 @@
 #include "servo_driver_stm32.h"
 
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 static TIM_HandleTypeDef *timer_for_descriptor(
     servo_timer_id_t timer_id,

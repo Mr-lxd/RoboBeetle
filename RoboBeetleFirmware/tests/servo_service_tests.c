@@ -121,6 +121,26 @@ static unsigned int count_event(
     return count;
 }
 
+static bool last_write_pulse(
+    const fake_driver_t *driver,
+    uint8_t servo_id,
+    uint16_t *pulse_us)
+{
+    for (unsigned int index = driver->event_count; index > 0U; --index)
+    {
+        const unsigned int event_index = index - 1U;
+
+        if ((driver->events[event_index] == 'W') &&
+            (driver->event_servo[event_index] == servo_id))
+        {
+            *pulse_us = driver->event_pulse[event_index];
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static void test_mask_validation(void)
 {
     fake_driver_t driver;
@@ -147,6 +167,9 @@ static void test_enable_each_servo_and_independent_bits(void)
     fake_driver_t driver;
     servo_service_t service;
     const servo_descriptor_t *table = servo_descriptor_table();
+    static const uint16_t expected_neutral_pulse_us[SERVO_DESCRIPTOR_COUNT] = {
+        1450U, 1580U, 1745U, 1570U, 1450U,
+    };
 
     init_service(&service, &driver);
 
@@ -165,6 +188,9 @@ static void test_enable_each_servo_and_independent_bits(void)
         expect(driver.event_pulse[driver.event_count - 2U] ==
                    table[id].calibration.neutral_pulse_us,
                "enable must use the descriptor neutral pulse");
+        expect(driver.event_pulse[driver.event_count - 2U] ==
+                   expected_neutral_pulse_us[id],
+               "enable must use the approved servo neutral pulse");
         expect(driver.event_servo[driver.event_count - 1U] == id &&
                    driver.events[driver.event_count - 1U] == 'S',
                "enable must start the requested semantic ID");
@@ -172,6 +198,14 @@ static void test_enable_each_servo_and_independent_bits(void)
 
     expect(servo_service_enabled_mask(&service) == 0x001FU,
            "enabling five independent bits should produce 0x001f");
+
+    for (uint8_t id = 0U; id < SERVO_DESCRIPTOR_COUNT; ++id)
+    {
+        uint16_t enable_pulse_us = 0U;
+        expect(last_write_pulse(&driver, id, &enable_pulse_us) &&
+                   enable_pulse_us == expected_neutral_pulse_us[id],
+               "Enable must write the approved neutral pulse");
+    }
 }
 
 static void test_multi_enable_rolls_back_on_start_failure(void)
@@ -223,77 +257,90 @@ static void test_command_ranges_and_capabilities(void)
 {
     fake_driver_t driver;
     servo_service_t service;
+    static const struct
+    {
+        uint8_t id;
+        uint16_t min_pulse_us;
+        uint16_t max_pulse_us;
+    } paddle_cases[] = {
+        {SERVO_ID_FRONT_RIGHT, 1000U, 1900U},
+        {SERVO_ID_FRONT_LEFT, 1140U, 2020U},
+        {SERVO_ID_REAR_RIGHT, 1110U, 2030U},
+        {SERVO_ID_REAR_LEFT, 960U, 1940U},
+    };
 
     init_service(&service, &driver);
     expect(servo_service_enable(&service, 0x001FU) ==
                SERVO_SERVICE_RESULT_OK,
            "range setup should enable all five servos");
 
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_RIGHT, 1049U) ==
-               SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "SAVOX 1049 us must be rejected");
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_RIGHT, 1050U) ==
-               SERVO_SERVICE_RESULT_OK,
-           "SAVOX 1050 us must be accepted");
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_RIGHT, 1950U) ==
-               SERVO_SERVICE_RESULT_OK,
-           "SAVOX 1950 us must be accepted");
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_RIGHT, 1951U) ==
-               SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "SAVOX 1951 us must be rejected");
-    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_RIGHT, -4500) ==
-               SERVO_SERVICE_RESULT_OK,
-           "SAVOX -45 degrees must be accepted");
-    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_RIGHT, 4500) ==
-               SERVO_SERVICE_RESULT_OK,
-           "SAVOX +45 degrees must be accepted");
-    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_RIGHT, -4501) ==
-               SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "SAVOX below -45 degrees must be rejected");
-    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_RIGHT, 4501) ==
-               SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "SAVOX above +45 degrees must be rejected");
+    for (size_t index = 0U;
+         index < sizeof(paddle_cases) / sizeof(paddle_cases[0]);
+         ++index)
+    {
+        const uint8_t id = paddle_cases[index].id;
+        const uint16_t min_pulse_us = paddle_cases[index].min_pulse_us;
+        const uint16_t max_pulse_us = paddle_cases[index].max_pulse_us;
 
-    expect(servo_service_set_pwm(&service, SERVO_ID_REAR_RIGHT, 1019U) ==
-               SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "GDW 1019 us must be rejected");
-    expect(servo_service_set_pwm(&service, SERVO_ID_REAR_RIGHT, 1020U) ==
-               SERVO_SERVICE_RESULT_OK,
-           "GDW 1020 us must be accepted");
-    expect(servo_service_set_pwm(&service, SERVO_ID_REAR_RIGHT, 2020U) ==
-               SERVO_SERVICE_RESULT_OK,
-           "GDW 2020 us must be accepted");
-    expect(servo_service_set_pwm(&service, SERVO_ID_REAR_RIGHT, 2021U) ==
-               SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "GDW 2021 us must be rejected");
-    expect(servo_service_set_angle(&service, SERVO_ID_REAR_RIGHT, -4500) ==
-               SERVO_SERVICE_RESULT_OK,
-           "GDW -45 degrees must be accepted");
-    expect(servo_service_set_angle(&service, SERVO_ID_REAR_RIGHT, 4500) ==
-               SERVO_SERVICE_RESULT_OK,
-           "GDW +45 degrees must be accepted");
-    expect(servo_service_set_angle(&service, SERVO_ID_REAR_RIGHT, -4501) ==
-               SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "GDW below -45 degrees must be rejected");
-    expect(servo_service_set_angle(&service, SERVO_ID_REAR_RIGHT, 4501) ==
-               SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "GDW above +45 degrees must be rejected");
+        expect(servo_service_set_pwm(&service, id,
+                                     (uint16_t)(min_pulse_us - 1U)) ==
+                   SERVO_SERVICE_RESULT_OUT_OF_RANGE,
+               "paddle raw PWM below the lower bound must be rejected");
+        expect(servo_service_set_pwm(&service, id, min_pulse_us) ==
+                   SERVO_SERVICE_RESULT_OK,
+               "paddle raw PWM lower bound must be accepted");
+        expect(servo_service_set_pwm(&service, id, max_pulse_us) ==
+                   SERVO_SERVICE_RESULT_OK,
+               "paddle raw PWM upper bound must be accepted");
+        expect(servo_service_set_pwm(&service, id,
+                                     (uint16_t)(max_pulse_us + 1U)) ==
+                   SERVO_SERVICE_RESULT_OUT_OF_RANGE,
+               "paddle raw PWM above the upper bound must be rejected");
 
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 499U) ==
+        expect(servo_service_set_angle(&service, id, -4501) ==
+                   SERVO_SERVICE_RESULT_OUT_OF_RANGE,
+               "paddle angle below -45 degrees must be rejected");
+        expect(servo_service_set_angle(&service, id, -4500) ==
+                   SERVO_SERVICE_RESULT_OK,
+               "paddle angle -45 degrees must be accepted");
+        expect(servo_service_set_angle(&service, id, 4500) ==
+                   SERVO_SERVICE_RESULT_OK,
+               "paddle angle +45 degrees must be accepted");
+        expect(servo_service_set_angle(&service, id, 4501) ==
+                   SERVO_SERVICE_RESULT_OUT_OF_RANGE,
+               "paddle angle above +45 degrees must be rejected");
+    }
+
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 1059U) ==
                SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "FrontAxis 499 us must be rejected");
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 500U) ==
+           "FrontAxis 1059 us must be rejected");
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 1060U) ==
                SERVO_SERVICE_RESULT_OK,
-           "FrontAxis 500 us must be accepted");
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 2500U) ==
+           "FrontAxis 1060 us must be accepted");
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 1745U) ==
                SERVO_SERVICE_RESULT_OK,
-           "FrontAxis 2500 us must be accepted");
-    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 2501U) ==
+           "FrontAxis 1745 us must be accepted");
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 2430U) ==
+               SERVO_SERVICE_RESULT_OK,
+           "FrontAxis 2430 us must be accepted");
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_AXIS, 2431U) ==
                SERVO_SERVICE_RESULT_OUT_OF_RANGE,
-           "FrontAxis 2501 us must be rejected");
+           "FrontAxis 2431 us must be rejected");
+    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_AXIS, -9001) ==
+               SERVO_SERVICE_RESULT_OUT_OF_RANGE,
+           "FrontAxis below -90 degrees must be rejected");
+    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_AXIS, -9000) ==
+               SERVO_SERVICE_RESULT_OK,
+           "FrontAxis -90 degrees must be accepted");
     expect(servo_service_set_angle(&service, SERVO_ID_FRONT_AXIS, 0) ==
-               SERVO_SERVICE_RESULT_UNSUPPORTED_SERVO,
-           "FrontAxis SetAngle must remain unsupported");
+               SERVO_SERVICE_RESULT_OK,
+           "FrontAxis zero degrees must be accepted");
+    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_AXIS, 9000) ==
+               SERVO_SERVICE_RESULT_OK,
+           "FrontAxis +90 degrees must be accepted");
+    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_AXIS, 9001) ==
+               SERVO_SERVICE_RESULT_OUT_OF_RANGE,
+           "FrontAxis above +90 degrees must be rejected");
 }
 
 static void test_unenabled_and_invalid_commands(void)
@@ -324,6 +371,9 @@ static void test_neutral_disable_and_disable_all(void)
 {
     fake_driver_t driver;
     servo_service_t service;
+    static const uint16_t expected_neutral_pulse_us[SERVO_DESCRIPTOR_COUNT] = {
+        1450U, 1580U, 1745U, 1570U, 1450U,
+    };
 
     init_service(&service, &driver);
     expect(servo_service_enable(&service, 0x001FU) ==
@@ -333,6 +383,13 @@ static void test_neutral_disable_and_disable_all(void)
     expect(servo_service_neutral(&service, 0x001FU) ==
                SERVO_SERVICE_RESULT_OK,
            "Neutral should accept all enabled servos");
+    for (uint8_t id = 0U; id < SERVO_DESCRIPTOR_COUNT; ++id)
+    {
+        uint16_t neutral_pulse_us = 0U;
+        expect(last_write_pulse(&driver, id, &neutral_pulse_us) &&
+                   neutral_pulse_us == expected_neutral_pulse_us[id],
+               "Neutral must write the approved neutral pulse");
+    }
     expect(driver.write_calls >= 10U,
            "Neutral should write one pulse for each requested servo");
     expect(servo_service_disable(&service, 0x0002U) ==

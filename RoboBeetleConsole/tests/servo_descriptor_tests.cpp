@@ -16,28 +16,54 @@ void expect(bool condition, const char *message)
     }
 }
 
-void expectSavoX(const rb::ServoDescriptor &descriptor)
+void expectSavoX(
+    const rb::ServoDescriptor &descriptor,
+    int electricalMinPwmUs,
+    int neutralPwmUs,
+    int electricalMaxPwmUs,
+    int commandMinPwmUs,
+    int commandMaxPwmUs)
 {
     expect(descriptor.hardwareName == std::string_view("SAVOX SW-0250MG+"),
            "SAVOX hardware name must match");
-    expect(descriptor.electricalMinPwmUs == 1000 && descriptor.neutralPwmUs == 1500
-               && descriptor.electricalMaxPwmUs == 2000,
+    expect(descriptor.angleSupported && !descriptor.calibrationPending,
+           "SAVOX calibration must support angles and be complete");
+    expect(descriptor.electricalMinPwmUs == electricalMinPwmUs
+               && descriptor.neutralPwmUs == neutralPwmUs
+               && descriptor.electricalMaxPwmUs == electricalMaxPwmUs,
            "SAVOX electrical calibration must match");
-    expect(descriptor.commandMinPwmUs == 1050 && descriptor.commandMaxPwmUs == 1950,
+    expect(descriptor.electricalMinAngleCdeg == -4500
+               && descriptor.electricalMaxAngleCdeg == 4500,
+           "SAVOX calibration angle envelope must match +/-45 degrees");
+    expect(descriptor.commandMinPwmUs == commandMinPwmUs
+               && descriptor.commandMaxPwmUs == commandMaxPwmUs,
            "SAVOX command envelope must match");
     expect(descriptor.commandMinAngleCdeg == -4500
                && descriptor.commandMaxAngleCdeg == 4500,
            "SAVOX command angle envelope must match");
 }
 
-void expectGdw(const rb::ServoDescriptor &descriptor)
+void expectGdw(
+    const rb::ServoDescriptor &descriptor,
+    int electricalMinPwmUs,
+    int neutralPwmUs,
+    int electricalMaxPwmUs,
+    int commandMinPwmUs,
+    int commandMaxPwmUs)
 {
     expect(descriptor.hardwareName == std::string_view("GDW IPX896HV"),
            "GDW hardware name must match");
-    expect(descriptor.electricalMinPwmUs == 520 && descriptor.neutralPwmUs == 1520
-               && descriptor.electricalMaxPwmUs == 2520,
+    expect(descriptor.angleSupported && !descriptor.calibrationPending,
+           "GDW calibration must support angles and be complete");
+    expect(descriptor.electricalMinPwmUs == electricalMinPwmUs
+               && descriptor.neutralPwmUs == neutralPwmUs
+               && descriptor.electricalMaxPwmUs == electricalMaxPwmUs,
            "GDW electrical calibration must match");
-    expect(descriptor.commandMinPwmUs == 1020 && descriptor.commandMaxPwmUs == 2020,
+    expect(descriptor.electricalMinAngleCdeg == -4500
+               && descriptor.electricalMaxAngleCdeg == 4500,
+           "GDW calibration angle envelope must match +/-45 degrees");
+    expect(descriptor.commandMinPwmUs == commandMinPwmUs
+               && descriptor.commandMaxPwmUs == commandMaxPwmUs,
            "GDW command envelope must match");
     expect(descriptor.commandMinAngleCdeg == -4500
                && descriptor.commandMaxAngleCdeg == 4500,
@@ -82,20 +108,24 @@ int main()
     expect(table[4].displayName == std::string_view("RearLeft"),
            "RearLeft display name must be ASCII and semantic");
 
-    expectSavoX(table[0]);
-    expectSavoX(table[1]);
+    expectSavoX(table[0], 1000, 1450, 1900, 1000, 1900);
+    expectSavoX(table[1], 2020, 1580, 1140, 1140, 2020);
     expect(table[2].hardwareName == std::string_view("HDKJ S3150D"),
            "FrontAxis hardware name must match");
-    expect(!table[2].angleSupported && table[2].calibrationPending,
-           "FrontAxis must remain PWM-only and calibration pending");
-    expect(table[2].electricalMinPwmUs == 500 && table[2].neutralPwmUs == 1500
-               && table[2].electricalMaxPwmUs == 2500,
-           "FrontAxis electrical metadata must remain 500/1500/2500 us");
-    expect(table[2].commandMinPwmUs == 500 && table[2].commandMaxPwmUs == 2500
-               && table[2].neutralPwmUs == 1500,
-           "FrontAxis PWM bring-up envelope must match");
-    expectGdw(table[3]);
-    expectGdw(table[4]);
+    expect(table[2].angleSupported && !table[2].calibrationPending,
+           "FrontAxis must support calibrated angles and have calibration complete");
+    expect(table[2].electricalMinPwmUs == 1060 && table[2].neutralPwmUs == 1745
+               && table[2].electricalMaxPwmUs == 2430,
+           "FrontAxis electrical calibration must match 1060/1745/2430 us");
+    expect(table[2].electricalMinAngleCdeg == -9000
+               && table[2].electricalMaxAngleCdeg == 9000,
+           "FrontAxis calibration angle envelope must match +/-90 degrees");
+    expect(table[2].commandMinPwmUs == 1060 && table[2].commandMaxPwmUs == 2430
+               && table[2].commandMinAngleCdeg == -9000
+               && table[2].commandMaxAngleCdeg == 9000,
+           "FrontAxis command envelope must match calibrated limits");
+    expectGdw(table[3], 1110, 1570, 2030, 1110, 2030);
+    expectGdw(table[4], 1940, 1450, 960, 960, 1940);
 
     expect(rb::servoDescriptor(rb::ServoId::FrontRight) == &table[0],
            "semantic descriptor lookup must return ID 0");
