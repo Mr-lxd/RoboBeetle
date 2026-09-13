@@ -144,6 +144,30 @@ static protocol_dispatcher_outcome_t handle(
         now_ms);
 }
 
+static void complete_motion_start_ramp(fixture_t *fixture)
+{
+    uint32_t now_ms;
+
+    (void)motion_manager_process(
+        &fixture->motion_manager,
+        0U);
+    (void)motion_manager_process(
+        &fixture->motion_manager,
+        10U);
+    for (now_ms = 100U; now_ms <= 700U; now_ms += 100U)
+    {
+        safety_supervisor_on_heartbeat(
+            &fixture->safety_supervisor,
+            now_ms);
+        (void)motion_manager_process(
+            &fixture->motion_manager,
+            now_ms);
+    }
+    (void)motion_manager_process(
+        &fixture->motion_manager,
+        760U);
+}
+
 static void accept_heartbeat(
     fixture_t *fixture,
     uint16_t sequence,
@@ -1076,6 +1100,7 @@ static void test_servo_disable_intersects_mode_transition_ownership(void)
     outcome = handle(&fixture, &frame, 0U);
     expect(outcome.result == RBP2_RESULT_OK,
            "transition Disable setup should start Forward Motion");
+    complete_motion_start_ramp(&fixture);
 
     frame = make_frame(
         RBP2_MSG_SET_MOTION_MODE,

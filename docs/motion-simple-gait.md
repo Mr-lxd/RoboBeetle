@@ -68,14 +68,19 @@ channel to logical neutral; SetAngle, Neutral, and Motion angle writes update
 the tracker. Raw SetPWM deliberately marks that channel's logical pose
 unknown because no inverse pulse-to-angle contract is assumed. START rejects
 an unknown required pose with the existing `HARDWARE_FAILURE` result mapping;
-after a known pose is available, START cross-fades the recorded logical
-targets to the selected gait target over the same provisional 750 ms window,
-including the mirrored left/right channels.
+it also rejects a known rear logical pose outside the operational envelope
+`-3000…+4500 cdeg` before acquiring Motion ownership. After a valid known pose
+is available, START cross-fades the recorded logical targets to the selected
+gait target over the same provisional 750 ms window, including the mirrored
+left/right channels. During either the initial START ramp or a mode cross-fade,
+only a repeated START for the current transition target is idempotently
+accepted; a different mode returns `BUSY` without overwriting the transition.
 
 The generator emits logical targets only. The common MotionManager output
 guard enforces the rear operational envelope `-3000…+4500 cdeg` immediately
-before Servo calibration/PWM conversion and owns the clamp diagnostic. A
-future alternate gait generator cannot bypass this guard.
+before Servo calibration/PWM conversion and owns the clamp diagnostic. STOPPING
+applies the same guard after interpolating its retained targets, so a future
+alternate gait generator or retained transition vector cannot bypass it.
 
 `Disable`/`Disable All`, heartbeat/liveness loss, and the existing
 `SafetySupervisor` fail-safe path bypass the ramp. `app_main` evaluates the
@@ -167,7 +172,11 @@ contract. Motion-specific assertions cover:
 - actual 10/20/70/100 ms Motion wall-time gaps and uint32 timestamp wrap;
 - non-neutral manual-pose START cross-fade, mirrored left/right handoff, and
   raw SetPWM unknown-pose rejection through existing `HARDWARE_FAILURE`;
-- generator-independent rear envelope clamping and Motion-owned diagnostics;
+- START rejection for known rear poses outside the operational envelope;
+- generator-independent rear envelope clamping, including the STOPPING path,
+  and Motion-owned diagnostics;
+- idempotent same-target START and `BUSY` rejection for reentrant different
+  modes during START/mode transitions;
 - manual Servo `BUSY` arbitration during STOPPING;
 - old/new ownership union through an acknowledged mode transition;
 - immediate Disable All and heartbeat/liveness takeover;

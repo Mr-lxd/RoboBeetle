@@ -211,6 +211,18 @@ static void keep_host_alive(
     }
 }
 
+static void complete_start_transition(fixture_t *fixture)
+{
+    uint32_t now_ms;
+
+    for (now_ms = 100U; now_ms <= 700U; now_ms += 100U)
+    {
+        keep_host_alive(fixture, now_ms);
+        (void)motion_manager_process(&fixture->manager, now_ms);
+    }
+    (void)motion_manager_process(&fixture->manager, 760U);
+}
+
 static int32_t abs_cdeg(int32_t value)
 {
     return value < 0 ? -value : value;
@@ -258,6 +270,7 @@ static void test_running_mode_change_preserves_phase(void)
            "mode-change setup should start FORWARD");
     (void)motion_manager_process(&fixture.manager, 0U);
     (void)motion_manager_process(&fixture.manager, 10U);
+    complete_start_transition(&fixture);
     phase_before_change = simple_gait_generator_phase(&fixture.generator);
 
     expect(motion_manager_start(
@@ -266,10 +279,78 @@ static void test_running_mode_change_preserves_phase(void)
            "running Motion should accept a mode change");
     expect(motion_manager_mode(&fixture.manager) == MOTION_FORWARD,
            "cross-fade should retain the active mode until its deadline");
-    (void)motion_manager_process(&fixture.manager, 20U);
+    keep_host_alive(&fixture, 800U);
+    (void)motion_manager_process(&fixture.manager, 800U);
     expect(simple_gait_generator_phase(&fixture.generator) >
                phase_before_change,
            "mode change should not reset the generator phase");
+}
+
+static void test_start_transition_rejects_different_mode_reentry(void)
+{
+    fixture_t fixture;
+
+    fixture_init(&fixture, 0x001BU);
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_FORWARD) == MOTION_MANAGER_RESULT_OK,
+           "START transition reentry setup should start FORWARD");
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_FORWARD) == MOTION_MANAGER_RESULT_OK,
+           "repeated START for the transition target should be idempotent");
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_TURN_LEFT) == MOTION_MANAGER_RESULT_BUSY,
+           "different START during the initial ramp should be BUSY");
+    expect(fixture.manager.transition ==
+               MOTION_MANAGER_TRANSITION_START &&
+               fixture.manager.transition_mode == MOTION_FORWARD &&
+               fixture.manager.transition_elapsed_ms == 0U,
+           "different START must not overwrite the initial transition");
+}
+
+static void test_mode_transition_rejects_reentrant_mode_changes(void)
+{
+    fixture_t fixture;
+    uint32_t elapsed_before_reentry;
+
+    fixture_init(&fixture, 0x001BU);
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_FORWARD) == MOTION_MANAGER_RESULT_OK,
+           "mode transition reentry setup should start FORWARD");
+    (void)motion_manager_process(&fixture.manager, 0U);
+    (void)motion_manager_process(&fixture.manager, 10U);
+    complete_start_transition(&fixture);
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_TURN_LEFT) == MOTION_MANAGER_RESULT_OK,
+           "mode transition reentry setup should accept TURN_LEFT");
+    keep_host_alive(&fixture, 800U);
+    (void)motion_manager_process(&fixture.manager, 800U);
+    elapsed_before_reentry = fixture.manager.transition_elapsed_ms;
+    expect(elapsed_before_reentry > 0U,
+           "mode transition reentry test should advance the cross-fade");
+
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_TURN_LEFT) == MOTION_MANAGER_RESULT_OK,
+           "repeated START for the cross-fade target should be idempotent");
+    expect(fixture.manager.transition_elapsed_ms == elapsed_before_reentry,
+           "idempotent START must not reset cross-fade elapsed time");
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_FORWARD) == MOTION_MANAGER_RESULT_BUSY,
+           "START for the stale active mode must be BUSY during cross-fade");
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_TURN_RIGHT) == MOTION_MANAGER_RESULT_BUSY,
+           "START for a third mode must be BUSY during cross-fade");
+    expect(fixture.manager.transition == MOTION_MANAGER_TRANSITION_MODE &&
+               fixture.manager.transition_from_mode == MOTION_FORWARD &&
+               fixture.manager.transition_mode == MOTION_TURN_LEFT,
+           "reentrant START must not overwrite the active cross-fade");
 }
 
 static void test_graceful_stop_contract_and_monotonic_targets(void)
@@ -529,6 +610,35 @@ static void test_motion_start_rejects_unknown_raw_pwm_pose(void)
            "Motion START should recover after Neutral establishes the pose");
 }
 
+static void test_motion_start_rejects_rear_pose_outside_operational_envelope(void)
+{
+    fixture_t fixture;
+
+    fixture_init(&fixture, 0x001BU);
+    expect(servo_service_set_angle(
+               &fixture.servo_service,
+               SERVO_ID_REAR_RIGHT,
+               -4500) == SERVO_SERVICE_RESULT_OK,
+           "manual rear pose should accept the wider Servo angle range");
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_FORWARD) == MOTION_MANAGER_RESULT_HARDWARE_FAILURE,
+           "Motion START should reject a rear pose below its operational minimum");
+    expect(motion_manager_state(&fixture.manager) == MOTION_STATE_STOPPED &&
+               !servo_service_motion_is_active(&fixture.servo_service),
+           "out-of-envelope rear pose rejection should not acquire Motion ownership");
+
+    expect(servo_service_neutral(
+               &fixture.servo_service,
+               (uint16_t)(1U << SERVO_ID_REAR_RIGHT)) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Neutral should restore a valid rear pose");
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_FORWARD) == MOTION_MANAGER_RESULT_OK,
+           "Motion START should recover after the rear pose returns in-envelope");
+}
+
 static void test_motion_process_uses_actual_elapsed_wall_time(void)
 {
     fixture_t fixture;
@@ -709,21 +819,54 @@ static void test_common_motion_guard_clamps_alternate_generator_output(void)
            "common Motion output guard should own its clamp diagnostic");
 }
 
+static void test_stop_transition_reapplies_operational_sanitizer(void)
+{
+    fixture_t fixture;
+
+    fixture_init(&fixture, 0x001BU);
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_FORWARD) == MOTION_MANAGER_RESULT_OK,
+           "STOP sanitizer setup should start FORWARD");
+    (void)motion_manager_process(&fixture.manager, 0U);
+    (void)motion_manager_process(&fixture.manager, 10U);
+
+    /* Model a retained transition target from an alternate Motion path. */
+    fixture.manager.last_targets.rear_right_cdeg = -4500;
+    expect(motion_manager_request_stop_at(&fixture.manager, 100U) ==
+               MOTION_MANAGER_RESULT_OK,
+           "STOP sanitizer setup should enter STOPPING");
+    keep_host_alive(&fixture, 100U);
+    (void)motion_manager_process(&fixture.manager, 110U);
+
+    expect(motion_manager_state(&fixture.manager) == MOTION_STATE_STOPPING,
+           "STOP sanitizer test should still be inside the provisional ramp");
+    expect(motion_manager_last_targets(&fixture.manager)->rear_right_cdeg ==
+               MOTION_REAR_MIN_CDEG,
+           "STOPPING must clamp retained rear targets to the operational minimum");
+    expect(motion_manager_operational_clamp_count(&fixture.manager) == 1U,
+           "STOPPING sanitizer should use the common clamp diagnostic");
+}
+
 int main(void)
 {
     test_stopped_running_and_start_gate();
     test_running_mode_change_preserves_phase();
+    test_start_transition_rejects_different_mode_reentry();
+    test_mode_transition_rejects_reentrant_mode_changes();
     test_graceful_stop_contract_and_monotonic_targets();
     test_stop_is_idempotent_when_stopped();
     test_watchdog_interrupts_graceful_stop_without_auto_resume();
     test_disable_all_preempts_stop_immediately();
     test_start_crossfades_from_recorded_manual_pose();
     test_motion_start_rejects_unknown_raw_pwm_pose();
+    test_motion_start_rejects_rear_pose_outside_operational_envelope();
     test_motion_process_uses_actual_elapsed_wall_time();
     test_motion_process_elapsed_time_is_wrap_safe();
     test_graceful_stop_uses_actual_750_ms_duration();
     test_stop_elapsed_time_starts_at_acceptance();
     test_common_motion_guard_clamps_alternate_generator_output();
+    test_stop_transition_reapplies_operational_sanitizer();
 
     if (failures == 0)
     {

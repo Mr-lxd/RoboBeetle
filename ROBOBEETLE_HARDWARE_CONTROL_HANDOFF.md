@@ -359,6 +359,11 @@ Verify 和 physical Motion exercise 尚未在本轮执行，仍为 **Pending**�
   与停止轨迹争夺 actuator ownership。
 - Running 模式切换在 ACK 后仍保留旧/新 required-mask 并集直到同一 provisional
   crossfade 窗口结束；只被新模式释放的通道在此窗口内仍按 Motion-owned 处理。
+- 初始 START ramp 或 mode crossfade 期间，只允许目标模式相同的幂等 START；
+  其它模式返回 `BUSY=7`，不能覆盖当前 transition。Motion START 在取得
+  ownership 前检查已知 rear logical pose 是否位于 `-3000…+4500 cdeg`
+  operational envelope 内，越界使用既有 `HardwareFailure=6` 映射拒绝。
+  STOPPING 插值后的 retained targets 仍经过同一 common sanitizer。
 - Disable/Disable All、heartbeat/host-liveness loss 和现有 SafetySupervisor
   fail-safe 路径立即 abort/disable，不等待 750 ms。`app_main` 先处理 Safety，
   Protocol Dispatcher 对已校验且与 active Motion ownership 相交的显式

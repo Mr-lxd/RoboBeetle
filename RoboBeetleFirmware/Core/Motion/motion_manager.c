@@ -104,6 +104,32 @@ static bool motion_manager_read_logical_pose(
     return true;
 }
 
+static bool motion_manager_pose_within_operational_envelope(
+    const joint_targets_t *targets,
+    uint16_t mask)
+{
+    if (targets == NULL)
+    {
+        return false;
+    }
+
+    if (((mask & (uint16_t)(1U << SERVO_ID_REAR_RIGHT)) != 0U) &&
+        ((targets->rear_right_cdeg < MOTION_REAR_MIN_CDEG) ||
+         (targets->rear_right_cdeg > MOTION_REAR_MAX_CDEG)))
+    {
+        return false;
+    }
+
+    if (((mask & (uint16_t)(1U << SERVO_ID_REAR_LEFT)) != 0U) &&
+        ((targets->rear_left_cdeg < MOTION_REAR_MIN_CDEG) ||
+         (targets->rear_left_cdeg > MOTION_REAR_MAX_CDEG)))
+    {
+        return false;
+    }
+
+    return true;
+}
+
 static motion_manager_result_t motion_manager_map_servo_result(
     servo_service_result_t result)
 {
@@ -304,6 +330,9 @@ static motion_manager_result_t motion_manager_tick(
             &manager->stop_start_targets,
             &zero_targets,
             manager->stop_elapsed_ms);
+        motion_manager_sanitize_targets(
+            &targets,
+            &manager->operational_clamp_count);
         result = motion_manager_apply_targets(manager, &targets);
         if (result != MOTION_MANAGER_RESULT_OK)
         {
@@ -503,6 +532,13 @@ motion_manager_result_t motion_manager_start(
 
     if (manager->state == MOTION_STATE_RUNNING)
     {
+        if (manager->transition != MOTION_MANAGER_TRANSITION_NONE)
+        {
+            return manager->transition_mode == mode
+                ? MOTION_MANAGER_RESULT_OK
+                : MOTION_MANAGER_RESULT_BUSY;
+        }
+
         if (manager->active_mode == mode)
         {
             return MOTION_MANAGER_RESULT_OK;
@@ -543,6 +579,13 @@ motion_manager_result_t motion_manager_start(
             manager,
             required_mask,
             &start_targets))
+    {
+        return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
+    }
+
+    if (!motion_manager_pose_within_operational_envelope(
+            &start_targets,
+            required_mask))
     {
         return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
     }

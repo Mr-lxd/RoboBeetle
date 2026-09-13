@@ -305,7 +305,12 @@ lane. A late START or mode-change ACK is ignored and cannot resurrect Running
 state. ServoService's logical-pose contract is explicit: Enable, SetAngle,
 Neutral, and Motion angle writes establish known pose; raw SetPWM marks pose
 unknown; Motion START rejects an unknown required pose using the existing
-`HardwareFailure=6` result.
+`HardwareFailure=6` result and rejects a known rear pose outside the
+`-3000…+4500 cdeg` operational envelope before Motion ownership is acquired.
+During the initial START ramp or a mode cross-fade, only a repeated START for
+the current transition target is idempotently accepted; a different mode maps
+to `Busy=7` and cannot overwrite the active transition. STOPPING re-applies the
+same rear envelope guard after interpolation.
 
 The Qt Controller displays `Running`, acceptance-time `Stopping`, timer-based
 `Stopped`, or `Faulted`; the UI timer is not actuator confirmation. Reconnect
