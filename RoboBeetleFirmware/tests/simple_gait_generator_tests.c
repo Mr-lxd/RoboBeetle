@@ -199,33 +199,7 @@ static void test_phase_step(void)
            "10 ms should advance the deterministic 0.5 Hz phase exactly");
 }
 
-static void test_operational_rear_clamp_and_diagnostics(void)
-{
-    joint_targets_t targets = {
-        .front_right_cdeg = 0,
-        .front_left_cdeg = 0,
-        .front_axis_cdeg = 0,
-        .rear_right_cdeg = -3001,
-        .rear_left_cdeg = 4501,
-    };
-    uint32_t clamp_count = 0U;
-
-    simple_gait_generator_clamp_targets(&targets, &clamp_count);
-    expect(targets.rear_right_cdeg == MOTION_REAR_MIN_CDEG,
-           "RearRight below the operational minimum should clamp");
-    expect(targets.rear_left_cdeg == MOTION_REAR_MAX_CDEG,
-           "RearLeft above the operational maximum should clamp");
-    expect(clamp_count == 2U,
-           "both rear boundary violations should be diagnosed");
-
-    targets.rear_right_cdeg = MOTION_REAR_MIN_CDEG;
-    targets.rear_left_cdeg = MOTION_REAR_MAX_CDEG;
-    simple_gait_generator_clamp_targets(&targets, &clamp_count);
-    expect(clamp_count == 2U,
-           "valid rear operational boundaries should not increment diagnostics");
-}
-
-static void test_sample_reports_a_clamp(void)
+static void test_sample_preserves_logical_targets_for_common_guard(void)
 {
     simple_gait_generator_t generator;
     joint_targets_t targets;
@@ -239,8 +213,9 @@ static void test_sample_reports_a_clamp(void)
                1.0F,
                &targets),
            "large deterministic sample should still return targets");
-    expect(simple_gait_generator_operational_clamp_count(&generator) > 0U,
-           "sampled rear clamp should be visible in diagnostics");
+    expect(targets.rear_right_cdeg == -5000 &&
+               targets.rear_left_cdeg == -5000,
+           "SimpleGaitGenerator should preserve logical targets beyond the operational envelope");
 }
 
 int main(void)
@@ -250,8 +225,7 @@ int main(void)
     test_backward_is_logical_stroke_inversion();
     test_turn_scales_and_axis_bias();
     test_phase_step();
-    test_operational_rear_clamp_and_diagnostics();
-    test_sample_reports_a_clamp();
+    test_sample_preserves_logical_targets_for_common_guard();
 
     if (failures == 0)
     {

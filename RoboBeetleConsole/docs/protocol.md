@@ -284,16 +284,28 @@ transition.
 
 The Firmware ACK is acceptance-level: successful START enters `RUNNING`, while
 successful STOP enters `MOTION_STOPPING` and retains Motion ownership. A
-centralized 750 ms **[Provisional]** cooperative ramp drives amplitude/bias and
-logical targets to zero before releasing ownership and entering STOPPED. During
-STOPPING, manual Servo Enable/SetPWM/SetAngle/Neutral requests map to `Busy=7`.
-Disable All and SafetySupervisor host-liveness loss immediately abort Motion
-and disable/stop actuators; they never wait for the ramp. An explicit
-single-channel Disable aborts Motion only when its validated mask intersects
-active Motion ownership; a non-intersecting Disable remains allowed. A successful
-`0x15` request participates in the existing one-entry successful duplicate
-cache, so same sequence/type retry replays the ACK without repeating the
-transition.
+centralized 750 ms **[Provisional]** cooperative wall-time ramp drives
+amplitude/bias and logical targets to zero before releasing ownership and
+entering STOPPED. During STOPPING, manual Servo Enable/SetPWM/SetAngle/Neutral
+requests map to `Busy=7`. Disable All and SafetySupervisor host-liveness loss
+immediately abort Motion and disable/stop actuators; they never wait for the
+ramp. An explicit single-channel Disable aborts Motion only when its validated
+mask intersects active Motion ownership; a non-intersecting Disable remains
+allowed. A successful `0x15` request participates in the existing one-entry
+successful duplicate cache, so same sequence/type retry replays the ACK without
+repeating the transition.
+
+The Controller also treats unresolved in-flight, queued, or deferred Motion
+work as active for local arbitration. STOP cancels stale queued/deferred Motion
+requests and marks an in-flight Motion request cancelled before submitting the
+canonical STOP. DirectUart can transmit STOP immediately alongside the
+cancelled request; Apc220HalfDuplex retains one-flight ordering and gives STOP
+a dedicated lane above ordinary work but below the safety-priority Disable
+lane. A late START or mode-change ACK is ignored and cannot resurrect Running
+state. ServoService's logical-pose contract is explicit: Enable, SetAngle,
+Neutral, and Motion angle writes establish known pose; raw SetPWM marks pose
+unknown; Motion START rejects an unknown required pose using the existing
+`HardwareFailure=6` result.
 
 The Qt Controller displays `Running`, acceptance-time `Stopping`, timer-based
 `Stopped`, or `Faulted`; the UI timer is not actuator confirmation. Reconnect
@@ -322,7 +334,7 @@ This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware v
 | Set Servo PWM | `0x12` | Sends count 1, semantic ID, pulse LE; applies descriptor command envelope | Accepts exactly count 1 and a supported semantic ID; host-alive/enabled/range gates; writes mapped timer CCR | `uint8,uint8,uint16` | Yes | **Consistent for all five IDs; final numeric bounds are recorded above, including inverted left-side calibration** |
 | Set Servo Angle | `0x13` | Controller and Qt UI send count 1, angle-capable semantic ID, signed cdeg LE; UI is gated by connection, Enable ACK, and no pending Disable | Maps each accepted descriptor angle with `int32_t` arithmetic, including FrontAxis −90…+90° | `uint8,uint8,int16` | Yes | **Implemented; PR #13 feature-image Hardware Verification: PASS** |
 | Neutral | `0x14` | Sends the selected semantic mask after local enable | Requires live host, valid mask, and enabled selected channels; writes descriptor neutral pulses without disabling | `uint16 mask` | Yes | **Implemented; final five-servo neutral values recorded above; PR #13 feature-image Hardware Verification: PASS** |
-| SetMotionMode | `0x15` | Sends `schema=1, mode, action`; successful STOP ACK displays `Stopping` and starts the provisional local transition timer | Validates exact three-byte payload, HostAlive for START, mode/action relation, ownership, and returns acceptance-level ACK; ordinary STOP enters `MOTION_STOPPING` and ramps targets to neutral over 750 ms | `uint8,uint8,uint8` | Yes | **Implemented / Host Test: PASS; gait profile and ARM/hardware exercise [Pending]** |
+| SetMotionMode | `0x15` | Sends `schema=1, mode, action`; successful STOP ACK displays `Stopping` and starts the provisional local transition timer; STOP supersedes unresolved Motion work | Validates exact three-byte payload, HostAlive for START, mode/action relation, ownership, and returns acceptance-level ACK; ordinary STOP enters `MOTION_STOPPING` and ramps targets to neutral over actual elapsed 750 ms while retaining Motion ownership; common Motion output guard enforces the rear envelope | `uint8,uint8,uint8` | Yes | **Implemented / Host Test: PASS; gait profile and ARM/hardware exercise [Pending]** |
 | LeakStatus | `0x20` | Receives one-byte monitoring telemetry and updates Unknown/Dry/Wet indicator; never creates an ACK pending entry | Samples PA11 and emits after accepted Heartbeat ACK, first/change/500 ms refresh; no ACK and no Servo/Safety action | `uint8 state` | No | **Implemented; end-to-end monitoring [Hardware Verified]** |
 | ImuSnapshot | `0x21` | Decodes fixed 56-byte monitoring telemetry into `ImuMonitor`; never creates or releases an ACK pending entry; displays Unknown/Receiving/Stale/Error and clears invalid/stale values | Encodes current JY901S state and diagnostics after accepted Heartbeat ACK, at most one optional frame per opportunity, with due LeakStatus priority and fair rotation against a due DepthSnapshot when LeakStatus is not due | 56-byte fixed schema | No | **Implemented / Host Test: PASS; physical JY901S telemetry [Hardware Verified]** |
 | DepthSnapshot | `0x22` | Decodes fixed 38-byte monitoring telemetry into `DepthMonitor`; validates schema/flags/length and never creates or releases an ACK pending entry; sensor-invalid snapshots are Stale with values hidden while diagnostics remain visible | Parses the listen-only ROVMAKER decoder line, applies the provisional 3000 ms sensor freshness bound, and encodes validity-gated fixed-point fields and seven diagnostics counters after accepted Heartbeat ACK, at most one optional frame per opportunity | 38-byte fixed schema | No | **Implemented / Host Test: PASS; physical decoder path [Pending Hardware Verification]** |
@@ -334,7 +346,7 @@ This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware v
 - DirectUart keeps every ACK-requiring request in a sequence-keyed table, including heartbeats; this preserves the original multi-pending behavior.
 - Apc220HalfDuplex permits one ACK-requiring request in flight. User servo commands wait in a bounded queue of `kApc220CommandQueueCapacity` entries, and heartbeat ticks collapse into one pending/due bit rather than a queue. The profile name is retained for compatibility; the current hardware path is DAP UART/COM13/USART1.
 - Servo Disable/Disable All requests in this single-flight profile use a safety-priority queue. A new Disable clears unsent Servo Enable, Set Servo PWM, Set Servo Angle, and Neutral work for the affected mask (and any deferred retry), then runs after the uncancellable in-flight exchange and any due heartbeat but before ordinary retry/queue work.
-- `SetMotionMode` is an ACK-requiring actuator command and uses the same DirectUart multi-pending or Apc220HalfDuplex bounded-queue bookkeeping. Disable All clears queued Motion work and keeps only the safety-priority Disable request. A successful Motion STOP ACK is cached at acceptance; the later 750 ms neutral completion is a local/Firmware state transition, not a second ACK.
+- `SetMotionMode` is an ACK-requiring actuator command and uses the same DirectUart multi-pending or Apc220HalfDuplex bounded-queue bookkeeping. STOP cancels queued/deferred Motion work and marks stale in-flight Motion requests cancelled; APC schedules the canonical STOP above ordinary work while keeping one ACK-requiring exchange in flight. Disable All clears all graceful-stop work and keeps only the safety-priority Disable request. A successful Motion STOP ACK is cached at acceptance; the later 750 ms neutral completion is a local/Firmware state transition, not a second ACK.
 - ACK timeout is 200 ms for DirectUart and 250 ms for Apc220HalfDuplex. Retries reuse the original encoded frame and sequence, up to three retransmissions after the original send when the transport accepts the write; DirectUart retains its legacy handling of failed retry writes for regression compatibility.
 - When the profile heartbeat is due, or when the remaining safety budget cannot contain an ordinary exchange, the heartbeat is dispatched first. The command retry remains deferred with its original sequence/frame and is sent after the heartbeat exchange.
 - Firmware caches the most recent successful non-Heartbeat request using `Sequence + MessageType`. An immediate retry of that request replays the cached result-0 ACK and returns before dispatch, so Servo Enable/PWM/Angle/Neutral/Disable are not executed twice.

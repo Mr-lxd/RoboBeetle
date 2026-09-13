@@ -8,7 +8,6 @@
 typedef struct
 {
     float phase_rad;
-    uint32_t operational_clamp_count;
 } simple_gait_generator_t;
 
 void simple_gait_generator_init(
@@ -33,12 +32,5 @@ bool simple_gait_generator_is_mode_valid(
 
 float simple_gait_generator_phase(
     const simple_gait_generator_t *generator);
-
-uint32_t simple_gait_generator_operational_clamp_count(
-    const simple_gait_generator_t *generator);
-
-void simple_gait_generator_clamp_targets(
-    joint_targets_t *targets,
-    uint32_t *clamp_count);
 
 #endif /* ROBOBEETLE_SIMPLE_GAIT_GENERATOR_H */

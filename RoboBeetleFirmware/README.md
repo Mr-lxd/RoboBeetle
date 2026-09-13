@@ -53,15 +53,27 @@ for the six non-STOP modes and `STOP` uses the STOP mode plus STOP action.
 
 Ordinary STOP is graceful: the dispatcher returns its successful ACK when the
 stop request is accepted, `MotionManager` enters `MOTION_STOPPING`, and the
-cooperative 10 ms scheduler interpolates the retained logical targets to
+cooperative foreground processing interpolates the retained logical targets to
 neutral over the centralized `MOTION_TRANSITION_DURATION_MS=750U` provisional
-duration. Motion ownership remains held throughout the ramp, so manual Servo
+duration using the actual wrap-safe elapsed time from the STOP acceptance
+timestamp. Time before STOP acceptance is not consumed by the ramp.
+Motion ownership remains held throughout the ramp, so manual
 Enable/SetPWM/SetAngle/Neutral is `BUSY`; the final zero write releases Motion
 ownership and enters `MOTION_STOPPED`. Disable All, an explicit Disable whose
 validated mask intersects active Motion ownership, and SafetySupervisor
 host-liveness failure abort immediately without waiting for the ramp; a
 non-intersecting single-channel Disable remains allowed without preempting
 Motion.
+
+ServoService tracks the logical angle of each enabled channel. Enable starts a
+new channel at logical neutral, SetAngle/Neutral/Motion writes update the
+tracker, and raw SetPWM marks that channel's pose unknown. Motion START refuses
+an unknown required pose through the existing internal
+`MOTION_MANAGER_RESULT_HARDWARE_FAILURE` mapping, so Protocol V2 keeps its
+existing result values. A known non-neutral pose is cross-faded to the gait
+target over the same 750 ms transition. SimpleGaitGenerator emits logical
+targets only; MotionManager applies the common rear operational guard
+(`-3000…+4500 cdeg`) before Servo calibration and owns its diagnostic count.
 
 The PA11 leak path remains monitoring-only in the current source and has no
 leak-to-Safety trip. If a future leak safety trip is added, it must call the
@@ -478,7 +490,7 @@ The current communication split is:
 - **[Implemented]** `Core/Servo/servo_calibration.c/.h` owns per-descriptor integer angle-to-pulse mapping.
 - **[Implemented]** `Core/Servo/servo_service.c/.h` owns supported-mask validation, enabled-state policy, command range checks, Neutral semantics, multi-bit Enable rollback, and driver-independent Servo results.
 - **[Implemented]** `Core/Servo/servo_driver_stm32.c/.h` owns the HAL/TIM3/TIM4 channel adapter. It maps abstract descriptor selectors to timer handles and HAL channels and has no Protocol or heartbeat knowledge.
-- **[Implemented / Software Verified]** `Core/Motion/motion_manager.c/.h` and `simple_gait_generator.c/.h` own the bench-provisional Motion state machine, logical target generation, 10 ms cooperative scheduling, Motion Servo ownership, acceptance-time graceful STOP, centralized 750 ms neutral ramp, and immediate abort hooks. The modules have no interrupt-driven gait path and no autonomous restart behavior.
+- **[Implemented / Software Verified]** `Core/Motion/motion_manager.c/.h` and `simple_gait_generator.c/.h` own the bench-provisional Motion state machine, logical target generation, cooperative foreground scheduling with wrap-safe wall-time deltas from a 10 ms minimum cadence, Motion Servo ownership, acceptance-time graceful STOP, centralized 750 ms neutral ramp, generator-independent operational limiting, and immediate abort hooks. The modules have no interrupt-driven gait path and no autonomous restart behavior.
 - **[Implemented]** `Core/Sensors/leak_sensor.c/.h` owns the HAL-independent UNKNOWN/DRY/WET mapping; `leak_sensor_stm32.c/.h` only reads the configured PA11 GPIO.
 - **[Implemented]** `Core/Sensors/leak_telemetry_policy.c/.h` limits LeakStatus publication to first sample/state changes/500 ms refreshes. `Core/App/app_main.c` sends one-byte `0x20` telemetry only after a successful Heartbeat ACK; it does not connect leak state to Safety or Servo behavior.
 - **[Implemented / Software Verified]** `Core/Sensors/jy901s_telemetry.c/.h` encodes the fixed 56-byte `ImuSnapshot` payload with explicit little-endian fixed-point fields and bring-up diagnostics. `Core/Communication/imu_telemetry_policy.c/.h` and `telemetry_scheduler.c/.h` keep IMU publication at one second, after completed Heartbeat ACK, with immediate priority for due LeakStatus, fair rotation against a due DepthSnapshot when LeakStatus is not due, and at most one optional frame per opportunity. The IMU path does not enter command/ACK matching or alter USART1 behavior.

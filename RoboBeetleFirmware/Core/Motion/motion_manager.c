@@ -38,6 +38,72 @@ static uint16_t motion_manager_required_mask(
     return mask;
 }
 
+static bool motion_manager_read_logical_pose(
+    const motion_manager_t *manager,
+    uint16_t mask,
+    joint_targets_t *targets)
+{
+    static const uint8_t ids[SERVO_DESCRIPTOR_COUNT] = {
+        SERVO_ID_FRONT_RIGHT,
+        SERVO_ID_FRONT_LEFT,
+        SERVO_ID_FRONT_AXIS,
+        SERVO_ID_REAR_RIGHT,
+        SERVO_ID_REAR_LEFT,
+    };
+    int16_t angle_cdeg;
+
+    if ((manager == NULL) || (manager->servo_service == NULL) ||
+        (targets == NULL) ||
+        !servo_service_logical_pose_is_known(
+            manager->servo_service,
+            mask))
+    {
+        return false;
+    }
+
+    *targets = zero_targets;
+    for (size_t index = 0U; index < SERVO_DESCRIPTOR_COUNT; ++index)
+    {
+        const uint16_t servo_mask = (uint16_t)(1U << ids[index]);
+
+        if ((mask & servo_mask) == 0U)
+        {
+            continue;
+        }
+
+        if (!servo_service_logical_angle_cdeg(
+                manager->servo_service,
+                ids[index],
+                &angle_cdeg))
+        {
+            return false;
+        }
+
+        switch (ids[index])
+        {
+            case SERVO_ID_FRONT_RIGHT:
+                targets->front_right_cdeg = angle_cdeg;
+                break;
+            case SERVO_ID_FRONT_LEFT:
+                targets->front_left_cdeg = angle_cdeg;
+                break;
+            case SERVO_ID_FRONT_AXIS:
+                targets->front_axis_cdeg = angle_cdeg;
+                break;
+            case SERVO_ID_REAR_RIGHT:
+                targets->rear_right_cdeg = angle_cdeg;
+                break;
+            case SERVO_ID_REAR_LEFT:
+                targets->rear_left_cdeg = angle_cdeg;
+                break;
+            default:
+                return false;
+        }
+    }
+
+    return true;
+}
+
 static motion_manager_result_t motion_manager_map_servo_result(
     servo_service_result_t result)
 {
@@ -114,6 +180,51 @@ static joint_targets_t blend_targets(
     return interpolate_targets(from, to, elapsed_ms);
 }
 
+static uint32_t saturating_transition_elapsed(
+    uint32_t elapsed_ms,
+    uint32_t delta_ms)
+{
+    if (elapsed_ms >= MOTION_TRANSITION_DURATION_MS ||
+        delta_ms >= (MOTION_TRANSITION_DURATION_MS - elapsed_ms))
+    {
+        return MOTION_TRANSITION_DURATION_MS;
+    }
+
+    return elapsed_ms + delta_ms;
+}
+
+static void motion_manager_sanitize_targets(
+    joint_targets_t *targets,
+    uint32_t *clamp_count)
+{
+    if ((targets == NULL) || (clamp_count == NULL))
+    {
+        return;
+    }
+
+    if (targets->rear_right_cdeg < MOTION_REAR_MIN_CDEG)
+    {
+        targets->rear_right_cdeg = MOTION_REAR_MIN_CDEG;
+        ++(*clamp_count);
+    }
+    else if (targets->rear_right_cdeg > MOTION_REAR_MAX_CDEG)
+    {
+        targets->rear_right_cdeg = MOTION_REAR_MAX_CDEG;
+        ++(*clamp_count);
+    }
+
+    if (targets->rear_left_cdeg < MOTION_REAR_MIN_CDEG)
+    {
+        targets->rear_left_cdeg = MOTION_REAR_MIN_CDEG;
+        ++(*clamp_count);
+    }
+    else if (targets->rear_left_cdeg > MOTION_REAR_MAX_CDEG)
+    {
+        targets->rear_left_cdeg = MOTION_REAR_MAX_CDEG;
+        ++(*clamp_count);
+    }
+}
+
 static motion_manager_result_t motion_manager_apply_targets(
     motion_manager_t *manager,
     const joint_targets_t *targets)
@@ -154,19 +265,6 @@ static motion_manager_result_t motion_manager_apply_targets(
     return MOTION_MANAGER_RESULT_OK;
 }
 
-static uint32_t motion_manager_generator_diagnostic_count(
-    const motion_manager_t *manager)
-{
-    if ((manager->generator.ops == NULL) ||
-        (manager->generator.ops->diagnostic_count == NULL))
-    {
-        return 0U;
-    }
-
-    return manager->generator.ops->diagnostic_count(
-        manager->generator.context);
-}
-
 static motion_manager_result_t motion_manager_sample(
     motion_manager_t *manager,
     motion_mode_t mode,
@@ -186,27 +284,21 @@ static motion_manager_result_t motion_manager_sample(
         return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
     }
 
-    manager->operational_clamp_count =
-        motion_manager_generator_diagnostic_count(manager);
     return MOTION_MANAGER_RESULT_OK;
 }
 
 static motion_manager_result_t motion_manager_tick(
-    motion_manager_t *manager)
+    motion_manager_t *manager,
+    uint32_t elapsed_ms)
 {
     joint_targets_t targets;
     motion_manager_result_t result;
 
     if (manager->state == MOTION_STATE_STOPPING)
     {
-        if (manager->stop_elapsed_ms < MOTION_TRANSITION_DURATION_MS)
-        {
-            manager->stop_elapsed_ms += MOTION_GAIT_TICK_MS;
-            if (manager->stop_elapsed_ms > MOTION_TRANSITION_DURATION_MS)
-            {
-                manager->stop_elapsed_ms = MOTION_TRANSITION_DURATION_MS;
-            }
-        }
+        manager->stop_elapsed_ms = saturating_transition_elapsed(
+            manager->stop_elapsed_ms,
+            elapsed_ms);
 
         targets = interpolate_targets(
             &manager->stop_start_targets,
@@ -242,45 +334,37 @@ static motion_manager_result_t motion_manager_tick(
 
     manager->generator.ops->advance(
         manager->generator.context,
-        MOTION_GAIT_TICK_MS);
+        elapsed_ms);
 
     if (manager->transition == MOTION_MANAGER_TRANSITION_START)
     {
-        if (manager->transition_elapsed_ms < MOTION_TRANSITION_DURATION_MS)
-        {
-            manager->transition_elapsed_ms += MOTION_GAIT_TICK_MS;
-            if (manager->transition_elapsed_ms >
-                MOTION_TRANSITION_DURATION_MS)
-            {
-                manager->transition_elapsed_ms =
-                    MOTION_TRANSITION_DURATION_MS;
-            }
-        }
-        const float scale =
-            (float)manager->transition_elapsed_ms /
-            (float)MOTION_TRANSITION_DURATION_MS;
+        joint_targets_t gait_targets;
+
+        manager->transition_elapsed_ms = saturating_transition_elapsed(
+            manager->transition_elapsed_ms,
+            elapsed_ms);
         result = motion_manager_sample(
             manager,
             manager->active_mode,
-            scale,
-            scale,
-            &targets);
+            1.0F,
+            1.0F,
+            &gait_targets);
+        if (result == MOTION_MANAGER_RESULT_OK)
+        {
+            targets = interpolate_targets(
+                &manager->start_from_targets,
+                &gait_targets,
+                manager->transition_elapsed_ms);
+        }
     }
     else if (manager->transition == MOTION_MANAGER_TRANSITION_MODE)
     {
         joint_targets_t from_targets;
         joint_targets_t to_targets;
 
-        if (manager->transition_elapsed_ms < MOTION_TRANSITION_DURATION_MS)
-        {
-            manager->transition_elapsed_ms += MOTION_GAIT_TICK_MS;
-            if (manager->transition_elapsed_ms >
-                MOTION_TRANSITION_DURATION_MS)
-            {
-                manager->transition_elapsed_ms =
-                    MOTION_TRANSITION_DURATION_MS;
-            }
-        }
+        manager->transition_elapsed_ms = saturating_transition_elapsed(
+            manager->transition_elapsed_ms,
+            elapsed_ms);
         result = motion_manager_sample(
             manager,
             manager->transition_from_mode,
@@ -323,6 +407,13 @@ static motion_manager_result_t motion_manager_tick(
         motion_manager_stop_immediate(manager);
         return result;
     }
+
+    // Every generator, including future alternate implementations, passes
+    // through the common operational envelope before reaching calibration and
+    // PWM conversion.  This keeps physical limits independent of gait math.
+    motion_manager_sanitize_targets(
+        &targets,
+        &manager->operational_clamp_count);
 
     result = motion_manager_apply_targets(manager, &targets);
     if (result != MOTION_MANAGER_RESULT_OK)
@@ -378,6 +469,7 @@ motion_manager_result_t motion_manager_start(
     motion_manager_t *manager,
     motion_mode_t mode)
 {
+    joint_targets_t start_targets;
     uint16_t required_mask;
     motion_manager_result_t result;
 
@@ -422,6 +514,13 @@ motion_manager_result_t motion_manager_start(
             return MOTION_MANAGER_RESULT_SERVO_NOT_ENABLED;
         }
 
+        if (!servo_service_logical_pose_is_known(
+                manager->servo_service,
+                required_mask))
+        {
+            return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
+        }
+
         manager->transition_from_mode = manager->active_mode;
         manager->transition_mode = mode;
         manager->transition_elapsed_ms = 0U;
@@ -438,6 +537,14 @@ motion_manager_result_t motion_manager_start(
          required_mask) != required_mask)
     {
         return MOTION_MANAGER_RESULT_SERVO_NOT_ENABLED;
+    }
+
+    if (!motion_manager_read_logical_pose(
+            manager,
+            required_mask,
+            &start_targets))
+    {
+        return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
     }
 
     result = motion_manager_map_servo_result(
@@ -457,14 +564,27 @@ motion_manager_result_t motion_manager_start(
     manager->write_mask = required_mask;
     manager->transition_elapsed_ms = 0U;
     manager->stop_elapsed_ms = 0U;
-    manager->last_targets = zero_targets;
-    manager->stop_start_targets = zero_targets;
+    manager->last_targets = start_targets;
+    manager->start_from_targets = start_targets;
+    manager->stop_start_targets = start_targets;
     manager->scheduler_started = 0U;
     return MOTION_MANAGER_RESULT_OK;
 }
 
 motion_manager_result_t motion_manager_request_stop(
     motion_manager_t *manager)
+{
+    const uint32_t acceptance_ms =
+        ((manager != NULL) && (manager->scheduler_started != 0U))
+            ? manager->last_tick_ms
+            : 0U;
+
+    return motion_manager_request_stop_at(manager, acceptance_ms);
+}
+
+motion_manager_result_t motion_manager_request_stop_at(
+    motion_manager_t *manager,
+    uint32_t now_ms)
 {
     if (manager == NULL)
     {
@@ -484,6 +604,11 @@ motion_manager_result_t motion_manager_request_stop(
 
     manager->stop_start_targets = manager->last_targets;
     manager->stop_elapsed_ms = 0U;
+    // The graceful-stop clock starts when the request is accepted, not at
+    // the previous foreground tick.  The next process() call still uses the
+    // normal minimum cadence, but its elapsed delta is measured from here.
+    manager->last_tick_ms = now_ms;
+    manager->scheduler_started = 1U;
     manager->state = MOTION_STATE_STOPPING;
     return MOTION_MANAGER_RESULT_OK;
 }
@@ -516,13 +641,16 @@ motion_manager_result_t motion_manager_process(
         return MOTION_MANAGER_RESULT_OK;
     }
 
-    if ((uint32_t)(now_ms - manager->last_tick_ms) < MOTION_GAIT_TICK_MS)
+    const uint32_t elapsed_ms =
+        (uint32_t)(now_ms - manager->last_tick_ms);
+
+    if (elapsed_ms < MOTION_GAIT_TICK_MS)
     {
         return MOTION_MANAGER_RESULT_OK;
     }
 
     manager->last_tick_ms = now_ms;
-    return motion_manager_tick(manager);
+    return motion_manager_tick(manager, elapsed_ms);
 }
 
 void motion_manager_stop_immediate(
@@ -546,6 +674,7 @@ void motion_manager_stop_immediate(
         servo_service_motion_abort(manager->servo_service);
     }
     manager->last_targets = zero_targets;
+    manager->start_from_targets = zero_targets;
     manager->stop_start_targets = zero_targets;
     manager->transition_elapsed_ms = 0U;
     manager->stop_elapsed_ms = 0U;

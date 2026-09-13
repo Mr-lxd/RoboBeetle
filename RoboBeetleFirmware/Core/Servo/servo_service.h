@@ -44,6 +44,8 @@ typedef struct
     uint16_t enabled_mask;
     servo_service_owner_t owner;
     uint16_t motion_mask;
+    int16_t logical_angle_cdeg[SERVO_DESCRIPTOR_COUNT];
+    uint16_t logical_pose_known_mask;
 } servo_service_t;
 
 void servo_service_init(
@@ -104,5 +106,20 @@ servo_service_result_t servo_service_neutral(
 
 uint16_t servo_service_enabled_mask(
     const servo_service_t *service);
+
+/*
+ * Logical pose is known only when the last accepted command for a channel was
+ * angle-domain (Enable/SetAngle/Neutral/Motion).  Raw SetPWM intentionally
+ * invalidates that channel because its logical angle cannot be inferred from
+ * a calibrated pulse without an explicit inverse-mapping contract.
+ */
+bool servo_service_logical_pose_is_known(
+    const servo_service_t *service,
+    uint16_t mask);
+
+bool servo_service_logical_angle_cdeg(
+    const servo_service_t *service,
+    uint8_t servo_id,
+    int16_t *angle_cdeg);
 
 #endif /* SERVO_SERVICE_H */

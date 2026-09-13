@@ -62,6 +62,7 @@ bool isServoActuatorCommand(MessageType type)
     case MessageType::LeakStatus:
     case MessageType::ImuSnapshot:
     case MessageType::DepthSnapshot:
+    case MessageType::SetMotionMode:
         return false;
     }
     return false;
@@ -432,12 +433,20 @@ bool RobotController::stopMotion()
         emit logMessage(QStringLiteral("Motion STOP rejected: transport is not connected"));
         return false;
     }
-    if (motionState_ == MotionState::Stopping) {
+    if (motionState_ == MotionState::Stopping || hasPendingMotionStop()) {
         return true;
     }
-    if (motionState_ == MotionState::Stopped || motionState_ == MotionState::Faulted) {
+    if ((motionState_ == MotionState::Stopped || motionState_ == MotionState::Faulted)
+        && !hasPendingMotionWork()) {
         return true;
     }
+
+    // STOP is a superseding Motion request.  Mark an in-flight Motion request
+    // cancelled so a late START/mode ACK can never resurrect local Running
+    // state, remove queued/deferred Motion work, then submit the canonical
+    // STOP through the link-profile-specific transport path.
+    cancelQueuedMotionRequests();
+    cancelPendingMotionRequests();
 
     const bool accepted = sendCommand(
         MessageType::SetMotionMode,
@@ -452,6 +461,13 @@ bool RobotController::stopMotion()
         motionModeTransitionTimer_.stop();
     }
     return accepted;
+}
+
+bool RobotController::isMotionActive() const
+{
+    return motionState_ == MotionState::Running
+        || motionState_ == MotionState::Stopping
+        || hasPendingMotionWork();
 }
 
 bool RobotController::isMotionReady(MotionMode mode) const
@@ -512,6 +528,9 @@ bool RobotController::sendCommand(MessageType type,
         refreshApc220HeartbeatDue();
         const QueuedCommand command{type, payload, affectedMask, motionRequest};
         const bool isSafetyDisable = type == MessageType::ServoDisable;
+        const bool isMotionStop = type == MessageType::SetMotionMode
+            && motionRequest.has_value()
+            && motionRequest->action == MotionAction::Stop;
         const bool ordinaryAdmissionBlocked = !isSafetyDisable
             && !canStartApc220OrdinaryExchange();
         if (isSafetyDisable) {
@@ -527,6 +546,12 @@ bool RobotController::sendCommand(MessageType type,
                    && !commandQueue_.isEmpty()) {
                 commandQueue_.dequeue();
             }
+            while (isMotionStop && queuedCommandCount() >= kApc220CommandQueueCapacity
+                   && !commandQueue_.isEmpty()) {
+                // A graceful STOP supersedes ordinary queued work.  Preserve
+                // the bounded scheduler while reserving room for the STOP.
+                commandQueue_.dequeue();
+            }
             if (queuedCommandCount() >= kApc220CommandQueueCapacity) {
                 emit logMessage(QStringLiteral(
                     "Command rejected: host-link command queue is full (%1)")
@@ -535,17 +560,22 @@ bool RobotController::sendCommand(MessageType type,
             }
             if (isSafetyDisable) {
                 priorityCommandQueue_.enqueue(command);
+            } else if (isMotionStop) {
+                motionStopCommandQueue_.enqueue(command);
             } else {
                 commandQueue_.enqueue(command);
             }
+            const QString queueClass = isSafetyDisable
+                ? QStringLiteral("priority ")
+                : isMotionStop ? QStringLiteral("Motion STOP priority ")
+                               : QString();
             monitor_.ackStatus = QStringLiteral("Queued %1message 0x%2 (%3/%4)")
-                                     .arg(isSafetyDisable ? QStringLiteral("priority ")
-                                                          : QString())
+                                     .arg(queueClass)
                                      .arg(static_cast<quint8>(type), 2, 16, QLatin1Char('0'))
                                      .arg(queuedCommandCount())
                                      .arg(kApc220CommandQueueCapacity);
             updateMonitor();
-            if (isSafetyDisable || ordinaryAdmissionBlocked) {
+            if (isSafetyDisable || isMotionStop || ordinaryAdmissionBlocked) {
                 pumpApc220Scheduler();
             }
             return true;
@@ -690,6 +720,15 @@ void RobotController::pumpApc220Scheduler()
         return;
     }
 
+    if (!motionStopCommandQueue_.isEmpty()) {
+        const QueuedCommand command = motionStopCommandQueue_.dequeue();
+        if (!dispatchApc220Command(command)) {
+            emit logMessage(QStringLiteral(
+                "Host-link Motion STOP dropped after write failure"));
+        }
+        return;
+    }
+
     // The soft target is allowed to slip while an exchange is in flight, but
     // do not start ordinary work when its worst-case timeout/polling window
     // would cross the hard heartbeat safety boundary.  Send a heartbeat now
@@ -765,7 +804,8 @@ void RobotController::dispatchApc220Heartbeat()
     nextHeartbeatSafetyDeadlineAtMs_ = config_.heartbeatSafetyBudgetMs > 0
         ? dispatchAtMs + config_.heartbeatSafetyBudgetMs
         : 0;
-    if (!dispatchApc220Command({MessageType::Heartbeat, payload, 0})) {
+    if (!dispatchApc220Command(
+            {MessageType::Heartbeat, payload, 0, std::nullopt})) {
         heartbeatDue_ = true;
         nextHeartbeatDueAtMs_ = dispatchAtMs;
         nextHeartbeatSafetyDeadlineAtMs_ = dispatchAtMs;
@@ -1229,6 +1269,7 @@ void RobotController::resetSchedulerState()
     motionModeTransitionTimer_.stop();
     pending_.clear();
     priorityCommandQueue_.clear();
+    motionStopCommandQueue_.clear();
     commandQueue_.clear();
     deferredRetry_.reset();
     heartbeatDue_ = false;
@@ -1261,6 +1302,11 @@ void RobotController::clearQueuedCommandsForDisable(quint16 affectedMask)
     }
     priorityCommandQueue_ = std::move(retainedPriority);
 
+    if (!motionStopCommandQueue_.isEmpty()
+        && (motionStopCommandQueue_.front().affectedMask & affectedMask) != 0U) {
+        motionStopCommandQueue_.clear();
+    }
+
     QQueue<QueuedCommand> retainedOrdinary;
     while (!commandQueue_.isEmpty()) {
         const QueuedCommand command = commandQueue_.dequeue();
@@ -1292,6 +1338,7 @@ void RobotController::cancelQueuedMotionRequests()
 
     retainNonMotion(priorityCommandQueue_);
     retainNonMotion(commandQueue_);
+    motionStopCommandQueue_.clear();
 }
 
 void RobotController::cancelPendingMotionRequests()
@@ -1307,6 +1354,70 @@ void RobotController::cancelPendingMotionRequests()
         && deferredRetry_->type == MessageType::SetMotionMode) {
         deferredRetry_.reset();
     }
+}
+
+bool RobotController::hasPendingMotionWork() const
+{
+    const auto isLiveMotion = [](const PendingRequest &request) {
+        return request.type == MessageType::SetMotionMode
+            && !request.cancelled
+            && !request.motionCancelled
+            && request.motionRequest.has_value();
+    };
+    const auto hasQueuedMotion = [](const QQueue<QueuedCommand> &queue) {
+        for (const QueuedCommand &command : queue) {
+            if (command.type == MessageType::SetMotionMode
+                && command.motionRequest.has_value()) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    for (auto it = pending_.cbegin(); it != pending_.cend(); ++it) {
+        if (isLiveMotion(it.value())) {
+            return true;
+        }
+    }
+    if (deferredRetry_.has_value() && isLiveMotion(*deferredRetry_)) {
+        return true;
+    }
+    return hasQueuedMotion(priorityCommandQueue_)
+        || hasQueuedMotion(motionStopCommandQueue_)
+        || hasQueuedMotion(commandQueue_);
+}
+
+bool RobotController::hasPendingMotionStop() const
+{
+    const auto isMotionStop = [](MessageType type,
+                                  const std::optional<MotionRequest> &motion) {
+        return type == MessageType::SetMotionMode
+            && motion.has_value()
+            && motion->action == MotionAction::Stop;
+    };
+
+    for (auto it = pending_.cbegin(); it != pending_.cend(); ++it) {
+        if (!it->cancelled && !it->motionCancelled
+            && isMotionStop(it->type, it->motionRequest)) {
+            return true;
+        }
+    }
+    if (deferredRetry_.has_value() && !deferredRetry_->cancelled
+        && !deferredRetry_->motionCancelled
+        && isMotionStop(deferredRetry_->type, deferredRetry_->motionRequest)) {
+        return true;
+    }
+    const auto queueHasMotionStop = [&isMotionStop](const QQueue<QueuedCommand> &queue) {
+        for (const QueuedCommand &command : queue) {
+            if (isMotionStop(command.type, command.motionRequest)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    return queueHasMotionStop(priorityCommandQueue_)
+        || queueHasMotionStop(motionStopCommandQueue_)
+        || queueHasMotionStop(commandQueue_);
 }
 
 void RobotController::cancelPendingDirectActuatorRequests()
@@ -1399,12 +1510,13 @@ void RobotController::setLeakState(LeakState state)
 
 void RobotController::failClosedMotionState()
 {
+    const bool hadMotionWork = isMotionActive();
     motionStopTimer_.stop();
     motionModeTransitionTimer_.stop();
     motionTransitionOwnedMask_ = 0;
     cancelQueuedMotionRequests();
     cancelPendingMotionRequests();
-    if (isMotionActive()) {
+    if (hadMotionWork) {
         setMotionState(MotionState::Faulted, MotionMode::Stop);
     }
 }
@@ -1437,6 +1549,9 @@ quint16 RobotController::motionProtectionMask() const
                    deferredRetry_->motionRequest);
     }
     for (const QueuedCommand &command : priorityCommandQueue_) {
+        addPending(command.type, command.affectedMask, command.motionRequest);
+    }
+    for (const QueuedCommand &command : motionStopCommandQueue_) {
         addPending(command.type, command.affectedMask, command.motionRequest);
     }
     for (const QueuedCommand &command : commandQueue_) {

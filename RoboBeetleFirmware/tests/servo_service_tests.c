@@ -521,6 +521,82 @@ static void test_disable_all_preempts_motion_owner(void)
            "a Motion write after Disable All should not be accepted");
 }
 
+static void test_logical_pose_tracking_and_raw_pwm_unknown(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+    int16_t angle_cdeg = 0;
+
+    init_service(&service, &driver);
+    expect(servo_service_enable(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "logical pose setup should enable all servos at neutral");
+    expect(servo_service_logical_pose_is_known(&service, 0x001FU),
+           "Enable should establish known neutral logical pose");
+    expect(servo_service_logical_angle_cdeg(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               &angle_cdeg) && angle_cdeg == 0,
+           "Enable should initialize each logical angle to zero");
+
+    expect(servo_service_set_angle(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               3000) == SERVO_SERVICE_RESULT_OK,
+           "manual SetAngle should establish the requested logical pose");
+    expect(servo_service_logical_angle_cdeg(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               &angle_cdeg) && angle_cdeg == 3000,
+           "manual SetAngle should update the logical angle tracker");
+
+    expect(servo_service_set_pwm(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               1600U) == SERVO_SERVICE_RESULT_OK,
+           "raw SetPWM should remain a valid manual command");
+    expect(!servo_service_logical_pose_is_known(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT)),
+           "raw SetPWM should mark the logical pose unknown");
+    expect(!servo_service_logical_angle_cdeg(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               &angle_cdeg),
+           "unknown raw-PWM pose should not expose a stale logical angle");
+    expect(servo_service_logical_pose_is_known(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_LEFT)),
+           "raw SetPWM should not invalidate another servo pose");
+
+    expect(servo_service_neutral(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT)) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Neutral should restore a raw-PWM channel's logical pose");
+    expect(servo_service_logical_pose_is_known(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT)) &&
+               servo_service_logical_angle_cdeg(
+                   &service,
+                   SERVO_ID_FRONT_RIGHT,
+                   &angle_cdeg) && angle_cdeg == 0,
+           "Neutral should restore known zero logical angle");
+
+    expect(servo_service_disable(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_LEFT)) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Disable should stop the tracked logical channel");
+    expect(!servo_service_logical_pose_is_known(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_LEFT)),
+           "Disable should clear the disabled channel's known pose");
+    servo_service_disable_all(&service);
+    expect(!servo_service_logical_pose_is_known(&service, 0x001FU),
+           "Disable All should clear every logical pose-known bit");
+}
+
 int main(void)
 {
     test_mask_validation();
@@ -532,6 +608,7 @@ int main(void)
     test_motion_owner_arbitrates_manual_writes();
     test_motion_begin_requires_enabled_channels_and_abort_releases();
     test_disable_all_preempts_motion_owner();
+    test_logical_pose_tracking_and_raw_pwm_unknown();
 
     if (failures == 0)
     {

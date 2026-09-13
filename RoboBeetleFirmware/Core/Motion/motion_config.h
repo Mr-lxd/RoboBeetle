@@ -19,8 +19,6 @@ _Static_assert(MOTION_GAIT_TICK_MS == 10U,
                "Bench gait tick must remain 10 ms");
 _Static_assert(MOTION_TRANSITION_DURATION_MS > 0U,
                "Motion transition duration must be positive");
-_Static_assert((MOTION_TRANSITION_DURATION_MS % MOTION_GAIT_TICK_MS) == 0U,
-               "Motion transition duration must align to the gait tick");
 _Static_assert(MOTION_REAR_MIN_CDEG == -3000,
                "Rear operational minimum must remain -3000 cdeg");
 _Static_assert(MOTION_REAR_MAX_CDEG == 4500,

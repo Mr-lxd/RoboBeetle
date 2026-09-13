@@ -16,7 +16,7 @@ closed-loop attitude control.
 - The existing five-servo calibration contract is immutable. Motion emits
   logical centidegrees and must not change calibration endpoints or raw PWM
   validation.
-- Installed rear clearance creates a gait-only envelope of
+- Installed rear clearance creates a common Motion operational envelope of
   `-3000..+4500 cdeg` for RearRight and RearLeft. Their Servo calibration
   envelope remains `-4500..+4500 cdeg`.
 - All profiles are `Bench Provisional / Pending Water Verification`. The
@@ -88,16 +88,19 @@ phase pi; both sides use the same logical sign. Backward uses the concentrated
 logical stroke inversion candidate and is documented as mathematically
 phase-equivalent for a pure sine, not as a hydrodynamic conclusion.
 
-After a profile is sampled, the generator applies the installed rear
-operational envelope. A clamp is allowed but never silent: the generator
-reports a clamp through Manager diagnostics/counters. ServoService then still
-enforces the immutable absolute calibration bounds.
+The generator returns logical targets only. MotionManager applies the installed
+rear operational envelope after profile interpolation and before ServoService
+calibration. A clamp is allowed but never silent: the common Motion layer
+reports it through Manager diagnostics/counters. ServoService then still
+enforces the immutable absolute calibration bounds. This keeps the envelope
+independent of any particular generator implementation.
 
 ### MotionManager
 
-`Core/Motion/motion_manager.c` owns the state machine, the non-blocking 10 ms
-tick scheduler, profile cross-fade, graceful stop, and immediate abort. It
-stores no raw PWM and never runs in an ISR.
+`Core/Motion/motion_manager.c` owns the state machine, the non-blocking
+foreground scheduler, profile cross-fade, graceful stop, and immediate abort.
+It advances by the wrap-safe elapsed wall time between processed calls (with a
+10 ms bench cadence floor), stores no raw PWM, and never runs in an ISR.
 
 Start behavior:
 
@@ -105,21 +108,27 @@ Start behavior:
 - Ascend/descend additionally require FrontAxis enabled.
 - Start rejects a missing enable with `ServoNotEnabled`, rejects a start while
   `STOPPING` with `BUSY`, and leaves the generator phase continuous.
-- A start from stopped/faulted acquires Motion ownership and ramps amplitude
-  and bias from zero to the selected profile over the shared 750 ms
-  provisional transition duration.
+- ServoService records a logical angle for each known channel. Enable starts a
+  newly enabled channel at neutral; SetAngle, Neutral, and Motion angle writes
+  update the tracker. Raw SetPWM marks its channel pose unknown because the
+  inverse pulse mapping is not part of this contract.
+- A start from stopped/faulted rejects an unknown required logical pose with
+  the existing `HARDWARE_FAILURE` result mapping, then acquires Motion
+  ownership and cross-fades the recorded pose to the selected full gait target
+  over the shared 750 ms provisional transition duration.
 - A running mode change cross-fades old and new logical profiles over the same
   duration without resetting phase.
 
 Graceful STOP behavior is exact:
 
 1. `request_stop()` returns `OK` immediately and leaves the Servo owner as
-   Motion.
+   Motion. The timestamped protocol path records the STOP acceptance time as
+   the ramp origin.
 2. State becomes `MOTION_STATE_STOPPING`; the oscillator phase is held at the
    request point, so the current target vector can converge monotonically to
    zero while both amplitude and bias scale down.
-3. Every 10 ms tick linearly ramps the retained target toward all-zero
-   `joint_targets_t` for 750 ms.
+3. Each foreground process linearly ramps the retained target toward all-zero
+   `joint_targets_t` using its actual unsigned elapsed wall time, for 750 ms.
 4. At the deadline Manager writes the all-zero logical neutral target, calls
    `servo_service_motion_end()`, and enters `MOTION_STATE_STOPPED`.
 
@@ -164,8 +173,8 @@ does the same before `servo_service_disable_all()`.
 
 `app_main_process()` remains the only cooperative foreground loop. It calls
 `motion_manager_process(&motion_manager, HAL_GetTick())`; Manager performs at
-most one 10 ms gait tick per foreground call when due. There is no blocking
-delay, busy wait, or timer ISR gait calculation. The existing
+most one elapsed-time update per foreground call when the 10 ms bench cadence
+is due. There is no blocking delay, busy wait, or timer ISR gait calculation. The existing
 SafetySupervisor remains the source of host-liveness truth. Its fail-safe
 branch immediately aborts Motion, disables all Servos, and invalidates the
 existing dispatcher action cache. Motion never changes heartbeat timeout,
@@ -198,9 +207,9 @@ combo containing STOP, FORWARD, BACKWARD, TURN_LEFT, TURN_RIGHT, ASCEND, and
 DESCEND, plus Start, Stop, and a status label. It sends only the `0x15`
 command and reports `Running <mode>`, `Stopping`, `Stopped`, or `Faulted`.
 
-While local state is Running or Stopping, manual Servo controls are disabled
-and the controller also rejects them locally. Firmware remains the final
-guard and returns `BUSY` for races or non-Qt clients. Global Disable All is
+While local state is Running, Stopping, or has unresolved Motion work, manual
+Servo controls are disabled and the controller also rejects them locally.
+Firmware remains the final guard and returns `BUSY` for races or non-Qt clients. Global Disable All is
 never disabled. A successful Stop ACK changes the Qt state to Stopping; a
 single-shot 750 ms UI timer changes it to Stopped, while disconnect/liveness
 loss immediately clears/faults it. This UI timing is provisional and does not
@@ -208,13 +217,14 @@ claim that the actuator has been water-verified.
 
 ## Verification contract
 
-Pure-C host tests cover deterministic generator profiles, phase and 10 ms
-stepping, rear clamps and diagnostics, Motion state transitions, start gates,
-graceful STOP timing/monotonic convergence, phase continuity, ownership,
-Disable All, watchdog interruption, no auto-resume, idempotent STOP, and
-dispatcher ACK/duplicate/invalid-mode behavior. Existing Servo calibration,
-descriptor, safety, protocol, sensor, and telemetry regressions remain in the
-suite.
+Pure-C host tests cover deterministic generator profiles, phase and elapsed
+10/20/70/100 ms stepping with uint32 wrap, common-layer rear clamps and
+diagnostics, logical-pose handoff/unknown raw-PWM rejection, Motion state
+transitions, start gates, graceful STOP timing/monotonic convergence, phase
+continuity, ownership, Disable All, watchdog interruption, no auto-resume,
+idempotent STOP, and dispatcher ACK/duplicate/invalid-mode behavior. Existing
+Servo calibration, descriptor, safety, protocol, sensor, and telemetry
+regressions remain in the suite.
 
 Qt tests cover message encoding, ACK-driven Running/Stopping/Stopped state,
 BUSY/manual arbitration, liveness/disconnect reset, reconnect without auto

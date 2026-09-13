@@ -124,18 +124,11 @@ static bool simple_gait_generator_valid_interface(
     return simple_gait_generator_is_mode_valid(mode);
 }
 
-static uint32_t simple_gait_generator_diagnostic_interface(
-    void *context)
-{
-    return simple_gait_generator_operational_clamp_count(
-        (const simple_gait_generator_t *)context);
-}
-
 static const gait_generator_ops_t simple_gait_generator_ops = {
     .advance = simple_gait_generator_advance_interface,
     .sample = simple_gait_generator_sample_interface,
     .is_mode_valid = simple_gait_generator_valid_interface,
-    .diagnostic_count = simple_gait_generator_diagnostic_interface,
+    .diagnostic_count = NULL,
 };
 
 void simple_gait_generator_init(
@@ -147,7 +140,6 @@ void simple_gait_generator_init(
     }
 
     generator->phase_rad = 0.0F;
-    generator->operational_clamp_count = 0U;
 }
 
 gait_generator_t simple_gait_generator_interface(
@@ -227,9 +219,6 @@ bool simple_gait_generator_sample(
         profile->left_scale,
         amplitude_scale);
 
-    simple_gait_generator_clamp_targets(
-        targets,
-        &generator->operational_clamp_count);
     return true;
 }
 
@@ -243,42 +232,4 @@ float simple_gait_generator_phase(
     const simple_gait_generator_t *generator)
 {
     return generator == NULL ? 0.0F : generator->phase_rad;
-}
-
-uint32_t simple_gait_generator_operational_clamp_count(
-    const simple_gait_generator_t *generator)
-{
-    return generator == NULL ? 0U : generator->operational_clamp_count;
-}
-
-void simple_gait_generator_clamp_targets(
-    joint_targets_t *targets,
-    uint32_t *clamp_count)
-{
-    if ((targets == NULL) || (clamp_count == NULL))
-    {
-        return;
-    }
-
-    if (targets->rear_right_cdeg < MOTION_REAR_MIN_CDEG)
-    {
-        targets->rear_right_cdeg = MOTION_REAR_MIN_CDEG;
-        ++(*clamp_count);
-    }
-    else if (targets->rear_right_cdeg > MOTION_REAR_MAX_CDEG)
-    {
-        targets->rear_right_cdeg = MOTION_REAR_MAX_CDEG;
-        ++(*clamp_count);
-    }
-
-    if (targets->rear_left_cdeg < MOTION_REAR_MIN_CDEG)
-    {
-        targets->rear_left_cdeg = MOTION_REAR_MIN_CDEG;
-        ++(*clamp_count);
-    }
-    else if (targets->rear_left_cdeg > MOTION_REAR_MAX_CDEG)
-    {
-        targets->rear_left_cdeg = MOTION_REAR_MAX_CDEG;
-        ++(*clamp_count);
-    }
 }

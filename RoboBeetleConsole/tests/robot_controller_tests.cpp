@@ -2386,6 +2386,141 @@ void testMotionStartStopStateAndWireContract()
            "the provisional UI transition should finish at Stopped");
 }
 
+void testMotionStopSupersedesInFlightDirectStart()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "Direct STOP race setup should send START");
+    const rb::Packet start = lastPacket(transport);
+    const qsizetype writesBeforeStop = transport.writes().size();
+
+    expect(controller.stopMotion(),
+           "STOP should be accepted while START is still awaiting ACK");
+    expect(transport.writes().size() == writesBeforeStop + 1,
+           "Direct STOP should be sent after cancelling stale START handling");
+    const rb::Packet stop = lastPacket(transport);
+    QByteArray expectedStop;
+    expectedStop.append(static_cast<char>(1));
+    expectedStop.append(static_cast<char>(rb::MotionMode::Stop));
+    expectedStop.append(static_cast<char>(rb::MotionAction::Stop));
+    expect(stop.type == rb::MessageType::SetMotionMode &&
+               stop.payload == expectedStop,
+           "Direct STOP should use the canonical STOP payload");
+
+    acknowledge(transport, start, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() != rb::MotionState::Running,
+           "a late Direct START ACK must not resurrect Motion");
+    acknowledge(transport, stop, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Stopping,
+           "STOP ACK should mark request acceptance and enter Stopping");
+}
+
+void testMotionStopSupersedesApcInFlightAndQueuedMotion()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 1000;
+    config.heartbeatSafetyBudgetMs = 5000;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+    enablePaddlesOnly(transport, controller);
+
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "APC STOP race setup should send START");
+    const rb::Packet start = lastPacket(transport);
+    expect(controller.startMotion(rb::MotionMode::TurnLeft),
+           "APC STOP race should queue the first stale mode change");
+    expect(controller.startMotion(rb::MotionMode::TurnRight),
+           "APC STOP race should queue the second stale mode change");
+    expect(controller.queuedCommandCount() == 2,
+           "APC STOP race setup should contain two queued Motion changes");
+
+    expect(controller.stopMotion(),
+           "APC STOP should supersede in-flight and queued Motion work");
+    expect(controller.queuedCommandCount() == 1,
+           "APC STOP should discard stale queued Motion and retain one STOP");
+
+    acknowledge(transport, start, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(lastPacket(transport).type == rb::MessageType::SetMotionMode,
+           "APC STOP should dispatch after the cancelled in-flight START slot clears");
+    const rb::Packet stop = lastPacket(transport);
+    QByteArray expectedStop;
+    expectedStop.append(static_cast<char>(1));
+    expectedStop.append(static_cast<char>(rb::MotionMode::Stop));
+    expectedStop.append(static_cast<char>(rb::MotionAction::Stop));
+    expect(stop.payload == expectedStop,
+           "APC queued STOP should use the canonical STOP payload");
+    acknowledge(transport, stop, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Stopping,
+           "APC STOP ACK should enter Stopping after stale START ACK");
+}
+
+void testApcMotionStopCancelsDeferredMotionRetry()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 20;
+    config.maxRetries = 1;
+    config.heartbeatSafetyBudgetMs = 5000;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+    enablePaddlesOnly(transport, controller);
+
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "deferred STOP setup should send START");
+    const rb::Packet start = lastPacket(transport);
+    expect(controller.disableServo(rb::ServoId::FrontAxis),
+           "an unrelated safety Disable should create APC priority work");
+    waitForMs(35);
+    expect(lastPacket(transport).type == rb::MessageType::ServoDisable,
+           "START timeout should dispatch the unrelated priority Disable");
+    const rb::Packet disable = lastPacket(transport);
+
+    expect(controller.stopMotion(),
+           "STOP should supersede a deferred Motion retry");
+    expect(controller.queuedCommandCount() == 1,
+           "deferred Motion retry should be replaced by one queued STOP");
+    acknowledge(transport, start, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    acknowledge(transport, disable, rb::AckResult::Ok,
+                rb::MessageType::ServoDisable);
+    expect(lastPacket(transport).type == rb::MessageType::SetMotionMode,
+           "deferred retry must not dispatch ahead of STOP");
+    const rb::Packet stop = lastPacket(transport);
+    acknowledge(transport, stop, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Stopping,
+           "STOP ACK should complete deferred-retry arbitration");
+}
+
+void testMotionStopIsIdempotentWhenAlreadyStopped()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+    const qsizetype writesBeforeStop = transport.writes().size();
+
+    expect(controller.stopMotion(),
+           "STOP while already Stopped should be idempotent");
+    expect(transport.writes().size() == writesBeforeStop,
+           "idempotent STOP should not emit a new wire command");
+    expect(controller.motionState() == rb::MotionState::Stopped,
+           "idempotent STOP should preserve Stopped state");
+}
+
 void testMotionManualArbitrationBusyAndDisableAllPreemption()
 {
     rb::FakeTransport transport;
@@ -2766,6 +2901,10 @@ int main(int argc, char **argv)
     testApc220QueuedWriteFailureDropsCommandAndClearsDisablePending();
     testApc220WriteErrorResetsWithoutInvalidatingRetryState();
     testMotionStartStopStateAndWireContract();
+    testMotionStopSupersedesInFlightDirectStart();
+    testMotionStopSupersedesApcInFlightAndQueuedMotion();
+    testApcMotionStopCancelsDeferredMotionRetry();
+    testMotionStopIsIdempotentWhenAlreadyStopped();
     testMotionManualArbitrationBusyAndDisableAllPreemption();
     testMotionUnrelatedServoDisablePreservesOwnership();
     testMotionTransitionRetainsOldOwnershipAfterAck();

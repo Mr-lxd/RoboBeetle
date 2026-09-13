@@ -43,8 +43,13 @@ RUNNING/STOPPING ─ Safety ──> FAULTED
 
 The provisional transition duration is centralized in
 `Core/Motion/motion_config.h` as `MOTION_TRANSITION_DURATION_MS=750U`. The
-Motion scheduler is cooperative and ticks every 10 ms in `app_main`; it does
-not run gait code from an interrupt.
+Motion scheduler is cooperative and only processes foreground calls at the
+10 ms bench cadence or slower; each call advances by the wrap-safe unsigned
+wall-time delta since the previous processed call. A delayed 70 or 100 ms
+foreground pass therefore consumes 70 or 100 ms of the transition instead of
+pretending that only one nominal tick elapsed. It does not run gait code from
+an interrupt. The protocol STOP path supplies its acceptance timestamp as the
+ramp clock origin, so time spent before STOP was accepted is never consumed.
 
 During ordinary STOPPING:
 
@@ -56,6 +61,21 @@ During ordinary STOPPING:
   returns `BUSY` and cannot compete for the actuator;
 - the final zero target is written before ownership is released and the state
   becomes `STOPPED`.
+
+Motion START also has an explicit pose handoff. ServoService records the last
+known logical angle per enabled channel. Enable initializes a newly enabled
+channel to logical neutral; SetAngle, Neutral, and Motion angle writes update
+the tracker. Raw SetPWM deliberately marks that channel's logical pose
+unknown because no inverse pulse-to-angle contract is assumed. START rejects
+an unknown required pose with the existing `HARDWARE_FAILURE` result mapping;
+after a known pose is available, START cross-fades the recorded logical
+targets to the selected gait target over the same provisional 750 ms window,
+including the mirrored left/right channels.
+
+The generator emits logical targets only. The common MotionManager output
+guard enforces the rear operational envelope `-3000…+4500 cdeg` immediately
+before Servo calibration/PWM conversion and owns the clamp diagnostic. A
+future alternate gait generator cannot bypass this guard.
 
 `Disable`/`Disable All`, heartbeat/liveness loss, and the existing
 `SafetySupervisor` fail-safe path bypass the ramp. `app_main` evaluates the
@@ -110,9 +130,14 @@ heartbeat fail-closed, and Disable All clear/fault the local Motion state;
 liveness fail-closed also clears the local logical enabled/pending masks.
 Reconnect does not auto-resume.
 
-While local Motion is `Running` or `Stopping`, manual Servo controls are
-disabled and the Controller rejects manual actuator commands locally. Firmware
-side `BUSY` ACKs are decoded and displayed. An explicit single-channel Disable
+While local Motion is `Running`, `Stopping`, or has unresolved in-flight,
+queued, or deferred Motion work, manual Servo controls are disabled and the
+Controller rejects manual actuator commands locally. A STOP supersedes stale
+Motion START/mode requests: DirectUart marks the old pending request
+cancelled before sending STOP, while APC220 keeps one exchange in flight and
+places STOP above ordinary work but below the safety-priority Disable lane.
+Late stale Motion ACKs are ignored. Firmware-side `BUSY` ACKs are decoded and
+displayed. An explicit single-channel Disable
 uses the same ownership intersection: a non-owned channel may be disabled
 without faulting Motion, while an owned channel immediately fail-closes Motion
 and cancels queued Motion work. Global `Disable All` remains available and is
@@ -137,6 +162,12 @@ contract. Motion-specific assertions cover:
 - `RUNNING → STOPPING → STOPPED`;
 - acceptance-time STOP ACK and approximately 750 ms elapsed ramp;
 - monotonic/convergent neutral targets and final zero write;
+- STOP supersession of DirectUart/APC220 in-flight START, queued mode changes,
+  and deferred Motion retry, including stale ACK suppression;
+- actual 10/20/70/100 ms Motion wall-time gaps and uint32 timestamp wrap;
+- non-neutral manual-pose START cross-fade, mirrored left/right handoff, and
+  raw SetPWM unknown-pose rejection through existing `HARDWARE_FAILURE`;
+- generator-independent rear envelope clamping and Motion-owned diagnostics;
 - manual Servo `BUSY` arbitration during STOPPING;
 - old/new ownership union through an acknowledged mode transition;
 - immediate Disable All and heartbeat/liveness takeover;

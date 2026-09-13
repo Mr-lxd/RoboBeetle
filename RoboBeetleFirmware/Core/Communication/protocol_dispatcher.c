@@ -409,8 +409,9 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
                 ? motion_manager_start(
                     dispatcher->motion_manager,
                     mode)
-                : motion_manager_request_stop(
-                    dispatcher->motion_manager);
+                : motion_manager_request_stop_at(
+                    dispatcher->motion_manager,
+                    now_ms);
 
             return complete_command(
                 dispatcher,

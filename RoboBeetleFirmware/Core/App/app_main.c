@@ -107,15 +107,9 @@ static void protocol_feed_byte(
             if (status == RBP2_OK)
             {
                 protocol_dispatcher_outcome_t outcome;
-                uint32_t now_ms = 0U;
+                const uint32_t now_ms = HAL_GetTick();
 
                 ++protocol_good_frames;
-
-                if ((frame.type == RBP2_MSG_HEARTBEAT) &&
-                    (frame.payload_length == 4U))
-                {
-                    now_ms = HAL_GetTick();
-                }
 
                 /* Reject stale actuator frames before dispatching them. A
                  * Heartbeat is intentionally allowed to refresh liveness
@@ -123,7 +117,7 @@ static void protocol_feed_byte(
                 if ((frame.type != RBP2_MSG_HEARTBEAT) &&
                     safety_supervisor_process(
                         &safety_supervisor,
-                        HAL_GetTick()))
+                        now_ms))
                 {
                     app_main_apply_safety_stop();
                 }

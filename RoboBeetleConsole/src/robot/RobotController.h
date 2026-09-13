@@ -102,15 +102,12 @@ public:
     [[nodiscard]] ProtocolMonitor monitor() const { return monitor_; }
     [[nodiscard]] MotionState motionState() const { return motionState_; }
     [[nodiscard]] MotionMode motionMode() const { return motionMode_; }
-    [[nodiscard]] bool isMotionActive() const
-    {
-        return motionState_ == MotionState::Running
-            || motionState_ == MotionState::Stopping;
-    }
+    [[nodiscard]] bool isMotionActive() const;
     [[nodiscard]] bool isMotionReady(MotionMode mode) const;
     [[nodiscard]] qsizetype queuedCommandCount() const
     {
-        return commandQueue_.size() + priorityCommandQueue_.size();
+        return commandQueue_.size() + priorityCommandQueue_.size()
+            + motionStopCommandQueue_.size();
     }
 
 signals:
@@ -168,6 +165,8 @@ private:
     void clearQueuedCommandsForDisable(quint16 affectedMask);
     void cancelQueuedMotionRequests();
     void cancelPendingMotionRequests();
+    [[nodiscard]] bool hasPendingMotionWork() const;
+    [[nodiscard]] bool hasPendingMotionStop() const;
     void cancelPendingDirectActuatorRequests();
     void failClosedDirectActuators();
     void failClosedApc220Actuators();
@@ -197,6 +196,10 @@ private:
     quint16 motionTransitionOwnedMask_{0};
     QHash<quint16, PendingRequest> pending_;
     QQueue<QueuedCommand> priorityCommandQueue_;
+    // A graceful Motion STOP outranks ordinary work but remains below the
+    // safety-priority Disable queue.  Keeping a dedicated lane also makes
+    // STOP supersession explicit instead of relying on FIFO ordering.
+    QQueue<QueuedCommand> motionStopCommandQueue_;
     QQueue<QueuedCommand> commandQueue_;
     std::optional<PendingRequest> deferredRetry_;
     bool heartbeatDue_{false};

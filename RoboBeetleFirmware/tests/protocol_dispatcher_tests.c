@@ -810,6 +810,46 @@ static void test_motion_start_stop_ack_and_duplicate_semantics(void)
            "new START during STOPPING should map to Protocol BUSY");
 }
 
+static void test_motion_unknown_raw_pwm_uses_existing_hardware_failure(void)
+{
+    fixture_t fixture;
+    const uint8_t pwm_payload[4] = {
+        1U,
+        SERVO_ID_FRONT_RIGHT,
+        0x40U,
+        0x06U,
+    };
+    const uint8_t start_payload[3] = {
+        1U,
+        MOTION_FORWARD,
+        MOTION_ACTION_START,
+    };
+    rbp2_frame_t frame;
+    protocol_dispatcher_outcome_t outcome;
+
+    fixture_init(&fixture);
+    enable_paddles(&fixture);
+    frame = make_frame(
+        RBP2_MSG_SET_SERVO_PWM,
+        115U,
+        pwm_payload,
+        sizeof(pwm_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "raw PWM should be accepted before unknown-pose Motion test");
+
+    frame = make_frame(
+        RBP2_MSG_SET_MOTION_MODE,
+        116U,
+        start_payload,
+        sizeof(start_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_HARDWARE_FAILURE,
+           "unknown logical pose should reuse Protocol HardwareFailure");
+    expect(motion_manager_state(&fixture.motion_manager) == MOTION_STATE_STOPPED,
+           "unknown logical pose should not acquire Motion ownership");
+}
+
 static void test_motion_payload_validation(void)
 {
     fixture_t fixture;
@@ -1103,6 +1143,7 @@ int main(void)
     test_result_mappings();
     test_unknown_messages_are_invalid_payload();
     test_motion_start_stop_ack_and_duplicate_semantics();
+    test_motion_unknown_raw_pwm_uses_existing_hardware_failure();
     test_motion_payload_validation();
     test_motion_ownership_and_disable_preemption();
     test_servo_disable_validates_before_motion_preemption();

@@ -44,6 +44,7 @@ typedef struct
     uint32_t last_tick_ms;
     uint8_t scheduler_started;
     joint_targets_t last_targets;
+    joint_targets_t start_from_targets;
     joint_targets_t stop_start_targets;
     uint32_t operational_clamp_count;
 } motion_manager_t;
@@ -60,6 +61,11 @@ motion_manager_result_t motion_manager_start(
 
 motion_manager_result_t motion_manager_request_stop(
     motion_manager_t *manager);
+
+/* Prefer this entry point when the caller has the STOP acceptance timestamp. */
+motion_manager_result_t motion_manager_request_stop_at(
+    motion_manager_t *manager,
+    uint32_t now_ms);
 
 motion_manager_result_t motion_manager_process(
     motion_manager_t *manager,
