@@ -238,7 +238,9 @@ bool RobotController::disableServo(ServoId id)
     if (markPendingBeforeSend) {
         setDisablePendingMask(static_cast<quint16>(disablePendingMask_ | mask));
     }
-    failClosedMotionState();
+    if ((motionProtectionMask() & mask) != 0U) {
+        failClosedMotionState();
+    }
     if (!sendCommand(MessageType::ServoDisable, maskPayload(mask), mask)) {
         if (markPendingBeforeSend) {
             setDisablePendingMask(static_cast<quint16>(disablePendingMask_ & ~mask));
@@ -951,7 +953,7 @@ void RobotController::handleAck(const Packet &packet)
     const bool isApc220 = config_.linkProfile == LinkProfile::Apc220HalfDuplex;
     const qint64 ackRttMs = qMax<qint64>(0, nowMs() - request->sentAtMs);
     const auto clearDisablePending = [this, &request] {
-        if (request->type == MessageType::ServoDisable) {
+        if (request->type == MessageType::ServoDisable && !request->cancelled) {
             setDisablePendingMask(
                 static_cast<quint16>(disablePendingMask_ & ~request->servoMask));
         }
@@ -997,15 +999,16 @@ void RobotController::handleAck(const Packet &packet)
         // The heartbeat deadline is anchored at dispatch.  An ACK only
         // confirms liveness/RTT; preserve a deadline that elapsed while the
         // heartbeat exchange was in flight.
-    } else if (request->type == MessageType::ServoEnable) {
+    } else if (request->type == MessageType::ServoEnable && !request->cancelled) {
         // A matching user Enable ACK is the explicit re-arm after any
         // liveness fail-closed transition.
         actuatorFailClosed_ = false;
         setEnabledMask(static_cast<quint16>(enabledMask_ | request->servoMask));
-    } else if (request->type == MessageType::ServoDisable) {
+    } else if (request->type == MessageType::ServoDisable && !request->cancelled) {
         clearDisablePending();
         setEnabledMask(static_cast<quint16>(enabledMask_ & ~request->servoMask));
     } else if (request->type == MessageType::SetMotionMode
+               && !request->cancelled
                && !request->motionCancelled
                && request->motionRequest.has_value()) {
         const MotionRequest motion = *request->motionRequest;
@@ -1145,7 +1148,7 @@ void RobotController::checkTimeouts()
         if (it->type == MessageType::Heartbeat) {
             failClosedDirectActuators();
         }
-        if (it->motionCancelled) {
+        if (it->cancelled) {
             pending_.erase(it);
             continue;
         }
@@ -1201,6 +1204,7 @@ void RobotController::resetSchedulerState()
     decoder_.reset();
     setEnabledMask(0);
     setDisablePendingMask(0);
+    motionOwnedMask_ = 0;
     lastLeakTelemetryAtMs_ = -1;
     markApc220LivenessLost();
 }
@@ -1237,12 +1241,30 @@ void RobotController::clearQueuedCommandsForDisable(quint16 affectedMask)
     }
 }
 
+void RobotController::cancelQueuedMotionRequests()
+{
+    const auto retainNonMotion = [](QQueue<QueuedCommand> &queue) {
+        QQueue<QueuedCommand> retained;
+        while (!queue.isEmpty()) {
+            const QueuedCommand command = queue.dequeue();
+            if (command.type != MessageType::SetMotionMode) {
+                retained.enqueue(command);
+            }
+        }
+        queue = std::move(retained);
+    };
+
+    retainNonMotion(priorityCommandQueue_);
+    retainNonMotion(commandQueue_);
+}
+
 void RobotController::cancelPendingMotionRequests()
 {
     for (auto it = pending_.begin(); it != pending_.end(); ++it) {
         if (it->type == MessageType::SetMotionMode) {
             it->motionRequest.reset();
             it->motionCancelled = true;
+            it->cancelled = true;
         }
     }
     if (deferredRetry_.has_value()
@@ -1251,8 +1273,25 @@ void RobotController::cancelPendingMotionRequests()
     }
 }
 
+void RobotController::cancelPendingDirectActuatorRequests()
+{
+    cancelPendingMotionRequests();
+    for (auto it = pending_.begin(); it != pending_.end(); ++it) {
+        if (isActuatorCommand(it->type) ||
+            (it->type == MessageType::ServoDisable)) {
+            it->cancelled = true;
+        }
+    }
+    if (deferredRetry_.has_value()
+        && (isActuatorCommand(deferredRetry_->type)
+            || deferredRetry_->type == MessageType::ServoDisable)) {
+        deferredRetry_.reset();
+    }
+}
+
 void RobotController::failClosedDirectActuators()
 {
+    cancelPendingDirectActuatorRequests();
     setEnabledMask(0);
     setDisablePendingMask(0);
     failClosedMotionState();
@@ -1325,10 +1364,46 @@ void RobotController::setLeakState(LeakState state)
 void RobotController::failClosedMotionState()
 {
     motionStopTimer_.stop();
+    cancelQueuedMotionRequests();
     cancelPendingMotionRequests();
     if (isMotionActive()) {
         setMotionState(MotionState::Faulted, MotionMode::Stop);
     }
+}
+
+quint16 RobotController::motionProtectionMask() const
+{
+    quint16 mask = motionOwnedMask_;
+    const auto addPending = [&mask, this](MessageType type,
+                                           quint16 affectedMask,
+                                           const std::optional<MotionRequest> &motion) {
+        if (type != MessageType::SetMotionMode || !motion.has_value()) {
+            return;
+        }
+        if (motion->action == MotionAction::Start) {
+            mask = static_cast<quint16>(mask | affectedMask);
+        } else {
+            mask = static_cast<quint16>(mask | motionOwnedMask_);
+        }
+    };
+
+    for (auto it = pending_.cbegin(); it != pending_.cend(); ++it) {
+        if (!it->cancelled) {
+            addPending(it->type, it->servoMask, it->motionRequest);
+        }
+    }
+    if (deferredRetry_.has_value() && !deferredRetry_->cancelled) {
+        addPending(deferredRetry_->type,
+                   deferredRetry_->servoMask,
+                   deferredRetry_->motionRequest);
+    }
+    for (const QueuedCommand &command : priorityCommandQueue_) {
+        addPending(command.type, command.affectedMask, command.motionRequest);
+    }
+    for (const QueuedCommand &command : commandQueue_) {
+        addPending(command.type, command.affectedMask, command.motionRequest);
+    }
+    return mask;
 }
 
 void RobotController::setMotionState(MotionState state, MotionMode mode)
@@ -1338,6 +1413,11 @@ void RobotController::setMotionState(MotionState state, MotionMode mode)
     }
     motionState_ = state;
     motionMode_ = mode;
+    if (state == MotionState::Running) {
+        motionOwnedMask_ = motionRequiredServoMask(mode);
+    } else if (state == MotionState::Stopped || state == MotionState::Faulted) {
+        motionOwnedMask_ = 0;
+    }
     emit motionStateChanged(motionState_, motionMode_);
 }
 

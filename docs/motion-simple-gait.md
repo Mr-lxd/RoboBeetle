@@ -112,8 +112,11 @@ Reconnect does not auto-resume.
 
 While local Motion is `Running` or `Stopping`, manual Servo controls are
 disabled and the Controller rejects manual actuator commands locally. Firmware
-side `BUSY` ACKs are decoded and displayed. Global `Disable All` remains
-available and is safety-prioritized in the existing APC220 bounded scheduler.
+side `BUSY` ACKs are decoded and displayed. An explicit single-channel Disable
+uses the same ownership intersection: a non-owned channel may be disabled
+without faulting Motion, while an owned channel immediately fail-closes Motion
+and cancels queued Motion work. Global `Disable All` remains available and is
+safety-prioritized in the existing APC220 bounded scheduler.
 
 ## Deterministic verification
 

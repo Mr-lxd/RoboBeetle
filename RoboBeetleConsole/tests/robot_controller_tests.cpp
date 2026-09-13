@@ -360,6 +360,31 @@ void testApcHeartbeatLossClearsLeakState()
            "APC Heartbeat loss must clear trusted leak state immediately");
 }
 
+void testDirectHeartbeatLossIgnoresLateEnableAck()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10;
+    config.ackTimeoutMs = 100;
+    config.maxRetries = 0;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    waitForMs(40);
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "DirectUart late-ACK setup should send Enable after a heartbeat is in flight");
+    const rb::Packet enable = lastPacket(transport);
+    waitForMs(90);
+    expect(!controller.isServoEnabled(rb::ServoId::Servo1),
+           "DirectUart heartbeat loss should clear state before a late Enable ACK");
+
+    acknowledge(transport, enable, rb::AckResult::Ok,
+                rb::MessageType::ServoEnable);
+    expect(!controller.isServoEnabled(rb::ServoId::Servo1),
+           "late DirectUart Enable ACK must not re-arm fail-closed state");
+}
+
 void testDirectHeartbeatLossClearsEnabledState()
 {
     rb::FakeTransport transport;
@@ -2295,11 +2320,9 @@ void testApc220WriteErrorResetsWithoutInvalidatingRetryState()
            "APC220 write error should clear scheduler state");
 }
 
-void connectAndEnablePaddles(rb::FakeTransport &transport,
-                             rb::RobotController &controller)
+void enablePaddlesOnly(rb::FakeTransport &transport,
+                       rb::RobotController &controller)
 {
-    controller.connectTransport({"COM_TEST", 9600});
-    transport.simulateConnected();
     const rb::ServoId paddles[] = {
         rb::ServoId::FrontRight,
         rb::ServoId::FrontLeft,
@@ -2311,6 +2334,14 @@ void connectAndEnablePaddles(rb::FakeTransport &transport,
                "Motion setup should send each paddle Enable");
         acknowledgeLast(transport);
     }
+}
+
+void connectAndEnablePaddles(rb::FakeTransport &transport,
+                             rb::RobotController &controller)
+{
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+    enablePaddlesOnly(transport, controller);
 }
 
 void testMotionStartStopStateAndWireContract()
@@ -2392,6 +2423,102 @@ void testMotionManualArbitrationBusyAndDisableAllPreemption()
            "Disable All must retain the Servo Disable safety path");
     expect(controller.motionState() == rb::MotionState::Faulted,
            "Disable All should immediately fault/terminate local Motion state");
+}
+
+void testMotionUnrelatedServoDisablePreservesOwnership()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+
+    expect(controller.enableServo(rb::ServoId::FrontAxis),
+           "unrelated Disable setup should enable FrontAxis");
+    acknowledgeLast(transport);
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "unrelated Disable setup should start Forward Motion");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "unrelated Disable setup should reach Running");
+
+    expect(controller.disableServo(rb::ServoId::FrontAxis),
+           "a non-owned FrontAxis Disable should remain allowed during Forward");
+    const rb::Packet disable = lastPacket(transport);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "non-owned Servo Disable must not fault local Motion");
+    acknowledge(transport, disable, rb::AckResult::Ok,
+                rb::MessageType::ServoDisable);
+    expect(!controller.isServoEnabled(rb::ServoId::FrontAxis),
+           "successful non-owned Servo Disable should clear that channel");
+    expect(controller.motionState() == rb::MotionState::Running,
+           "non-owned Servo Disable ACK must preserve Motion state");
+    expect(!controller.setServoAngle(rb::ServoId::FrontRight, 0),
+           "owned Servo SetAngle must remain blocked after unrelated Disable");
+}
+
+void testApcMotionDisableOwnershipAndQueuedPreemption()
+{
+    {
+        rb::FakeTransport transport;
+        rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+        config.heartbeatIntervalMs = 10000;
+        config.ackTimeoutMs = 1000;
+        config.heartbeatSafetyBudgetMs = 5000;
+        rb::RobotController controller(&transport, config);
+        connectApcAndAcknowledgeHeartbeat(transport, controller);
+        enablePaddlesOnly(transport, controller);
+        expect(controller.enableServo(rb::ServoId::FrontAxis),
+               "APC unrelated Disable setup should enable FrontAxis");
+        acknowledgeLast(transport);
+        expect(controller.startMotion(rb::MotionMode::Forward),
+               "APC unrelated Disable setup should start Forward Motion");
+        acknowledgeLast(transport);
+
+        expect(controller.disableServo(rb::ServoId::FrontAxis),
+               "APC non-owned FrontAxis Disable should be accepted");
+        const rb::Packet disable = lastPacket(transport);
+        expect(controller.motionState() == rb::MotionState::Running,
+               "APC non-owned Disable must preserve local Motion state");
+        acknowledge(transport, disable, rb::AckResult::Ok,
+                    rb::MessageType::ServoDisable);
+        expect(controller.motionState() == rb::MotionState::Running,
+               "APC non-owned Disable ACK must preserve local Motion state");
+    }
+
+    {
+        rb::FakeTransport transport;
+        rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+        config.heartbeatIntervalMs = 10000;
+        config.ackTimeoutMs = 1000;
+        config.heartbeatSafetyBudgetMs = 5000;
+        rb::RobotController controller(&transport, config);
+        connectApcAndAcknowledgeHeartbeat(transport, controller);
+        enablePaddlesOnly(transport, controller);
+        expect(controller.enableServo(rb::ServoId::FrontAxis),
+               "APC transition Disable setup should enable FrontAxis");
+        acknowledgeLast(transport);
+        expect(controller.startMotion(rb::MotionMode::Forward),
+               "APC transition Disable setup should start Forward Motion");
+        acknowledgeLast(transport);
+
+        expect(controller.startMotion(rb::MotionMode::Ascend),
+               "APC transition Disable setup should send Ascend mode change");
+        const rb::Packet modeChange = lastPacket(transport);
+        expect(controller.disableServo(rb::ServoId::FrontAxis),
+               "APC transition-intersecting Disable should be queued as safety priority");
+        expect(controller.motionState() == rb::MotionState::Faulted,
+               "APC transition-intersecting Disable should fault local Motion");
+        expect(controller.queuedCommandCount() == 1,
+               "APC transition-intersecting Disable should occupy the priority queue");
+
+        acknowledge(transport, modeChange, rb::AckResult::Ok,
+                    rb::MessageType::SetMotionMode);
+        expect(controller.motionState() == rb::MotionState::Faulted,
+               "late APC transition ACK must not resurrect fail-closed Motion");
+        expect(lastPacket(transport).type == rb::MessageType::ServoDisable,
+               "APC transition-intersecting Disable must dispatch after stale ACK");
+    }
 }
 
 void testMotionBusyAckAndReconnectDoesNotResume()
@@ -2529,6 +2656,7 @@ int main(int argc, char **argv)
     testImuSnapshotDoesNotTouchAckOrLeakState();
     testDepthSnapshotDoesNotTouchAckOrLeakState();
     testApcHeartbeatLossClearsLeakState();
+    testDirectHeartbeatLossIgnoresLateEnableAck();
     testDirectHeartbeatLossClearsEnabledState();
     testAngleDegreesConvertToCentidegrees();
     testSetAngleBlockedDuringDisableRequest();
@@ -2585,6 +2713,8 @@ int main(int argc, char **argv)
     testApc220WriteErrorResetsWithoutInvalidatingRetryState();
     testMotionStartStopStateAndWireContract();
     testMotionManualArbitrationBusyAndDisableAllPreemption();
+    testMotionUnrelatedServoDisablePreservesOwnership();
+    testApcMotionDisableOwnershipAndQueuedPreemption();
     testMotionBusyAckAndReconnectDoesNotResume();
     testMotionFailClosedIgnoresLateMotionAck();
     testApc220MotionCommandsUseTheExistingBoundedScheduler();

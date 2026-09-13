@@ -359,7 +359,8 @@ Verify 和 physical Motion exercise 尚未在本轮执行，仍为 **Pending**�
   与停止轨迹争夺 actuator ownership。
 - Disable/Disable All、heartbeat/host-liveness loss 和现有 SafetySupervisor
   fail-safe 路径立即 abort/disable，不等待 750 ms。`app_main` 先处理 Safety，
-  Protocol Dispatcher 对显式 Servo Disable 先 abort Motion。
+  Protocol Dispatcher 对已校验且与 active Motion ownership 相交的显式
+  Servo Disable 立即 abort Motion；非相交的单轴 Disable 不抢占 Motion。
 - 本仓库当前 PA11 leak path 明确是 monitoring-only，尚无 leak-to-Safety trip；
   如果后续加入 trip，必须复用同一 immediate takeover path，不能走 graceful ramp。
 - 被中断的 STOP 不会在 reconnect/heartbeat recovery 后自动 resume；必须重新

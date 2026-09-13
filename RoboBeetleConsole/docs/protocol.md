@@ -287,8 +287,10 @@ successful STOP enters `MOTION_STOPPING` and retains Motion ownership. A
 centralized 750 ms **[Provisional]** cooperative ramp drives amplitude/bias and
 logical targets to zero before releasing ownership and entering STOPPED. During
 STOPPING, manual Servo Enable/SetPWM/SetAngle/Neutral requests map to `Busy=7`.
-Disable/Disable All and SafetySupervisor host-liveness loss immediately abort
-Motion and disable/stop actuators; they never wait for the ramp. A successful
+Disable All and SafetySupervisor host-liveness loss immediately abort Motion
+and disable/stop actuators; they never wait for the ramp. An explicit
+single-channel Disable aborts Motion only when its validated mask intersects
+active Motion ownership; a non-intersecting Disable remains allowed. A successful
 `0x15` request participates in the existing one-entry successful duplicate
 cache, so same sequence/type retry replays the ACK without repeating the
 transition.

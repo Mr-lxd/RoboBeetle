@@ -998,6 +998,70 @@ static void test_servo_disable_validates_before_motion_preemption(void)
            "unrelated Servo Disable should still disable its requested channel");
 }
 
+static void test_servo_disable_intersects_mode_transition_ownership(void)
+{
+    fixture_t fixture;
+    const uint8_t forward_payload[3] = {
+        1U,
+        MOTION_FORWARD,
+        MOTION_ACTION_START,
+    };
+    const uint8_t ascend_payload[3] = {
+        1U,
+        MOTION_ASCEND,
+        MOTION_ACTION_START,
+    };
+    uint8_t enable_payload[2];
+    uint8_t disable_payload[2];
+    rbp2_frame_t frame;
+    protocol_dispatcher_outcome_t outcome;
+
+    fixture_init(&fixture);
+    accept_heartbeat(&fixture, 160U, 0U, 0U);
+    write_le16(enable_payload, 0x001FU);
+    frame = make_frame(
+        RBP2_MSG_SERVO_ENABLE,
+        161U,
+        enable_payload,
+        sizeof(enable_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "transition Disable setup should enable all servos");
+
+    frame = make_frame(
+        RBP2_MSG_SET_MOTION_MODE,
+        162U,
+        forward_payload,
+        sizeof(forward_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "transition Disable setup should start Forward Motion");
+
+    frame = make_frame(
+        RBP2_MSG_SET_MOTION_MODE,
+        163U,
+        ascend_payload,
+        sizeof(ascend_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "transition Disable setup should accept Forward to Ascend");
+
+    write_le16(disable_payload, 0x0004U);
+    frame = make_frame(
+        RBP2_MSG_SERVO_DISABLE,
+        164U,
+        disable_payload,
+        sizeof(disable_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "FrontAxis Disable should remain allowed during a mode transition");
+    expect(motion_manager_state(&fixture.motion_manager) ==
+               MOTION_STATE_FAULTED,
+           "FrontAxis Disable must abort a transition that owns FrontAxis");
+    expect(!servo_service_motion_is_active(&fixture.servo_service),
+           "transition-intersecting Disable must release Motion ownership");
+}
+
 static void test_stop_when_already_stopped_is_idempotent(void)
 {
     fixture_t fixture;
@@ -1042,6 +1106,7 @@ int main(void)
     test_motion_payload_validation();
     test_motion_ownership_and_disable_preemption();
     test_servo_disable_validates_before_motion_preemption();
+    test_servo_disable_intersects_mode_transition_ownership();
     test_stop_when_already_stopped_is_idempotent();
 
     if (failures == 0)

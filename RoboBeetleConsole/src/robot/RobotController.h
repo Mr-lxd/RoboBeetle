@@ -135,6 +135,7 @@ private:
         int retries{0};
         std::optional<MotionRequest> motionRequest;
         bool motionCancelled{false};
+        bool cancelled{false};
     };
 
     struct QueuedCommand {
@@ -165,7 +166,9 @@ private:
     void updateMonitor();
     void resetSchedulerState();
     void clearQueuedCommandsForDisable(quint16 affectedMask);
+    void cancelQueuedMotionRequests();
     void cancelPendingMotionRequests();
+    void cancelPendingDirectActuatorRequests();
     void failClosedDirectActuators();
     void failClosedApc220Actuators();
     void failClosedMotionState();
@@ -176,6 +179,7 @@ private:
     void markApc220LivenessLost();
     void noteWriteFailure(const QString &context);
     bool rejectUnsupportedServo(ServoId id, const QString &command);
+    [[nodiscard]] quint16 motionProtectionMask() const;
     static QByteArray maskPayload(quint16 mask);
     static qint64 nowMs();
     static bool isMotionCommand(MessageType type);
@@ -189,6 +193,7 @@ private:
     quint16 nextSequence_{1};
     quint16 enabledMask_{0};
     quint16 disablePendingMask_{0};
+    quint16 motionOwnedMask_{0};
     QHash<quint16, PendingRequest> pending_;
     QQueue<QueuedCommand> priorityCommandQueue_;
     QQueue<QueuedCommand> commandQueue_;

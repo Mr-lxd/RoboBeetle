@@ -57,8 +57,11 @@ cooperative 10 ms scheduler interpolates the retained logical targets to
 neutral over the centralized `MOTION_TRANSITION_DURATION_MS=750U` provisional
 duration. Motion ownership remains held throughout the ramp, so manual Servo
 Enable/SetPWM/SetAngle/Neutral is `BUSY`; the final zero write releases Motion
-ownership and enters `MOTION_STOPPED`. Disable/Disable All and SafetySupervisor
-host-liveness failure abort immediately without waiting for the ramp.
+ownership and enters `MOTION_STOPPED`. Disable All, an explicit Disable whose
+validated mask intersects active Motion ownership, and SafetySupervisor
+host-liveness failure abort immediately without waiting for the ramp; a
+non-intersecting single-channel Disable remains allowed without preempting
+Motion.
 
 The PA11 leak path remains monitoring-only in the current source and has no
 leak-to-Safety trip. If a future leak safety trip is added, it must call the
