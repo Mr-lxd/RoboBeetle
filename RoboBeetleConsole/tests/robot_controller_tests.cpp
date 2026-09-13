@@ -2457,6 +2457,60 @@ void testMotionUnrelatedServoDisablePreservesOwnership()
            "owned Servo SetAngle must remain blocked after unrelated Disable");
 }
 
+void testMotionTransitionRetainsOldOwnershipAfterAck()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+
+    expect(controller.enableServo(rb::ServoId::FrontAxis),
+           "transition ownership setup should enable FrontAxis");
+    acknowledgeLast(transport);
+    expect(controller.startMotion(rb::MotionMode::Ascend),
+           "transition ownership setup should start Ascend Motion");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "transition ownership setup should reach Running Ascend");
+
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "Ascend to Forward transition should be sent");
+    const rb::Packet modeChange = lastPacket(transport);
+    acknowledge(transport, modeChange, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "mode-change ACK should expose the new Running mode");
+
+    expect(controller.disableServo(rb::ServoId::FrontAxis),
+           "Disable during the acknowledged mode transition should be accepted as safety takeover");
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "old-mode ownership must remain fail-closed until the transition completes");
+
+    {
+        rb::FakeTransport completedTransport;
+        rb::RobotController completedController(&completedTransport, config);
+        connectAndEnablePaddles(completedTransport, completedController);
+        expect(completedController.enableServo(rb::ServoId::FrontAxis),
+               "completed transition setup should enable FrontAxis");
+        acknowledgeLast(completedTransport);
+        expect(completedController.startMotion(rb::MotionMode::Ascend),
+               "completed transition setup should start Ascend Motion");
+        acknowledgeLast(completedTransport);
+        expect(completedController.startMotion(rb::MotionMode::Forward),
+               "completed Ascend to Forward transition should be sent");
+        const rb::Packet completedModeChange = lastPacket(completedTransport);
+        acknowledge(completedTransport, completedModeChange, rb::AckResult::Ok,
+                    rb::MessageType::SetMotionMode);
+
+        waitForMs(rb::kMotionTransitionDurationMs + 100);
+        expect(completedController.disableServo(rb::ServoId::FrontAxis),
+               "Disable after the mode transition should remain non-intersecting");
+        expect(completedController.motionState() == rb::MotionState::Running,
+               "old-mode ownership should be released after the mode transition completes");
+    }
+}
+
 void testApcMotionDisableOwnershipAndQueuedPreemption()
 {
     {
@@ -2714,6 +2768,7 @@ int main(int argc, char **argv)
     testMotionStartStopStateAndWireContract();
     testMotionManualArbitrationBusyAndDisableAllPreemption();
     testMotionUnrelatedServoDisablePreservesOwnership();
+    testMotionTransitionRetainsOldOwnershipAfterAck();
     testApcMotionDisableOwnershipAndQueuedPreemption();
     testMotionBusyAckAndReconnectDoesNotResume();
     testMotionFailClosedIgnoresLateMotionAck();

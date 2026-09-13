@@ -117,6 +117,9 @@ uses the same ownership intersection: a non-owned channel may be disabled
 without faulting Motion, while an owned channel immediately fail-closes Motion
 and cancels queued Motion work. Global `Disable All` remains available and is
 safety-prioritized in the existing APC220 bounded scheduler.
+During a Running mode change, the Controller retains the old/new required-mask
+union for the same provisional crossfade window, including after the mode ACK,
+so a channel released only by the new mode cannot race Firmware ownership.
 
 ## Deterministic verification
 
@@ -135,6 +138,7 @@ contract. Motion-specific assertions cover:
 - acceptance-time STOP ACK and approximately 750 ms elapsed ramp;
 - monotonic/convergent neutral targets and final zero write;
 - manual Servo `BUSY` arbitration during STOPPING;
+- old/new ownership union through an acknowledged mode transition;
 - immediate Disable All and heartbeat/liveness takeover;
 - no auto-resume after interrupted stop;
 - idempotent STOP while already STOPPED;

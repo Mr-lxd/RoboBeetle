@@ -194,6 +194,7 @@ private:
     quint16 enabledMask_{0};
     quint16 disablePendingMask_{0};
     quint16 motionOwnedMask_{0};
+    quint16 motionTransitionOwnedMask_{0};
     QHash<quint16, PendingRequest> pending_;
     QQueue<QueuedCommand> priorityCommandQueue_;
     QQueue<QueuedCommand> commandQueue_;
@@ -206,6 +207,7 @@ private:
     QTimer heartbeatTimer_;
     QTimer retryTimer_;
     QTimer motionStopTimer_;
+    QTimer motionModeTransitionTimer_;
     ProtocolMonitor monitor_;
     LeakState leakState_{LeakState::Unknown};
     qint64 lastLeakTelemetryAtMs_{-1};

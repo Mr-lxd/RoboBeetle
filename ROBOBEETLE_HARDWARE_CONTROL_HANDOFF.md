@@ -357,6 +357,8 @@ Verify 和 physical Motion exercise 尚未在本轮执行，仍为 **Pending**�
   neutral write 完成后才释放 Motion ownership 并进入 `MOTION_STOPPED`。
 - STOPPING 期间 manual Enable/SetPWM/SetAngle/Neutral 必须返回 `BUSY=7`，不能
   与停止轨迹争夺 actuator ownership。
+- Running 模式切换在 ACK 后仍保留旧/新 required-mask 并集直到同一 provisional
+  crossfade 窗口结束；只被新模式释放的通道在此窗口内仍按 Motion-owned 处理。
 - Disable/Disable All、heartbeat/host-liveness loss 和现有 SafetySupervisor
   fail-safe 路径立即 abort/disable，不等待 750 ms。`app_main` 先处理 Safety，
   Protocol Dispatcher 对已校验且与 active Motion ownership 相交的显式

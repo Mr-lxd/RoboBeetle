@@ -104,12 +104,21 @@ RobotController::RobotController(ITransport *transport,
     heartbeatTimer_.setInterval(config_.heartbeatIntervalMs);
     retryTimer_.setInterval(qMax(10, config_.ackTimeoutMs / 4));
     motionStopTimer_.setSingleShot(true);
+    motionModeTransitionTimer_.setSingleShot(true);
 
     connect(&heartbeatTimer_, &QTimer::timeout, this, &RobotController::sendHeartbeat);
     connect(&retryTimer_, &QTimer::timeout, this, &RobotController::checkTimeouts);
     connect(&motionStopTimer_, &QTimer::timeout, this, [this] {
         if (motionState_ == MotionState::Stopping) {
             setMotionState(MotionState::Stopped, MotionMode::Stop);
+        }
+    });
+    connect(&motionModeTransitionTimer_, &QTimer::timeout, this, [this] {
+        // Firmware retains the old/new union for the whole mode crossfade.
+        // If STOP or a safety path won the race, setMotionState() clears the
+        // mask when the lifecycle reaches STOPPED/FAULTED instead.
+        if (motionState_ == MotionState::Running) {
+            motionTransitionOwnedMask_ = 0;
         }
     });
     connect(transport_, &ITransport::bytesReceived, this, &RobotController::processIncoming);
@@ -400,6 +409,10 @@ bool RobotController::startMotion(MotionMode mode)
         emit logMessage(QStringLiteral("Motion START rejected: STOPPING (BUSY)"));
         return false;
     }
+    if (motionModeTransitionTimer_.isActive()) {
+        emit logMessage(QStringLiteral("Motion START rejected: mode transition in progress (BUSY)"));
+        return false;
+    }
     if (!isMotionReady(mode)) {
         emit logMessage(QStringLiteral("Motion START rejected: required Servo channels are not enabled"));
         return false;
@@ -426,12 +439,19 @@ bool RobotController::stopMotion()
         return true;
     }
 
-    return sendCommand(
+    const bool accepted = sendCommand(
         MessageType::SetMotionMode,
         motionPayload(MotionMode::Stop, MotionAction::Stop),
         SupportedServoMask,
         true,
         MotionRequest{MotionMode::Stop, MotionAction::Stop});
+    if (accepted) {
+        // Freeze the old/new ownership union until the STOP ACK moves the
+        // local lifecycle to STOPPING. Firmware may already be ramping down
+        // while the STOP request is still in flight.
+        motionModeTransitionTimer_.stop();
+    }
+    return accepted;
 }
 
 bool RobotController::isMotionReady(MotionMode mode) const
@@ -1013,7 +1033,21 @@ void RobotController::handleAck(const Packet &packet)
                && request->motionRequest.has_value()) {
         const MotionRequest motion = *request->motionRequest;
         if (motion.action == MotionAction::Start) {
+            const bool isModeTransition = motionState_ == MotionState::Running
+                && motionMode_ != MotionMode::Stop
+                && motionMode_ != motion.mode;
+            if (isModeTransition) {
+                motionTransitionOwnedMask_ = static_cast<quint16>(
+                    motionRequiredServoMask(motionMode_)
+                    | motionRequiredServoMask(motion.mode));
+            } else {
+                motionModeTransitionTimer_.stop();
+                motionTransitionOwnedMask_ = 0;
+            }
             setMotionState(MotionState::Running, motion.mode);
+            if (isModeTransition) {
+                motionModeTransitionTimer_.start(kMotionTransitionDurationMs);
+            }
         } else {
             setMotionState(MotionState::Stopping, MotionMode::Stop);
             motionStopTimer_.start(kMotionTransitionDurationMs);
@@ -1192,6 +1226,7 @@ void RobotController::updateMonitor()
 void RobotController::resetSchedulerState()
 {
     motionStopTimer_.stop();
+    motionModeTransitionTimer_.stop();
     pending_.clear();
     priorityCommandQueue_.clear();
     commandQueue_.clear();
@@ -1205,6 +1240,7 @@ void RobotController::resetSchedulerState()
     setEnabledMask(0);
     setDisablePendingMask(0);
     motionOwnedMask_ = 0;
+    motionTransitionOwnedMask_ = 0;
     lastLeakTelemetryAtMs_ = -1;
     markApc220LivenessLost();
 }
@@ -1364,6 +1400,8 @@ void RobotController::setLeakState(LeakState state)
 void RobotController::failClosedMotionState()
 {
     motionStopTimer_.stop();
+    motionModeTransitionTimer_.stop();
+    motionTransitionOwnedMask_ = 0;
     cancelQueuedMotionRequests();
     cancelPendingMotionRequests();
     if (isMotionActive()) {
@@ -1373,7 +1411,7 @@ void RobotController::failClosedMotionState()
 
 quint16 RobotController::motionProtectionMask() const
 {
-    quint16 mask = motionOwnedMask_;
+    quint16 mask = static_cast<quint16>(motionOwnedMask_ | motionTransitionOwnedMask_);
     const auto addPending = [&mask, this](MessageType type,
                                            quint16 affectedMask,
                                            const std::optional<MotionRequest> &motion) {
@@ -1383,7 +1421,8 @@ quint16 RobotController::motionProtectionMask() const
         if (motion->action == MotionAction::Start) {
             mask = static_cast<quint16>(mask | affectedMask);
         } else {
-            mask = static_cast<quint16>(mask | motionOwnedMask_);
+            mask = static_cast<quint16>(mask | motionOwnedMask_
+                                        | motionTransitionOwnedMask_);
         }
     };
 
@@ -1417,6 +1456,8 @@ void RobotController::setMotionState(MotionState state, MotionMode mode)
         motionOwnedMask_ = motionRequiredServoMask(mode);
     } else if (state == MotionState::Stopped || state == MotionState::Faulted) {
         motionOwnedMask_ = 0;
+        motionTransitionOwnedMask_ = 0;
+        motionModeTransitionTimer_.stop();
     }
     emit motionStateChanged(motionState_, motionMode_);
 }
