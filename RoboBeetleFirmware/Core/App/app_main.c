@@ -77,6 +77,14 @@ static bool protocol_send_imu_snapshot(void);
 
 static bool protocol_send_depth_snapshot(void);
 
+static void app_main_apply_safety_stop(void)
+{
+    motion_manager_stop_immediate(&motion_manager);
+    servo_service_disable_all(&servo_service);
+    protocol_dispatcher_invalidate_action_cache(
+        &protocol_dispatcher);
+}
+
 static void protocol_feed_byte(
     uint8_t byte)
 {
@@ -107,6 +115,17 @@ static void protocol_feed_byte(
                     (frame.payload_length == 4U))
                 {
                     now_ms = HAL_GetTick();
+                }
+
+                /* Reject stale actuator frames before dispatching them. A
+                 * Heartbeat is intentionally allowed to refresh liveness
+                 * before this guard is applied to the next command. */
+                if ((frame.type != RBP2_MSG_HEARTBEAT) &&
+                    safety_supervisor_process(
+                        &safety_supervisor,
+                        HAL_GetTick()))
+                {
+                    app_main_apply_safety_stop();
                 }
 
                 outcome = protocol_dispatcher_handle(
@@ -481,7 +500,6 @@ void app_main_init(
 void app_main_process(void)
 {
     uint8_t byte;
-    const uint32_t now_ms = HAL_GetTick();
 
     jy901s_transport_stm32_poll();
     depth_transport_stm32_poll();
@@ -515,19 +533,14 @@ void app_main_process(void)
             HAL_GetTick());
     }
 
+    /* Sample safety and Motion time after this pass's input dispatch. */
+    const uint32_t now_ms = HAL_GetTick();
     if (safety_supervisor_process(
             &safety_supervisor,
             now_ms))
     {
-        /*
-         * Fail-safe:
-         * 上位机失联，立即停止所有已实现执行器。
-         */
-        motion_manager_stop_immediate(&motion_manager);
-        servo_service_disable_all(&servo_service);
-
-        protocol_dispatcher_invalidate_action_cache(
-            &protocol_dispatcher);
+        /* Fail-safe: host loss immediately stops all implemented actuators. */
+        app_main_apply_safety_stop();
     }
     else
     {
@@ -537,10 +550,7 @@ void app_main_process(void)
         if ((motion_result == MOTION_MANAGER_RESULT_HOST_NOT_ALIVE) ||
             (motion_result == MOTION_MANAGER_RESULT_HARDWARE_FAILURE))
         {
-            motion_manager_stop_immediate(&motion_manager);
-            servo_service_disable_all(&servo_service);
-            protocol_dispatcher_invalidate_action_cache(
-                &protocol_dispatcher);
+            app_main_apply_safety_stop();
         }
     }
 }

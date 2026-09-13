@@ -70,10 +70,17 @@ servo_service_result_t servo_service_motion_begin(
 void servo_service_motion_end(
     servo_service_t *service);
 
+void servo_service_motion_set_mask(
+    servo_service_t *service,
+    uint16_t mask);
+
 void servo_service_motion_abort(
     servo_service_t *service);
 
 bool servo_service_motion_is_active(
+    const servo_service_t *service);
+
+uint16_t servo_service_motion_mask(
     const servo_service_t *service);
 
 servo_service_result_t servo_service_set_pwm(

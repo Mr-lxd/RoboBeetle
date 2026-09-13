@@ -202,7 +202,20 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
             uint16_t mask =
                 read_le16(frame->payload);
 
-            if (dispatcher->motion_manager != NULL)
+            const servo_service_result_t mask_result =
+                servo_service_validate_mask(mask);
+
+            if (mask_result != SERVO_SERVICE_RESULT_OK)
+            {
+                return complete_command(
+                    dispatcher,
+                    frame,
+                    map_servo_service_result(mask_result));
+            }
+
+            if ((dispatcher->motion_manager != NULL) &&
+                ((servo_service_motion_mask(
+                      dispatcher->servo_service) & mask) != 0U))
             {
                 motion_manager_stop_immediate(
                     dispatcher->motion_manager);

@@ -134,6 +134,7 @@ private:
         qint64 sentAtMs{0};
         int retries{0};
         std::optional<MotionRequest> motionRequest;
+        bool motionCancelled{false};
     };
 
     struct QueuedCommand {
@@ -164,6 +165,8 @@ private:
     void updateMonitor();
     void resetSchedulerState();
     void clearQueuedCommandsForDisable(quint16 affectedMask);
+    void cancelPendingMotionRequests();
+    void failClosedDirectActuators();
     void failClosedApc220Actuators();
     void failClosedMotionState();
     void setMotionState(MotionState state, MotionMode mode);

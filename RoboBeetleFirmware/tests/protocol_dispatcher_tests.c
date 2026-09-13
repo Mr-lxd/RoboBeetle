@@ -930,6 +930,74 @@ static void test_motion_ownership_and_disable_preemption(void)
            "Servo Disable should stop the requested owned channels");
 }
 
+static void test_servo_disable_validates_before_motion_preemption(void)
+{
+    fixture_t fixture;
+    const uint8_t start_payload[3] = {
+        1U,
+        MOTION_FORWARD,
+        MOTION_ACTION_START,
+    };
+    uint8_t enable_payload[2];
+    uint8_t disable_payload[2];
+    rbp2_frame_t frame;
+    protocol_dispatcher_outcome_t outcome;
+
+    fixture_init(&fixture);
+    accept_heartbeat(&fixture, 150U, 0U, 0U);
+    write_le16(enable_payload, 0x001FU);
+    frame = make_frame(
+        RBP2_MSG_SERVO_ENABLE,
+        151U,
+        enable_payload,
+        sizeof(enable_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "Disable validation setup should enable all servos");
+
+    frame = make_frame(
+        RBP2_MSG_SET_MOTION_MODE,
+        152U,
+        start_payload,
+        sizeof(start_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "Disable validation setup should start Motion");
+
+    write_le16(disable_payload, 0x0020U);
+    frame = make_frame(
+        RBP2_MSG_SERVO_DISABLE,
+        153U,
+        disable_payload,
+        sizeof(disable_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_UNSUPPORTED_SERVO,
+           "invalid Servo Disable should preserve its validation result");
+    expect(motion_manager_state(&fixture.motion_manager) ==
+               MOTION_STATE_RUNNING,
+           "invalid Servo Disable must not preempt active Motion");
+    expect(servo_service_motion_is_active(&fixture.servo_service),
+           "invalid Servo Disable must not release Motion ownership");
+
+    write_le16(disable_payload, 0x0004U);
+    frame = make_frame(
+        RBP2_MSG_SERVO_DISABLE,
+        154U,
+        disable_payload,
+        sizeof(disable_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "valid unrelated Servo Disable should remain allowed");
+    expect(motion_manager_state(&fixture.motion_manager) ==
+               MOTION_STATE_RUNNING,
+           "unrelated Servo Disable must not preempt paddle Motion");
+    expect(servo_service_motion_is_active(&fixture.servo_service),
+           "unrelated Servo Disable must preserve Motion ownership");
+    expect((servo_service_enabled_mask(&fixture.servo_service) & 0x0004U) ==
+               0U,
+           "unrelated Servo Disable should still disable its requested channel");
+}
+
 static void test_stop_when_already_stopped_is_idempotent(void)
 {
     fixture_t fixture;
@@ -973,6 +1041,7 @@ int main(void)
     test_motion_start_stop_ack_and_duplicate_semantics();
     test_motion_payload_validation();
     test_motion_ownership_and_disable_preemption();
+    test_servo_disable_validates_before_motion_preemption();
     test_stop_when_already_stopped_is_idempotent();
 
     if (failures == 0)

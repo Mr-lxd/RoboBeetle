@@ -217,6 +217,19 @@ void servo_service_motion_end(
     }
 }
 
+void servo_service_motion_set_mask(
+    servo_service_t *service,
+    uint16_t mask)
+{
+    if (!servo_service_motion_owner(service) ||
+        (servo_service_validate_mask(mask) != SERVO_SERVICE_RESULT_OK))
+    {
+        return;
+    }
+
+    service->motion_mask = mask;
+}
+
 void servo_service_motion_abort(
     servo_service_t *service)
 {
@@ -227,6 +240,12 @@ bool servo_service_motion_is_active(
     const servo_service_t *service)
 {
     return servo_service_motion_owner(service);
+}
+
+uint16_t servo_service_motion_mask(
+    const servo_service_t *service)
+{
+    return servo_service_motion_owner(service) ? service->motion_mask : 0U;
 }
 
 servo_service_result_t servo_service_set_pwm(

@@ -1006,6 +1006,7 @@ void RobotController::handleAck(const Packet &packet)
         clearDisablePending();
         setEnabledMask(static_cast<quint16>(enabledMask_ & ~request->servoMask));
     } else if (request->type == MessageType::SetMotionMode
+               && !request->motionCancelled
                && request->motionRequest.has_value()) {
         const MotionRequest motion = *request->motionRequest;
         if (motion.action == MotionAction::Start) {
@@ -1042,6 +1043,14 @@ void RobotController::checkTimeouts()
 
         auto it = pending_.begin();
         if (now - it->sentAtMs < config_.ackTimeoutMs) {
+            return;
+        }
+        if (it->motionCancelled) {
+            const quint16 sequence = it->sequence;
+            pending_.erase(it);
+            monitor_.ackStatus = QStringLiteral("Cancelled Motion seq=%1").arg(sequence);
+            pumpApc220Scheduler();
+            updateMonitor();
             return;
         }
         if (it->type == MessageType::Heartbeat) {
@@ -1134,7 +1143,11 @@ void RobotController::checkTimeouts()
             continue;
         }
         if (it->type == MessageType::Heartbeat) {
-            failClosedMotionState();
+            failClosedDirectActuators();
+        }
+        if (it->motionCancelled) {
+            pending_.erase(it);
+            continue;
         }
         if (it->retries >= config_.maxRetries) {
             const MessageType timedOutType = it->type;
@@ -1224,6 +1237,27 @@ void RobotController::clearQueuedCommandsForDisable(quint16 affectedMask)
     }
 }
 
+void RobotController::cancelPendingMotionRequests()
+{
+    for (auto it = pending_.begin(); it != pending_.end(); ++it) {
+        if (it->type == MessageType::SetMotionMode) {
+            it->motionRequest.reset();
+            it->motionCancelled = true;
+        }
+    }
+    if (deferredRetry_.has_value()
+        && deferredRetry_->type == MessageType::SetMotionMode) {
+        deferredRetry_.reset();
+    }
+}
+
+void RobotController::failClosedDirectActuators()
+{
+    setEnabledMask(0);
+    setDisablePendingMask(0);
+    failClosedMotionState();
+}
+
 void RobotController::failClosedApc220Actuators()
 {
     const bool firstFailClosed = !actuatorFailClosed_;
@@ -1291,6 +1325,7 @@ void RobotController::setLeakState(LeakState state)
 void RobotController::failClosedMotionState()
 {
     motionStopTimer_.stop();
+    cancelPendingMotionRequests();
     if (isMotionActive()) {
         setMotionState(MotionState::Faulted, MotionMode::Stop);
     }

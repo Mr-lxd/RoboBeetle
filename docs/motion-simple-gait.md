@@ -59,11 +59,12 @@ During ordinary STOPPING:
 
 `Disable`/`Disable All`, heartbeat/liveness loss, and the existing
 `SafetySupervisor` fail-safe path bypass the ramp. `app_main` evaluates the
-SafetySupervisor before Motion scheduling; the dispatcher also aborts Motion
-before an explicit Servo Disable. A future leak safety trip must use this same
-immediate takeover path. The current PA11 leak implementation is still
-monitoring-only and has no leak-to-Safety trip, so this feature does not invent
-one.
+SafetySupervisor before non-heartbeat command dispatch and before Motion
+scheduling; after Servo Disable payload validation, the dispatcher aborts
+Motion only when the requested mask intersects active Motion ownership. A
+future leak safety trip must use this same immediate takeover path. The current
+PA11 leak implementation is still monitoring-only and has no leak-to-Safety
+trip, so this feature does not invent one.
 
 After an interrupted stop, the manager is faulted/stopped as appropriate,
 ownership is released, actuators are disabled by the safety caller, and a later
@@ -105,8 +106,9 @@ changes the local state to `Running`; a successful STOP ACK changes it to
 `Stopping`, and a single-shot UI timer based on the same centralized 750 ms
 provisional duration changes the display to `Stopped`. The timer is a UI
 transition estimate, not actuator confirmation. Transport error, disconnect,
-heartbeat fail-closed, and Disable All clear/fault the local Motion state, and
-reconnect does not auto-resume.
+heartbeat fail-closed, and Disable All clear/fault the local Motion state;
+liveness fail-closed also clears the local logical enabled/pending masks.
+Reconnect does not auto-resume.
 
 While local Motion is `Running` or `Stopping`, manual Servo controls are
 disabled and the Controller rejects manual actuator commands locally. Firmware

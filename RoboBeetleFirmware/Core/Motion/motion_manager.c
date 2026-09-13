@@ -344,6 +344,9 @@ static motion_manager_result_t motion_manager_tick(
         manager->active_mode = manager->transition_mode;
         manager->write_mask = motion_manager_required_mask(
             manager->active_mode);
+        servo_service_motion_set_mask(
+            manager->servo_service,
+            manager->write_mask);
         manager->transition = MOTION_MANAGER_TRANSITION_NONE;
     }
 
@@ -424,6 +427,9 @@ motion_manager_result_t motion_manager_start(
         manager->transition_elapsed_ms = 0U;
         manager->write_mask = (uint16_t)(
             manager->write_mask | required_mask);
+        servo_service_motion_set_mask(
+            manager->servo_service,
+            manager->write_mask);
         manager->transition = MOTION_MANAGER_TRANSITION_MODE;
         return MOTION_MANAGER_RESULT_OK;
     }

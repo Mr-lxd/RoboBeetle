@@ -360,6 +360,21 @@ void testApcHeartbeatLossClearsLeakState()
            "APC Heartbeat loss must clear trusted leak state immediately");
 }
 
+void testDirectHeartbeatLossClearsEnabledState()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 5;
+    config.ackTimeoutMs = 5;
+    config.maxRetries = 0;
+    rb::RobotController controller(&transport, config);
+    connectAndEnableServo1(transport, controller);
+
+    waitForMs(40);
+    expect(!controller.isServoEnabled(rb::ServoId::Servo1),
+           "DirectUart heartbeat loss must clear the logical enabled mask");
+}
+
 void testAngleDegreesConvertToCentidegrees()
 {
     expect(rb::angleDegreesToCentidegrees(-90.0) == -9000,
@@ -2416,6 +2431,36 @@ void testMotionBusyAckAndReconnectDoesNotResume()
            "reconnect must not emit an automatic Motion command");
 }
 
+void testMotionFailClosedIgnoresLateMotionAck()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "late-ACK setup should start Forward Motion");
+    const rb::Packet start = lastPacket(transport);
+    acknowledge(transport, start, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "late-ACK setup should reach Running");
+
+    expect(controller.stopMotion(),
+           "late-ACK setup should send a graceful STOP");
+    const rb::Packet stop = lastPacket(transport);
+    expect(controller.disableAll(),
+           "Disable All should fail-close while STOP is in flight");
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "Disable All should fault local Motion before a late ACK");
+
+    acknowledge(transport, stop, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "a late successful Motion ACK must not resurrect Faulted Motion");
+}
+
 void testApc220MotionCommandsUseTheExistingBoundedScheduler()
 {
     rb::FakeTransport transport;
@@ -2467,6 +2512,8 @@ void testApc220MotionCommandsUseTheExistingBoundedScheduler()
 
     acknowledge(transport, modeChange, rb::AckResult::Ok,
                 rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "late APC220 Motion ACK must not resurrect Disable All fail-closed state");
     expect(lastPacket(transport).type == rb::MessageType::ServoDisable,
            "Disable All should dispatch before stale queued Motion work");
 }
@@ -2482,6 +2529,7 @@ int main(int argc, char **argv)
     testImuSnapshotDoesNotTouchAckOrLeakState();
     testDepthSnapshotDoesNotTouchAckOrLeakState();
     testApcHeartbeatLossClearsLeakState();
+    testDirectHeartbeatLossClearsEnabledState();
     testAngleDegreesConvertToCentidegrees();
     testSetAngleBlockedDuringDisableRequest();
     testApc220DisablePendingBlocksAllMotionAndErrorReleasesNoStaleWork();
@@ -2538,6 +2586,7 @@ int main(int argc, char **argv)
     testMotionStartStopStateAndWireContract();
     testMotionManualArbitrationBusyAndDisableAllPreemption();
     testMotionBusyAckAndReconnectDoesNotResume();
+    testMotionFailClosedIgnoresLateMotionAck();
     testApc220MotionCommandsUseTheExistingBoundedScheduler();
     if (failures == 0) {
         std::cout << "All robot controller tests passed\n";
