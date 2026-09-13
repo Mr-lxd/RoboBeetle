@@ -39,6 +39,35 @@ static rbp2_result_t map_servo_service_result(
         case SERVO_SERVICE_RESULT_HARDWARE_FAILURE:
             return RBP2_RESULT_HARDWARE_FAILURE;
 
+        case SERVO_SERVICE_RESULT_BUSY:
+            return RBP2_RESULT_BUSY;
+
+        default:
+            return RBP2_RESULT_HARDWARE_FAILURE;
+    }
+}
+
+static rbp2_result_t map_motion_manager_result(
+    motion_manager_result_t result)
+{
+    switch (result)
+    {
+        case MOTION_MANAGER_RESULT_OK:
+            return RBP2_RESULT_OK;
+
+        case MOTION_MANAGER_RESULT_INVALID_MODE:
+            return RBP2_RESULT_INVALID_PAYLOAD;
+
+        case MOTION_MANAGER_RESULT_HOST_NOT_ALIVE:
+            return RBP2_RESULT_HOST_NOT_ALIVE;
+
+        case MOTION_MANAGER_RESULT_SERVO_NOT_ENABLED:
+            return RBP2_RESULT_SERVO_NOT_ENABLED;
+
+        case MOTION_MANAGER_RESULT_BUSY:
+            return RBP2_RESULT_BUSY;
+
+        case MOTION_MANAGER_RESULT_HARDWARE_FAILURE:
         default:
             return RBP2_RESULT_HARDWARE_FAILURE;
     }
@@ -72,10 +101,12 @@ static protocol_dispatcher_outcome_t complete_command(
 void protocol_dispatcher_init(
     protocol_dispatcher_t *dispatcher,
     servo_service_t *servo_service,
-    safety_supervisor_t *safety_supervisor)
+    safety_supervisor_t *safety_supervisor,
+    motion_manager_t *motion_manager)
 {
     dispatcher->servo_service = servo_service;
     dispatcher->safety_supervisor = safety_supervisor;
+    dispatcher->motion_manager = motion_manager;
     dispatcher->last_request_valid = false;
     dispatcher->last_request_sequence = 0U;
     dispatcher->last_request_type = 0U;
@@ -170,6 +201,12 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
 
             uint16_t mask =
                 read_le16(frame->payload);
+
+            if (dispatcher->motion_manager != NULL)
+            {
+                motion_manager_stop_immediate(
+                    dispatcher->motion_manager);
+            }
 
             return complete_command(
                 dispatcher,
@@ -297,6 +334,75 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
                         dispatcher->servo_service,
                         servo_id,
                         angle_cdeg)));
+        }
+
+        case RBP2_MSG_SET_MOTION_MODE:
+        {
+            motion_mode_t mode;
+            motion_action_t action;
+            motion_manager_result_t manager_result;
+
+            if (frame->payload_length != 3U)
+            {
+                return complete_command(
+                    dispatcher,
+                    frame,
+                    RBP2_RESULT_INVALID_PAYLOAD);
+            }
+
+            if (frame->payload[0] != 1U)
+            {
+                return complete_command(
+                    dispatcher,
+                    frame,
+                    RBP2_RESULT_INVALID_PAYLOAD);
+            }
+
+            mode = (motion_mode_t)frame->payload[1];
+            action = (motion_action_t)frame->payload[2];
+            if (!motion_mode_is_valid(mode) ||
+                ((action != MOTION_ACTION_STOP) &&
+                 (action != MOTION_ACTION_START)) ||
+                ((action == MOTION_ACTION_START) &&
+                 (mode == MOTION_STOP)) ||
+                ((action == MOTION_ACTION_STOP) &&
+                 (mode != MOTION_STOP)))
+            {
+                return complete_command(
+                    dispatcher,
+                    frame,
+                    RBP2_RESULT_INVALID_PAYLOAD);
+            }
+
+            if ((action == MOTION_ACTION_START) &&
+                !safety_supervisor_is_host_alive(
+                    dispatcher->safety_supervisor))
+            {
+                return complete_command(
+                    dispatcher,
+                    frame,
+                    RBP2_RESULT_HOST_NOT_ALIVE);
+            }
+
+            if (dispatcher->motion_manager == NULL)
+            {
+                return complete_command(
+                    dispatcher,
+                    frame,
+                    RBP2_RESULT_HARDWARE_FAILURE);
+            }
+
+            manager_result = action == MOTION_ACTION_START
+                ? motion_manager_start(
+                    dispatcher->motion_manager,
+                    mode)
+                : motion_manager_request_stop(
+                    dispatcher->motion_manager);
+
+            return complete_command(
+                dispatcher,
+                frame,
+                map_motion_manager_result(manager_result));
         }
 
         default:

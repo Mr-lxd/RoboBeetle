@@ -27,6 +27,12 @@ static bool servo_service_is_enabled(
     return (service->enabled_mask & descriptor->mask) != 0U;
 }
 
+static bool servo_service_motion_owner(
+    const servo_service_t *service)
+{
+    return service->owner == SERVO_SERVICE_OWNER_MOTION;
+}
+
 void servo_service_init(
     servo_service_t *service,
     const servo_service_driver_ops_t *driver_ops,
@@ -35,6 +41,8 @@ void servo_service_init(
     service->driver_ops = driver_ops;
     service->driver_context = driver_context;
     service->enabled_mask = 0U;
+    service->owner = SERVO_SERVICE_OWNER_MANUAL;
+    service->motion_mask = 0U;
 }
 
 servo_service_result_t servo_service_validate_mask(uint16_t mask)
@@ -56,6 +64,11 @@ servo_service_result_t servo_service_enable(
     servo_service_t *service,
     uint16_t mask)
 {
+    if (servo_service_motion_owner(service))
+    {
+        return SERVO_SERVICE_RESULT_BUSY;
+    }
+
     const servo_service_result_t mask_result =
         servo_service_validate_mask(mask);
     const uint16_t original_mask = service->enabled_mask;
@@ -163,6 +176,57 @@ void servo_service_disable_all(servo_service_t *service)
     }
 
     service->enabled_mask = 0U;
+    service->owner = SERVO_SERVICE_OWNER_MANUAL;
+    service->motion_mask = 0U;
+}
+
+servo_service_result_t servo_service_motion_begin(
+    servo_service_t *service,
+    uint16_t mask)
+{
+    const servo_service_result_t mask_result =
+        servo_service_validate_mask(mask);
+
+    if (mask_result != SERVO_SERVICE_RESULT_OK)
+    {
+        return mask_result;
+    }
+
+    if (servo_service_motion_owner(service))
+    {
+        return SERVO_SERVICE_RESULT_BUSY;
+    }
+
+    if ((service->enabled_mask & mask) != mask)
+    {
+        return SERVO_SERVICE_RESULT_SERVO_NOT_ENABLED;
+    }
+
+    service->owner = SERVO_SERVICE_OWNER_MOTION;
+    service->motion_mask = mask;
+    return SERVO_SERVICE_RESULT_OK;
+}
+
+void servo_service_motion_end(
+    servo_service_t *service)
+{
+    if (servo_service_motion_owner(service))
+    {
+        service->owner = SERVO_SERVICE_OWNER_MANUAL;
+        service->motion_mask = 0U;
+    }
+}
+
+void servo_service_motion_abort(
+    servo_service_t *service)
+{
+    servo_service_motion_end(service);
+}
+
+bool servo_service_motion_is_active(
+    const servo_service_t *service)
+{
+    return servo_service_motion_owner(service);
 }
 
 servo_service_result_t servo_service_set_pwm(
@@ -170,6 +234,11 @@ servo_service_result_t servo_service_set_pwm(
     uint8_t servo_id,
     uint16_t pulse_us)
 {
+    if (servo_service_motion_owner(service))
+    {
+        return SERVO_SERVICE_RESULT_BUSY;
+    }
+
     const servo_descriptor_t *descriptor =
         servo_service_descriptor(servo_id);
 
@@ -202,6 +271,11 @@ servo_service_result_t servo_service_set_angle(
     uint8_t servo_id,
     int16_t angle_cdeg)
 {
+    if (servo_service_motion_owner(service))
+    {
+        return SERVO_SERVICE_RESULT_BUSY;
+    }
+
     const servo_descriptor_t *descriptor =
         servo_service_descriptor(servo_id);
 
@@ -231,10 +305,54 @@ servo_service_result_t servo_service_set_angle(
     return SERVO_SERVICE_RESULT_OK;
 }
 
+servo_service_result_t servo_service_set_angle_from_motion(
+    servo_service_t *service,
+    uint8_t servo_id,
+    int32_t angle_cdeg)
+{
+    const servo_descriptor_t *descriptor =
+        servo_service_descriptor(servo_id);
+
+    if (!servo_service_motion_owner(service))
+    {
+        return SERVO_SERVICE_RESULT_BUSY;
+    }
+
+    if ((descriptor == NULL) || !descriptor->angle_supported)
+    {
+        return SERVO_SERVICE_RESULT_UNSUPPORTED_SERVO;
+    }
+
+    if (!servo_service_is_enabled(service, descriptor))
+    {
+        return SERVO_SERVICE_RESULT_SERVO_NOT_ENABLED;
+    }
+
+    if ((angle_cdeg < descriptor->command_min_angle_cdeg) ||
+        (angle_cdeg > descriptor->command_max_angle_cdeg))
+    {
+        return SERVO_SERVICE_RESULT_OUT_OF_RANGE;
+    }
+
+    service->driver_ops->write_pulse_us(
+        service->driver_context,
+        descriptor->id,
+        servo_calibration_angle_to_pulse(
+            &descriptor->calibration,
+            (int16_t)angle_cdeg));
+
+    return SERVO_SERVICE_RESULT_OK;
+}
+
 servo_service_result_t servo_service_neutral(
     servo_service_t *service,
     uint16_t mask)
 {
+    if (servo_service_motion_owner(service))
+    {
+        return SERVO_SERVICE_RESULT_BUSY;
+    }
+
     const servo_service_result_t mask_result =
         servo_service_validate_mask(mask);
 

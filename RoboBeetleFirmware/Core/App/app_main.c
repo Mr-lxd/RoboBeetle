@@ -17,6 +17,8 @@
 #include "depth_parser.h"
 #include "depth_telemetry.h"
 #include "depth_transport_stm32.h"
+#include "motion_manager.h"
+#include "simple_gait_generator.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -51,6 +53,8 @@ static protocol_dispatcher_t protocol_dispatcher;
 static safety_supervisor_t safety_supervisor;
 static servo_driver_stm32_t servo_driver;
 static servo_service_t servo_service;
+static simple_gait_generator_t simple_gait_generator;
+static motion_manager_t motion_manager;
 static leak_sensor_t leak_sensor;
 static leak_sensor_stm32_t leak_sensor_reader;
 static leak_telemetry_policy_t leak_telemetry_policy;
@@ -452,10 +456,17 @@ void app_main_init(
         &servo_service,
         servo_driver_stm32_ops(),
         &servo_driver);
+    simple_gait_generator_init(&simple_gait_generator);
+    motion_manager_init(
+        &motion_manager,
+        &servo_service,
+        &safety_supervisor,
+        simple_gait_generator_interface(&simple_gait_generator));
     protocol_dispatcher_init(
         &protocol_dispatcher,
         &servo_service,
-        &safety_supervisor);
+        &safety_supervisor,
+        &motion_manager);
     uart_transport_stm32_init(uart);
     jy901s_parser_init(&jy901s_parser);
     imu_telemetry_policy_init(&imu_telemetry_policy);
@@ -470,6 +481,7 @@ void app_main_init(
 void app_main_process(void)
 {
     uint8_t byte;
+    const uint32_t now_ms = HAL_GetTick();
 
     jy901s_transport_stm32_poll();
     depth_transport_stm32_poll();
@@ -505,16 +517,31 @@ void app_main_process(void)
 
     if (safety_supervisor_process(
             &safety_supervisor,
-            HAL_GetTick()))
+            now_ms))
     {
         /*
          * Fail-safe:
          * 上位机失联，立即停止所有已实现执行器。
          */
+        motion_manager_stop_immediate(&motion_manager);
         servo_service_disable_all(&servo_service);
 
         protocol_dispatcher_invalidate_action_cache(
             &protocol_dispatcher);
+    }
+    else
+    {
+        const motion_manager_result_t motion_result =
+            motion_manager_process(&motion_manager, now_ms);
+
+        if ((motion_result == MOTION_MANAGER_RESULT_HOST_NOT_ALIVE) ||
+            (motion_result == MOTION_MANAGER_RESULT_HARDWARE_FAILURE))
+        {
+            motion_manager_stop_immediate(&motion_manager);
+            servo_service_disable_all(&servo_service);
+            protocol_dispatcher_invalidate_action_cache(
+                &protocol_dispatcher);
+        }
     }
 }
 

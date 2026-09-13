@@ -1,5 +1,9 @@
 #include "protocol_dispatcher.h"
 
+#include "motion_config.h"
+#include "motion_manager.h"
+#include "simple_gait_generator.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -70,6 +74,8 @@ typedef struct
     fake_driver_t driver;
     servo_service_t servo_service;
     safety_supervisor_t safety_supervisor;
+    simple_gait_generator_t generator;
+    motion_manager_t motion_manager;
     protocol_dispatcher_t dispatcher;
 } fixture_t;
 
@@ -83,10 +89,17 @@ static void fixture_init(fixture_t *fixture)
         &fake_ops,
         &fixture->driver);
     safety_supervisor_init(&fixture->safety_supervisor);
+    simple_gait_generator_init(&fixture->generator);
+    motion_manager_init(
+        &fixture->motion_manager,
+        &fixture->servo_service,
+        &fixture->safety_supervisor,
+        simple_gait_generator_interface(&fixture->generator));
     protocol_dispatcher_init(
         &fixture->dispatcher,
         &fixture->servo_service,
-        &fixture->safety_supervisor);
+        &fixture->safety_supervisor,
+        &fixture->motion_manager);
 }
 
 static rbp2_frame_t make_frame(
@@ -715,6 +728,234 @@ static void test_unknown_messages_are_invalid_payload(void)
            "reserved Error message must remain InvalidPayload");
 }
 
+static void enable_paddles(fixture_t *fixture)
+{
+    uint8_t mask_payload[2];
+    rbp2_frame_t frame;
+    protocol_dispatcher_outcome_t outcome;
+
+    accept_heartbeat(fixture, 100U, 0U, 0U);
+    write_le16(mask_payload, 0x001BU);
+    frame = make_frame(
+        RBP2_MSG_SERVO_ENABLE,
+        101U,
+        mask_payload,
+        sizeof(mask_payload));
+    outcome = handle(fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "Motion protocol setup should enable all paddles");
+}
+
+static void test_motion_start_stop_ack_and_duplicate_semantics(void)
+{
+    fixture_t fixture;
+    const uint8_t start_payload[3] = {
+        1U,
+        MOTION_FORWARD,
+        MOTION_ACTION_START,
+    };
+    const uint8_t stop_payload[3] = {
+        1U,
+        MOTION_STOP,
+        MOTION_ACTION_STOP,
+    };
+    rbp2_frame_t frame;
+    protocol_dispatcher_outcome_t outcome;
+    unsigned int writes_before_stop;
+
+    fixture_init(&fixture);
+    enable_paddles(&fixture);
+
+    frame = make_frame(
+        RBP2_MSG_SET_MOTION_MODE,
+        110U,
+        start_payload,
+        sizeof(start_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "valid Motion START should be accepted");
+    expect(motion_manager_state(&fixture.motion_manager) ==
+               MOTION_STATE_RUNNING,
+           "Motion START ACK should correspond to RUNNING acceptance");
+
+    frame = make_frame(
+        RBP2_MSG_SET_MOTION_MODE,
+        111U,
+        stop_payload,
+        sizeof(stop_payload));
+    writes_before_stop = fixture.driver.write_calls;
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "ordinary Motion STOP should ACK request acceptance");
+    expect(motion_manager_state(&fixture.motion_manager) ==
+               MOTION_STATE_STOPPING,
+           "STOP ACK should be sent while firmware is STOPPING");
+    expect(fixture.driver.write_calls == writes_before_stop,
+           "STOP acceptance should not wait for or perform the ramp");
+
+    outcome = handle(&fixture, &frame, MOTION_TRANSITION_DURATION_MS);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "duplicate STOP should replay its successful ACK result");
+    expect(motion_manager_state(&fixture.motion_manager) ==
+               MOTION_STATE_STOPPING,
+           "duplicate STOP should not repeat or complete the ramp");
+
+    frame = make_frame(
+        RBP2_MSG_SET_MOTION_MODE,
+        112U,
+        start_payload,
+        sizeof(start_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_BUSY,
+           "new START during STOPPING should map to Protocol BUSY");
+}
+
+static void test_motion_payload_validation(void)
+{
+    fixture_t fixture;
+    static const uint8_t invalid_length[] = {1U, MOTION_FORWARD};
+    static const uint8_t invalid_schema[] = {
+        0U,
+        MOTION_FORWARD,
+        MOTION_ACTION_START,
+    };
+    static const uint8_t start_stop_mode[] = {
+        1U,
+        MOTION_STOP,
+        MOTION_ACTION_START,
+    };
+    static const uint8_t stop_non_stop_mode[] = {
+        1U,
+        MOTION_FORWARD,
+        MOTION_ACTION_STOP,
+    };
+    static const uint8_t invalid_action[] = {
+        1U,
+        MOTION_FORWARD,
+        2U,
+    };
+    static const uint8_t invalid_mode[] = {
+        1U,
+        MOTION_COUNT,
+        MOTION_ACTION_START,
+    };
+    const struct
+    {
+        const uint8_t *payload;
+        uint16_t length;
+        const char *message;
+    } cases[] = {
+        {invalid_length, sizeof(invalid_length),
+         "Motion payload length must be exactly three bytes"},
+        {invalid_schema, sizeof(invalid_schema),
+         "Motion schema must be validated"},
+        {start_stop_mode, sizeof(start_stop_mode),
+         "START with STOP mode must be invalid"},
+        {stop_non_stop_mode, sizeof(stop_non_stop_mode),
+         "STOP with a non-STOP mode must be invalid"},
+        {invalid_action, sizeof(invalid_action),
+         "Motion action outside START/STOP must be invalid"},
+        {invalid_mode, sizeof(invalid_mode),
+         "Motion mode outside the documented enum must be invalid"},
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index)
+    {
+        rbp2_frame_t frame = make_frame(
+            RBP2_MSG_SET_MOTION_MODE,
+            (uint16_t)(120U + index),
+            cases[index].payload,
+            cases[index].length);
+        const protocol_dispatcher_outcome_t outcome =
+            handle(&fixture, &frame, 0U);
+
+        expect(outcome.result == RBP2_RESULT_INVALID_PAYLOAD,
+               cases[index].message);
+    }
+}
+
+static void test_motion_ownership_and_disable_preemption(void)
+{
+    fixture_t fixture;
+    const uint8_t start_payload[3] = {
+        1U,
+        MOTION_FORWARD,
+        MOTION_ACTION_START,
+    };
+    uint8_t angle_payload[4] = {1U, SERVO_ID_FRONT_RIGHT, 0U, 0U};
+    uint8_t disable_payload[2];
+    rbp2_frame_t frame;
+    protocol_dispatcher_outcome_t outcome;
+
+    fixture_init(&fixture);
+    enable_paddles(&fixture);
+
+    frame = make_frame(
+        RBP2_MSG_SET_MOTION_MODE,
+        130U,
+        start_payload,
+        sizeof(start_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "ownership setup Motion START should succeed");
+
+    frame = make_frame(
+        RBP2_MSG_SET_SERVO_ANGLE,
+        131U,
+        angle_payload,
+        sizeof(angle_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_BUSY,
+           "manual angle command should be BUSY under Motion ownership");
+
+    (void)motion_manager_request_stop(&fixture.motion_manager);
+    write_le16(disable_payload, 0x001BU);
+    frame = make_frame(
+        RBP2_MSG_SERVO_DISABLE,
+        132U,
+        disable_payload,
+        sizeof(disable_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "Servo Disable should remain allowed during STOPPING");
+    expect(motion_manager_state(&fixture.motion_manager) ==
+               MOTION_STATE_FAULTED,
+           "Servo Disable should immediately abort graceful STOPPING");
+    expect(!servo_service_motion_is_active(&fixture.servo_service),
+           "Servo Disable should release Motion ownership immediately");
+    expect((servo_service_enabled_mask(&fixture.servo_service) & 0x001BU) ==
+               0U,
+           "Servo Disable should stop the requested owned channels");
+}
+
+static void test_stop_when_already_stopped_is_idempotent(void)
+{
+    fixture_t fixture;
+    const uint8_t stop_payload[3] = {
+        1U,
+        MOTION_STOP,
+        MOTION_ACTION_STOP,
+    };
+    rbp2_frame_t frame;
+    protocol_dispatcher_outcome_t outcome;
+
+    fixture_init(&fixture);
+    accept_heartbeat(&fixture, 140U, 0U, 0U);
+    frame = make_frame(
+        RBP2_MSG_SET_MOTION_MODE,
+        141U,
+        stop_payload,
+        sizeof(stop_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "STOP while already STOPPED should be idempotent");
+    expect(motion_manager_state(&fixture.motion_manager) ==
+               MOTION_STATE_STOPPED,
+           "idempotent STOP should remain STOPPED");
+}
+
 int main(void)
 {
     test_valid_heartbeat();
@@ -729,6 +970,10 @@ int main(void)
     test_cache_invalidation_allows_retry();
     test_result_mappings();
     test_unknown_messages_are_invalid_payload();
+    test_motion_start_stop_ack_and_duplicate_semantics();
+    test_motion_payload_validation();
+    test_motion_ownership_and_disable_preemption();
+    test_stop_when_already_stopped_is_idempotent();
 
     if (failures == 0)
     {

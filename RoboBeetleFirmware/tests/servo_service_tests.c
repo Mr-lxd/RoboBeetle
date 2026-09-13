@@ -416,6 +416,111 @@ static void test_neutral_disable_and_disable_all(void)
            "Disable All should stop RearLeft");
 }
 
+static void test_motion_owner_arbitrates_manual_writes(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+
+    init_service(&service, &driver);
+    expect(servo_service_enable(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Motion ownership setup should enable all servos");
+    expect(servo_service_motion_begin(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Motion should acquire all enabled servos");
+    expect(servo_service_motion_is_active(&service),
+           "Motion owner should remain active after acquisition");
+    expect(servo_service_set_angle_from_motion(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               1000) == SERVO_SERVICE_RESULT_OK,
+           "Motion owner should be able to write logical angles");
+
+    expect(servo_service_set_angle(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               0) == SERVO_SERVICE_RESULT_BUSY,
+           "manual SetAngle should be BUSY while Motion owns servos");
+    expect(servo_service_set_pwm(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               1450U) == SERVO_SERVICE_RESULT_BUSY,
+           "manual SetPWM should be BUSY while Motion owns servos");
+    expect(servo_service_neutral(
+               &service,
+               0x001FU) == SERVO_SERVICE_RESULT_BUSY,
+           "manual Neutral should be BUSY while Motion owns servos");
+    expect(servo_service_enable(
+               &service,
+               0x001FU) == SERVO_SERVICE_RESULT_BUSY,
+           "manual Enable should be BUSY while Motion owns servos");
+    expect(servo_service_motion_begin(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_BUSY,
+           "a second Motion owner should be rejected");
+
+    servo_service_motion_end(&service);
+    expect(!servo_service_motion_is_active(&service),
+           "Motion end should release actuator ownership");
+    expect(servo_service_set_angle(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               0) == SERVO_SERVICE_RESULT_OK,
+           "manual SetAngle should recover after Motion ends");
+}
+
+static void test_motion_begin_requires_enabled_channels_and_abort_releases(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+
+    init_service(&service, &driver);
+    expect(servo_service_enable(&service, 0x000FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "partial Motion setup should enable four paddles");
+    expect(servo_service_motion_begin(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_SERVO_NOT_ENABLED,
+           "Motion should reject a missing required FrontAxis enable");
+    expect(!servo_service_motion_is_active(&service),
+           "failed Motion acquisition should not retain ownership");
+    expect(servo_service_motion_begin(&service, 0x000FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Motion should acquire an enabled subset");
+
+    servo_service_motion_abort(&service);
+    expect(!servo_service_motion_is_active(&service),
+           "Motion abort should release ownership immediately");
+    expect(servo_service_set_pwm(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               1450U) == SERVO_SERVICE_RESULT_OK,
+           "manual writes should recover after Motion abort");
+}
+
+static void test_disable_all_preempts_motion_owner(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+
+    init_service(&service, &driver);
+    expect(servo_service_enable(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Disable All setup should enable all servos");
+    expect(servo_service_motion_begin(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Disable All setup should acquire Motion ownership");
+
+    servo_service_disable_all(&service);
+    expect(servo_service_enabled_mask(&service) == 0U,
+           "Disable All should clear all enabled channels during Motion");
+    expect(!servo_service_motion_is_active(&service),
+           "Disable All should preempt Motion ownership");
+    expect(servo_service_set_angle_from_motion(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               0) == SERVO_SERVICE_RESULT_BUSY,
+           "a Motion write after Disable All should not be accepted");
+}
+
 int main(void)
 {
     test_mask_validation();
@@ -424,6 +529,9 @@ int main(void)
     test_command_ranges_and_capabilities();
     test_unenabled_and_invalid_commands();
     test_neutral_disable_and_disable_all();
+    test_motion_owner_arbitrates_manual_writes();
+    test_motion_begin_requires_enabled_channels_and_abort_releases();
+    test_disable_all_preempts_motion_owner();
 
     if (failures == 0)
     {

@@ -32,6 +32,7 @@ typedef enum
     RBP2_MSG_SET_SERVO_PWM = 0x12,
     RBP2_MSG_SET_SERVO_ANGLE = 0x13,
     RBP2_MSG_NEUTRAL = 0x14,
+    RBP2_MSG_SET_MOTION_MODE = 0x15,
 
     /* Unacknowledged robot-status telemetry (not a command). */
     RBP2_MSG_LEAK_STATUS = 0x20,
@@ -48,7 +49,8 @@ typedef enum
     RBP2_RESULT_UNSUPPORTED_SERVO = 3,
     RBP2_RESULT_SERVO_NOT_ENABLED = 4,
     RBP2_RESULT_OUT_OF_RANGE = 5,
-    RBP2_RESULT_HARDWARE_FAILURE = 6
+    RBP2_RESULT_HARDWARE_FAILURE = 6,
+    RBP2_RESULT_BUSY = 7
 
 } rbp2_result_t;
 

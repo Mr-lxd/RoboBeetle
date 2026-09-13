@@ -55,6 +55,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Communication/imu_telemetry_policy.c
     Core/Communication/telemetry_scheduler.c
     Core/Communication/protocol_dispatcher.c
+    Core/Motion/simple_gait_generator.c
+    Core/Motion/motion_manager.c
     Core/Sensors/leak_sensor.c
     Core/Sensors/leak_sensor_stm32.c
     Core/Sensors/leak_telemetry_policy.c
@@ -77,6 +79,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Sensors
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Servo
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Safety
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Motion
 )
 
 # Add project symbols (macros)
@@ -90,6 +93,7 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
+    m
 
     # Add user defined libraries
 )

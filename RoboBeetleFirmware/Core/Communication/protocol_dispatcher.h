@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "rb_protocol_v2.h"
+#include "motion_manager.h"
 #include "safety_supervisor.h"
 #include "servo_service.h"
 
@@ -12,6 +13,7 @@ typedef struct
 {
     servo_service_t *servo_service;
     safety_supervisor_t *safety_supervisor;
+    motion_manager_t *motion_manager;
 
     bool last_request_valid;
     uint16_t last_request_sequence;
@@ -30,7 +32,8 @@ typedef struct
 void protocol_dispatcher_init(
     protocol_dispatcher_t *dispatcher,
     servo_service_t *servo_service,
-    safety_supervisor_t *safety_supervisor);
+    safety_supervisor_t *safety_supervisor,
+    motion_manager_t *motion_manager);
 
 protocol_dispatcher_outcome_t protocol_dispatcher_handle(
     protocol_dispatcher_t *dispatcher,
