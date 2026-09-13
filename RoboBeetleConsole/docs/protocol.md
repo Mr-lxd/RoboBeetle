@@ -1,6 +1,6 @@
 # RoboBeetle Protocol V2 — Phase 1 Baseline
 
-This document describes the Console and Firmware sources repaired and clean-built on 2026-09-11, plus the conservative host-link scheduler adaptation, PR #9 leak-status telemetry, PR #11 low-rate JY901S telemetry, PR #12 ROVMAKER depth telemetry, and the PR #13 final five-servo calibration contract. **[Implemented]** refers to code presence and software verification; the pre-PR8 Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]** for its historical layout. The current host-link evidence uses Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2; APC220 is an earlier/legacy transport record and was not used in the recent runs. PR #7 scheduler behavior remains **[Hardware Verified - Bench]** only for that historical APC220 setup; its timing parameters remain **[Provisional]**. The PR #13 feature-image Hardware Verification for the final five-servo calibration is **PASS**; PR #9 LeakStatus, PR #11 physical JY901S telemetry, and PR #12's stable-connection DepthSnapshot path are **[Hardware Verified]** in their recorded boundaries, while connector robustness and ROVMAKER depth calibration remain pending.
+This document describes the Console and Firmware sources repaired and clean-built on 2026-09-11, plus the conservative host-link scheduler adaptation, PR #9 leak-status telemetry, PR #11 low-rate JY901S telemetry, PR #12 ROVMAKER depth telemetry, the PR #13 final five-servo calibration contract, and the bench-provisional Motion / SimpleGait foundation. **[Implemented]** refers to code presence and software verification; the pre-PR8 Servo1 hardware acceptance recorded below is explicitly marked **[Hardware Verified]** for its historical layout. The current host-link evidence uses Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2; APC220 is an earlier/legacy transport record and was not used in the recent runs. PR #7 scheduler behavior remains **[Hardware Verified - Bench]** only for that historical APC220 setup; its timing parameters remain **[Provisional]**. The PR #13 feature-image Hardware Verification for the final five-servo calibration is **PASS**; PR #9 LeakStatus, PR #11 physical JY901S telemetry, and PR #12's stable-connection DepthSnapshot path are **[Hardware Verified]** in their recorded boundaries, while Motion ARM/hardware exercise, connector robustness, and ROVMAKER depth calibration remain pending. The full Motion contract is in [`../../docs/motion-simple-gait.md`](../../docs/motion-simple-gait.md).
 
 Evidence labels used across the project are **[Implemented]** (current source), **[Hardware Verified]** (development-record hardware evidence), **[Provisional]** (bring-up value/incomplete contract), **[Planned]** (future work), and **[Historical Reference]** (old papers/code only). This protocol document relies primarily on Implemented evidence; hardware milestones and historical context are kept in the project READMEs and root handoff.
 
@@ -80,6 +80,7 @@ Console and Firmware use the same frozen result values:
 | `4` | `ServoNotEnabled` | Servo not enabled |
 | `5` | `OutOfRange` | PWM/angle outside the descriptor command range |
 | `6` | `HardwareFailure` | `HAL_TIM_PWM_Start()` failed |
+| `7` | `Busy` | Motion ownership or an in-progress Motion transition rejects the request |
 
 ### Error — `0x03`
 
@@ -267,6 +268,37 @@ The type and schema are implemented on both sides:
 - Firmware: validates `count=1`, live heartbeat, an angle-capable semantic ID, enabled state, and the descriptor range for all five final descriptors. Out-of-range values return `OutOfRange` and are not clamped.
 - Firmware performs the descriptor-specific signed-delta piecewise linear calibration with `int32_t` intermediates and then updates the mapped STM32 timer channel. The final tuples are `FrontRight 1000/1450/1900 μs`, `FrontLeft 2020/1580/1140 μs`, `FrontAxis 1060/1745/2430 μs`, `RearRight 1110/1570/2030 μs`, and `RearLeft 1940/1450/960 μs` for negative endpoint / neutral / positive endpoint.
 
+### Motion / SimpleGait — `0x15`
+
+```text
+schema  uint8 = 1
+mode    uint8
+action  uint8
+```
+
+The stable mode order is `STOP=0`, `FORWARD=1`, `BACKWARD=2`, `TURN_LEFT=3`,
+`TURN_RIGHT=4`, `ASCEND=5`, `DESCEND=6`; `COUNT=7` is a sentinel and is not
+sent. `START=1` is valid only for modes 1–6. Ordinary STOP uses
+`mode=STOP, action=STOP=0` and is accepted without waiting for the neutral
+transition.
+
+The Firmware ACK is acceptance-level: successful START enters `RUNNING`, while
+successful STOP enters `MOTION_STOPPING` and retains Motion ownership. A
+centralized 750 ms **[Provisional]** cooperative ramp drives amplitude/bias and
+logical targets to zero before releasing ownership and entering STOPPED. During
+STOPPING, manual Servo Enable/SetPWM/SetAngle/Neutral requests map to `Busy=7`.
+Disable/Disable All and SafetySupervisor host-liveness loss immediately abort
+Motion and disable/stop actuators; they never wait for the ramp. A successful
+`0x15` request participates in the existing one-entry successful duplicate
+cache, so same sequence/type retry replays the ACK without repeating the
+transition.
+
+The Qt Controller displays `Running`, acceptance-time `Stopping`, timer-based
+`Stopped`, or `Faulted`; the UI timer is not actuator confirmation. Reconnect
+does not auto-resume an interrupted Motion. The current PA11 leak path remains
+monitoring-only and has no leak-to-Safety trip; any future leak trip must use
+the same immediate fail-safe path.
+
 ### Historical Servo1 Set Angle hardware acceptance — [Hardware Verified] (2026-09-06)
 
 This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware verification of the new five-servo wiring.
@@ -288,6 +320,7 @@ This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware v
 | Set Servo PWM | `0x12` | Sends count 1, semantic ID, pulse LE; applies descriptor command envelope | Accepts exactly count 1 and a supported semantic ID; host-alive/enabled/range gates; writes mapped timer CCR | `uint8,uint8,uint16` | Yes | **Consistent for all five IDs; final numeric bounds are recorded above, including inverted left-side calibration** |
 | Set Servo Angle | `0x13` | Controller and Qt UI send count 1, angle-capable semantic ID, signed cdeg LE; UI is gated by connection, Enable ACK, and no pending Disable | Maps each accepted descriptor angle with `int32_t` arithmetic, including FrontAxis −90…+90° | `uint8,uint8,int16` | Yes | **Implemented; PR #13 feature-image Hardware Verification: PASS** |
 | Neutral | `0x14` | Sends the selected semantic mask after local enable | Requires live host, valid mask, and enabled selected channels; writes descriptor neutral pulses without disabling | `uint16 mask` | Yes | **Implemented; final five-servo neutral values recorded above; PR #13 feature-image Hardware Verification: PASS** |
+| SetMotionMode | `0x15` | Sends `schema=1, mode, action`; successful STOP ACK displays `Stopping` and starts the provisional local transition timer | Validates exact three-byte payload, HostAlive for START, mode/action relation, ownership, and returns acceptance-level ACK; ordinary STOP enters `MOTION_STOPPING` and ramps targets to neutral over 750 ms | `uint8,uint8,uint8` | Yes | **Implemented / Host Test: PASS; gait profile and ARM/hardware exercise [Pending]** |
 | LeakStatus | `0x20` | Receives one-byte monitoring telemetry and updates Unknown/Dry/Wet indicator; never creates an ACK pending entry | Samples PA11 and emits after accepted Heartbeat ACK, first/change/500 ms refresh; no ACK and no Servo/Safety action | `uint8 state` | No | **Implemented; end-to-end monitoring [Hardware Verified]** |
 | ImuSnapshot | `0x21` | Decodes fixed 56-byte monitoring telemetry into `ImuMonitor`; never creates or releases an ACK pending entry; displays Unknown/Receiving/Stale/Error and clears invalid/stale values | Encodes current JY901S state and diagnostics after accepted Heartbeat ACK, at most one optional frame per opportunity, with due LeakStatus priority and fair rotation against a due DepthSnapshot when LeakStatus is not due | 56-byte fixed schema | No | **Implemented / Host Test: PASS; physical JY901S telemetry [Hardware Verified]** |
 | DepthSnapshot | `0x22` | Decodes fixed 38-byte monitoring telemetry into `DepthMonitor`; validates schema/flags/length and never creates or releases an ACK pending entry; sensor-invalid snapshots are Stale with values hidden while diagnostics remain visible | Parses the listen-only ROVMAKER decoder line, applies the provisional 3000 ms sensor freshness bound, and encodes validity-gated fixed-point fields and seven diagnostics counters after accepted Heartbeat ACK, at most one optional frame per opportunity | 38-byte fixed schema | No | **Implemented / Host Test: PASS; physical decoder path [Pending Hardware Verification]** |
@@ -299,6 +332,7 @@ This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware v
 - DirectUart keeps every ACK-requiring request in a sequence-keyed table, including heartbeats; this preserves the original multi-pending behavior.
 - Apc220HalfDuplex permits one ACK-requiring request in flight. User servo commands wait in a bounded queue of `kApc220CommandQueueCapacity` entries, and heartbeat ticks collapse into one pending/due bit rather than a queue. The profile name is retained for compatibility; the current hardware path is DAP UART/COM13/USART1.
 - Servo Disable/Disable All requests in this single-flight profile use a safety-priority queue. A new Disable clears unsent Servo Enable, Set Servo PWM, Set Servo Angle, and Neutral work for the affected mask (and any deferred retry), then runs after the uncancellable in-flight exchange and any due heartbeat but before ordinary retry/queue work.
+- `SetMotionMode` is an ACK-requiring actuator command and uses the same DirectUart multi-pending or Apc220HalfDuplex bounded-queue bookkeeping. Disable All clears queued Motion work and keeps only the safety-priority Disable request. A successful Motion STOP ACK is cached at acceptance; the later 750 ms neutral completion is a local/Firmware state transition, not a second ACK.
 - ACK timeout is 200 ms for DirectUart and 250 ms for Apc220HalfDuplex. Retries reuse the original encoded frame and sequence, up to three retransmissions after the original send when the transport accepts the write; DirectUart retains its legacy handling of failed retry writes for regression compatibility.
 - When the profile heartbeat is due, or when the remaining safety budget cannot contain an ordinary exchange, the heartbeat is dispatched first. The command retry remains deferred with its original sequence/frame and is sent after the heartbeat exchange.
 - Firmware caches the most recent successful non-Heartbeat request using `Sequence + MessageType`. An immediate retry of that request replays the cached result-0 ACK and returns before dispatch, so Servo Enable/PWM/Angle/Neutral/Disable are not executed twice.

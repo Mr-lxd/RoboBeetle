@@ -1,6 +1,6 @@
 # RoboBeetleConsole
 
-RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the current direct Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link. This document describes the implementation repaired and verified on 2026-09-11, including the PR #11 low-rate JY901S telemetry monitor and the PR #12 ROVMAKER DepthSnapshot monitor; PR #13 carries the final four-paddle descriptor contract, while the new Firmware image remains pending target and hardware evidence; historical papers, slides, and legacy code are references only.
+RoboBeetleConsole is the Phase 1 Qt 6 / C++20 engineering console for the current direct Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link. This document describes the implementation repaired and verified on 2026-09-11, including the PR #11 low-rate JY901S telemetry monitor, the PR #12 ROVMAKER DepthSnapshot monitor, and the first Motion / SimpleGait control panel; PR #13 carries the final four-paddle descriptor contract, while the new Firmware image and this Motion feature remain pending target/hardware evidence; historical papers, slides, and legacy code are references only.
 
 The recent Servo, LeakStatus, JY901S, and Depth hardware runs used the wired DAP UART/COM13 path above. APC220 is an earlier/legacy transport record, was not enabled in those runs, and is not current JY901S or PR #11/PR #12 hardware evidence.
 
@@ -34,7 +34,12 @@ FrontAxis waterproof capability is **[Unverified]**. The seller parameter page s
 
 PR #13 evidence is deliberately split: FrontRight `1450/1900 us` are **[Bench Measured]** and `1000 us` is **[Symmetry-Derived / User Accepted]**; FrontLeft `1580/1140 us` are **[Bench Measured]** and `2020 us` is **[Symmetry-Derived / User Accepted]**; RearRight `1110/1570/2030 us` and RearLeft `1940/1450/960 us` are **[Bench Hardware Verified]** user bench results. These labels describe the supplied actuator evidence, not this branch's image execution. This feature image has not been independently ARM-built, programmed/verified, or exercised on hardware here, so **ARM Build**, **Program Verify**, and **Hardware Verified** remain **[Pending]**. Do not copy prior PR or old-image PASS into this feature status.
 
-Future gait/CPG layers must emit logical joint angles and pass them through `Motion Command → Gait / CPG Generator → Logical Joint Target → ServoService set_angle → Servo Calibration → PWM`. Neutral differences, left/right inversion, and PWM conversion stay in the Servo calibration layer. This PR documents that boundary only; it does not implement gait, CPG, motion commands, or Qt gait controls.
+The current Motion/simple-gait foundation is documented in
+[`../docs/motion-simple-gait.md`](../docs/motion-simple-gait.md). The Console
+sends `SetMotionMode 0x15`, displays acceptance-time `Running`/`Stopping` and
+the provisional `Stopped` transition, keeps manual Servo controls disabled while
+Motion owns actuators, and leaves global `Disable All` available. Full CPG,
+feedback control, and water-tested gait calibration remain planned.
 
 This is a hardware-layout compatibility break: the historical v0.4 Servo1/PA6 bring-up object was `RearLeft`, while PR #8 formally assigns PA6/ID0 to `FrontRight` and `RearLeft` to PD13/TIM4_CH2. Do not mix pre-PR8 Console/Firmware binaries with the PR8 five-servo wiring. PR #13 software verification covers the final descriptor and controller contract; target hardware regression for the new descriptor values remains pending.
 
@@ -187,13 +192,14 @@ is not a second Firmware sensor path.
 - Explicit DirectUart and Apc220HalfDuplex link profiles. DirectUart retains the 100 ms heartbeat / 200 ms ACK timeout and multi-pending behavior; the legacy-named Apc220HalfDuplex profile supplies the conservative stop-and-wait host-link policy used by the current DAP UART/COM13 bench run. Its 250 ms / 250 ms timing values remain **[Provisional]**; this does not verify an APC220 radio.
 - Up to three retransmissions after the original send, always reusing the original sequence and encoded frame.
 - ACK/Error reception, request-sequence matching, TX/RX hex display, packet/CRC/timeout counters, ACK status, and an event log.
-- Shared ACK result meanings `0..6`, with named rejection status in the monitor.
+- Shared ACK result meanings `0..7`, with named rejection status including `Busy` in the monitor.
 - `ITransport` abstraction with real `SerialTransport` and test-only `FakeTransport` implementations.
 - Protocol codec/stream tests and controller behavior tests.
 - Set Angle UI for all five angle-capable semantic servos with descriptor-specific ranges; the UI converts to centidegrees and angle-to-pulse conversion remains authoritative in Firmware. FrontAxis/Depth uses the calibrated `-90 to +90 degrees` software angle range and `1060–2430 us` PWM command limits.
 - Monitoring-only LeakStatus `0x20` indicator with Unknown/Dry/Wet states and stale/disconnect fail-to-Unknown behavior; the end-to-end path is **[Hardware Verified]**.
 - Monitoring-only JY901S `ImuSnapshot` `0x21` panel with explicit fixed-point display, diagnostics, Unknown/Receiving/Stale/Error lifecycle, and stale/liveness value invalidation; the matching PR #11 physical IMU path and post-fix re-arm diagnostics are **[Hardware Verified]**, with USART3 UART/checksum physical-link quality, body-frame mapping, and magnetic/yaw calibration still pending.
 - Monitoring-only ROVMAKER `DepthSnapshot` `0x22` panel with fixed-point depth/temperature, validity flags, sample age, parser/transport diagnostics, and Unknown/Receiving/Stale/Error lifecycle. Software and host tests are **[Host Test: PASS]**; the stable physical decoder path is **[Hardware Verified]**, while connector/harness robustness and final calibration remain **[Pending]**.
+- Motion / Gait — Bench panel with the seven documented mode labels, exact `0x15` Start/Stop commands, `Running`/`Stopping`/`Stopped`/`Faulted` status, manual-control arbitration, and always-available global Disable All. The 0.5 Hz / 10° gait profile and 750 ms STOP duration are **[Provisional]**; host tests are **[Host Test: PASS]**, while ARM Build, Program Verify, and physical Motion remain **[Pending]**.
 
 ### [Planned]
 
@@ -217,10 +223,12 @@ QApplication
       │   ├─ logical enabled-mask state
       │   ├─ LeakStatus state / stale policy
       │   ├─ ImuSnapshot state / stale policy
-      │   └─ DepthSnapshot state / stale policy
+      │   ├─ DepthSnapshot state / stale policy
+      │   └─ Motion state / 0x15 command and provisional STOP timer
       └─ MainWindow
           ├─ connection controls
           ├─ five descriptor-driven servo panels
+          ├─ Motion / Gait — Bench panel
           ├─ IMU — JY901S monitor
           ├─ Depth Sensor — ROVMAKER monitor
           └─ protocol monitor / event log
@@ -254,6 +262,7 @@ QApplication
 | Neutral | [Implemented] | Sends `0x14` with the selected semantic servo mask after Enable ACK and with no pending Disable; FrontAxis/Depth uses Neutral `1745 us`. |
 | Apply PWM | [Implemented] | Explicit button; slider movement alone does not transmit. Requires successful Enable ACK, no pending Disable, and descriptor command-range validation. |
 | Set Angle | [Implemented] | All five angle-capable semantic servos use descriptor-specific input ranges and 0.1° steps; Qt converts to signed cdeg and calls `RobotController::setServoAngle()`. The control requires connection, support, Enable ACK, and no pending Disable request; FrontAxis/Depth is limited to `-90 to +90 degrees`. |
+| Motion / Gait — Bench | [Implemented / Provisional] | Sends exact Protocol V2 `0x15` Start/Stop payloads, reports `Running`, acceptance-time `Stopping`, timer-estimated `Stopped`, or `Faulted`, blocks manual actuator commands while active, and keeps global Disable All available. The 0.5 Hz / 10° gait profile and 750 ms transition remain provisional. |
 | Leak status | [Hardware Verified] | Displays `Leak: Unknown`, `Leak: Dry`, or `LEAK DETECTED` from Protocol V2 `0x20`; disconnect, host-link liveness loss, invalid payload, and stale telemetry return it to Unknown. Monitoring-only; no Servo/Safety action. |
 | JY901S IMU monitor | [Implemented] / physical data [Hardware Verified] | Displays `IMU — JY901S` status, valid fixed-point Acc/Gyro/Angle domains, and diagnostics from Protocol V2 `0x21`; Unknown/invalid/Stale/liveness loss clear values. Read-only; no 3D/history/control/configuration. |
 | ROVMAKER depth monitor | [Hardware Verified] with stable connection | Displays `Depth Sensor — ROVMAKER` lifecycle, validity-gated depth/temperature, sample age, and parser/transport diagnostics from Protocol V2 `0x22`. Read-only; no decoder configuration or control action. Connector robustness and calibration remain pending. |
