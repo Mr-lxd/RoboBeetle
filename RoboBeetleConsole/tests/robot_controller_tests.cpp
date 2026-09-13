@@ -2386,6 +2386,91 @@ void testMotionStartStopStateAndWireContract()
            "the provisional UI transition should finish at Stopped");
 }
 
+void testMotionStartSerializesDirectModeChange()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+    expect(controller.enableServo(rb::ServoId::FrontAxis),
+           "Direct Motion serialization setup should enable FrontAxis");
+    acknowledgeLast(transport);
+
+    expect(controller.startMotion(rb::MotionMode::Ascend),
+           "Direct Motion serialization setup should start Ascend");
+    acknowledgeLast(transport);
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "Direct Motion serialization setup should start Forward transition");
+    const rb::Packet firstModeChange = lastPacket(transport);
+    const qsizetype writesBeforeDuplicate = transport.writes().size();
+
+    const bool duplicateAccepted = controller.startMotion(rb::MotionMode::Forward);
+    const bool duplicateWasWritten = transport.writes().size() > writesBeforeDuplicate;
+    const rb::Packet duplicate = lastPacket(transport);
+    expect(!duplicateAccepted,
+           "DirectUart must reject a duplicate Motion START before the first ACK");
+    expect(!duplicateWasWritten,
+           "DirectUart duplicate Motion START must not allocate another sequence");
+
+    acknowledge(transport, firstModeChange, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    if (duplicateWasWritten) {
+        acknowledge(transport, duplicate, rb::AckResult::Ok,
+                    rb::MessageType::SetMotionMode);
+    }
+    expect(controller.disableServo(rb::ServoId::FrontAxis),
+           "FrontAxis Disable should remain a safety takeover during the transition");
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "duplicate START handling must not release old-mode ownership early");
+}
+
+void testMotionStartSerializesApc220ModeChange()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 1000;
+    config.heartbeatSafetyBudgetMs = 5000;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+    enablePaddlesOnly(transport, controller);
+    expect(controller.enableServo(rb::ServoId::FrontAxis),
+           "APC220 Motion serialization setup should enable FrontAxis");
+    acknowledgeLast(transport);
+
+    expect(controller.startMotion(rb::MotionMode::Ascend),
+           "APC220 Motion serialization setup should start Ascend");
+    const rb::Packet ascend = lastPacket(transport);
+    acknowledge(transport, ascend, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "APC220 Motion serialization setup should start Forward transition");
+    const rb::Packet firstModeChange = lastPacket(transport);
+    const qsizetype writesBeforeDuplicate = transport.writes().size();
+
+    const bool duplicateAccepted = controller.startMotion(rb::MotionMode::Forward);
+    const bool duplicateWasWritten = transport.writes().size() > writesBeforeDuplicate;
+    expect(!duplicateAccepted,
+           "APC220 must reject a duplicate Motion START before the first ACK");
+    expect(!duplicateWasWritten && controller.queuedCommandCount() == 0,
+           "APC220 duplicate Motion START must not enter its command queue");
+
+    const qsizetype writesBeforeFirstAck = transport.writes().size();
+    acknowledge(transport, firstModeChange, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    const bool duplicateWasDispatched = transport.writes().size() > writesBeforeFirstAck;
+    const rb::Packet duplicate = lastPacket(transport);
+    if (duplicateWasDispatched) {
+        acknowledge(transport, duplicate, rb::AckResult::Ok,
+                    rb::MessageType::SetMotionMode);
+    }
+    expect(controller.disableServo(rb::ServoId::FrontAxis),
+           "APC220 FrontAxis Disable should remain a safety takeover during the transition");
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "APC220 duplicate START handling must not release old-mode ownership early");
+}
+
 void testMotionStopSupersedesInFlightDirectStart()
 {
     rb::FakeTransport transport;
@@ -2397,6 +2482,11 @@ void testMotionStopSupersedesInFlightDirectStart()
     expect(controller.startMotion(rb::MotionMode::Forward),
            "Direct STOP race setup should send START");
     const rb::Packet start = lastPacket(transport);
+    const qsizetype writesBeforeDuplicate = transport.writes().size();
+    expect(!controller.startMotion(rb::MotionMode::Forward),
+           "Direct STOP race should reject a duplicate unresolved START");
+    expect(transport.writes().size() == writesBeforeDuplicate,
+           "Direct STOP race duplicate START must not write a frame");
     const qsizetype writesBeforeStop = transport.writes().size();
 
     expect(controller.stopMotion(),
@@ -2436,12 +2526,12 @@ void testMotionStopSupersedesApcInFlightAndQueuedMotion()
     expect(controller.startMotion(rb::MotionMode::Forward),
            "APC STOP race setup should send START");
     const rb::Packet start = lastPacket(transport);
-    expect(controller.startMotion(rb::MotionMode::TurnLeft),
-           "APC STOP race should queue the first stale mode change");
-    expect(controller.startMotion(rb::MotionMode::TurnRight),
-           "APC STOP race should queue the second stale mode change");
-    expect(controller.queuedCommandCount() == 2,
-           "APC STOP race setup should contain two queued Motion changes");
+    expect(!controller.startMotion(rb::MotionMode::TurnLeft),
+           "APC STOP race should reject a second unresolved mode change");
+    expect(!controller.startMotion(rb::MotionMode::TurnRight),
+           "APC STOP race should reject another unresolved mode change");
+    expect(controller.queuedCommandCount() == 0,
+           "APC STOP race setup should not queue duplicate Motion changes");
 
     expect(controller.stopMotion(),
            "APC STOP should supersede in-flight and queued Motion work");
@@ -2802,17 +2892,18 @@ void testApc220MotionCommandsUseTheExistingBoundedScheduler()
     expect(controller.startMotion(rb::MotionMode::Forward),
            "APC220 Motion START should occupy the one-flight slot");
     const rb::Packet start = lastPacket(transport);
-    expect(controller.startMotion(rb::MotionMode::TurnLeft),
-           "a second Motion command should enter the bounded APC220 queue");
-    expect(controller.queuedCommandCount() == 1,
-           "APC220 should retain one queued Motion command behind START");
+    expect(!controller.startMotion(rb::MotionMode::TurnLeft),
+           "a second unresolved Motion START should be rejected at the Controller boundary");
+    expect(controller.queuedCommandCount() == 0,
+           "APC220 should not queue a second unresolved Motion command");
 
     acknowledge(transport, start, rb::AckResult::Ok,
                 rb::MessageType::SetMotionMode);
     expect(controller.motionState() == rb::MotionState::Running,
-           "START ACK should make the queued-Motion fixture Running");
-    expect(lastPacket(transport).type == rb::MessageType::SetMotionMode,
-           "queued Motion command should dispatch after START ACK");
+           "START ACK should make the serialized-Motion fixture Running");
+
+    expect(controller.startMotion(rb::MotionMode::TurnLeft),
+           "a new Motion mode change should be allowed after START ACK");
 
     const rb::Packet modeChange = lastPacket(transport);
     expect(controller.stopMotion(),
@@ -2901,6 +2992,8 @@ int main(int argc, char **argv)
     testApc220QueuedWriteFailureDropsCommandAndClearsDisablePending();
     testApc220WriteErrorResetsWithoutInvalidatingRetryState();
     testMotionStartStopStateAndWireContract();
+    testMotionStartSerializesDirectModeChange();
+    testMotionStartSerializesApc220ModeChange();
     testMotionStopSupersedesInFlightDirectStart();
     testMotionStopSupersedesApcInFlightAndQueuedMotion();
     testApcMotionStopCancelsDeferredMotionRetry();

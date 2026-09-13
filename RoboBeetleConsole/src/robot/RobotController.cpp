@@ -406,8 +406,13 @@ bool RobotController::startMotion(MotionMode mode)
         emit logMessage(QStringLiteral("Motion START rejected: invalid mode"));
         return false;
     }
-    if (motionState_ == MotionState::Stopping) {
+    if (motionState_ == MotionState::Stopping || hasPendingMotionStop()) {
         emit logMessage(QStringLiteral("Motion START rejected: STOPPING (BUSY)"));
+        return false;
+    }
+    if (hasPendingMotionStart()) {
+        emit logMessage(QStringLiteral(
+            "Motion START rejected: another START is awaiting ACK (BUSY)"));
         return false;
     }
     if (motionModeTransitionTimer_.isActive()) {
@@ -1418,6 +1423,40 @@ bool RobotController::hasPendingMotionStop() const
     return queueHasMotionStop(priorityCommandQueue_)
         || queueHasMotionStop(motionStopCommandQueue_)
         || queueHasMotionStop(commandQueue_);
+}
+
+bool RobotController::hasPendingMotionStart() const
+{
+    const auto isMotionStart = [](MessageType type,
+                                  const std::optional<MotionRequest> &motion) {
+        return type == MessageType::SetMotionMode
+            && motion.has_value()
+            && motion->action == MotionAction::Start;
+    };
+
+    for (auto it = pending_.cbegin(); it != pending_.cend(); ++it) {
+        if (!it->cancelled && !it->motionCancelled
+            && isMotionStart(it->type, it->motionRequest)) {
+            return true;
+        }
+    }
+    if (deferredRetry_.has_value() && !deferredRetry_->cancelled
+        && !deferredRetry_->motionCancelled
+        && isMotionStart(deferredRetry_->type, deferredRetry_->motionRequest)) {
+        return true;
+    }
+    const auto queueHasMotionStart = [&isMotionStart](
+                                         const QQueue<QueuedCommand> &queue) {
+        for (const QueuedCommand &command : queue) {
+            if (isMotionStart(command.type, command.motionRequest)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    return queueHasMotionStart(priorityCommandQueue_)
+        || queueHasMotionStart(motionStopCommandQueue_)
+        || queueHasMotionStart(commandQueue_);
 }
 
 void RobotController::cancelPendingDirectActuatorRequests()

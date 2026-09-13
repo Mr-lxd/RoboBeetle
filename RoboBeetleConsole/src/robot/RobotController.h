@@ -167,6 +167,7 @@ private:
     void cancelPendingMotionRequests();
     [[nodiscard]] bool hasPendingMotionWork() const;
     [[nodiscard]] bool hasPendingMotionStop() const;
+    [[nodiscard]] bool hasPendingMotionStart() const;
     void cancelPendingDirectActuatorRequests();
     void failClosedDirectActuators();
     void failClosedApc220Actuators();
