@@ -17,6 +17,8 @@
 #include "depth_parser.h"
 #include "depth_telemetry.h"
 #include "depth_transport_stm32.h"
+#include "motion_manager.h"
+#include "simple_gait_generator.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -51,6 +53,8 @@ static protocol_dispatcher_t protocol_dispatcher;
 static safety_supervisor_t safety_supervisor;
 static servo_driver_stm32_t servo_driver;
 static servo_service_t servo_service;
+static simple_gait_generator_t simple_gait_generator;
+static motion_manager_t motion_manager;
 static leak_sensor_t leak_sensor;
 static leak_sensor_stm32_t leak_sensor_reader;
 static leak_telemetry_policy_t leak_telemetry_policy;
@@ -72,6 +76,28 @@ static bool protocol_send_leak_status(
 static bool protocol_send_imu_snapshot(void);
 
 static bool protocol_send_depth_snapshot(void);
+
+static void app_main_apply_safety_stop(void)
+{
+    motion_manager_stop_immediate(&motion_manager);
+    servo_service_disable_all(&servo_service);
+    protocol_dispatcher_invalidate_action_cache(
+        &protocol_dispatcher);
+}
+
+/*
+ * HAL_TIM_IRQHandler clears the CC flag and invokes this callback after the
+ * PWM1 compare/falling edge.  Keep the callback at the driver boundary: the
+ * ISR performs only the pending-channel finalizer and never enters Motion or
+ * Safety state machines.
+ */
+void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    servo_driver_stm32_handle_timer_compare(
+        &servo_driver,
+        htim,
+        htim == NULL ? 0U : htim->Channel);
+}
 
 static void protocol_feed_byte(
     uint8_t byte)
@@ -95,14 +121,19 @@ static void protocol_feed_byte(
             if (status == RBP2_OK)
             {
                 protocol_dispatcher_outcome_t outcome;
-                uint32_t now_ms = 0U;
+                const uint32_t now_ms = HAL_GetTick();
 
                 ++protocol_good_frames;
 
-                if ((frame.type == RBP2_MSG_HEARTBEAT) &&
-                    (frame.payload_length == 4U))
+                /* Reject stale actuator frames before dispatching them. A
+                 * Heartbeat is intentionally allowed to refresh liveness
+                 * before this guard is applied to the next command. */
+                if ((frame.type != RBP2_MSG_HEARTBEAT) &&
+                    safety_supervisor_process(
+                        &safety_supervisor,
+                        now_ms))
                 {
-                    now_ms = HAL_GetTick();
+                    app_main_apply_safety_stop();
                 }
 
                 outcome = protocol_dispatcher_handle(
@@ -452,10 +483,17 @@ void app_main_init(
         &servo_service,
         servo_driver_stm32_ops(),
         &servo_driver);
+    simple_gait_generator_init(&simple_gait_generator);
+    motion_manager_init(
+        &motion_manager,
+        &servo_service,
+        &safety_supervisor,
+        simple_gait_generator_interface(&simple_gait_generator));
     protocol_dispatcher_init(
         &protocol_dispatcher,
         &servo_service,
-        &safety_supervisor);
+        &safety_supervisor,
+        &motion_manager);
     uart_transport_stm32_init(uart);
     jy901s_parser_init(&jy901s_parser);
     imu_telemetry_policy_init(&imu_telemetry_policy);
@@ -503,18 +541,25 @@ void app_main_process(void)
             HAL_GetTick());
     }
 
+    /* Sample safety and Motion time after this pass's input dispatch. */
+    const uint32_t now_ms = HAL_GetTick();
     if (safety_supervisor_process(
             &safety_supervisor,
-            HAL_GetTick()))
+            now_ms))
     {
-        /*
-         * Fail-safe:
-         * 上位机失联，立即停止所有已实现执行器。
-         */
-        servo_service_disable_all(&servo_service);
+        /* Fail-safe: host loss immediately stops all implemented actuators. */
+        app_main_apply_safety_stop();
+    }
+    else
+    {
+        const motion_manager_result_t motion_result =
+            motion_manager_process(&motion_manager, now_ms);
 
-        protocol_dispatcher_invalidate_action_cache(
-            &protocol_dispatcher);
+        if ((motion_result == MOTION_MANAGER_RESULT_HOST_NOT_ALIVE) ||
+            (motion_result == MOTION_MANAGER_RESULT_HARDWARE_FAILURE))
+        {
+            app_main_apply_safety_stop();
+        }
     }
 }
 

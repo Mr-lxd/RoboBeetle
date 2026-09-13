@@ -150,7 +150,8 @@ void installSynchronousAcks(rb::FakeTransport &transport,
             || requestType == rb::MessageType::ServoEnable
             || requestType == rb::MessageType::SetServoPwm
             || requestType == rb::MessageType::SetServoAngle
-            || requestType == rb::MessageType::Neutral;
+            || requestType == rb::MessageType::Neutral
+            || requestType == rb::MessageType::SetMotionMode;
         if (!expectsAck) {
             return;
         }
@@ -357,6 +358,46 @@ void testApcHeartbeatLossClearsLeakState()
     waitForMs(40);
     expect(controller.leakState() == rb::LeakState::Unknown,
            "APC Heartbeat loss must clear trusted leak state immediately");
+}
+
+void testDirectHeartbeatLossIgnoresLateEnableAck()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10;
+    config.ackTimeoutMs = 100;
+    config.maxRetries = 0;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    waitForMs(40);
+    expect(controller.enableServo(rb::ServoId::Servo1),
+           "DirectUart late-ACK setup should send Enable after a heartbeat is in flight");
+    const rb::Packet enable = lastPacket(transport);
+    waitForMs(90);
+    expect(!controller.isServoEnabled(rb::ServoId::Servo1),
+           "DirectUart heartbeat loss should clear state before a late Enable ACK");
+
+    acknowledge(transport, enable, rb::AckResult::Ok,
+                rb::MessageType::ServoEnable);
+    expect(!controller.isServoEnabled(rb::ServoId::Servo1),
+           "late DirectUart Enable ACK must not re-arm fail-closed state");
+}
+
+void testDirectHeartbeatLossClearsEnabledState()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 5;
+    config.ackTimeoutMs = 5;
+    config.maxRetries = 0;
+    rb::RobotController controller(&transport, config);
+    connectAndEnableServo1(transport, controller);
+
+    waitForMs(40);
+    expect(!controller.isServoEnabled(rb::ServoId::Servo1),
+           "DirectUart heartbeat loss must clear the logical enabled mask");
 }
 
 void testAngleDegreesConvertToCentidegrees()
@@ -2279,6 +2320,628 @@ void testApc220WriteErrorResetsWithoutInvalidatingRetryState()
            "APC220 write error should clear scheduler state");
 }
 
+void enablePaddlesOnly(rb::FakeTransport &transport,
+                       rb::RobotController &controller)
+{
+    const rb::ServoId paddles[] = {
+        rb::ServoId::FrontRight,
+        rb::ServoId::FrontLeft,
+        rb::ServoId::RearRight,
+        rb::ServoId::RearLeft,
+    };
+    for (const rb::ServoId id : paddles) {
+        expect(controller.enableServo(id),
+               "Motion setup should send each paddle Enable");
+        acknowledgeLast(transport);
+    }
+}
+
+void connectAndEnablePaddles(rb::FakeTransport &transport,
+                             rb::RobotController &controller)
+{
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+    enablePaddlesOnly(transport, controller);
+}
+
+void testMotionStartStopStateAndWireContract()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+
+    expect(controller.motionState() == rb::MotionState::Stopped,
+           "Motion should start in Stopped state");
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "Forward Motion START should be sent");
+    const rb::Packet start = lastPacket(transport);
+    QByteArray expectedStart;
+    expectedStart.append(static_cast<char>(1));
+    expectedStart.append(static_cast<char>(rb::MotionMode::Forward));
+    expectedStart.append(static_cast<char>(rb::MotionAction::Start));
+    expect(start.type == rb::MessageType::SetMotionMode &&
+               start.payload == expectedStart,
+           "Motion START should use exact schema/mode/action payload");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "successful START ACK should enter Running");
+
+    expect(controller.stopMotion(),
+           "ordinary Motion STOP should be sent");
+    const rb::Packet stop = lastPacket(transport);
+    QByteArray expectedStop;
+    expectedStop.append(static_cast<char>(1));
+    expectedStop.append(static_cast<char>(rb::MotionMode::Stop));
+    expectedStop.append(static_cast<char>(rb::MotionAction::Stop));
+    expect(stop.type == rb::MessageType::SetMotionMode &&
+               stop.payload == expectedStop,
+           "Motion STOP should use canonical STOP payload");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Stopping,
+           "STOP ACK should enter Stopping before the provisional ramp ends");
+    waitForMs(800);
+    expect(controller.motionState() == rb::MotionState::Stopped,
+           "the provisional UI transition should finish at Stopped");
+}
+
+void testBackwardRemainsProtocolCompatibleButIsNotBenchStartable()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+
+    const qsizetype writesBefore = transport.writes().size();
+    expect(!controller.isMotionReady(rb::MotionMode::Backward),
+           "BACKWARD must remain unavailable for the bench UI");
+    expect(!controller.startMotion(rb::MotionMode::Backward),
+           "BACKWARD must not send a fake sign-inverted START");
+    expect(transport.writes().size() == writesBefore,
+           "rejected BACKWARD START must not write a protocol frame");
+}
+
+void testMotionStartSerializesDirectModeChange()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+    expect(controller.enableServo(rb::ServoId::FrontAxis),
+           "Direct Motion serialization setup should enable FrontAxis");
+    acknowledgeLast(transport);
+
+    expect(controller.startMotion(rb::MotionMode::Ascend),
+           "Direct Motion serialization setup should start Ascend");
+    acknowledgeLast(transport);
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "Direct Motion serialization setup should start Forward transition");
+    const rb::Packet firstModeChange = lastPacket(transport);
+    const qsizetype writesBeforeDuplicate = transport.writes().size();
+
+    const bool duplicateAccepted = controller.startMotion(rb::MotionMode::Forward);
+    const bool duplicateWasWritten = transport.writes().size() > writesBeforeDuplicate;
+    const rb::Packet duplicate = lastPacket(transport);
+    expect(!duplicateAccepted,
+           "DirectUart must reject a duplicate Motion START before the first ACK");
+    expect(!duplicateWasWritten,
+           "DirectUart duplicate Motion START must not allocate another sequence");
+
+    acknowledge(transport, firstModeChange, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    if (duplicateWasWritten) {
+        acknowledge(transport, duplicate, rb::AckResult::Ok,
+                    rb::MessageType::SetMotionMode);
+    }
+    expect(controller.disableServo(rb::ServoId::FrontAxis),
+           "FrontAxis Disable should remain a safety takeover during the transition");
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "duplicate START handling must not release old-mode ownership early");
+}
+
+void testMotionStartSerializesApc220ModeChange()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 1000;
+    config.heartbeatSafetyBudgetMs = 5000;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+    enablePaddlesOnly(transport, controller);
+    expect(controller.enableServo(rb::ServoId::FrontAxis),
+           "APC220 Motion serialization setup should enable FrontAxis");
+    acknowledgeLast(transport);
+
+    expect(controller.startMotion(rb::MotionMode::Ascend),
+           "APC220 Motion serialization setup should start Ascend");
+    const rb::Packet ascend = lastPacket(transport);
+    acknowledge(transport, ascend, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "APC220 Motion serialization setup should start Forward transition");
+    const rb::Packet firstModeChange = lastPacket(transport);
+    const qsizetype writesBeforeDuplicate = transport.writes().size();
+
+    const bool duplicateAccepted = controller.startMotion(rb::MotionMode::Forward);
+    const bool duplicateWasWritten = transport.writes().size() > writesBeforeDuplicate;
+    expect(!duplicateAccepted,
+           "APC220 must reject a duplicate Motion START before the first ACK");
+    expect(!duplicateWasWritten && controller.queuedCommandCount() == 0,
+           "APC220 duplicate Motion START must not enter its command queue");
+
+    const qsizetype writesBeforeFirstAck = transport.writes().size();
+    acknowledge(transport, firstModeChange, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    const bool duplicateWasDispatched = transport.writes().size() > writesBeforeFirstAck;
+    const rb::Packet duplicate = lastPacket(transport);
+    if (duplicateWasDispatched) {
+        acknowledge(transport, duplicate, rb::AckResult::Ok,
+                    rb::MessageType::SetMotionMode);
+    }
+    expect(controller.disableServo(rb::ServoId::FrontAxis),
+           "APC220 FrontAxis Disable should remain a safety takeover during the transition");
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "APC220 duplicate START handling must not release old-mode ownership early");
+}
+
+void testMotionStopSupersedesInFlightDirectStart()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "Direct STOP race setup should send START");
+    const rb::Packet start = lastPacket(transport);
+    const qsizetype writesBeforeDuplicate = transport.writes().size();
+    expect(!controller.startMotion(rb::MotionMode::Forward),
+           "Direct STOP race should reject a duplicate unresolved START");
+    expect(transport.writes().size() == writesBeforeDuplicate,
+           "Direct STOP race duplicate START must not write a frame");
+    const qsizetype writesBeforeStop = transport.writes().size();
+
+    expect(controller.stopMotion(),
+           "STOP should be accepted while START is still awaiting ACK");
+    expect(transport.writes().size() == writesBeforeStop + 1,
+           "Direct STOP should be sent after cancelling stale START handling");
+    const rb::Packet stop = lastPacket(transport);
+    QByteArray expectedStop;
+    expectedStop.append(static_cast<char>(1));
+    expectedStop.append(static_cast<char>(rb::MotionMode::Stop));
+    expectedStop.append(static_cast<char>(rb::MotionAction::Stop));
+    expect(stop.type == rb::MessageType::SetMotionMode &&
+               stop.payload == expectedStop,
+           "Direct STOP should use the canonical STOP payload");
+
+    acknowledge(transport, start, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() != rb::MotionState::Running,
+           "a late Direct START ACK must not resurrect Motion");
+    acknowledge(transport, stop, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Stopping,
+           "STOP ACK should mark request acceptance and enter Stopping");
+}
+
+void testMotionStopSupersedesApcInFlightAndQueuedMotion()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 1000;
+    config.heartbeatSafetyBudgetMs = 5000;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+    enablePaddlesOnly(transport, controller);
+
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "APC STOP race setup should send START");
+    const rb::Packet start = lastPacket(transport);
+    expect(!controller.startMotion(rb::MotionMode::TurnLeft),
+           "APC STOP race should reject a second unresolved mode change");
+    expect(!controller.startMotion(rb::MotionMode::TurnRight),
+           "APC STOP race should reject another unresolved mode change");
+    expect(controller.queuedCommandCount() == 0,
+           "APC STOP race setup should not queue duplicate Motion changes");
+
+    expect(controller.stopMotion(),
+           "APC STOP should supersede in-flight and queued Motion work");
+    expect(controller.queuedCommandCount() == 1,
+           "APC STOP should discard stale queued Motion and retain one STOP");
+
+    acknowledge(transport, start, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(lastPacket(transport).type == rb::MessageType::SetMotionMode,
+           "APC STOP should dispatch after the cancelled in-flight START slot clears");
+    const rb::Packet stop = lastPacket(transport);
+    QByteArray expectedStop;
+    expectedStop.append(static_cast<char>(1));
+    expectedStop.append(static_cast<char>(rb::MotionMode::Stop));
+    expectedStop.append(static_cast<char>(rb::MotionAction::Stop));
+    expect(stop.payload == expectedStop,
+           "APC queued STOP should use the canonical STOP payload");
+    acknowledge(transport, stop, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Stopping,
+           "APC STOP ACK should enter Stopping after stale START ACK");
+}
+
+void testApcMotionStopCancelsDeferredMotionRetry()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 20;
+    config.maxRetries = 1;
+    config.heartbeatSafetyBudgetMs = 5000;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+    enablePaddlesOnly(transport, controller);
+
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "deferred STOP setup should send START");
+    const rb::Packet start = lastPacket(transport);
+    expect(controller.disableServo(rb::ServoId::FrontAxis),
+           "an unrelated safety Disable should create APC priority work");
+    waitForMs(35);
+    expect(lastPacket(transport).type == rb::MessageType::ServoDisable,
+           "START timeout should dispatch the unrelated priority Disable");
+    const rb::Packet disable = lastPacket(transport);
+
+    expect(controller.stopMotion(),
+           "STOP should supersede a deferred Motion retry");
+    expect(controller.queuedCommandCount() == 1,
+           "deferred Motion retry should be replaced by one queued STOP");
+    acknowledge(transport, start, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    acknowledge(transport, disable, rb::AckResult::Ok,
+                rb::MessageType::ServoDisable);
+    expect(lastPacket(transport).type == rb::MessageType::SetMotionMode,
+           "deferred retry must not dispatch ahead of STOP");
+    const rb::Packet stop = lastPacket(transport);
+    acknowledge(transport, stop, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Stopping,
+           "STOP ACK should complete deferred-retry arbitration");
+}
+
+void testMotionStopIsIdempotentWhenAlreadyStopped()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+    const qsizetype writesBeforeStop = transport.writes().size();
+
+    expect(controller.stopMotion(),
+           "STOP while already Stopped should be idempotent");
+    expect(transport.writes().size() == writesBeforeStop,
+           "idempotent STOP should not emit a new wire command");
+    expect(controller.motionState() == rb::MotionState::Stopped,
+           "idempotent STOP should preserve Stopped state");
+}
+
+void testMotionManualArbitrationBusyAndDisableAllPreemption()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "manual arbitration setup should start Motion");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "manual arbitration setup should reach Running");
+
+    const qsizetype writesBeforeManual = transport.writes().size();
+    expect(!controller.setServoAngle(rb::ServoId::FrontRight, 0),
+           "manual SetAngle should be rejected while Motion is Running");
+    expect(!controller.setServoPwm(rb::ServoId::FrontRight, 1450),
+           "manual SetPWM should be rejected while Motion is Running");
+    expect(!controller.neutralServo(rb::ServoId::FrontRight),
+           "manual Neutral should be rejected while Motion is Running");
+    expect(transport.writes().size() == writesBeforeManual,
+           "locally rejected manual commands must not write frames");
+
+    expect(controller.stopMotion(),
+           "manual arbitration setup should request STOP");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Stopping,
+           "manual arbitration setup should reach Stopping");
+    expect(!controller.setServoAngle(rb::ServoId::FrontRight, 0),
+           "manual SetAngle should be rejected while Motion is Stopping");
+
+    expect(controller.disableAll(),
+           "Disable All must remain available during Motion STOPPING");
+    expect(lastPacket(transport).type == rb::MessageType::ServoDisable,
+           "Disable All must retain the Servo Disable safety path");
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "Disable All should immediately fault/terminate local Motion state");
+}
+
+void testMotionUnrelatedServoDisablePreservesOwnership()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+
+    expect(controller.enableServo(rb::ServoId::FrontAxis),
+           "unrelated Disable setup should enable FrontAxis");
+    acknowledgeLast(transport);
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "unrelated Disable setup should start Forward Motion");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "unrelated Disable setup should reach Running");
+
+    expect(controller.disableServo(rb::ServoId::FrontAxis),
+           "a non-owned FrontAxis Disable should remain allowed during Forward");
+    const rb::Packet disable = lastPacket(transport);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "non-owned Servo Disable must not fault local Motion");
+    acknowledge(transport, disable, rb::AckResult::Ok,
+                rb::MessageType::ServoDisable);
+    expect(!controller.isServoEnabled(rb::ServoId::FrontAxis),
+           "successful non-owned Servo Disable should clear that channel");
+    expect(controller.motionState() == rb::MotionState::Running,
+           "non-owned Servo Disable ACK must preserve Motion state");
+    expect(!controller.setServoAngle(rb::ServoId::FrontRight, 0),
+           "owned Servo SetAngle must remain blocked after unrelated Disable");
+}
+
+void testMotionTransitionRetainsOldOwnershipAfterAck()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+
+    expect(controller.enableServo(rb::ServoId::FrontAxis),
+           "transition ownership setup should enable FrontAxis");
+    acknowledgeLast(transport);
+    expect(controller.startMotion(rb::MotionMode::Ascend),
+           "transition ownership setup should start Ascend Motion");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "transition ownership setup should reach Running Ascend");
+
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "Ascend to Forward transition should be sent");
+    const rb::Packet modeChange = lastPacket(transport);
+    acknowledge(transport, modeChange, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "mode-change ACK should expose the new Running mode");
+
+    expect(controller.disableServo(rb::ServoId::FrontAxis),
+           "Disable during the acknowledged mode transition should be accepted as safety takeover");
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "old-mode ownership must remain fail-closed until the transition completes");
+
+    {
+        rb::FakeTransport completedTransport;
+        rb::RobotController completedController(&completedTransport, config);
+        connectAndEnablePaddles(completedTransport, completedController);
+        expect(completedController.enableServo(rb::ServoId::FrontAxis),
+               "completed transition setup should enable FrontAxis");
+        acknowledgeLast(completedTransport);
+        expect(completedController.startMotion(rb::MotionMode::Ascend),
+               "completed transition setup should start Ascend Motion");
+        acknowledgeLast(completedTransport);
+        expect(completedController.startMotion(rb::MotionMode::Forward),
+               "completed Ascend to Forward transition should be sent");
+        const rb::Packet completedModeChange = lastPacket(completedTransport);
+        acknowledge(completedTransport, completedModeChange, rb::AckResult::Ok,
+                    rb::MessageType::SetMotionMode);
+
+        waitForMs(rb::kMotionTransitionDurationMs + 100);
+        expect(completedController.disableServo(rb::ServoId::FrontAxis),
+               "Disable after the mode transition should remain non-intersecting");
+        expect(completedController.motionState() == rb::MotionState::Running,
+               "old-mode ownership should be released after the mode transition completes");
+    }
+}
+
+void testApcMotionDisableOwnershipAndQueuedPreemption()
+{
+    {
+        rb::FakeTransport transport;
+        rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+        config.heartbeatIntervalMs = 10000;
+        config.ackTimeoutMs = 1000;
+        config.heartbeatSafetyBudgetMs = 5000;
+        rb::RobotController controller(&transport, config);
+        connectApcAndAcknowledgeHeartbeat(transport, controller);
+        enablePaddlesOnly(transport, controller);
+        expect(controller.enableServo(rb::ServoId::FrontAxis),
+               "APC unrelated Disable setup should enable FrontAxis");
+        acknowledgeLast(transport);
+        expect(controller.startMotion(rb::MotionMode::Forward),
+               "APC unrelated Disable setup should start Forward Motion");
+        acknowledgeLast(transport);
+
+        expect(controller.disableServo(rb::ServoId::FrontAxis),
+               "APC non-owned FrontAxis Disable should be accepted");
+        const rb::Packet disable = lastPacket(transport);
+        expect(controller.motionState() == rb::MotionState::Running,
+               "APC non-owned Disable must preserve local Motion state");
+        acknowledge(transport, disable, rb::AckResult::Ok,
+                    rb::MessageType::ServoDisable);
+        expect(controller.motionState() == rb::MotionState::Running,
+               "APC non-owned Disable ACK must preserve local Motion state");
+    }
+
+    {
+        rb::FakeTransport transport;
+        rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+        config.heartbeatIntervalMs = 10000;
+        config.ackTimeoutMs = 1000;
+        config.heartbeatSafetyBudgetMs = 5000;
+        rb::RobotController controller(&transport, config);
+        connectApcAndAcknowledgeHeartbeat(transport, controller);
+        enablePaddlesOnly(transport, controller);
+        expect(controller.enableServo(rb::ServoId::FrontAxis),
+               "APC transition Disable setup should enable FrontAxis");
+        acknowledgeLast(transport);
+        expect(controller.startMotion(rb::MotionMode::Forward),
+               "APC transition Disable setup should start Forward Motion");
+        acknowledgeLast(transport);
+
+        expect(controller.startMotion(rb::MotionMode::Ascend),
+               "APC transition Disable setup should send Ascend mode change");
+        const rb::Packet modeChange = lastPacket(transport);
+        expect(controller.disableServo(rb::ServoId::FrontAxis),
+               "APC transition-intersecting Disable should be queued as safety priority");
+        expect(controller.motionState() == rb::MotionState::Faulted,
+               "APC transition-intersecting Disable should fault local Motion");
+        expect(controller.queuedCommandCount() == 1,
+               "APC transition-intersecting Disable should occupy the priority queue");
+
+        acknowledge(transport, modeChange, rb::AckResult::Ok,
+                    rb::MessageType::SetMotionMode);
+        expect(controller.motionState() == rb::MotionState::Faulted,
+               "late APC transition ACK must not resurrect fail-closed Motion");
+        expect(lastPacket(transport).type == rb::MessageType::ServoDisable,
+               "APC transition-intersecting Disable must dispatch after stale ACK");
+    }
+}
+
+void testMotionBusyAckAndReconnectDoesNotResume()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "BUSY ACK setup should start Forward Motion");
+    acknowledgeLast(transport);
+
+    expect(controller.startMotion(rb::MotionMode::TurnLeft),
+           "a mode change should be sent while Running");
+    const rb::Packet modeChange = lastPacket(transport);
+    acknowledge(transport, modeChange, rb::AckResult::Busy,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "BUSY mode-change ACK should preserve the prior Running state");
+    expect(controller.monitor().ackStatus.contains(QStringLiteral("Busy")),
+           "BUSY ACK should be visible in the protocol monitor");
+
+    expect(controller.stopMotion(),
+           "reconnect test should request graceful STOP");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Stopping,
+           "reconnect test should enter Stopping before link loss");
+    const qsizetype writesBeforeLinkLoss = transport.writes().size();
+    transport.simulateError(QStringLiteral("link lost"));
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "link loss should immediately fault/clear local Motion state");
+    transport.simulateConnected();
+    expect(!controller.isMotionActive(),
+           "reconnect must not auto-resume the interrupted Motion");
+    expect(transport.writes().size() == writesBeforeLinkLoss,
+           "reconnect must not emit an automatic Motion command");
+}
+
+void testMotionFailClosedIgnoresLateMotionAck()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "late-ACK setup should start Forward Motion");
+    const rb::Packet start = lastPacket(transport);
+    acknowledge(transport, start, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "late-ACK setup should reach Running");
+
+    expect(controller.stopMotion(),
+           "late-ACK setup should send a graceful STOP");
+    const rb::Packet stop = lastPacket(transport);
+    expect(controller.disableAll(),
+           "Disable All should fail-close while STOP is in flight");
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "Disable All should fault local Motion before a late ACK");
+
+    acknowledge(transport, stop, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "a late successful Motion ACK must not resurrect Faulted Motion");
+}
+
+void testApc220MotionCommandsUseTheExistingBoundedScheduler()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 1000;
+    config.heartbeatSafetyBudgetMs = 5000;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+
+    const rb::ServoId paddles[] = {
+        rb::ServoId::FrontRight,
+        rb::ServoId::FrontLeft,
+        rb::ServoId::RearRight,
+        rb::ServoId::RearLeft,
+    };
+    for (const rb::ServoId id : paddles) {
+        expect(controller.enableServo(id),
+               "APC220 Motion setup should queue/send each paddle Enable");
+        acknowledgeLast(transport);
+    }
+
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "APC220 Motion START should occupy the one-flight slot");
+    const rb::Packet start = lastPacket(transport);
+    expect(!controller.startMotion(rb::MotionMode::TurnLeft),
+           "a second unresolved Motion START should be rejected at the Controller boundary");
+    expect(controller.queuedCommandCount() == 0,
+           "APC220 should not queue a second unresolved Motion command");
+
+    acknowledge(transport, start, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "START ACK should make the serialized-Motion fixture Running");
+
+    expect(controller.startMotion(rb::MotionMode::TurnLeft),
+           "a new Motion mode change should be allowed after START ACK");
+
+    const rb::Packet modeChange = lastPacket(transport);
+    expect(controller.stopMotion(),
+           "STOP should queue behind an in-flight Motion mode change");
+    expect(controller.queuedCommandCount() == 1,
+           "STOP should be represented by one queued Motion request");
+    expect(controller.disableAll(),
+           "Disable All should preempt queued Motion commands");
+    expect(controller.queuedCommandCount() == 1,
+           "Disable All should retain only its safety-priority request");
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "Disable All should immediately fail-close local Motion state");
+
+    acknowledge(transport, modeChange, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "late APC220 Motion ACK must not resurrect Disable All fail-closed state");
+    expect(lastPacket(transport).type == rb::MessageType::ServoDisable,
+           "Disable All should dispatch before stale queued Motion work");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -2290,6 +2953,8 @@ int main(int argc, char **argv)
     testImuSnapshotDoesNotTouchAckOrLeakState();
     testDepthSnapshotDoesNotTouchAckOrLeakState();
     testApcHeartbeatLossClearsLeakState();
+    testDirectHeartbeatLossIgnoresLateEnableAck();
+    testDirectHeartbeatLossClearsEnabledState();
     testAngleDegreesConvertToCentidegrees();
     testSetAngleBlockedDuringDisableRequest();
     testApc220DisablePendingBlocksAllMotionAndErrorReleasesNoStaleWork();
@@ -2343,6 +3008,21 @@ int main(int argc, char **argv)
     testApc220RetryWriteFailureConsumesRetryBudget();
     testApc220QueuedWriteFailureDropsCommandAndClearsDisablePending();
     testApc220WriteErrorResetsWithoutInvalidatingRetryState();
+    testMotionStartStopStateAndWireContract();
+    testBackwardRemainsProtocolCompatibleButIsNotBenchStartable();
+    testMotionStartSerializesDirectModeChange();
+    testMotionStartSerializesApc220ModeChange();
+    testMotionStopSupersedesInFlightDirectStart();
+    testMotionStopSupersedesApcInFlightAndQueuedMotion();
+    testApcMotionStopCancelsDeferredMotionRetry();
+    testMotionStopIsIdempotentWhenAlreadyStopped();
+    testMotionManualArbitrationBusyAndDisableAllPreemption();
+    testMotionUnrelatedServoDisablePreservesOwnership();
+    testMotionTransitionRetainsOldOwnershipAfterAck();
+    testApcMotionDisableOwnershipAndQueuedPreemption();
+    testMotionBusyAckAndReconnectDoesNotResume();
+    testMotionFailClosedIgnoresLateMotionAck();
+    testApc220MotionCommandsUseTheExistingBoundedScheduler();
     if (failures == 0) {
         std::cout << "All robot controller tests passed\n";
     }

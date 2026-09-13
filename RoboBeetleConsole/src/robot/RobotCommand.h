@@ -46,6 +46,52 @@ constexpr quint16 servoMask(ServoId id)
 
 constexpr quint16 SupportedServoMaskPhase1 = SupportedServoMask;
 
+enum class MotionMode : quint8 {
+    Stop = 0,
+    Forward,
+    Backward,
+    TurnLeft,
+    TurnRight,
+    Ascend,
+    Descend,
+    Count,
+};
+
+enum class MotionAction : quint8 {
+    Stop = 0,
+    Start = 1,
+};
+
+enum class MotionState : quint8 {
+    Stopped = 0,
+    Running,
+    Stopping,
+    Faulted,
+};
+
+inline constexpr int kMotionTransitionDurationMs = 750;
+
+constexpr bool isValidMotionMode(quint8 value)
+{
+    return value < static_cast<quint8>(MotionMode::Count);
+}
+
+constexpr bool isValidMotionMode(MotionMode mode)
+{
+    return isValidMotionMode(static_cast<quint8>(mode));
+}
+
+constexpr quint16 motionRequiredServoMask(MotionMode mode)
+{
+    if (mode == MotionMode::Ascend || mode == MotionMode::Descend) {
+        return SupportedServoMask;
+    }
+    return servoMask(ServoId::FrontRight)
+        | servoMask(ServoId::FrontLeft)
+        | servoMask(ServoId::RearRight)
+        | servoMask(ServoId::RearLeft);
+}
+
 inline qint16 angleDegreesToCentidegrees(double degrees)
 {
     return static_cast<qint16>(std::lround(degrees * 100.0));

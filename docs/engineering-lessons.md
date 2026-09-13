@@ -73,7 +73,7 @@ The five-servo bring-up keeps a pure-C Firmware `servo_descriptor` table and an 
 
 ## Keep logical joint angles above Servo calibration
 
-The four paddle servos use `0 degrees` for mechanical neutral, `+45 degrees` for the backward paddle stroke that produces forward propulsion, and `-45 degrees` for the opposite direction. Future gait/CPG output must stop at `Logical Joint Target` and call `ServoService set_angle`; the calibration layer owns neutral differences, left/right inversion, and PWM conversion. The intended documented flow is `Motion Command → Gait / CPG Generator → Logical Joint Target → ServoService set_angle → Servo Calibration → PWM`. PR #13 records this boundary only and does not implement gait, CPG, motion commands, or Qt gait controls.
+The four paddle servos use `0 degrees` for mechanical neutral, `+45 degrees` for the backward paddle stroke that produces forward propulsion, and `-45 degrees` for the opposite direction. The Motion/simple-gait foundation now stops at `Logical Joint Target` and calls the Motion-owned `ServoService` angle API; the calibration layer owns neutral differences, left/right inversion, and PWM conversion. The current documented flow is `Motion Command → Gait / CPG Generator → Logical Joint Target → ServoService set_angle → Servo Calibration → PWM`. Full CPG and feedback control remain future work; the acceptance-level graceful STOP contract is recorded in `docs/motion-simple-gait.md`.
 
 ## Multi-servo Enable must be transactional
 

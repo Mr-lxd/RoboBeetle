@@ -6,8 +6,12 @@
 #include "ui/MainWindow.h"
 
 #include <QApplication>
+#include <QComboBox>
+#include <QEventLoop>
 #include <QGroupBox>
 #include <QLabel>
+#include <QPushButton>
+#include <QTimer>
 
 #include <cstdio>
 
@@ -71,6 +75,16 @@ QGroupBox *depthPanel(rb::MainWindow &window)
     return nullptr;
 }
 
+QGroupBox *motionPanel(rb::MainWindow &window)
+{
+    for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
+        if (box->title() == QStringLiteral("Motion / Gait — Bench")) {
+            return box;
+        }
+    }
+    return nullptr;
+}
+
 bool hasLabelText(const QWidget *root, const QString &text)
 {
     for (QLabel *label : root->findChildren<QLabel *>()) {
@@ -79,6 +93,57 @@ bool hasLabelText(const QWidget *root, const QString &text)
         }
     }
     return false;
+}
+
+QPushButton *buttonWithText(const QWidget *root, const QString &text)
+{
+    for (QPushButton *button : root->findChildren<QPushButton *>()) {
+        if (button->text() == text) {
+            return button;
+        }
+    }
+    return nullptr;
+}
+
+rb::Packet lastPacket(const rb::FakeTransport &transport)
+{
+    const QByteArray wire = transport.writes().last();
+    return rb::PacketCodec::decodeWire(wire.first(wire.size() - 1)).packet;
+}
+
+void acknowledgeLast(rb::FakeTransport &transport)
+{
+    const rb::Packet request = lastPacket(transport);
+    QByteArray payload;
+    payload.append(static_cast<char>(request.sequence & 0xffU));
+    payload.append(static_cast<char>((request.sequence >> 8U) & 0xffU));
+    payload.append(static_cast<char>(request.type));
+    payload.append(static_cast<char>(rb::AckResult::Ok));
+    transport.injectBytes(rb::PacketCodec::encodeWire(
+        {rb::MessageType::Ack, 0x8000, payload}));
+}
+
+void waitForMs(int milliseconds)
+{
+    QEventLoop loop;
+    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
+void enablePaddles(rb::FakeTransport &transport, rb::RobotController &controller)
+{
+    controller.connectTransport({QStringLiteral("COM_TEST"), 9600});
+    transport.simulateConnected();
+    const rb::ServoId paddles[] = {
+        rb::ServoId::FrontRight,
+        rb::ServoId::FrontLeft,
+        rb::ServoId::RearRight,
+        rb::ServoId::RearLeft,
+    };
+    for (const rb::ServoId id : paddles) {
+        controller.enableServo(id);
+        acknowledgeLast(transport);
+    }
 }
 
 void testImuPanelLifecycle()
@@ -151,6 +216,122 @@ void testDepthPanelLifecycle()
            "Depth panel must clear old depth values after becoming stale");
 }
 
+void testMotionPanelLifecycleAndManualArbitration()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    rb::MainWindow window(&controller);
+
+    QGroupBox *panel = motionPanel(window);
+    expect(panel != nullptr,
+           "MainWindow must expose the Motion / Gait — Bench panel");
+    if (panel == nullptr) {
+        return;
+    }
+
+    expect(panel->findChild<QComboBox *>() == nullptr,
+           "Motion panel must use direct mode buttons instead of a combo");
+    QPushButton *forwardButton = buttonWithText(panel, QStringLiteral("Forward"));
+    QPushButton *backwardButton = buttonWithText(panel, QStringLiteral("Backward (Pending)"));
+    QPushButton *turnLeftButton = buttonWithText(panel, QStringLiteral("Turn Left"));
+    QPushButton *turnRightButton = buttonWithText(panel, QStringLiteral("Turn Right"));
+    QPushButton *ascendButton = buttonWithText(panel, QStringLiteral("Ascend"));
+    QPushButton *descendButton = buttonWithText(panel, QStringLiteral("Descend"));
+    QPushButton *stopButton = buttonWithText(panel, QStringLiteral("Stop"));
+    expect(forwardButton != nullptr && backwardButton != nullptr
+               && turnLeftButton != nullptr && turnRightButton != nullptr
+               && ascendButton != nullptr && descendButton != nullptr
+               && stopButton != nullptr,
+           "Motion panel must expose direct Forward/Backward/Turn/Axis/Stop buttons");
+    if (forwardButton == nullptr || backwardButton == nullptr
+        || turnLeftButton == nullptr || turnRightButton == nullptr
+        || ascendButton == nullptr || descendButton == nullptr
+        || stopButton == nullptr) {
+        return;
+    }
+
+    expect(hasLabelText(panel, QStringLiteral("Stopped")),
+           "Motion panel must start with Stopped status");
+    expect(!forwardButton->isEnabled() && !turnLeftButton->isEnabled()
+               && !turnRightButton->isEnabled() && !ascendButton->isEnabled()
+               && !descendButton->isEnabled() && !stopButton->isEnabled(),
+           "Motion controls must be disabled while disconnected");
+    expect(!backwardButton->isEnabled()
+               && backwardButton->toolTip().contains(QStringLiteral("Pending")),
+           "Backward must remain disabled and visibly Pending");
+
+    enablePaddles(transport, controller);
+    expect(forwardButton->isEnabled() && turnLeftButton->isEnabled()
+               && turnRightButton->isEnabled()
+               && !ascendButton->isEnabled() && !descendButton->isEnabled(),
+           "paddle-only setup should enable horizontal Motion buttons only");
+    expect(controller.enableServo(rb::ServoId::FrontAxis),
+           "direct Motion UI setup should enable FrontAxis for vertical modes");
+    acknowledgeLast(transport);
+    expect(ascendButton->isEnabled() && descendButton->isEnabled(),
+           "Ascend and Descend should enable after FrontAxis ACK");
+    expect(!backwardButton->isEnabled(),
+           "Backward must remain disabled after the link is ready");
+    expect(buttonWithText(&window, QStringLiteral("Release PWM")) != nullptr,
+           "enabled individual Servo controls must use Release PWM semantics");
+    forwardButton->click();
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "direct Forward button should reach Running after ACK");
+    expect(hasLabelText(panel, QStringLiteral("Running — Forward")),
+           "Motion panel should display the running mode");
+    expect(forwardButton->isCheckable()
+               && forwardButton->styleSheet().contains(QStringLiteral(":checked")),
+           "Motion buttons must provide an explicit checked highlight style");
+    expect(forwardButton->isChecked()
+               && !turnLeftButton->isChecked()
+               && !turnRightButton->isChecked()
+               && !ascendButton->isChecked()
+               && !descendButton->isChecked(),
+           "the active Forward button must be checked exclusively");
+
+    for (QPushButton *button : window.findChildren<QPushButton *>()) {
+        if (button->text() == QStringLiteral("Set Angle")
+            || button->text() == QStringLiteral("Apply PWM")
+            || button->text() == QStringLiteral("Neutral")) {
+            expect(!button->isEnabled(),
+                   "manual Servo controls must be disabled while Motion runs");
+        }
+    }
+    QGroupBox *global = nullptr;
+    for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
+        if (box->title() == QStringLiteral("Global")) {
+            global = box;
+            break;
+        }
+    }
+    expect(global != nullptr,
+           "MainWindow must retain its Global panel");
+    if (global != nullptr) {
+        QPushButton *disableAll = buttonWithText(global, QStringLiteral("Disable All"));
+        expect(disableAll != nullptr && disableAll->isEnabled(),
+               "Disable All must remain available during Motion");
+    }
+
+    stopButton->click();
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Stopping,
+           "Motion panel should display the acceptance-time Stopping state");
+    expect(hasLabelText(panel, QStringLiteral("Stopping")),
+           "Motion panel should show Stopping during the provisional ramp");
+    waitForMs(rb::kMotionTransitionDurationMs + 50);
+    expect(controller.motionState() == rb::MotionState::Stopped,
+           "Motion panel should settle at Stopped after the provisional duration");
+    expect(hasLabelText(panel, QStringLiteral("Stopped")),
+           "Motion panel should show Stopped after the ramp timer");
+    expect(!forwardButton->isChecked() && !turnLeftButton->isChecked()
+               && !turnRightButton->isChecked()
+               && !ascendButton->isChecked() && !descendButton->isChecked(),
+           "Motion button highlight must clear after graceful STOP completes");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -158,8 +339,9 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
     testImuPanelLifecycle();
     testDepthPanelLifecycle();
+    testMotionPanelLifecycleAndManualArbitration();
     if (failures == 0) {
-        std::fprintf(stdout, "All MainWindow IMU panel tests passed\n");
+        std::fprintf(stdout, "All MainWindow tests passed\n");
     }
     return failures == 0 ? 0 : 1;
 }

@@ -57,6 +57,21 @@ QString formatTemperature(qint16 temperatureCentiC)
         .arg(static_cast<double>(temperatureCentiC) / 100.0, 0, 'f', 2);
 }
 
+QString motionModeText(MotionMode mode)
+{
+    switch (mode) {
+    case MotionMode::Stop: return QStringLiteral("Stop");
+    case MotionMode::Forward: return QStringLiteral("Forward");
+    case MotionMode::Backward: return QStringLiteral("Backward (Pending)");
+    case MotionMode::TurnLeft: return QStringLiteral("Turn Left");
+    case MotionMode::TurnRight: return QStringLiteral("Turn Right");
+    case MotionMode::Ascend: return QStringLiteral("Ascend");
+    case MotionMode::Descend: return QStringLiteral("Descend");
+    case MotionMode::Count: break;
+    }
+    return QStringLiteral("UNKNOWN");
+}
+
 } // namespace
 
 MainWindow::MainWindow(RobotController *controller, QWidget *parent)
@@ -78,6 +93,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     }
     root->addLayout(servos);
     root->addWidget(createGlobalPanel());
+    root->addWidget(createMotionPanel());
     root->addWidget(createImuPanel());
     root->addWidget(createDepthPanel());
     root->addWidget(createMonitorPanel(), 1);
@@ -102,6 +118,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
         }
         Q_UNUSED(enabled);
         refreshServoUi(index);
+        refreshMotionUi();
     });
     connect(controller_, &RobotController::servoDisablePendingChanged,
             this, [this](int index, bool) {
@@ -109,7 +126,15 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
             return;
         }
         refreshServoUi(index);
+        refreshMotionUi();
     });
+    connect(controller_, &RobotController::motionStateChanged,
+            this, [this](MotionState, MotionMode) {
+                refreshMotionUi();
+                for (int index = 0; index < kServoCount; ++index) {
+                    refreshServoUi(index);
+                }
+            });
     connect(controller_, &RobotController::leakStateChanged,
             this, &MainWindow::setLeakUiState);
     connect(controller_->imuMonitor(), &ImuMonitor::changed, this, [this] {
@@ -136,6 +161,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     setLeakUiState(controller_->leakState());
     setImuUiState(controller_->imuState());
     setDepthUiState(controller_->depthState());
+    refreshMotionUi();
     controller_->refreshSerialPorts();
 }
 
@@ -207,7 +233,9 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     pwmSliders_[index]->setValue(descriptor == nullptr ? 0 : descriptor->neutralPwmUs);
     pwmSpins_[index]->setEnabled(supported);
     pwmSliders_[index]->setEnabled(supported);
-    enableButtons_[index] = new QPushButton(QStringLiteral("Enable"), box);
+    enableButtons_[index] = new QPushButton(QStringLiteral("Enable PWM"), box);
+    enableButtons_[index]->setToolTip(QStringLiteral(
+        "Enable PWM drive and hold the calibrated neutral position."));
     neutralButtons_[index] = new QPushButton(
         descriptor != nullptr && descriptor->calibrationPending
             ? QStringLiteral("Center %1 us — Provisional").arg(descriptor->neutralPwmUs)
@@ -308,6 +336,65 @@ QWidget *MainWindow::createGlobalPanel()
             refreshServoUi(index);
         }
     });
+    return box;
+}
+
+QWidget *MainWindow::createMotionPanel()
+{
+    auto *box = new QGroupBox(QStringLiteral("Motion / Gait — Bench"), this);
+    auto *layout = new QGridLayout(box);
+    const MotionMode modes[] = {
+        MotionMode::Forward,
+        MotionMode::Backward,
+        MotionMode::TurnLeft,
+        MotionMode::TurnRight,
+        MotionMode::Ascend,
+        MotionMode::Descend,
+    };
+    const int modeCount = static_cast<int>(sizeof(modes) / sizeof(modes[0]));
+    for (int index = 0; index < modeCount; ++index) {
+        const MotionMode mode = modes[index];
+        auto *button = new QPushButton(motionModeText(mode), box);
+        button->setCheckable(true);
+        button->setAutoExclusive(false);
+        button->setStyleSheet(QStringLiteral(
+            "QPushButton:checked { background-color: #1976D2; color: white; "
+            "font-weight: bold; }"));
+        motionButtons_[static_cast<std::size_t>(mode)] = button;
+        if (mode == MotionMode::Backward) {
+            button->setEnabled(false);
+            button->setToolTip(
+                QStringLiteral("Pending water-tank verification; no BACKWARD START is emitted."));
+        }
+        connect(button,
+                &QPushButton::clicked,
+                this,
+                [this, mode] {
+                    controller_->startMotion(mode);
+                    refreshMotionUi();
+                });
+        layout->addWidget(
+            motionButtons_[static_cast<std::size_t>(mode)],
+            index / 3,
+            index % 3);
+    }
+    motionStopButton_ = new QPushButton(QStringLiteral("Stop"), box);
+    motionStatus_ = new QLabel(QStringLiteral("Stopped"), box);
+    auto *provisional = new QLabel(
+        QStringLiteral("Bench Provisional / Pending Water Verification"),
+        box);
+    provisional->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
+
+    layout->addWidget(motionStopButton_, 2, 0);
+    layout->addWidget(new QLabel(QStringLiteral("Status"), box), 2, 1);
+    layout->addWidget(motionStatus_, 2, 2);
+    layout->addWidget(provisional, 3, 0, 1, 3);
+
+    connect(motionStopButton_, &QPushButton::clicked, this, [this] {
+        controller_->stopMotion();
+        refreshMotionUi();
+    });
+    refreshMotionUi();
     return box;
 }
 
@@ -539,6 +626,7 @@ void MainWindow::setConnectedUi(bool connected)
     for (int index = 0; index < kServoCount; ++index) {
         refreshServoUi(index);
     }
+    refreshMotionUi();
 }
 
 void MainWindow::refreshServoUi(int index)
@@ -555,10 +643,20 @@ void MainWindow::refreshServoUi(int index)
     const bool supported = controller_->isServoSupported(id);
     const bool enabled = controller_->isServoEnabled(id);
     const bool pendingDisable = controller_->isServoDisablePending(id);
-    enableButtons_[index]->setText(enabled ? QStringLiteral("Disable") : QStringLiteral("Enable"));
-    enableButtons_[index]->setEnabled(connected && supported);
-    neutralButtons_[index]->setEnabled(connected && supported && enabled && !pendingDisable);
-    applyButtons_[index]->setEnabled(connected && supported && enabled && !pendingDisable);
+    const bool motionActive = controller_->isMotionActive();
+    enableButtons_[index]->setText(enabled
+                                       ? QStringLiteral("Release PWM")
+                                       : QStringLiteral("Enable PWM"));
+    enableButtons_[index]->setToolTip(enabled
+                                          ? QStringLiteral(
+                                                "Release PWM: stop PWM drive without sending Neutral; the servo is no longer actively held.")
+                                          : QStringLiteral(
+                                                "Enable PWM drive and hold the calibrated neutral position."));
+    enableButtons_[index]->setEnabled(connected && supported && !motionActive);
+    neutralButtons_[index]->setEnabled(connected && supported && enabled
+                                       && !pendingDisable && !motionActive);
+    applyButtons_[index]->setEnabled(connected && supported && enabled
+                                     && !pendingDisable && !motionActive);
     if (!connected) {
         statusLabels_[index]->setText(QStringLiteral("Disconnected"));
     } else if (!supported) {
@@ -588,9 +686,52 @@ void MainWindow::setAngleUiEnabled(int index, bool enabled)
     const bool actionable = enabled && controller_->isConnected()
         && controller_->isServoSupported(id) && descriptor->angleSupported
         && !descriptor->calibrationPending && controller_->isServoEnabled(id)
-        && !controller_->isServoDisablePending(id);
+        && !controller_->isServoDisablePending(id)
+        && !controller_->isMotionActive();
     angleSpins_[index]->setEnabled(actionable);
     angleButtons_[index]->setEnabled(actionable);
+}
+
+void MainWindow::refreshMotionUi()
+{
+    if (motionStopButton_ == nullptr || motionStatus_ == nullptr) {
+        return;
+    }
+
+    const MotionState state = controller_->motionState();
+    switch (state) {
+    case MotionState::Stopped:
+        motionStatus_->setText(QStringLiteral("Stopped"));
+        break;
+    case MotionState::Running:
+        motionStatus_->setText(QStringLiteral("Running — %1")
+                                   .arg(motionModeText(controller_->motionMode())));
+        break;
+    case MotionState::Stopping:
+        motionStatus_->setText(QStringLiteral("Stopping"));
+        break;
+    case MotionState::Faulted:
+        motionStatus_->setText(QStringLiteral("Faulted"));
+        break;
+    }
+
+    const bool connected = controller_->isConnected();
+    const bool transitioning = controller_->isMotionTransitioning();
+    for (int index = 0; index < static_cast<int>(motionButtons_.size()); ++index) {
+        QPushButton *button = motionButtons_[static_cast<std::size_t>(index)];
+        if (button == nullptr) {
+            continue;
+        }
+        const MotionMode mode = static_cast<MotionMode>(index);
+        const bool pendingMode = mode == MotionMode::Backward;
+        button->setChecked(
+            !pendingMode && state == MotionState::Running
+            && controller_->motionMode() == mode);
+        button->setEnabled(
+            !pendingMode && connected && state != MotionState::Stopping
+            && !transitioning && controller_->isMotionReady(mode));
+    }
+    motionStopButton_->setEnabled(connected && controller_->isMotionActive());
 }
 
 void MainWindow::appendLog(const QString &message)

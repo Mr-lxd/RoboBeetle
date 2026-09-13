@@ -5,6 +5,7 @@
 #include <QMainWindow>
 
 #include <array>
+#include <cstddef>
 
 class QCloseEvent;
 class QComboBox;
@@ -31,6 +32,7 @@ private:
     QWidget *createServoPanel(int index, ServoId id);
     QWidget *createConnectionPanel();
     QWidget *createGlobalPanel();
+    QWidget *createMotionPanel();
     QWidget *createImuPanel();
     QWidget *createDepthPanel();
     QWidget *createMonitorPanel();
@@ -40,6 +42,7 @@ private:
     void setLeakUiState(LeakState state);
     void setImuUiState(const ImuMonitorState &state);
     void setDepthUiState(const DepthMonitorState &state);
+    void refreshMotionUi();
     void appendLog(const QString &message);
     static QString stateText(TransportState state);
 
@@ -49,6 +52,9 @@ private:
     QPushButton *connectButton_{nullptr};
     QLabel *connectionStatus_{nullptr};
     QLabel *leakStatus_{nullptr};
+    std::array<QPushButton *, static_cast<std::size_t>(MotionMode::Count)> motionButtons_{};
+    QPushButton *motionStopButton_{nullptr};
+    QLabel *motionStatus_{nullptr};
     QLabel *imuStatus_{nullptr};
     QLabel *imuAcc_{nullptr};
     QLabel *imuGyro_{nullptr};

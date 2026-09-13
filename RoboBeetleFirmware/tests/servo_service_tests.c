@@ -30,6 +30,7 @@ typedef struct
     unsigned int write_calls;
     uint16_t last_pulse;
     uint16_t current_pulse[SERVO_DESCRIPTOR_COUNT];
+    uint16_t stop_pending_mask;
 } fake_driver_t;
 
 static void record_event(
@@ -87,10 +88,20 @@ static void fake_stop(
     record_event(driver, 'T', servo_id, 0U);
 }
 
+static bool fake_is_stop_pending(
+    void *context,
+    uint8_t servo_id)
+{
+    const fake_driver_t *driver = (const fake_driver_t *)context;
+
+    return (driver->stop_pending_mask & (uint16_t)(1U << servo_id)) != 0U;
+}
+
 static const servo_service_driver_ops_t fake_ops = {
     .write_pulse_us = fake_write_pulse,
     .start = fake_start,
     .stop = fake_stop,
+    .is_stop_pending = fake_is_stop_pending,
 };
 
 static void init_service(
@@ -416,6 +427,256 @@ static void test_neutral_disable_and_disable_all(void)
            "Disable All should stop RearLeft");
 }
 
+static void test_enable_is_busy_while_physical_stop_is_pending(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+
+    init_service(&service, &driver);
+    driver.stop_pending_mask = (uint16_t)(1U << SERVO_ID_FRONT_RIGHT);
+
+    expect(servo_service_enable(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT)) ==
+               SERVO_SERVICE_RESULT_BUSY,
+           "Enable must be BUSY until a pending physical stop is finalized");
+    expect(driver.write_calls == 0U && driver.start_calls == 0U,
+           "pending Enable must not rewrite neutral or restart the channel");
+    expect(servo_service_enabled_mask(&service) == 0U,
+           "pending Enable must not claim the channel logically");
+}
+
+static void test_manual_commands_are_busy_while_physical_stop_is_pending(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+    const uint16_t front_right_mask =
+        (uint16_t)(1U << SERVO_ID_FRONT_RIGHT);
+
+    init_service(&service, &driver);
+    expect(servo_service_enable(&service, front_right_mask) ==
+               SERVO_SERVICE_RESULT_OK,
+           "pending command setup should enable FrontRight");
+    driver.stop_pending_mask = front_right_mask;
+
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_RIGHT, 1500U) ==
+               SERVO_SERVICE_RESULT_BUSY,
+           "ApplyPWM must be BUSY while the physical channel is pending stop");
+    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_RIGHT, 0) ==
+               SERVO_SERVICE_RESULT_BUSY,
+           "SetAngle must be BUSY while the physical channel is pending stop");
+    expect(servo_service_neutral(&service, front_right_mask) ==
+               SERVO_SERVICE_RESULT_BUSY,
+           "Neutral must be BUSY while the physical channel is pending stop");
+}
+
+static void test_motion_write_is_blocked_while_physical_stop_is_pending(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+    const uint16_t front_right_mask =
+        (uint16_t)(1U << SERVO_ID_FRONT_RIGHT);
+
+    init_service(&service, &driver);
+    expect(servo_service_enable(&service, front_right_mask) ==
+               SERVO_SERVICE_RESULT_OK,
+           "motion pending-stop setup should enable FrontRight");
+    expect(servo_service_motion_begin(&service, front_right_mask) ==
+               SERVO_SERVICE_RESULT_OK,
+           "motion pending-stop setup should acquire FrontRight");
+    driver.stop_pending_mask = front_right_mask;
+    const unsigned int writes_before = driver.write_calls;
+
+    expect(servo_service_set_angle_from_motion(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               1000) == SERVO_SERVICE_RESULT_BUSY,
+           "Motion angle writes must be BUSY while physical stop is pending");
+    expect(driver.write_calls == writes_before,
+           "pending Motion writes must not reach the driver");
+}
+
+static void test_motion_owner_arbitrates_manual_writes(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+
+    init_service(&service, &driver);
+    expect(servo_service_enable(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Motion ownership setup should enable all servos");
+    expect(servo_service_motion_begin(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Motion should acquire all enabled servos");
+    expect(servo_service_motion_is_active(&service),
+           "Motion owner should remain active after acquisition");
+    expect(servo_service_set_angle_from_motion(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               1000) == SERVO_SERVICE_RESULT_OK,
+           "Motion owner should be able to write logical angles");
+
+    expect(servo_service_set_angle(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               0) == SERVO_SERVICE_RESULT_BUSY,
+           "manual SetAngle should be BUSY while Motion owns servos");
+    expect(servo_service_set_pwm(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               1450U) == SERVO_SERVICE_RESULT_BUSY,
+           "manual SetPWM should be BUSY while Motion owns servos");
+    expect(servo_service_neutral(
+               &service,
+               0x001FU) == SERVO_SERVICE_RESULT_BUSY,
+           "manual Neutral should be BUSY while Motion owns servos");
+    expect(servo_service_enable(
+               &service,
+               0x001FU) == SERVO_SERVICE_RESULT_BUSY,
+           "manual Enable should be BUSY while Motion owns servos");
+    expect(servo_service_motion_begin(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_BUSY,
+           "a second Motion owner should be rejected");
+
+    servo_service_motion_end(&service);
+    expect(!servo_service_motion_is_active(&service),
+           "Motion end should release actuator ownership");
+    expect(servo_service_set_angle(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               0) == SERVO_SERVICE_RESULT_OK,
+           "manual SetAngle should recover after Motion ends");
+}
+
+static void test_motion_begin_requires_enabled_channels_and_abort_releases(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+
+    init_service(&service, &driver);
+    expect(servo_service_enable(&service, 0x000FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "partial Motion setup should enable four paddles");
+    expect(servo_service_motion_begin(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_SERVO_NOT_ENABLED,
+           "Motion should reject a missing required FrontAxis enable");
+    expect(!servo_service_motion_is_active(&service),
+           "failed Motion acquisition should not retain ownership");
+    expect(servo_service_motion_begin(&service, 0x000FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Motion should acquire an enabled subset");
+
+    servo_service_motion_abort(&service);
+    expect(!servo_service_motion_is_active(&service),
+           "Motion abort should release ownership immediately");
+    expect(servo_service_set_pwm(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               1450U) == SERVO_SERVICE_RESULT_OK,
+           "manual writes should recover after Motion abort");
+}
+
+static void test_disable_all_preempts_motion_owner(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+
+    init_service(&service, &driver);
+    expect(servo_service_enable(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Disable All setup should enable all servos");
+    expect(servo_service_motion_begin(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Disable All setup should acquire Motion ownership");
+
+    servo_service_disable_all(&service);
+    expect(servo_service_enabled_mask(&service) == 0U,
+           "Disable All should clear all enabled channels during Motion");
+    expect(!servo_service_motion_is_active(&service),
+           "Disable All should preempt Motion ownership");
+    expect(servo_service_set_angle_from_motion(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               0) == SERVO_SERVICE_RESULT_BUSY,
+           "a Motion write after Disable All should not be accepted");
+}
+
+static void test_logical_pose_tracking_and_raw_pwm_unknown(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+    int16_t angle_cdeg = 0;
+
+    init_service(&service, &driver);
+    expect(servo_service_enable(&service, 0x001FU) ==
+               SERVO_SERVICE_RESULT_OK,
+           "logical pose setup should enable all servos at neutral");
+    expect(servo_service_logical_pose_is_known(&service, 0x001FU),
+           "Enable should establish known neutral logical pose");
+    expect(servo_service_logical_angle_cdeg(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               &angle_cdeg) && angle_cdeg == 0,
+           "Enable should initialize each logical angle to zero");
+
+    expect(servo_service_set_angle(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               3000) == SERVO_SERVICE_RESULT_OK,
+           "manual SetAngle should establish the requested logical pose");
+    expect(servo_service_logical_angle_cdeg(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               &angle_cdeg) && angle_cdeg == 3000,
+           "manual SetAngle should update the logical angle tracker");
+
+    expect(servo_service_set_pwm(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               1600U) == SERVO_SERVICE_RESULT_OK,
+           "raw SetPWM should remain a valid manual command");
+    expect(!servo_service_logical_pose_is_known(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT)),
+           "raw SetPWM should mark the logical pose unknown");
+    expect(!servo_service_logical_angle_cdeg(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               &angle_cdeg),
+           "unknown raw-PWM pose should not expose a stale logical angle");
+    expect(servo_service_logical_pose_is_known(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_LEFT)),
+           "raw SetPWM should not invalidate another servo pose");
+
+    expect(servo_service_neutral(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT)) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Neutral should restore a raw-PWM channel's logical pose");
+    expect(servo_service_logical_pose_is_known(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT)) &&
+               servo_service_logical_angle_cdeg(
+                   &service,
+                   SERVO_ID_FRONT_RIGHT,
+                   &angle_cdeg) && angle_cdeg == 0,
+           "Neutral should restore known zero logical angle");
+
+    expect(servo_service_disable(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_LEFT)) ==
+               SERVO_SERVICE_RESULT_OK,
+           "Disable should stop the tracked logical channel");
+    expect(!servo_service_logical_pose_is_known(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_LEFT)),
+           "Disable should clear the disabled channel's known pose");
+    servo_service_disable_all(&service);
+    expect(!servo_service_logical_pose_is_known(&service, 0x001FU),
+           "Disable All should clear every logical pose-known bit");
+}
+
 int main(void)
 {
     test_mask_validation();
@@ -423,7 +684,14 @@ int main(void)
     test_multi_enable_rolls_back_on_start_failure();
     test_command_ranges_and_capabilities();
     test_unenabled_and_invalid_commands();
+    test_enable_is_busy_while_physical_stop_is_pending();
+    test_manual_commands_are_busy_while_physical_stop_is_pending();
+    test_motion_write_is_blocked_while_physical_stop_is_pending();
     test_neutral_disable_and_disable_all();
+    test_motion_owner_arbitrates_manual_writes();
+    test_motion_begin_requires_enabled_channels_and_abort_releases();
+    test_disable_all_preempts_motion_owner();
+    test_logical_pose_tracking_and_raw_pwm_unknown();
 
     if (failures == 0)
     {

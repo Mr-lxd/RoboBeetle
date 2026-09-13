@@ -1,6 +1,6 @@
 # RoboBeetleFirmware
 
-RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for the Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, and the PR #11 low-rate JY901S telemetry path. This README records the merged hardware-verified modularization baseline, the PR #8 wiring baseline, the PR #9 leak-status hardware acceptance, the PR #10/PR #11 JY901S evidence boundaries, and the PR #13 final four-paddle calibration contract. The JY901S physical receive and end-to-end monitoring path are hardware verified; the PR #13 descriptor changes have host-test evidence, while this feature image's ARM Build, Program Verify, and Hardware Verified statuses remain **[Pending]**. Separate ROVMAKER depth-sensor calibration, USART3 UART/checksum physical-link quality, body-frame mapping, and final magnetic/yaw calibration remain pending.
+RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for the Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, the PR #11 low-rate JY901S telemetry path, and the first Motion / SimpleGait foundation. This README records the merged hardware-verified modularization baseline, the PR #8 wiring baseline, the PR #9 leak-status hardware acceptance, the PR #10/PR #11 JY901S evidence boundaries, the PR #13 final four-paddle calibration contract, and the bench-provisional STOP contract. The JY901S physical receive and end-to-end monitoring path are hardware verified; the Motion/simple-gait source has host-test evidence, while this feature image's ARM Build, Program Verify, and Hardware Verified statuses remain **[Pending]**. Separate ROVMAKER depth-sensor calibration, USART3 UART/checksum physical-link quality, body-frame mapping, and final magnetic/yaw calibration remain pending.
 
 The recent Servo, LeakStatus, and JY901S hardware runs used the wired DAP UART/COM13 host path above. APC220 is an earlier/legacy transport record, was not enabled in those runs, and is not current JY901S or PR #11 hardware evidence.
 
@@ -36,7 +36,87 @@ The four paddle servos share one logical convention: `0 degrees` is mechanical n
 
 PR #13 evidence is deliberately split: FrontRight `1450/1900 us` are **[Bench Measured]** and `1000 us` is **[Symmetry-Derived / User Accepted]**; FrontLeft `1580/1140 us` are **[Bench Measured]** and `2020 us` is **[Symmetry-Derived / User Accepted]**; RearRight `1110/1570/2030 us` and RearLeft `1940/1450/960 us` are **[Bench Hardware Verified]** user bench results. These labels describe the supplied actuator evidence, not this branch's image execution. This feature image has not been independently ARM-built, programmed/verified, or exercised on hardware here, so **ARM Build**, **Program Verify**, and **Hardware Verified** remain **[Pending]**. Do not copy prior PR or old-image PASS into this feature status.
 
-Future gait/CPG layers must emit logical joint angles and pass them through `Motion Command → Gait / CPG Generator → Logical Joint Target → ServoService set_angle → Servo Calibration → PWM`. Neutral differences, left/right inversion, and PWM conversion stay in the Servo calibration layer. This PR documents that boundary only; it does not implement gait, CPG, motion commands, or Qt gait controls.
+The current Motion/simple-gait foundation is documented in
+[`../docs/motion-simple-gait.md`](../docs/motion-simple-gait.md). It emits
+logical joint targets and passes them through `MotionManager →
+SimpleGaitGenerator → ServoService Motion-owned angle API → Servo Calibration
+→ PWM`. Neutral differences, left/right inversion, and PWM conversion stay in
+the Servo calibration layer. Full CPG, feedback control, and water-tested gait
+calibration remain outside this feature.
+
+## Current Motion / SimpleGait foundation — [Implemented / Software Verified]
+
+Protocol V2 `SetMotionMode` (`0x15`) uses the exact three-byte payload
+`schema=1, mode, action`. The stable mode order is `STOP`, `FORWARD`,
+`BACKWARD`, `TURN_LEFT`, `TURN_RIGHT`, `ASCEND`, `DESCEND`; `STOP` uses the
+STOP mode plus STOP action. The wire enum keeps `BACKWARD` for compatibility,
+but the current bench SimpleGait implementation accepts `FORWARD`,
+`TURN_LEFT`, `TURN_RIGHT`, `ASCEND`, and `DESCEND` only. `BACKWARD` is reserved
+pending bench/water verification and is rejected by the generator and Qt
+Console.
+
+Ordinary STOP is graceful: the dispatcher returns its successful ACK when the
+stop request is accepted, `MotionManager` enters `MOTION_STOPPING`, and the
+cooperative foreground processing interpolates the retained logical targets to
+neutral over the centralized `MOTION_TRANSITION_DURATION_MS=750U` provisional
+duration using the actual wrap-safe elapsed time from the STOP acceptance
+timestamp. Time before STOP acceptance is not consumed by the ramp.
+Motion ownership remains held throughout the ramp, so manual
+Enable/SetPWM/SetAngle/Neutral is `BUSY`; the final zero write releases Motion
+ownership and enters `MOTION_STOPPED`. Disable All, an explicit Disable whose
+validated mask intersects active Motion ownership, and SafetySupervisor
+host-liveness failure abort immediately without waiting for the ramp; a
+non-intersecting single-channel Disable remains allowed without preempting
+Motion.
+
+ServoService tracks the logical angle of each enabled channel. Enable starts a
+new channel at logical neutral, SetAngle/Neutral/Motion writes update the
+tracker, and raw SetPWM marks that channel's pose unknown. Motion START refuses
+an unknown required pose through the existing internal
+`MOTION_MANAGER_RESULT_HARDWARE_FAILURE` mapping, so Protocol V2 keeps its
+existing result values. A known non-neutral pose is cross-faded to the gait
+target over the same 750 ms transition. SimpleGaitGenerator emits logical
+targets only; MotionManager applies the common rear operational guard
+(`-3000…+4500 cdeg`) before Servo calibration and owns its diagnostic count.
+
+The PA11 leak path remains monitoring-only in the current source and has no
+leak-to-Safety trip. If a future leak safety trip is added, it must call the
+same immediate Motion abort plus actuator-disable path; this feature does not
+invent a new leak safety policy. Interrupted Motion never auto-resumes after
+heartbeat recovery or reconnect; explicit Servo re-enable and a new START are
+required. See the full contract and host commands in
+[`../docs/motion-simple-gait.md`](../docs/motion-simple-gait.md).
+
+### PWM Disable safe-stop — [Implemented / Host-Tested]
+
+`Neutral` continues legal calibrated PWM output and records logical `0 degrees`.
+`Disable` and `Disable All` stop PWM drive without writing Neutral; logical
+ownership and Motion/Safety ownership are cleared immediately. On TIM3/TIM4,
+PWM mode 1 is active-high and up-counting, with HAL `OCxPE` preload enabled.
+For any logically active channel with a running timer, the driver never uses
+readable `CNT`/`CCR` ordering as proof that the current output is LOW: it
+clears stale `CCxIF`, marks only that channel `stop_pending`, enables its
+`CCxIE`, retains `CCxE`, and waits for the next real compare event. It re-reads
+`CNT`, `CCR`, and `CCxIF` after arming for race diagnostics, but only `CCxIF`
+can authorize same-edge finalization. The existing HAL compare callback then
+performs the final `HAL_TIM_PWM_Stop()` after the falling edge, preserving HAL
+channel state. A timer that is not running, or an already inactive channel,
+may finalize immediately. The HAL's `__HAL_TIM_DISABLE()` keeps a shared timer
+counter running while any other `CCxE/CCxNE` output remains enabled, so
+stopping one channel does not stop its siblings.
+
+Pending-stop channels reject SetAngle, ApplyPWM, Motion writes, and Enable with
+`BUSY`; repeated Disable is idempotent. At the current `PSC=15`, `ARR=3002`,
+1 microsecond-tick configuration, the physical shutdown wait is at most one
+complete approximately 3 ms PWM frame plus compare-ISR latency, not the
+separate 750 ms graceful Motion STOP. Safety events interrupt graceful Motion
+immediately and may use only this frame-level safe edge for physical shutdown.
+Host tests prove the decision/state policy, not waveform behavior. The current
+hardware evidence remains `Physical no-jump Disable: Pending Hardware
+Re-verification`; the dedicated host regression models a preload/shadow
+mismatch (readable preload 1000 μs while the current shadow pulse is 1900 μs)
+and requires deferral. An optional logic-analyzer check must find a complete
+final pulse or a stop already in the LOW window, never a runt pulse.
 
 Enable accepts a multi-bit mask only with all-or-nothing semantics. Requested channels already present in the pre-call enabled mask are idempotent and receive no pulse write, start, or stop. If any newly requested channel fails to start, only channels newly started by that call are stopped and the pre-call enabled state—including the physical pulse of an already-running channel—is preserved. Disable and Disable All retain fail-closed/best-effort stop behavior.
 
@@ -445,6 +525,7 @@ The current communication split is:
 - **[Implemented]** `Core/Servo/servo_calibration.c/.h` owns per-descriptor integer angle-to-pulse mapping.
 - **[Implemented]** `Core/Servo/servo_service.c/.h` owns supported-mask validation, enabled-state policy, command range checks, Neutral semantics, multi-bit Enable rollback, and driver-independent Servo results.
 - **[Implemented]** `Core/Servo/servo_driver_stm32.c/.h` owns the HAL/TIM3/TIM4 channel adapter. It maps abstract descriptor selectors to timer handles and HAL channels and has no Protocol or heartbeat knowledge.
+- **[Implemented / Software Verified]** `Core/Motion/motion_manager.c/.h` and `simple_gait_generator.c/.h` own the bench-provisional Motion state machine, logical target generation, cooperative foreground scheduling with wrap-safe wall-time deltas from a 10 ms minimum cadence, Motion Servo ownership, acceptance-time graceful STOP, centralized 750 ms neutral ramp, generator-independent operational limiting, and immediate abort hooks. The modules have no interrupt-driven gait path and no autonomous restart behavior.
 - **[Implemented]** `Core/Sensors/leak_sensor.c/.h` owns the HAL-independent UNKNOWN/DRY/WET mapping; `leak_sensor_stm32.c/.h` only reads the configured PA11 GPIO.
 - **[Implemented]** `Core/Sensors/leak_telemetry_policy.c/.h` limits LeakStatus publication to first sample/state changes/500 ms refreshes. `Core/App/app_main.c` sends one-byte `0x20` telemetry only after a successful Heartbeat ACK; it does not connect leak state to Safety or Servo behavior.
 - **[Implemented / Software Verified]** `Core/Sensors/jy901s_telemetry.c/.h` encodes the fixed 56-byte `ImuSnapshot` payload with explicit little-endian fixed-point fields and bring-up diagnostics. `Core/Communication/imu_telemetry_policy.c/.h` and `telemetry_scheduler.c/.h` keep IMU publication at one second, after completed Heartbeat ACK, with immediate priority for due LeakStatus, fair rotation against a due DepthSnapshot when LeakStatus is not due, and at most one optional frame per opportunity. The IMU path does not enter command/ACK matching or alter USART1 behavior.
@@ -475,7 +556,7 @@ Current constants:
 - Magic `52 42`, version `02`
 - Header 8 bytes, CRC 2 bytes, payload ≤64 bytes
 - `WireFrame = COBS(LogicalFrame) + 00`
-- Message IDs: Heartbeat `01`, ACK `02`, Error `03`, Servo Enable `10`, Servo Disable `11`, Set Servo PWM `12`, Set Servo Angle `13`, Neutral `14`, LeakStatus `20`, ImuSnapshot `21`, DepthSnapshot `22`
+- Message IDs: Heartbeat `01`, ACK `02`, Error `03`, Servo Enable `10`, Servo Disable `11`, Set Servo PWM `12`, Set Servo Angle `13`, Neutral `14`, SetMotionMode `15`, LeakStatus `20`, ImuSnapshot `21`, DepthSnapshot `22`
 
 See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmware matrix. Important current behavior is:
 
@@ -485,7 +566,8 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 - Set Angle is available for all five angle-supported descriptors, including the four final logical paddle ranges `-45 to +45 degrees` and unchanged FrontAxis/Depth range `-90 to +90 degrees`; each angle is range-checked and mapped with `int32_t` intermediates. Left-side paddle inversion comes from signed calibration deltas, not Servo ID special cases.
 - LeakStatus `0x20` is a one-byte, unacknowledged monitoring frame (`UNKNOWN=0`, `DRY=1`, `WET=2`). Firmware sends it only after an accepted Heartbeat and completed ACK transmission, on first sample/state change or a 500 ms refresh; it has an independent telemetry sequence and does not trigger Safety or Servo actions.
 - ImuSnapshot `0x21` is a fixed 56-byte, unacknowledged monitoring frame. Firmware sends it only after an accepted Heartbeat ACK has completed, at most once per one-second policy interval, with due LeakStatus priority and fair rotation against a due DepthSnapshot when LeakStatus is not due. It uses the independent telemetry sequence and carries explicit little-endian fixed-point Acc/Gyro/Angle values plus JY901S diagnostics; it does not trigger Safety, Servo, or JY901S configuration actions.
-- ACK result values are frozen as `OK=0`, `InvalidPayload=1`, `HostNotAlive=2`, `UnsupportedServo=3`, `ServoNotEnabled=4`, `OutOfRange=5`, and `HardwareFailure=6`.
+- SetMotionMode `0x15` uses `schema=1, mode, action`; successful STOP ACK means request acceptance and `MOTION_STOPPING`, not completed neutral. Ordinary STOP ramps logical targets to zero over `MOTION_TRANSITION_DURATION_MS=750U` while retaining Motion ownership; Safety/Disable All abort immediately.
+- ACK result values are frozen as `OK=0`, `InvalidPayload=1`, `HostNotAlive=2`, `UnsupportedServo=3`, `ServoNotEnabled=4`, `OutOfRange=5`, `HardwareFailure=6`, and `Busy=7`.
 - Supported mask is exactly `0x001F`. Zero mask is invalid; any unknown bit fails with `UnsupportedServo`. Multi-bit Enable is all-or-nothing with rollback on a channel-start failure.
 - The most recent successful non-Heartbeat request is cached by sequence and type. Its retry replays the ACK without executing the Servo action again. Heartbeats refresh liveness but do not evict this cache.
 
@@ -559,7 +641,7 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Servo, Safety, and Sensors modules and their include directories. The Firmware host gate currently compiles and runs all 17 executable test sources: the existing `tests/protocol_golden_vectors.c`, `tests/ring_buffer_tests.c`, `tests/servo_descriptor_tests.c`, `tests/servo_calibration_tests.c`, `tests/servo_service_tests.c`, `tests/safety_supervisor_tests.c`, `tests/protocol_dispatcher_tests.c`, `tests/leak_sensor_tests.c`, `tests/servo_driver_stm32_tests.c`, `tests/jy901s_parser_tests.c`, `tests/jy901s_transport_stm32_tests.c`, `tests/jy901s_telemetry_tests.c`, and `tests/telemetry_scheduler_tests.c`, plus `tests/depth_parser_tests.c`, `tests/depth_transport_stm32_tests.c`, `tests/depth_telemetry_tests.c`, and `tests/app_main_depth_telemetry_tests.c`. The leak sensor source is linked with `leak_telemetry_policy.c` because that existing test covers both behaviors. The HAL-adapter mapping test uses host stubs for PWM start/stop and explicitly verifies that HAL `TIM_CHANNEL_1 == 0` remains valid. The `app_main_depth_telemetry_tests.c` integration test links the production application path with HAL stubs and verifies accepted Heartbeat scheduling emits a decoded 38-byte `DepthSnapshot`. `tests/app_main_jy901s_api_tests.c` is a separate compile-contract check; all are compiled manually with `-Wall -Wextra -Werror` plus the documented host HAL pointer-cast suppression where needed. These host checks complement, but do not replace, the real ARM target build.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Motion, Servo, Safety, and Sensors modules and their include directories. The reproducible Firmware host gate is `powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run_host_tests.ps1` from `RoboBeetleFirmware`; it compiles and runs all 20 executable test sources, including the SimpleGait, MotionManager, Motion-aware Protocol Dispatcher, and PWM safe-stop coverage, plus the separate `app_main_jy901s_api.c` compile contract. The runner uses C11, `-Wall -Wextra -Werror`, host HAL stubs where required, and `-lm` for the deterministic sine gait. These host checks complement, but do not replace, the real ARM target build.
 
 ## App/Main maintainability audit（Historical Reference: PR #6 old image）
 
@@ -582,6 +664,11 @@ Core/
 │  ├─ servo_driver_stm32.c/h
 │  ├─ servo_service.c/h
 │  └─ servo_calibration.c/h
+├─ Motion/
+│  ├─ motion_manager.c/.h
+│  ├─ simple_gait_generator.c/.h
+│  ├─ motion_types.h
+│  └─ motion_config.h
 ├─ Sensors/
 │  ├─ leak_sensor.c/h
 │  └─ leak_sensor_stm32.c/h

@@ -340,6 +340,71 @@ Firmware 与 Console 两张独立 descriptor table 必须完全一致。对于 `
 
 已验证的 DAP/OpenOCD 稳定流程为 `SWD clock 100 kHz → SYSRESETREQ → halt → program → verify`；若烧录后 UART 异常，先完整断电再上电，不加入软件 workaround。
 
+## 2026-09-13 Motion / SimpleGait 第一版基础（Bench-Provisional；本 feature）
+
+本 feature 在 PR #13 五舵机 semantic descriptor 基础上加入第一版 Motion / Gait
+控制基础，完整 contract 见 [`docs/motion-simple-gait.md`](docs/motion-simple-gait.md)。
+当前只声明 Host Test / software evidence；本 feature image 的 ARM Build、Program
+Verify 和 physical Motion exercise 尚未在本轮执行，仍为 **Pending**。
+
+### STOP contract
+
+- Protocol V2 `SetMotionMode` 使用 `0x15`，payload 严格为 `schema=1, mode, action`。
+- 普通 `STOP` ACK 只表示 stop request accepted；Firmware 立即进入
+  `MOTION_STOPPING`，不是已经回到 neutral。
+- 在集中配置的 `MOTION_TRANSITION_DURATION_MS=750U`、10 ms cooperative tick
+  内，amplitude/bias 与五个 logical joint targets 平滑收敛到零；最后一次
+  neutral write 完成后才释放 Motion ownership 并进入 `MOTION_STOPPED`。
+- STOPPING 期间 manual Enable/SetPWM/SetAngle/Neutral 必须返回 `BUSY=7`，不能
+  与停止轨迹争夺 actuator ownership。
+- Running 模式切换在 ACK 后仍保留旧/新 required-mask 并集直到同一 provisional
+  crossfade 窗口结束；只被新模式释放的通道在此窗口内仍按 Motion-owned 处理。
+- 初始 START ramp 或 mode crossfade 期间，只允许目标模式相同的幂等 START；
+  其它模式返回 `BUSY=7`，不能覆盖当前 transition。Motion START 在取得
+  ownership 前检查已知 rear logical pose 是否位于 `-3000…+4500 cdeg`
+  operational envelope 内，越界使用既有 `HardwareFailure=6` 映射拒绝。
+  STOPPING 插值后的 retained targets 仍经过同一 common sanitizer。
+- Disable/Disable All、heartbeat/host-liveness loss 和现有 SafetySupervisor
+  fail-safe 路径立即 abort/disable，不等待 750 ms。`app_main` 先处理 Safety，
+  Protocol Dispatcher 对已校验且与 active Motion ownership 相交的显式
+  Servo Disable 立即 abort Motion；非相交的单轴 Disable 不抢占 Motion。
+- 本仓库当前 PA11 leak path 明确是 monitoring-only，尚无 leak-to-Safety trip；
+  如果后续加入 trip，必须复用同一 immediate takeover path，不能走 graceful ramp。
+- 被中断的 STOP 不会在 reconnect/heartbeat recovery 后自动 resume；必须重新
+  Enable 并发送新的 Motion START。STOP 在 STOPPED 时安全幂等。
+
+### 实现边界与验证
+
+```text
+0x15 Motion command
+  → MotionManager
+  → SimpleGaitGenerator
+  → logical joint targets (cdeg)
+  → ServoService Motion ownership
+  → Servo calibration / PWM
+```
+
+Bench-provisional profile 当前为 0.5 Hz、1000 cdeg paddle amplitude、π 前后足
+phase、turn reduced-side 50%、ASCEND/DESCEND 的 ±1000 cdeg FrontAxis candidate
+bias；rear operational clamp 为 −3000…+4500 cdeg，全部集中在
+`RoboBeetleFirmware/Core/Motion/motion_config.h`。这不是 pool/hydrodynamic
+calibration，也不等同于 ARM 或实机证据。
+
+Firmware host runner：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File .\RoboBeetleFirmware\tests\run_host_tests.ps1
+```
+
+本 feature 的 runner 通过 19 个 executable tests 与 1 个 app_main compile
+contract，覆盖 STOP state chain、acceptance ACK、约 750 ms duration、target
+monotonic convergence、manual BUSY、Disable All/heartbeat immediate takeover、
+reconnect no-auto-resume、STOP idempotency、duplicate cache 和 exact `0x15` wire
+payload。Qt CTest 另覆盖 Controller/UI lifecycle 及 APC220 bounded-queue safety
+priority。具体当前执行结果记录在 feature branch 的 PR 描述和
+`docs/motion-simple-gait.md`；Hardware evidence 仍 Pending。
+
 ## [Historical Reference] 2026-09-08 五舵机语义 descriptor bring-up（PR #8 snapshot；current contract updated 2026-09-12）
 
 ### 历史状态（2026-09-08 snapshot）

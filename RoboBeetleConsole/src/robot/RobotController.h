@@ -57,6 +57,11 @@ struct ProtocolMonitor {
     QString ackStatus{QStringLiteral("Idle")};
 };
 
+struct MotionRequest {
+    MotionMode mode{MotionMode::Stop};
+    MotionAction action{MotionAction::Stop};
+};
+
 class RobotController final : public QObject {
     Q_OBJECT
 
@@ -79,6 +84,8 @@ public:
     bool setServoPwm(ServoId id, quint16 pulseUs);
     bool setServoAngle(ServoId id, qint16 angleCentidegrees);
     bool neutralServo(ServoId id);
+    bool startMotion(MotionMode mode);
+    bool stopMotion();
 
     [[nodiscard]] bool isConnected() const { return state_ == TransportState::Connected; }
     [[nodiscard]] bool isServoSupported(ServoId id) const;
@@ -93,9 +100,18 @@ public:
     [[nodiscard]] const DepthMonitor *depthMonitor() const { return &depthMonitor_; }
     [[nodiscard]] RobotControllerConfig config() const { return config_; }
     [[nodiscard]] ProtocolMonitor monitor() const { return monitor_; }
+    [[nodiscard]] MotionState motionState() const { return motionState_; }
+    [[nodiscard]] MotionMode motionMode() const { return motionMode_; }
+    [[nodiscard]] bool isMotionActive() const;
+    [[nodiscard]] bool isMotionReady(MotionMode mode) const;
+    [[nodiscard]] bool isMotionTransitioning() const
+    {
+        return motionModeTransitionTimer_.isActive();
+    }
     [[nodiscard]] qsizetype queuedCommandCount() const
     {
-        return commandQueue_.size() + priorityCommandQueue_.size();
+        return commandQueue_.size() + priorityCommandQueue_.size()
+            + motionStopCommandQueue_.size();
     }
 
 signals:
@@ -104,6 +120,7 @@ signals:
     void servoStateChanged(int servoIndex, bool enabled);
     void servoDisablePendingChanged(int servoIndex, bool pending);
     void leakStateChanged(rb::LeakState state);
+    void motionStateChanged(rb::MotionState state, rb::MotionMode mode);
     void protocolMonitorChanged(const rb::ProtocolMonitor &monitor);
     void txHexChanged(const QString &hex);
     void rxHexChanged(const QString &hex);
@@ -117,16 +134,21 @@ private:
         quint16 servoMask{0};
         qint64 sentAtMs{0};
         int retries{0};
+        std::optional<MotionRequest> motionRequest;
+        bool motionCancelled{false};
+        bool cancelled{false};
     };
 
     struct QueuedCommand {
         MessageType type;
         QByteArray payload;
         quint16 affectedMask{0};
+        std::optional<MotionRequest> motionRequest;
     };
 
     bool sendCommand(MessageType type, const QByteArray &payload, quint16 affectedMask = 0,
-                     bool expectAck = true);
+                     bool expectAck = true,
+                     std::optional<MotionRequest> motionRequest = std::nullopt);
     void sendHeartbeat();
     bool dispatchApc220Command(const QueuedCommand &command);
     bool dispatchApc220Retry(quint16 sequence);
@@ -145,15 +167,27 @@ private:
     void updateMonitor();
     void resetSchedulerState();
     void clearQueuedCommandsForDisable(quint16 affectedMask);
+    void cancelQueuedMotionRequests();
+    void cancelPendingMotionRequests();
+    [[nodiscard]] bool hasPendingMotionWork() const;
+    [[nodiscard]] bool hasPendingMotionStop() const;
+    [[nodiscard]] bool hasPendingMotionStart() const;
+    void cancelPendingDirectActuatorRequests();
+    void failClosedDirectActuators();
     void failClosedApc220Actuators();
+    void failClosedMotionState();
+    void setMotionState(MotionState state, MotionMode mode);
     void setEnabledMask(quint16 mask);
     void setDisablePendingMask(quint16 mask);
     void setLeakState(LeakState state);
     void markApc220LivenessLost();
     void noteWriteFailure(const QString &context);
     bool rejectUnsupportedServo(ServoId id, const QString &command);
+    [[nodiscard]] quint16 motionProtectionMask() const;
     static QByteArray maskPayload(quint16 mask);
     static qint64 nowMs();
+    static bool isMotionCommand(MessageType type);
+    static bool isActuatorCommand(MessageType type);
 
     ITransport *transport_;
     RobotControllerConfig config_;
@@ -163,8 +197,14 @@ private:
     quint16 nextSequence_{1};
     quint16 enabledMask_{0};
     quint16 disablePendingMask_{0};
+    quint16 motionOwnedMask_{0};
+    quint16 motionTransitionOwnedMask_{0};
     QHash<quint16, PendingRequest> pending_;
     QQueue<QueuedCommand> priorityCommandQueue_;
+    // A graceful Motion STOP outranks ordinary work but remains below the
+    // safety-priority Disable queue.  Keeping a dedicated lane also makes
+    // STOP supersession explicit instead of relying on FIFO ordering.
+    QQueue<QueuedCommand> motionStopCommandQueue_;
     QQueue<QueuedCommand> commandQueue_;
     std::optional<PendingRequest> deferredRetry_;
     bool heartbeatDue_{false};
@@ -174,13 +214,19 @@ private:
     qint64 nextHeartbeatSafetyDeadlineAtMs_{0};
     QTimer heartbeatTimer_;
     QTimer retryTimer_;
+    QTimer motionStopTimer_;
+    QTimer motionModeTransitionTimer_;
     ProtocolMonitor monitor_;
     LeakState leakState_{LeakState::Unknown};
     qint64 lastLeakTelemetryAtMs_{-1};
     ImuMonitor imuMonitor_;
     DepthMonitor depthMonitor_;
+    MotionState motionState_{MotionState::Stopped};
+    MotionMode motionMode_{MotionMode::Stop};
 };
 
 } // namespace rb
 
 Q_DECLARE_METATYPE(rb::ProtocolMonitor)
+Q_DECLARE_METATYPE(rb::MotionState)
+Q_DECLARE_METATYPE(rb::MotionMode)

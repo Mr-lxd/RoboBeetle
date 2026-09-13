@@ -14,6 +14,8 @@
 
 static int failures = 0;
 static uint32_t test_tick = 0U;
+static uint32_t test_tick_read_count = 0U;
+static bool advance_tick_on_second_read = false;
 static uint8_t *uart1_receive_destination = NULL;
 static uint8_t *uart3_receive_destination = NULL;
 static uint8_t *uart6_receive_destination = NULL;
@@ -98,6 +100,11 @@ HAL_StatusTypeDef HAL_UART_Transmit(
 
 uint32_t HAL_GetTick(void)
 {
+    ++test_tick_read_count;
+    if (advance_tick_on_second_read && test_tick_read_count == 2U)
+    {
+        ++test_tick;
+    }
     return test_tick;
 }
 
@@ -184,6 +191,64 @@ static void send_heartbeat(
     app_main_process();
 }
 
+static void send_servo_enable(
+    UART_HandleTypeDef *host_uart,
+    uint16_t sequence)
+{
+    const uint8_t payload[2] = {1U, 0U};
+    uint8_t wire[RBP2_MAX_WIRE_SIZE];
+    size_t wire_length = rbp2_encode_wire(
+        RBP2_MSG_SERVO_ENABLE,
+        sequence,
+        payload,
+        sizeof payload,
+        wire,
+        sizeof wire);
+
+    expect(wire_length > 0U, "Servo Enable test frame did not encode");
+    for (size_t index = 0U; index < wire_length; ++index)
+    {
+        inject_byte(
+            host_uart,
+            wire[index],
+            uart_transport_stm32_on_rx_complete);
+    }
+
+    app_main_process();
+}
+
+static void send_servo_pwm(
+    UART_HandleTypeDef *host_uart,
+    uint16_t sequence,
+    uint16_t pulse_us)
+{
+    const uint8_t payload[4] = {
+        1U,
+        0U,
+        (uint8_t)(pulse_us & 0xffU),
+        (uint8_t)((pulse_us >> 8U) & 0xffU),
+    };
+    uint8_t wire[RBP2_MAX_WIRE_SIZE];
+    size_t wire_length = rbp2_encode_wire(
+        RBP2_MSG_SET_SERVO_PWM,
+        sequence,
+        payload,
+        sizeof payload,
+        wire,
+        sizeof wire);
+
+    expect(wire_length > 0U, "Set PWM test frame did not encode");
+    for (size_t index = 0U; index < wire_length; ++index)
+    {
+        inject_byte(
+            host_uart,
+            wire[index],
+            uart_transport_stm32_on_rx_complete);
+    }
+
+    app_main_process();
+}
+
 static bool decode_tx_frame(
     size_t index,
     rbp2_frame_t *frame)
@@ -245,6 +310,8 @@ int main(void)
     UART_HandleTypeDef uart6 = {0};
     TIM_HandleTypeDef tim3 = {0};
     TIM_HandleTypeDef tim4 = {0};
+    TIM_TypeDef fake_tim3 = {0};
+    TIM_TypeDef fake_tim4 = {0};
     rbp2_frame_t depth_frame;
     depth_telemetry_source_t source;
     depth_telemetry_diagnostics_t diagnostics;
@@ -252,6 +319,8 @@ int main(void)
     uart1.Instance = USART1;
     uart3.Instance = USART3;
     uart6.Instance = USART6;
+    tim3.Instance = &fake_tim3;
+    tim4.Instance = &fake_tim4;
     test_tick = 1000U;
 
     app_main_init(
@@ -368,6 +437,32 @@ int main(void)
         expect(source.temperature_centi_c == 1925,
                "fresh sensor recovery temperature differs");
     }
+
+    /*
+     * A heartbeat may complete after app_main_process() takes its first
+     * timestamp. The safety check must use a current timestamp after input
+     * dispatch, not the older pre-dispatch sample.
+     */
+    test_tick_read_count = 0U;
+    advance_tick_on_second_read = true;
+    send_heartbeat(&uart1, 10U);
+    advance_tick_on_second_read = false;
+    send_servo_enable(&uart1, 11U);
+    expect(find_last_tx_type(RBP2_MSG_ACK, &depth_frame),
+           "delayed-heartbeat regression should produce a Servo Enable ACK");
+    if (find_last_tx_type(RBP2_MSG_ACK, &depth_frame))
+    {
+        expect(depth_frame.payload_length == 4U &&
+                   depth_frame.payload[3] == RBP2_RESULT_OK,
+               "heartbeat received during a process pass must not false-trip SafetySupervisor");
+    }
+
+    /* A stale actuator frame must not execute before the same-pass watchdog. */
+    fake_tim3.CCR1 = 1234U;
+    test_tick = 5602U;
+    send_servo_pwm(&uart1, 12U, 1900U);
+    expect(fake_tim3.CCR1 == 1234U,
+           "a stale actuator frame must be rejected before SafetySupervisor disables outputs");
 
     if (failures == 0)
     {
