@@ -129,7 +129,9 @@ ID meaning. Each node stores:
 - amplitude state `r_i` and derivative `r_dot_i` in logical degrees;
 - offset state `x_i` and derivative `x_dot_i` in logical degrees per second;
 - the current target amplitude `R_i` and target offset `X_i`;
-- the source output-memory value `theta_i` in logical degrees.
+- the source output-memory value `theta_i` in logical degrees;
+- the source discrete derivative input `theta_dot_i` and its previous scaled
+  output sample held by the source UnitDelay state.
 
 Each directed source coupling slot stores the target phase state and its
 derivative. The centralized model profile stores `beta_i`, `T_i`, `k_v_i`,
@@ -148,14 +150,89 @@ Units are explicit:
 | `joint_targets_t` | signed centidegree |
 | nominal integration step | second, `0.01` |
 
+### Frozen `theta_dot_i` source semantics
+
+`theta_dot_i` is not an analytic derivative and is not a separately named
+state in the generated C. It is the local expression formed from a scaled
+output-memory sample and a UnitDelay state immediately before each node's
+phase-rate expression:
+
+```text
+CPG_i[k]       = Memory_i_PreviousInput[k]
+TSamp_i[k]     = CPG_i[k] * 100.0
+theta_dot_i[k] = TSamp_i[k] - UD_i[k]
+               = 100.0 * (Memory_i[k] - Memory_i[k-1])
+```
+
+The four exact generated-source symbol pairs are:
+
+| Legacy node | output-memory symbol read at step start | scaled sample | previous-sample state | `theta_dot` expression |
+| --- | --- | --- | --- | --- |
+| node 0 | `CPG_1 = Memory19_PreviousInput` | `rtb_TSamp = CPG_1 * 100.0` | `UD_DSTATE` | `rtb_TSamp - UD_DSTATE` |
+| node 1 | `CPG_2 = Memory7_PreviousInput` | `rtb_TSamp_d = CPG_2 * 100.0` | `UD_DSTATE_o` | `rtb_TSamp_d - UD_DSTATE_o` |
+| node 2 | `CPG_3 = Memory11_PreviousInput` | `rtb_TSamp_p = CPG_3 * 100.0` | `UD_DSTATE_b` | `rtb_TSamp_p - UD_DSTATE_b` |
+| node 3 | `CPG_4 = Memory15_PreviousInput` | `rtb_TSamp_b = CPG_4 * 100.0` | `UD_DSTATE_a` | `rtb_TSamp_b - UD_DSTATE_a` |
+
+The source output and `ampli` values use the same logical-angle numeric unit;
+the adapter interprets that unit as logical degree. Because `TSamp_i` is the
+source output multiplied by `1/(w*Ts)=100`, `theta_dot_i` has logical degrees
+per second when the source output is expressed in logical degrees. The
+UnitDelay state has the same scaled-output/per-second unit. The source has no
+dedicated `theta_dot` integrator or derivative state beyond these UnitDelay
+values.
+
+Static-storage initialization gives all four `UD_DSTATE*` values zero. The
+historical `CPG_RoboBeetle_stm_initialize()` initializes `gait`, `prd`,
+`ampli`, and `Beta` but does not overwrite the UnitDelay or output-memory
+states; the generated C static block state is therefore initially zero.
+
+For every source step, the order is frozen as follows:
+
+1. `Def_pa` selects the signed target amplitudes and source coupling arrays.
+2. Each `Memory*_PreviousInput` is read into `CPG_i`, then `TSamp_i` and
+   `theta_dot_i` are formed from the current UnitDelay value.
+3. The amplitude, offset, phase-rate, and phase-target accelerations are
+   evaluated from pre-Euler states. Each `theta_dot_i` used by `nu_i` is thus
+   a pre-Euler discrete difference of the output-memory sequence.
+4. The source computes the next output-memory values as
+   `r_i[k]*sin(phi_i[k]) + x_i[k]`, using pre-Euler oscillator states. The
+   generated code writes these values to `Memory7`, `Memory11`, `Memory15`,
+   and finally `Memory19` before any oscillator Euler state write.
+5. The generated C then interleaves UnitDelay and per-node Euler writes in
+   this order: node 0 `UD_DSTATE` followed by node 0 amplitude/offset/phase
+   integrators; node 1 `UD_DSTATE_o` followed by node 1 integrators; node 2
+   `UD_DSTATE_b` followed by node 2 integrators; and node 3 `UD_DSTATE_a`
+   followed by node 3 integrators. Each UnitDelay receives the current
+   pre-step scaled sample (`UD_i[k+1] = TSamp_i[k]`).
+6. The remaining phase-target integrators and their derivative-memory arrays
+   receive their `0.01` Euler updates after those per-node writes. No
+   derivative expression is recalculated after a state write, and the source
+   does not recompute output-memory values from post-Euler oscillator states
+   until a later step.
+
+The new core must expose `theta_dot_i` and the corresponding previous-scaled
+sample in its golden snapshot. This prevents an implementation from replacing
+the source difference with a mathematically plausible analytic derivative.
+
+The source anchors for this contract are `CPG_RoboBeetle_stm.c:138-145`,
+`:186-199`, `:211-218`, `:254-267`, `:296-303`, `:343-356`, `:385-392`, and
+`:432-446` for the four scaled samples and phase-rate expressions;
+`:275-278`, `:364-367`, `:454-457`, and `:480-483` for output-memory writes;
+and `:491`, `:543`, `:573`, and `:601` for UnitDelay writes. The initialization
+entry point is at `:853-861`; the UnitDelay and output-memory state remains
+zero through C static-storage initialization rather than an explicit reset
+assignment in that function.
+
 The production default profile uses the source-compatible formula and
 parameter layout. The golden fixture explicitly uses the historical source
 initialization: `beta_i=0.75`, `T_i=1.0 s`, and `ampli_i=30 logical degrees`.
 The bench profile keeps front and rear nominal amplitudes as separate
 centralized fields and starts both at the same conservative logical amplitude
 of `10 degrees`; this is a neutral bench placeholder, not a verified
-front/rear hydrodynamic ratio. It uses `T=2.0 s` (`0.5 Hz`) and does not use
-the paper's `45 degrees` / `1.3 Hz` example as a default.
+front/rear hydrodynamic ratio. It uses `T=2.0 s` as a nominal period
+parameter; the actual steady-state period is not assumed to be exactly 2.0 s
+because source `nu_i` depends on `beta_i`, `theta_dot_i`, and `k_v_i`. The
+paper's `45 degrees` / `1.3 Hz` example is not used as a default.
 
 ### Equations and source choices
 
@@ -233,6 +310,31 @@ The adapter accumulates elapsed milliseconds and advances the core in 10 ms
 Euler substeps. A remainder below 10 ms is retained for the next call. This
 gives exact source behavior at nominal cadence while preserving elapsed-time
 semantics for 20/70/100 ms foreground gaps.
+
+### Safety-before-catch-up contract
+
+Liveness has final authority over any elapsed-time catch-up. Both the existing
+`app_main_process()` safety prepass and the defensive check at the beginning
+of `motion_manager_process()` must run before `motion_manager_tick()` can call
+the selected generator. The active-path order is therefore:
+
+```text
+process(now_ms)
+  -> if active and host is not alive:
+       immediate Motion abort; release Servo ownership; return
+       (no CPG advance, no CPG sample, no Servo write)
+  -> compute wrap-safe elapsed time
+  -> if cadence is due, CPG catch up in bounded substeps
+  -> sample logical targets, apply common guard, write through ServoService
+```
+
+If a foreground gap is already beyond the heartbeat/liveness deadline, the
+first branch wins. A stale active Motion must not catch up 70 steps and write
+an actuator command before the heartbeat abort. The integration regression
+therefore counts generator advances and Servo writes across a gap greater than
+`SAFETY_SUPERVISOR_HEARTBEAT_TIMEOUT_MS`, requiring safety abort, zero
+post-gap CPG actuator commands, and no implicit resume after heartbeat
+recovery.
 
 To make extreme gaps bounded and deterministic, one `advance` call processes
 at most `100` source substeps (`1.0 s`). Excess elapsed time is discarded after
@@ -343,6 +445,38 @@ are not compiled into this PR's production path.
 
 ## Verification design
 
+### STM32F407 double-precision performance evidence
+
+The production core remains `double` throughout this PR. The STM32F407's
+single-precision hardware FPU is a performance consideration, not permission
+to change the source-compatible numeric type. A target benchmark is added
+alongside the firmware verification work and uses the same compiler,
+optimization flags, clock configuration, and linker settings as the firmware
+image.
+
+The evidence record contains:
+
+- baseline and feature image `text`, `data`, and `bss` sizes from the ARM
+  size/map output;
+- FLASH delta as `(text + data)_feature - (text + data)_baseline`;
+- RAM delta as `(data + bss)_feature - (data + bss)_baseline`;
+- DWT cycle-counter timing for one nominal 10 ms CPG core substep;
+- DWT timing for representative 20 ms, 70 ms, and 100 ms elapsed catch-up
+  calls, corresponding to 2, 7, and 10 source substeps;
+- worst-case bounded catch-up timing for the configured 100-substep cap;
+- target clock, compiler flags, optimization level, measurement repetitions,
+  and observed min/max values.
+
+Nominal single-substep execution must be compared with the 10 ms scheduler
+period. Catch-up measurements are reported separately from the safety
+contract; a stale active Motion is aborted before catch-up and cannot use a
+long-gap timing result to justify an actuator write. If the measured `double`
+implementation cannot meet the target real-time budget, the result is
+reported as a blocker for this production profile and the follow-up design is
+explicitly a double-reference / float-production parity study. This PR does
+not silently switch to float and does not claim target timing evidence when
+the ARM toolchain or target measurement surface is unavailable.
+
 ### Independent numerical golden
 
 The golden fixture is created from the historical STM32 C algorithm behavior
@@ -363,6 +497,8 @@ For all four oscillator slots, each observation records and compares:
 - amplitude state and derivative;
 - target amplitude;
 - `beta`;
+- exact `theta_dot_i` discrete difference;
+- the corresponding previous-scaled-output UnitDelay state (`UD_DSTATE*`);
 - source-emitted raw oscillator output;
 - output-memory ordering at the first sample.
 
@@ -385,6 +521,22 @@ Host tests cover beta `.75` behavior, finite/no-NaN/no-Infinity state,
 amplitude convergence, phase/frequency behavior, long-run boundedness,
 deterministic fixed-step catch-up, remainder retention, and the 100-substep
 maximum-gap policy.
+
+The long-run period test runs the production nominal-period profile for a
+fixed multi-cycle window after its amplitude transient. It detects repeated
+same-direction zero crossings (or equivalent stable output phase markers),
+requires a positive finite measured period, and reports:
+
+```text
+nominal_period_s, measured_period_s, measured_frequency_hz,
+measured_period / nominal_period
+```
+
+It does not label `T=2.0 s` as the actual oscillator period unless the measured
+source-compatible trajectory supports that conclusion. The same measurement
+is taken from the independent legacy reference path when available so the
+production core's long-run period can be compared without treating `1/T` as a
+fixed output frequency.
 
 ### Adapter and integration
 
