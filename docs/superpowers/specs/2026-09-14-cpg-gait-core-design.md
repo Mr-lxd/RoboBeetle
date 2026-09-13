@@ -1,0 +1,426 @@
+# Legacy Source-Compatible CPG v1 / RoboBeetle Semantic Adapter
+
+## Status
+
+This document is the approved design for the RoboBeetle CPG gait core
+reproduction and integration task. It covers the numerical core, the current
+RoboBeetle semantic adapter, backend selection, lifecycle semantics, tests, and
+documentation. It does not implement the feature.
+
+The implementation branch is `feature/cpg-gait-core`. Its baseline is
+`origin/main` at `bb48f8d057c5a83f1ea91bc88b40b3dbc32419de`.
+
+## Decision summary
+
+The production STM32 C implementation is named **Legacy Source-Compatible CPG
+v1**. Its equations, parameters, state update order, numeric representation,
+and nominal integration step follow the historical generated STM32 C source,
+not a reconstruction from the paper's printed equations.
+
+The core has no knowledge of RoboBeetle Servo IDs, PWM, calibration, shell
+clearance, Protocol V2, Qt, HAL, or interrupts. A separate
+`CPGGaitGenerator` semantic adapter converts four numerical oscillator outputs
+to the current `joint_targets_t` logical-angle contract. `SimpleGaitGenerator`
+remains available as the comparison and rollback baseline.
+
+The approved source/model differences remain documented as unresolved
+paper/source discrepancies. This design does not call the paper wrong and
+does not implement a second paper-faithful production model.
+
+## Evidence and provenance
+
+The formal model evidence is the local thesis PDF:
+
+```text
+D:\RoboBeetle\resource\高新义毕业论文.pdf
+SHA-256: 7DBD3D58AA5BADFD913DD11B34460903C8E68F2DE23E0004D526AFEF8839D265
+```
+
+The numerical and execution-order evidence is the generated source file:
+
+```text
+D:\RoboBeetle\resource\CPG（高新义毕业论文 源代码）\CPG（高新义毕业论文 源代码）\stm32_demo\CPG_RoboBeetle_stm_ert_rtw\CPG_RoboBeetle_stm.c
+SHA-256: 879BD16C8853AA5191953E8598173EB37CE5104870640E9DF04A3ABE4E314BD3
+```
+
+The expected reference directory
+`D:\RoboBeetle\resource\深科毕业论文 源代码` is unavailable. It is recorded
+as **Expected reference source unavailable**, not silently substituted and not
+treated as a blocker for this implementation.
+
+The source uses `real_T`, which is `double` in its `rtwtypes.h`. The new core
+therefore uses `double` for state and model arithmetic so the host golden
+comparison does not introduce an avoidable float-width change.
+
+## Scope and non-goals
+
+In scope:
+
+- a deterministic four-node, HAL-independent CPG core;
+- exact legacy source-compatible numerical golden vectors;
+- a RoboBeetle semantic adapter returning logical centidegree targets;
+- Forward, conservative left/right turn modulation, ASCEND/DESCEND FrontAxis
+  bias, and STOP behavior through the existing generator interface;
+- preservation of current MotionManager ownership, transitions, safety, and
+  operational envelope behavior;
+- host tests, firmware build registration, and source-grounded documentation.
+
+Out of scope:
+
+- a paper-faithful CPG implementation;
+- changing Protocol V2 or adding a runtime backend selector;
+- Qt CPG/Simple selectors, beta sliders, frequency sliders, or phase-matrix
+  editors;
+- true Backward gait, phase-inverted reverse motion, or a sign-inverted fake
+  reverse mode;
+- closed-loop sensory feedback, IMU/depth/PID/ROS2 control, or water
+  propulsion claims;
+- ServoCalibration, raw PWM, shell-clearance constants, or SafetySupervisor
+  changes.
+
+## Architecture and data flow
+
+The production path is:
+
+```text
+app_main backend selection
+        |
+        v
+gait_generator_t
+        |
+        +--> CPGGaitGenerator --> Legacy Source-Compatible CPG v1
+        |                              |
+        +--> SimpleGaitGenerator       v
+                              LogicalJointTargets (joint_targets_t)
+                                      |
+                                      v
+                         MotionManager common guard
+                                      |
+                                      v
+                                  ServoService
+                                      |
+                                      v
+                              ServoCalibration / PWM
+```
+
+`MotionManager` continues to own start, mode transition, graceful STOP, the
+750 ms transition ownership, immediate abort, and the common rear operational
+envelope. CPG output is never applied directly to a timer compare register.
+
+`app_main` will initialize both generator objects and pass the selected
+interface to the existing `MotionManager`. The compile-time default is CPG for
+this feature branch. A single documented compile-time configuration value can
+select SimpleGait for A/B comparison or rollback; no protocol or Qt surface is
+added for this choice. Existing direct SimpleGait tests remain unchanged.
+
+The existing `gait_generator_ops_t` is sufficient. CPG uses its `advance`,
+`sample`, `is_mode_valid`, and diagnostic-count callbacks without adding Servo
+or application dependencies to the core.
+
+## Legacy Source-Compatible CPG v1 core
+
+### State and parameters
+
+The core stores four numerical oscillator slots in historical source order,
+but calls them only `legacy_node[0..3]`; these names carry no historical Servo
+ID meaning. Each node stores:
+
+- phase `phi_i` in radians;
+- amplitude state `r_i` and derivative `r_dot_i` in logical degrees;
+- offset state `x_i` and derivative `x_dot_i` in logical degrees per second;
+- the current target amplitude `R_i` and target offset `X_i`;
+- the source output-memory value `theta_i` in logical degrees.
+
+Each directed source coupling slot stores the target phase state and its
+derivative. The centralized model profile stores `beta_i`, `T_i`, `k_v_i`,
+`a_i`, `b_i`, `c_ij`, `w_ij`, desired phase `DeltaPhi_ij`, target amplitudes,
+target offsets, and the fixed integration step.
+
+Units are explicit:
+
+| Quantity | Unit |
+| --- | --- |
+| `phi`, phase coupling, desired phase | radian |
+| `r`, `x`, target amplitude, target offset, raw output | logical degree |
+| `T` | second |
+| `nu` | Hz |
+| `a`, `b`, `c`, `k_v` | source model gain units |
+| `joint_targets_t` | signed centidegree |
+| nominal integration step | second, `0.01` |
+
+The production default profile uses the source-compatible formula and
+parameter layout. The golden fixture explicitly uses the historical source
+initialization: `beta_i=0.75`, `T_i=1.0 s`, and `ampli_i=30 logical degrees`.
+The bench profile keeps front and rear nominal amplitudes as separate
+centralized fields and starts both at the same conservative logical amplitude
+of `10 degrees`; this is a neutral bench placeholder, not a verified
+front/rear hydrodynamic ratio. It uses `T=2.0 s` (`0.5 Hz`) and does not use
+the paper's `45 degrees` / `1.3 Hz` example as a default.
+
+### Equations and source choices
+
+The core implements the source-compatible form of the following model:
+
+```text
+nu_i = [ (2*beta_i - 1)
+          / (2*beta_i*(1 - beta_i)*(exp(-k_v_i*theta_dot_i) + 1))
+          + 1/(2*beta_i) ] / T_i
+
+r_ddot_i = a_i * [ (a_i/4)*(R_i - r_i) - r_dot_i ]
+x_ddot_i = b_i * [ (b_i/4)*(X_i - x_i) - x_dot_i ]
+
+DeltaPhi_t_ddot_ij = c_ij * [ (c_ij/4)*(DeltaPhi_ij - DeltaPhi_t_ij)
+                              - DeltaPhi_t_dot_ij ]
+
+phi_dot_i = 2*pi*nu_i
+            + sum_j w_ij*sin(phi_j - phi_i - DeltaPhi_t_ij)
+
+theta_i = x_i + r_i*sin(phi_i)
+```
+
+The implementation follows the historical generated source's actual
+three-neighbor coupling slots and source constants. It does not infer a new
+coupling graph from the paper image.
+
+For reproducibility, the source-compatible baseline parameters are recorded
+here in the generated source's flattened slot order:
+
+```text
+k_v       = [1, 1, 1, 1]
+beta      = [0.75, 0.75, 0.75, 0.75]
+T         = [1, 1, 1, 1] seconds
+ampli     = [30, 30, 30, 30] logical degrees
+X         = [0, 0, 0, 0] logical degrees
+DeltaPhi  = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] radians
+w         = [2, 2, 0, 2, 0, 2, 2, 0, 2, 0, 2, 2]
+c         = [20, 20, 0, 20, 0, 20, 20, 0, 20, 0, 20, 20]
+a         = 20 for every oscillator
+b         = 20 for every oscillator
+dt        = 0.01 seconds
+```
+
+The zero entries in the flattened `w` and `c` arrays are retained as source
+slot values; their slot ordering is not reinterpreted as a current logical
+joint order. For the historical Forward initialization (`gait=1`), the
+source target assignment is:
+
+```text
+R_source = [-ampli[0], +ampli[1], +ampli[2], -ampli[3]]
+```
+
+The production bench profile changes only the centralized target-amplitude
+and period values for conservative operation; it does not change the model
+equations, source slot topology, beta term, or integrator.
+
+The source's `Def_pa` behavior for the Forward baseline produces the signed
+target pattern `[-R_0, +R_1, +R_2, -R_3]`, with zero desired phase. The core
+keeps that signed-amplitude behavior. A negative target amplitude therefore
+acts as an equivalent `pi` output phase inversion for the periodic output; it
+is not a Servo direction or PWM convention.
+
+Each source-compatible step uses Forward Euler at `0.01 s`. The generated
+source updates the output-memory values before writing the Euler-updated
+states. The new core preserves that order and exposes both the source-emitted
+raw output and the post-step internal state so golden vectors can distinguish
+them rather than silently shifting the comparison by one sample.
+
+### Elapsed-time catch-up
+
+`MotionManager` continues to pass the wrap-safe actual elapsed wall time. The
+CPG adapter never assumes that one foreground call equals 10 ms.
+
+The adapter accumulates elapsed milliseconds and advances the core in 10 ms
+Euler substeps. A remainder below 10 ms is retained for the next call. This
+gives exact source behavior at nominal cadence while preserving elapsed-time
+semantics for 20/70/100 ms foreground gaps.
+
+To make extreme gaps bounded and deterministic, one `advance` call processes
+at most `100` source substeps (`1.0 s`). Excess elapsed time is discarded after
+the cap and increments the CPG catch-up diagnostic counter; it is not allowed
+to create an unbounded loop. Under the existing 500 ms heartbeat timeout,
+normal active Motion processing should fail-safe before this defensive cap is
+needed for a live actuator path. The behavior is still directly unit tested.
+
+## RoboBeetle semantic adapter
+
+The adapter is the only layer that assigns numerical outputs to current
+logical joints. It does not claim that historical `CPG_1` through `CPG_4`
+were physically wired as current Servo IDs.
+
+The approved semantic topology is:
+
+- FrontRight and FrontLeft share phase;
+- RearRight and RearLeft share phase;
+- the Front pair and Rear pair are approximately `pi` apart;
+- the front/rear amplitude ratio is unknown;
+- both front and rear pair strokes are retained as the Forward bench
+  candidate.
+
+The adapter uses an explicit semantic table over anonymous legacy slots:
+
+```text
+FrontRight <- legacy_node[0]
+FrontLeft  <- legacy_node[3]
+RearRight  <- legacy_node[1]
+RearLeft   <- legacy_node[2]
+```
+
+This groups the source signed-amplitude pattern's two negative nodes as the
+Front pair and its two positive nodes as the Rear pair. The table is an
+adapter policy derived from the confirmed current topology, not a historical
+Servo mapping. The mapping is covered by tests using effective phase
+(`phi + pi` when the signed amplitude is negative) and logical output values.
+
+The adapter's profiles are:
+
+| Mode | Paddle targets | Turn behavior | FrontAxis |
+| --- | --- | --- | --- |
+| STOP | zero logical output | none | zero |
+| FORWARD | conservative front/rear nominal amplitudes | none | zero |
+| TURN_LEFT | same topology | reduce left pair to 50% | zero |
+| TURN_RIGHT | same topology | reduce right pair to 50% | zero |
+| ASCEND | Forward paddle topology | none | `+1000 cdeg * bias_scale` |
+| DESCEND | Forward paddle topology | none | `-1000 cdeg * bias_scale` |
+| BACKWARD | invalid | not implemented | not applicable |
+
+Turn is implemented by changing the target amplitude vector in the semantic
+profile. The core contains no `TURN_LEFT` or `TURN_RIGHT` branch. Front/rear
+phase topology and the signed source convention remain unchanged.
+
+`FrontAxis` is a profile bias only; it is not a fifth oscillator. ASCEND and
+DESCEND remain `Bench Provisional / Pending Water Verification`.
+
+The adapter rounds raw logical degrees to signed centidegrees when constructing
+`joint_targets_t`. It does not clamp rear targets. Rear targets then pass
+through the existing MotionManager common sanitizer (`-3000..+4500 cdeg`) and
+the existing ServoService logical-angle and calibration checks.
+
+## Mode, reset, and ownership semantics
+
+The protocol and `motion_mode_t` values remain unchanged. `BACKWARD` remains
+wire-compatible but is rejected by the CPG generator, so no phase shift or
+sign inversion is presented as reverse locomotion.
+
+Reset and lifecycle behavior is:
+
+1. Generator initialization and explicit test reset zero all phase, amplitude,
+   offset, derivative, output-memory, and elapsed-remainder state. It installs
+   the centralized profile parameters and starts with zero current output.
+2. `MOTION_START` does not reset the oscillator. The existing MotionManager
+   cross-fades from the recorded logical pose over 750 ms while CPG state stays
+   continuous.
+3. Graceful STOP does not advance the CPG while MotionManager owns the
+   750 ms output ramp. The core phase and amplitude state remain available for
+   a later explicit restart; MotionManager still writes the final all-zero
+   logical target and releases ownership only at the existing deadline.
+4. A new START after STOP or a safety fault preserves oscillator continuity;
+   reconnect never auto-resumes because that remains a MotionManager and
+   SafetySupervisor rule. A full generator reinitialization is the only normal
+   reset to phase zero.
+5. A running mode transition preserves phase. The semantic profile changes
+   target amplitude, the core's amplitude dynamics respond smoothly, and
+   MotionManager blends the old and new logical target vectors over 750 ms.
+
+The adapter may update the requested profile during `sample`; the next
+elapsed-time advance integrates toward that target. This intentional one
+nominal-step command latency avoids an instantaneous amplitude jump and is
+covered by the target-change tests.
+
+## Paper/source discrepancy record
+
+The following are unresolved paper/source discrepancies. The engineering
+choice for this PR is Legacy Source-Compatible CPG v1 in every case.
+
+| Topic | Paper evidence | Legacy source evidence | PR choice | Status |
+| --- | --- | --- | --- | --- |
+| Nonlinear beta term | Eq. 4-1 prints `2*beta_i*(2*beta_i-1)` | generated C evaluates `2*Beta[i]*(1-Beta[i])` | source term | Unresolved paper/source discrepancy |
+| Beta initialization | Table 4-2 shows `beta=[0.5,0.5,0.5,0.5]` | `CPG_RoboBeetle_stm_initialize()` sets every `Beta[i]=0.75` | `0.75` | Unresolved paper/source discrepancy |
+| Integrator | thesis text describes fourth-order Runge-Kutta in Simulink | generated embedded C uses fixed Forward Euler updates with `0.01` | Forward Euler `0.01 s` | Unresolved paper/source discrepancy |
+
+Future paper-faithful equations, Euler/RK4 comparison, beta comparison, and
+closed-loop sensory feedback are documented as research interfaces only. They
+are not compiled into this PR's production path.
+
+## Verification design
+
+### Independent numerical golden
+
+The golden fixture is created from the historical STM32 C algorithm behavior
+before or independently of the new production implementation. Tests must not
+generate expected data by calling the new core and then compare it to itself.
+
+The source-compatible golden test executable is named
+`cpg_legacy_source_compatible_tests`, and its test names include
+`legacy_source_compatible`. It covers the exact observation times:
+
+```text
+0, 0.01, 0.1, 0.5, 1.0, 2.0, 5.0 seconds
+```
+
+For all four oscillator slots, each observation records and compares:
+
+- post-step internal phase/state;
+- amplitude state and derivative;
+- target amplitude;
+- `beta`;
+- source-emitted raw oscillator output;
+- output-memory ordering at the first sample.
+
+The frozen fixture records the historical source path and SHA-256 above. Its
+tolerance is explicit and appropriate for the source's `double` host
+arithmetic; no tolerance is used to hide a state-order or sign-convention
+error.
+
+Additional source-compatible scenarios cover:
+
+- cold start from all-zero state;
+- target amplitude change from 10 to 20 logical degrees;
+- frequency/period change;
+- signed target amplitude and equivalent phase inversion;
+- reset and replay determinism.
+
+### Core properties
+
+Host tests cover beta `.75` behavior, finite/no-NaN/no-Infinity state,
+amplitude convergence, phase/frequency behavior, long-run boundedness,
+deterministic fixed-step catch-up, remainder retention, and the 100-substep
+maximum-gap policy.
+
+### Adapter and integration
+
+Adapter tests cover:
+
+- FrontRight/FrontLeft effective phase equality;
+- RearRight/RearLeft effective phase equality;
+- Front/Rear effective phase difference of approximately `pi`;
+- signed logical centidegree targets and no PWM dependency;
+- Forward and conservative turn asymmetry;
+- FrontAxis-only ASCEND/DESCEND bias;
+- STOP output and BACKWARD rejection.
+
+Motion integration tests cover CPG Forward start, 750 ms graceful STOP,
+mode transition continuity, turn target asymmetry, downstream rear envelope
+clamping, Disable All immediate takeover, and reconnect without auto-resume.
+The existing firmware host regression suite remains mandatory.
+
+The firmware CMake target and host PowerShell test runner will register the new
+core and adapter sources/tests. Qt configure/build and ARM cross-build results
+will be reported separately from host evidence; unavailable toolchains are not
+represented as passing.
+
+## Documentation and review closeout
+
+The implementation documentation will use the full name **Legacy
+Source-Compatible CPG v1** wherever the model is discussed. It will preserve
+the core/adapter/target/safety diagram, exact units and equations, source
+provenance, discrepancy table, reset semantics, golden-vector provenance,
+SimpleGait comparison boundary, and verified versus pending water behavior.
+
+The PR will be pushed as a new PR targeting `main` and will not be merged.
+Final closeout must report the exact branch, baseline, commit SHA, changed
+files, `git diff --check`, host/Qt/ARM verification boundaries, PR state, and
+the explicit handoff line:
+
+```text
+READY FOR EXTERNAL GITHUB REVIEW
+```
