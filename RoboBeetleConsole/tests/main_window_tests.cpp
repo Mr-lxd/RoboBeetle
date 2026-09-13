@@ -231,47 +231,56 @@ void testMotionPanelLifecycleAndManualArbitration()
         return;
     }
 
-    QComboBox *modeCombo = panel->findChild<QComboBox *>();
-    QPushButton *startButton = buttonWithText(panel, QStringLiteral("Start"));
+    expect(panel->findChild<QComboBox *>() == nullptr,
+           "Motion panel must use direct mode buttons instead of a combo");
+    QPushButton *forwardButton = buttonWithText(panel, QStringLiteral("Forward"));
+    QPushButton *backwardButton = buttonWithText(panel, QStringLiteral("Backward (Pending)"));
+    QPushButton *turnLeftButton = buttonWithText(panel, QStringLiteral("Turn Left"));
+    QPushButton *turnRightButton = buttonWithText(panel, QStringLiteral("Turn Right"));
+    QPushButton *ascendButton = buttonWithText(panel, QStringLiteral("Ascend"));
+    QPushButton *descendButton = buttonWithText(panel, QStringLiteral("Descend"));
     QPushButton *stopButton = buttonWithText(panel, QStringLiteral("Stop"));
-    expect(modeCombo != nullptr,
-           "Motion panel must expose a mode combo");
-    expect(startButton != nullptr && stopButton != nullptr,
-           "Motion panel must expose Start and Stop buttons");
-    if (modeCombo == nullptr || startButton == nullptr || stopButton == nullptr) {
+    expect(forwardButton != nullptr && backwardButton != nullptr
+               && turnLeftButton != nullptr && turnRightButton != nullptr
+               && ascendButton != nullptr && descendButton != nullptr
+               && stopButton != nullptr,
+           "Motion panel must expose direct Forward/Backward/Turn/Axis/Stop buttons");
+    if (forwardButton == nullptr || backwardButton == nullptr
+        || turnLeftButton == nullptr || turnRightButton == nullptr
+        || ascendButton == nullptr || descendButton == nullptr
+        || stopButton == nullptr) {
         return;
     }
 
-    const QStringList expectedModes = {
-        QStringLiteral("STOP"),
-        QStringLiteral("FORWARD"),
-        QStringLiteral("BACKWARD"),
-        QStringLiteral("TURN_LEFT"),
-        QStringLiteral("TURN_RIGHT"),
-        QStringLiteral("ASCEND"),
-        QStringLiteral("DESCEND"),
-    };
-    expect(modeCombo->count() == expectedModes.size(),
-           "Motion panel must list exactly the seven documented modes");
-    for (int index = 0; index < modeCombo->count()
-         && index < expectedModes.size(); ++index) {
-        expect(modeCombo->itemText(index) == expectedModes.at(index),
-               "Motion mode labels must retain the Protocol enum order");
-    }
     expect(hasLabelText(panel, QStringLiteral("Stopped")),
            "Motion panel must start with Stopped status");
-    expect(!startButton->isEnabled() && !stopButton->isEnabled(),
+    expect(!forwardButton->isEnabled() && !turnLeftButton->isEnabled()
+               && !turnRightButton->isEnabled() && !ascendButton->isEnabled()
+               && !descendButton->isEnabled() && !stopButton->isEnabled(),
            "Motion controls must be disabled while disconnected");
+    expect(!backwardButton->isEnabled()
+               && backwardButton->toolTip().contains(QStringLiteral("Pending")),
+           "Backward must remain disabled and visibly Pending");
 
     enablePaddles(transport, controller);
-    modeCombo->setCurrentIndex(static_cast<int>(rb::MotionMode::Forward));
-    expect(startButton->isEnabled(),
-           "Forward Start should enable after required paddle ACKs");
-    startButton->click();
+    expect(forwardButton->isEnabled() && turnLeftButton->isEnabled()
+               && turnRightButton->isEnabled()
+               && !ascendButton->isEnabled() && !descendButton->isEnabled(),
+           "paddle-only setup should enable horizontal Motion buttons only");
+    expect(controller.enableServo(rb::ServoId::FrontAxis),
+           "direct Motion UI setup should enable FrontAxis for vertical modes");
+    acknowledgeLast(transport);
+    expect(ascendButton->isEnabled() && descendButton->isEnabled(),
+           "Ascend and Descend should enable after FrontAxis ACK");
+    expect(!backwardButton->isEnabled(),
+           "Backward must remain disabled after the link is ready");
+    expect(buttonWithText(&window, QStringLiteral("Release PWM")) != nullptr,
+           "enabled individual Servo controls must use Release PWM semantics");
+    forwardButton->click();
     acknowledgeLast(transport);
     expect(controller.motionState() == rb::MotionState::Running,
-           "Motion panel Start should reach Running after ACK");
-    expect(hasLabelText(panel, QStringLiteral("Running FORWARD")),
+           "direct Forward button should reach Running after ACK");
+    expect(hasLabelText(panel, QStringLiteral("Running — Forward")),
            "Motion panel should display the running mode");
 
     for (QPushButton *button : window.findChildren<QPushButton *>()) {

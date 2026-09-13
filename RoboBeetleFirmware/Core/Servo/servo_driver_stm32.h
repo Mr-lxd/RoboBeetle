@@ -18,6 +18,9 @@ typedef struct
 typedef struct
 {
     servo_driver_stm32_binding_t bindings[SERVO_DESCRIPTOR_COUNT];
+    volatile uint16_t active_mask;
+    volatile uint16_t stop_pending_mask;
+    volatile uint32_t safe_stop_finalization_count;
 } servo_driver_stm32_t;
 
 void servo_driver_stm32_init(
@@ -28,6 +31,17 @@ void servo_driver_stm32_init(
 const servo_driver_stm32_binding_t *servo_driver_stm32_binding_for_id(
     const servo_driver_stm32_t *driver,
     uint8_t servo_id);
+
+uint16_t servo_driver_stm32_stop_pending_mask(
+    const servo_driver_stm32_t *driver);
+
+uint32_t servo_driver_stm32_safe_stop_finalization_count(
+    const servo_driver_stm32_t *driver);
+
+void servo_driver_stm32_handle_timer_compare(
+    servo_driver_stm32_t *driver,
+    TIM_HandleTypeDef *timer,
+    uint32_t hal_active_channel);
 
 const servo_service_driver_ops_t *servo_driver_stm32_ops(void);
 

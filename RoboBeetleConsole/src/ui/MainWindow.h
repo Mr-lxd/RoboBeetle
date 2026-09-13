@@ -5,6 +5,7 @@
 #include <QMainWindow>
 
 #include <array>
+#include <cstddef>
 
 class QCloseEvent;
 class QComboBox;
@@ -51,8 +52,7 @@ private:
     QPushButton *connectButton_{nullptr};
     QLabel *connectionStatus_{nullptr};
     QLabel *leakStatus_{nullptr};
-    QComboBox *motionModeCombo_{nullptr};
-    QPushButton *motionStartButton_{nullptr};
+    std::array<QPushButton *, static_cast<std::size_t>(MotionMode::Count)> motionButtons_{};
     QPushButton *motionStopButton_{nullptr};
     QLabel *motionStatus_{nullptr};
     QLabel *imuStatus_{nullptr};

@@ -53,9 +53,10 @@ static void test_modes_and_stop(void)
 
     for (int mode = MOTION_STOP; mode < MOTION_COUNT; ++mode)
     {
-        expect(simple_gait_generator_is_mode_valid(
-                   (motion_mode_t)mode),
-               "every documented Motion mode should be valid");
+        const motion_mode_t candidate = (motion_mode_t)mode;
+        const bool expected_valid = candidate != MOTION_BACKWARD;
+        expect(simple_gait_generator_is_mode_valid(candidate) == expected_valid,
+               "only the bench-supported Motion modes should be generator-valid");
     }
 
     (void)memset(&targets, 0xA5, sizeof(targets));
@@ -104,32 +105,22 @@ static void test_forward_phase_relation_and_determinism(void)
            "same phase and profile should produce deterministic targets");
 }
 
-static void test_backward_is_logical_stroke_inversion(void)
+static void test_backward_is_reserved_pending(void)
 {
     simple_gait_generator_t generator;
-    joint_targets_t forward;
     joint_targets_t backward;
 
     simple_gait_generator_init(&generator);
     simple_gait_generator_advance(&generator, 500U);
-    (void)simple_gait_generator_sample(
-        &generator,
-        MOTION_FORWARD,
-        1.0F,
-        1.0F,
-        &forward);
-    (void)simple_gait_generator_sample(
+    expect(!simple_gait_generator_is_mode_valid(MOTION_BACKWARD),
+           "BACKWARD must remain protocol-compatible but generator-unavailable");
+    expect(!simple_gait_generator_sample(
         &generator,
         MOTION_BACKWARD,
         1.0F,
         1.0F,
-        &backward);
-
-    expect(backward.front_right_cdeg == -forward.front_right_cdeg &&
-               backward.front_left_cdeg == -forward.front_left_cdeg &&
-               backward.rear_right_cdeg == -forward.rear_right_cdeg &&
-               backward.rear_left_cdeg == -forward.rear_left_cdeg,
-           "BACKWARD should invert the logical paddle stroke candidate");
+        &backward),
+           "BACKWARD must not emit a fake sign-inverted gait candidate");
 }
 
 static void test_turn_scales_and_axis_bias(void)
@@ -222,7 +213,7 @@ int main(void)
 {
     test_modes_and_stop();
     test_forward_phase_relation_and_determinism();
-    test_backward_is_logical_stroke_inversion();
+    test_backward_is_reserved_pending();
     test_turn_scales_and_axis_bias();
     test_phase_step();
     test_sample_preserves_logical_targets_for_common_guard();

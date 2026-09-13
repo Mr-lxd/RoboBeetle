@@ -98,7 +98,34 @@ The Console can parse payloads of at least five bytes, validates both the reques
 servo_mask  uint16 LE
 ```
 
-Mask assignments are the frozen five semantic bits from the PR #13 descriptor contract above. Firmware and Console use `SUPPORTED_SERVO_MASK = 0x001F`. A zero mask returns `InvalidPayload`; any bit outside `0x001F` returns `UnsupportedServo` and performs no partial action. Multi-bit Enable is all-or-nothing: requested channels that were already enabled are skipped without pulse write/start/stop, and if a newly requested channel fails to start, only channels newly started by that call are rolled back while the pre-call logical and physical state is preserved. Disable and Disable All retain fail-closed/best-effort stop semantics. While a Disable is pending for a servo, the Console Controller rejects PWM, Neutral, and Set Angle before wire encoding or host-link queueing. Neutral otherwise requires a live host and enabled selected channels, writes each descriptor's final calibrated neutral pulse (`FrontRight 1450`, `FrontLeft 1580`, `FrontAxis 1745`, `RearRight 1570`, `RearLeft 1450 μs`), and returns `OK`.
+Mask assignments are the frozen five semantic bits from the PR #13 descriptor contract above. Firmware and Console use `SUPPORTED_SERVO_MASK = 0x001F`. A zero mask returns `InvalidPayload`; any bit outside `0x001F` returns `UnsupportedServo` and performs no partial action. Multi-bit Enable is all-or-nothing: requested channels that were already enabled are skipped without pulse write/start/stop, and if a newly requested channel fails to start, only channels newly started by that call are rolled back while the pre-call logical and physical state is preserved. Disable and Disable All retain fail-closed/best-effort stop semantics, clear logical ownership immediately, and never insert a Neutral write. While a channel's physical safe-stop is pending, the Console Controller rejects PWM, Neutral, Set Angle, and Enable before wire encoding or host-link queueing. Neutral otherwise requires a live host and enabled selected channels, writes each descriptor's final calibrated neutral pulse (`FrontRight 1450`, `FrontLeft 1580`, `FrontAxis 1745`, `RearRight 1570`, `RearLeft 1450 μs`), and returns `OK`.
+
+#### PWM Disable safe-stop
+
+TIM3/TIM4 use PWM mode 1, active-high, up-counting output compare. For a
+channel-local Disable, `CNT >= CCR` means the falling edge has already occurred
+and the HAL PWM channel may be stopped immediately. If `CNT < CCR`, Firmware
+clears the stale `CCxIF`, records a per-channel pending-stop bit, enables only
+that channel's `CCxIE`, keeps `CCxE` active, and rechecks `CNT`/`CCR`/`CCxIF`
+after arming. The existing HAL timer IRQ clears the compare flag and invokes
+the callback after the falling edge; the callback then finalizes that channel
+through `HAL_TIM_PWM_Stop()` so HAL channel state remains consistent. A race
+may emit one additional complete legal pulse, but never a truncated pulse.
+
+Pending-stop ownership rejects SetAngle, ApplyPWM, Motion writes, and Enable
+with `Busy=7`; repeated Disable is idempotent. TIM3/TIM4 channels are finalized
+independently. This HAL only disables the shared timer counter after all of its
+output channels are disabled, so stopping one channel does not stop another.
+With the current `PSC=15`, `ARR=3002`, and 1 μs timer tick, the PWM period is
+3003 ticks (about 3 ms / 333 Hz); the physical shutdown bound is at most one
+PWM frame plus ISR latency, not the separate 750 ms graceful Motion STOP.
+Safety ownership is cleared immediately and SafetySupervisor never waits for
+the graceful ramp.
+
+Host tests cover the decision/state policy only. Physical no-jump Disable
+remains `Pending Hardware Re-verification`; optional logic-analyzer or
+oscilloscope verification must show a final complete legal pulse or a stop
+after entry into the LOW window, with no runt pulse.
 
 ### LeakStatus — `0x20`
 
@@ -278,9 +305,11 @@ action  uint8
 
 The stable mode order is `STOP=0`, `FORWARD=1`, `BACKWARD=2`, `TURN_LEFT=3`,
 `TURN_RIGHT=4`, `ASCEND=5`, `DESCEND=6`; `COUNT=7` is a sentinel and is not
-sent. `START=1` is valid only for modes 1–6. Ordinary STOP uses
-`mode=STOP, action=STOP=0` and is accepted without waiting for the neutral
-transition.
+sent. `START=1` is currently accepted for `FORWARD`, `TURN_LEFT`, `TURN_RIGHT`,
+`ASCEND`, and `DESCEND`. `BACKWARD` remains enum/protocol-compatible but is
+Pending bench verification: the generator and Qt UI reject it as a startable
+mode. Ordinary STOP uses `mode=STOP, action=STOP=0` and is accepted without
+waiting for the neutral transition.
 
 The Firmware ACK is acceptance-level: successful START enters `RUNNING`, while
 successful STOP enters `MOTION_STOPPING` and retains Motion ownership. A

@@ -60,13 +60,13 @@ QString formatTemperature(qint16 temperatureCentiC)
 QString motionModeText(MotionMode mode)
 {
     switch (mode) {
-    case MotionMode::Stop: return QStringLiteral("STOP");
-    case MotionMode::Forward: return QStringLiteral("FORWARD");
-    case MotionMode::Backward: return QStringLiteral("BACKWARD");
-    case MotionMode::TurnLeft: return QStringLiteral("TURN_LEFT");
-    case MotionMode::TurnRight: return QStringLiteral("TURN_RIGHT");
-    case MotionMode::Ascend: return QStringLiteral("ASCEND");
-    case MotionMode::Descend: return QStringLiteral("DESCEND");
+    case MotionMode::Stop: return QStringLiteral("Stop");
+    case MotionMode::Forward: return QStringLiteral("Forward");
+    case MotionMode::Backward: return QStringLiteral("Backward (Pending)");
+    case MotionMode::TurnLeft: return QStringLiteral("Turn Left");
+    case MotionMode::TurnRight: return QStringLiteral("Turn Right");
+    case MotionMode::Ascend: return QStringLiteral("Ascend");
+    case MotionMode::Descend: return QStringLiteral("Descend");
     case MotionMode::Count: break;
     }
     return QStringLiteral("UNKNOWN");
@@ -118,6 +118,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
         }
         Q_UNUSED(enabled);
         refreshServoUi(index);
+        refreshMotionUi();
     });
     connect(controller_, &RobotController::servoDisablePendingChanged,
             this, [this](int index, bool) {
@@ -125,6 +126,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
             return;
         }
         refreshServoUi(index);
+        refreshMotionUi();
     });
     connect(controller_, &RobotController::motionStateChanged,
             this, [this](MotionState, MotionMode) {
@@ -231,7 +233,9 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     pwmSliders_[index]->setValue(descriptor == nullptr ? 0 : descriptor->neutralPwmUs);
     pwmSpins_[index]->setEnabled(supported);
     pwmSliders_[index]->setEnabled(supported);
-    enableButtons_[index] = new QPushButton(QStringLiteral("Enable"), box);
+    enableButtons_[index] = new QPushButton(QStringLiteral("Enable PWM"), box);
+    enableButtons_[index]->setToolTip(QStringLiteral(
+        "Enable PWM drive and hold the calibrated neutral position."));
     neutralButtons_[index] = new QPushButton(
         descriptor != nullptr && descriptor->calibrationPending
             ? QStringLiteral("Center %1 us — Provisional").arg(descriptor->neutralPwmUs)
@@ -339,9 +343,7 @@ QWidget *MainWindow::createMotionPanel()
 {
     auto *box = new QGroupBox(QStringLiteral("Motion / Gait — Bench"), this);
     auto *layout = new QGridLayout(box);
-    motionModeCombo_ = new QComboBox(box);
     const MotionMode modes[] = {
-        MotionMode::Stop,
         MotionMode::Forward,
         MotionMode::Backward,
         MotionMode::TurnLeft,
@@ -349,12 +351,28 @@ QWidget *MainWindow::createMotionPanel()
         MotionMode::Ascend,
         MotionMode::Descend,
     };
-    for (const MotionMode mode : modes) {
-        motionModeCombo_->addItem(
-            motionModeText(mode),
-            static_cast<int>(mode));
+    const int modeCount = static_cast<int>(sizeof(modes) / sizeof(modes[0]));
+    for (int index = 0; index < modeCount; ++index) {
+        const MotionMode mode = modes[index];
+        motionButtons_[static_cast<std::size_t>(mode)] = new QPushButton(
+            motionModeText(mode), box);
+        if (mode == MotionMode::Backward) {
+            motionButtons_[static_cast<std::size_t>(mode)]->setEnabled(false);
+            motionButtons_[static_cast<std::size_t>(mode)]->setToolTip(
+                QStringLiteral("Pending water-tank verification; no BACKWARD START is emitted."));
+        }
+        connect(motionButtons_[static_cast<std::size_t>(mode)],
+                &QPushButton::clicked,
+                this,
+                [this, mode] {
+                    controller_->startMotion(mode);
+                    refreshMotionUi();
+                });
+        layout->addWidget(
+            motionButtons_[static_cast<std::size_t>(mode)],
+            index / 3,
+            index % 3);
     }
-    motionStartButton_ = new QPushButton(QStringLiteral("Start"), box);
     motionStopButton_ = new QPushButton(QStringLiteral("Stop"), box);
     motionStatus_ = new QLabel(QStringLiteral("Stopped"), box);
     auto *provisional = new QLabel(
@@ -362,22 +380,11 @@ QWidget *MainWindow::createMotionPanel()
         box);
     provisional->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
 
-    layout->addWidget(new QLabel(QStringLiteral("Mode"), box), 0, 0);
-    layout->addWidget(motionModeCombo_, 0, 1);
-    layout->addWidget(motionStartButton_, 0, 2);
-    layout->addWidget(motionStopButton_, 0, 3);
-    layout->addWidget(new QLabel(QStringLiteral("Status"), box), 1, 0);
-    layout->addWidget(motionStatus_, 1, 1, 1, 3);
-    layout->addWidget(provisional, 2, 0, 1, 4);
+    layout->addWidget(motionStopButton_, 2, 0);
+    layout->addWidget(new QLabel(QStringLiteral("Status"), box), 2, 1);
+    layout->addWidget(motionStatus_, 2, 2);
+    layout->addWidget(provisional, 3, 0, 1, 3);
 
-    connect(motionModeCombo_, qOverload<int>(&QComboBox::currentIndexChanged),
-            this, [this](int) { refreshMotionUi(); });
-    connect(motionStartButton_, &QPushButton::clicked, this, [this] {
-        const MotionMode mode = static_cast<MotionMode>(
-            motionModeCombo_->currentData().toInt());
-        controller_->startMotion(mode);
-        refreshMotionUi();
-    });
     connect(motionStopButton_, &QPushButton::clicked, this, [this] {
         controller_->stopMotion();
         refreshMotionUi();
@@ -632,7 +639,14 @@ void MainWindow::refreshServoUi(int index)
     const bool enabled = controller_->isServoEnabled(id);
     const bool pendingDisable = controller_->isServoDisablePending(id);
     const bool motionActive = controller_->isMotionActive();
-    enableButtons_[index]->setText(enabled ? QStringLiteral("Disable") : QStringLiteral("Enable"));
+    enableButtons_[index]->setText(enabled
+                                       ? QStringLiteral("Release PWM")
+                                       : QStringLiteral("Enable PWM"));
+    enableButtons_[index]->setToolTip(enabled
+                                          ? QStringLiteral(
+                                                "Release PWM: stop PWM drive without sending Neutral; the servo is no longer actively held.")
+                                          : QStringLiteral(
+                                                "Enable PWM drive and hold the calibrated neutral position."));
     enableButtons_[index]->setEnabled(connected && supported && !motionActive);
     neutralButtons_[index]->setEnabled(connected && supported && enabled
                                        && !pendingDisable && !motionActive);
@@ -675,20 +689,17 @@ void MainWindow::setAngleUiEnabled(int index, bool enabled)
 
 void MainWindow::refreshMotionUi()
 {
-    if (motionModeCombo_ == nullptr || motionStartButton_ == nullptr
-        || motionStopButton_ == nullptr || motionStatus_ == nullptr) {
+    if (motionStopButton_ == nullptr || motionStatus_ == nullptr) {
         return;
     }
 
     const MotionState state = controller_->motionState();
-    const MotionMode selectedMode = static_cast<MotionMode>(
-        motionModeCombo_->currentData().toInt());
     switch (state) {
     case MotionState::Stopped:
         motionStatus_->setText(QStringLiteral("Stopped"));
         break;
     case MotionState::Running:
-        motionStatus_->setText(QStringLiteral("Running %1")
+        motionStatus_->setText(QStringLiteral("Running — %1")
                                    .arg(motionModeText(controller_->motionMode())));
         break;
     case MotionState::Stopping:
@@ -700,11 +711,18 @@ void MainWindow::refreshMotionUi()
     }
 
     const bool connected = controller_->isConnected();
-    motionModeCombo_->setEnabled(connected && state != MotionState::Stopping);
-    motionStartButton_->setEnabled(
-        connected && selectedMode != MotionMode::Stop
-        && state != MotionState::Stopping
-        && controller_->isMotionReady(selectedMode));
+    const bool transitioning = controller_->isMotionTransitioning();
+    for (int index = 0; index < static_cast<int>(motionButtons_.size()); ++index) {
+        QPushButton *button = motionButtons_[static_cast<std::size_t>(index)];
+        if (button == nullptr) {
+            continue;
+        }
+        const MotionMode mode = static_cast<MotionMode>(index);
+        const bool pendingMode = mode == MotionMode::Backward;
+        button->setEnabled(
+            !pendingMode && connected && state != MotionState::Stopping
+            && !transitioning && controller_->isMotionReady(mode));
+    }
     motionStopButton_->setEnabled(connected && controller_->isMotionActive());
 }
 

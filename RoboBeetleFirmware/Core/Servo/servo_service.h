@@ -35,6 +35,10 @@ typedef struct
     void (*stop)(
         void *context,
         uint8_t servo_id);
+    /* Optional physical-state query used to block re-enable during safe stop. */
+    bool (*is_stop_pending)(
+        void *context,
+        uint8_t servo_id);
 } servo_service_driver_ops_t;
 
 typedef struct

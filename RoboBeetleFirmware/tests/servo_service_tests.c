@@ -30,6 +30,7 @@ typedef struct
     unsigned int write_calls;
     uint16_t last_pulse;
     uint16_t current_pulse[SERVO_DESCRIPTOR_COUNT];
+    uint16_t stop_pending_mask;
 } fake_driver_t;
 
 static void record_event(
@@ -87,10 +88,20 @@ static void fake_stop(
     record_event(driver, 'T', servo_id, 0U);
 }
 
+static bool fake_is_stop_pending(
+    void *context,
+    uint8_t servo_id)
+{
+    const fake_driver_t *driver = (const fake_driver_t *)context;
+
+    return (driver->stop_pending_mask & (uint16_t)(1U << servo_id)) != 0U;
+}
+
 static const servo_service_driver_ops_t fake_ops = {
     .write_pulse_us = fake_write_pulse,
     .start = fake_start,
     .stop = fake_stop,
+    .is_stop_pending = fake_is_stop_pending,
 };
 
 static void init_service(
@@ -416,6 +427,75 @@ static void test_neutral_disable_and_disable_all(void)
            "Disable All should stop RearLeft");
 }
 
+static void test_enable_is_busy_while_physical_stop_is_pending(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+
+    init_service(&service, &driver);
+    driver.stop_pending_mask = (uint16_t)(1U << SERVO_ID_FRONT_RIGHT);
+
+    expect(servo_service_enable(
+               &service,
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT)) ==
+               SERVO_SERVICE_RESULT_BUSY,
+           "Enable must be BUSY until a pending physical stop is finalized");
+    expect(driver.write_calls == 0U && driver.start_calls == 0U,
+           "pending Enable must not rewrite neutral or restart the channel");
+    expect(servo_service_enabled_mask(&service) == 0U,
+           "pending Enable must not claim the channel logically");
+}
+
+static void test_manual_commands_are_busy_while_physical_stop_is_pending(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+    const uint16_t front_right_mask =
+        (uint16_t)(1U << SERVO_ID_FRONT_RIGHT);
+
+    init_service(&service, &driver);
+    expect(servo_service_enable(&service, front_right_mask) ==
+               SERVO_SERVICE_RESULT_OK,
+           "pending command setup should enable FrontRight");
+    driver.stop_pending_mask = front_right_mask;
+
+    expect(servo_service_set_pwm(&service, SERVO_ID_FRONT_RIGHT, 1500U) ==
+               SERVO_SERVICE_RESULT_BUSY,
+           "ApplyPWM must be BUSY while the physical channel is pending stop");
+    expect(servo_service_set_angle(&service, SERVO_ID_FRONT_RIGHT, 0) ==
+               SERVO_SERVICE_RESULT_BUSY,
+           "SetAngle must be BUSY while the physical channel is pending stop");
+    expect(servo_service_neutral(&service, front_right_mask) ==
+               SERVO_SERVICE_RESULT_BUSY,
+           "Neutral must be BUSY while the physical channel is pending stop");
+}
+
+static void test_motion_write_is_blocked_while_physical_stop_is_pending(void)
+{
+    fake_driver_t driver;
+    servo_service_t service;
+    const uint16_t front_right_mask =
+        (uint16_t)(1U << SERVO_ID_FRONT_RIGHT);
+
+    init_service(&service, &driver);
+    expect(servo_service_enable(&service, front_right_mask) ==
+               SERVO_SERVICE_RESULT_OK,
+           "motion pending-stop setup should enable FrontRight");
+    expect(servo_service_motion_begin(&service, front_right_mask) ==
+               SERVO_SERVICE_RESULT_OK,
+           "motion pending-stop setup should acquire FrontRight");
+    driver.stop_pending_mask = front_right_mask;
+    const unsigned int writes_before = driver.write_calls;
+
+    expect(servo_service_set_angle_from_motion(
+               &service,
+               SERVO_ID_FRONT_RIGHT,
+               1000) == SERVO_SERVICE_RESULT_BUSY,
+           "Motion angle writes must be BUSY while physical stop is pending");
+    expect(driver.write_calls == writes_before,
+           "pending Motion writes must not reach the driver");
+}
+
 static void test_motion_owner_arbitrates_manual_writes(void)
 {
     fake_driver_t driver;
@@ -604,6 +684,9 @@ int main(void)
     test_multi_enable_rolls_back_on_start_failure();
     test_command_ranges_and_capabilities();
     test_unenabled_and_invalid_commands();
+    test_enable_is_busy_while_physical_stop_is_pending();
+    test_manual_commands_are_busy_while_physical_stop_is_pending();
+    test_motion_write_is_blocked_while_physical_stop_is_pending();
     test_neutral_disable_and_disable_all();
     test_motion_owner_arbitrates_manual_writes();
     test_motion_begin_requires_enabled_channels_and_abort_releases();

@@ -35,6 +35,7 @@ $cases = @(
     @{ Name = 'ring_buffer_tests'; Sources = @('tests/ring_buffer_tests.c', 'Core/Communication/ring_buffer.c'); Link = @() },
     @{ Name = 'servo_descriptor_tests'; Sources = @('tests/servo_descriptor_tests.c', 'Core/Servo/servo_descriptor.c'); Link = @() },
     @{ Name = 'servo_calibration_tests'; Sources = @('tests/servo_calibration_tests.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c'); Link = @() },
+    @{ Name = 'servo_pwm_stop_policy_tests'; Sources = @('tests/servo_pwm_stop_policy_tests.c', 'Core/Servo/servo_pwm_stop_policy.c'); Link = @() },
     @{ Name = 'servo_service_tests'; Sources = @('tests/servo_service_tests.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c'); Link = @() },
     @{ Name = 'safety_supervisor_tests'; Sources = @('tests/safety_supervisor_tests.c', 'Core/Safety/safety_supervisor.c'); Link = @() },
     @{ Name = 'leak_sensor_tests'; Sources = @('tests/leak_sensor_tests.c', 'Core/Sensors/leak_sensor.c', 'Core/Sensors/leak_telemetry_policy.c'); Link = @() },
@@ -46,7 +47,7 @@ $cases = @(
     @{ Name = 'telemetry_scheduler_tests'; Sources = @('tests/telemetry_scheduler_tests.c', 'Core/Communication/imu_telemetry_policy.c', 'Core/Communication/telemetry_scheduler.c'); Link = @() },
     @{ Name = 'depth_parser_tests'; Sources = @('tests/depth_parser_tests.c', 'Core/Sensors/depth_parser.c'); Link = @() },
     @{ Name = 'depth_telemetry_tests'; Sources = @('tests/depth_telemetry_tests.c', 'Core/Communication/depth_telemetry.c'); Link = @() },
-    @{ Name = 'servo_driver_stm32_tests'; Sources = @('tests/servo_driver_stm32_tests.c', 'Core/Servo/servo_driver_stm32.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c'); Link = @(); Extra = $halWarningArgs },
+    @{ Name = 'servo_driver_stm32_tests'; Sources = @('tests/servo_driver_stm32_tests.c', 'Core/Servo/servo_driver_stm32.c', 'Core/Servo/servo_pwm_stop_policy.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c'); Link = @(); Extra = $halWarningArgs },
     @{ Name = 'jy901s_transport_stm32_tests'; Sources = @('tests/jy901s_transport_stm32_tests.c', 'Core/Communication/jy901s_transport_stm32.c', 'Core/Communication/ring_buffer.c'); Link = @(); Extra = $halWarningArgs },
     @{ Name = 'depth_transport_stm32_tests'; Sources = @('tests/depth_transport_stm32_tests.c', 'Core/Communication/depth_transport_stm32.c', 'Core/Communication/ring_buffer.c'); Link = @(); Extra = $halWarningArgs },
     @{ Name = 'app_main_depth_telemetry_tests'; Sources = @(
@@ -73,6 +74,7 @@ $cases = @(
         'Core/Servo/servo_descriptor.c',
         'Core/Servo/servo_service.c',
         'Core/Servo/servo_driver_stm32.c',
+        'Core/Servo/servo_pwm_stop_policy.c',
         'Core/Safety/safety_supervisor.c'
     ); Link = @('-lm'); Extra = $halWarningArgs }
 )

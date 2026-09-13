@@ -33,6 +33,16 @@ static bool servo_service_motion_owner(
     return service->owner == SERVO_SERVICE_OWNER_MOTION;
 }
 
+static bool servo_service_stop_pending(
+    const servo_service_t *service,
+    uint8_t servo_id)
+{
+    return (service->driver_ops->is_stop_pending != NULL) &&
+           service->driver_ops->is_stop_pending(
+               service->driver_context,
+               servo_id);
+}
+
 void servo_service_init(
     servo_service_t *service,
     const servo_service_driver_ops_t *driver_ops,
@@ -90,6 +100,24 @@ servo_service_result_t servo_service_enable(
     if (mask_result != SERVO_SERVICE_RESULT_OK)
     {
         return mask_result;
+    }
+
+    if (service->driver_ops->is_stop_pending != NULL)
+    {
+        for (size_t index = 0U; index < servo_descriptor_count(); ++index)
+        {
+            const servo_descriptor_t *descriptor =
+                &servo_descriptor_table()[index];
+
+            if (((mask & descriptor->mask) != 0U) &&
+                ((original_mask & descriptor->mask) == 0U) &&
+                service->driver_ops->is_stop_pending(
+                    service->driver_context,
+                    descriptor->id))
+            {
+                return SERVO_SERVICE_RESULT_BUSY;
+            }
+        }
     }
 
     for (size_t index = 0U; index < servo_descriptor_count(); ++index)
@@ -296,6 +324,11 @@ servo_service_result_t servo_service_set_pwm(
         return SERVO_SERVICE_RESULT_UNSUPPORTED_SERVO;
     }
 
+    if (servo_service_stop_pending(service, descriptor->id))
+    {
+        return SERVO_SERVICE_RESULT_BUSY;
+    }
+
     if (!servo_service_is_enabled(service, descriptor))
     {
         return SERVO_SERVICE_RESULT_SERVO_NOT_ENABLED;
@@ -334,6 +367,11 @@ servo_service_result_t servo_service_set_angle(
     if ((descriptor == NULL) || !descriptor->angle_supported)
     {
         return SERVO_SERVICE_RESULT_UNSUPPORTED_SERVO;
+    }
+
+    if (servo_service_stop_pending(service, descriptor->id))
+    {
+        return SERVO_SERVICE_RESULT_BUSY;
     }
 
     if (!servo_service_is_enabled(service, descriptor))
@@ -377,6 +415,11 @@ servo_service_result_t servo_service_set_angle_from_motion(
     if ((descriptor == NULL) || !descriptor->angle_supported)
     {
         return SERVO_SERVICE_RESULT_UNSUPPORTED_SERVO;
+    }
+
+    if (servo_service_stop_pending(service, descriptor->id))
+    {
+        return SERVO_SERVICE_RESULT_BUSY;
     }
 
     if (!servo_service_is_enabled(service, descriptor))
@@ -424,6 +467,18 @@ servo_service_result_t servo_service_neutral(
     if ((service->enabled_mask & mask) != mask)
     {
         return SERVO_SERVICE_RESULT_SERVO_NOT_ENABLED;
+    }
+
+    for (size_t index = 0U; index < servo_descriptor_count(); ++index)
+    {
+        const servo_descriptor_t *descriptor =
+            &servo_descriptor_table()[index];
+
+        if (((mask & descriptor->mask) != 0U) &&
+            servo_service_stop_pending(service, descriptor->id))
+        {
+            return SERVO_SERVICE_RESULT_BUSY;
+        }
     }
 
     for (size_t index = 0U; index < servo_descriptor_count(); ++index)

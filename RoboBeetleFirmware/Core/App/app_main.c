@@ -85,6 +85,20 @@ static void app_main_apply_safety_stop(void)
         &protocol_dispatcher);
 }
 
+/*
+ * HAL_TIM_IRQHandler clears the CC flag and invokes this callback after the
+ * PWM1 compare/falling edge.  Keep the callback at the driver boundary: the
+ * ISR performs only the pending-channel finalizer and never enters Motion or
+ * Safety state machines.
+ */
+void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    servo_driver_stm32_handle_timer_compare(
+        &servo_driver,
+        htim,
+        htim == NULL ? 0U : htim->Channel);
+}
+
 static void protocol_feed_byte(
     uint8_t byte)
 {

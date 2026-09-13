@@ -104,6 +104,10 @@ public:
     [[nodiscard]] MotionMode motionMode() const { return motionMode_; }
     [[nodiscard]] bool isMotionActive() const;
     [[nodiscard]] bool isMotionReady(MotionMode mode) const;
+    [[nodiscard]] bool isMotionTransitioning() const
+    {
+        return motionModeTransitionTimer_.isActive();
+    }
     [[nodiscard]] qsizetype queuedCommandCount() const
     {
         return commandQueue_.size() + priorityCommandQueue_.size()

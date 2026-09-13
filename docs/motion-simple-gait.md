@@ -22,11 +22,15 @@ The stable mode order is:
 4 TURN_RIGHT 5 ASCEND      6 DESCEND     7 COUNT (sentinel)
 ```
 
-`START` accepts modes 1–6. `STOP` uses mode 0 and action `STOP`. A successful
-STOP ACK means that the stop request was accepted and the Firmware has entered
-`MOTION_STOPPING`; it does not mean that all targets are already neutral. The
-existing successful-request duplicate cache applies to `0x15`, so a retry of
-the same sequence/type replays the ACK without repeating the state transition.
+`STOP` uses mode 0 and action `STOP`. The current bench SimpleGait implementation
+accepts `FORWARD`, `TURN_LEFT`, `TURN_RIGHT`, `ASCEND`, and `DESCEND` for
+`START`. `BACKWARD` remains in the enum and wire schema for compatibility, but
+is reserved pending bench/water verification; the Firmware generator rejects it
+and the Qt Console does not emit it. A successful STOP ACK means that the stop
+request was accepted and the Firmware has entered `MOTION_STOPPING`; it does
+not mean that all targets are already neutral. The existing successful-request
+duplicate cache applies to `0x15`, so a retry of the same sequence/type replays
+the ACK without repeating the state transition.
 
 ACK result `BUSY=7` is appended after the existing frozen result values 0–6;
 the existing numeric meanings are unchanged.
@@ -96,6 +100,52 @@ ownership is released, actuators are disabled by the safety caller, and a later
 heartbeat/reconnect never resumes the old mode. An explicit re-enable and new
 Motion START are required.
 
+## PWM Disable safe-stop
+
+`Neutral` and `Disable` have deliberately different meanings:
+
+- `Neutral` keeps PWM drive enabled, writes the descriptor's legal calibrated
+  neutral pulse, and records logical `0 degrees`.
+- `Disable` and `Disable All` do not write Neutral. They clear logical actuator
+  ownership immediately and stop PWM drive through the channel-local safe-stop
+  path. A channel that is already stopped makes repeated Disable a no-op.
+
+TIM3/TIM4 are configured as PWM mode 1, active-high, up-counting timers with
+`PSC=15`, `ARR=3002`, and a 1 microsecond timer tick. The resulting period is
+`ARR+1 = 3003` ticks, approximately 3 ms / 333 Hz. For an enabled channel,
+`CNT >= CCR` means the falling edge has already occurred and Disable can finish
+immediately. When `CNT < CCR`, the driver clears the stale `CCxIF`, publishes a
+per-channel `stop_pending` bit, enables that channel's `CCxIE`, and leaves
+`CCxE` enabled. It rechecks `CNT`, `CCR`, and `CCxIF` after arming so a compare
+edge during the arm sequence cannot cause an unnecessary full-frame wait. The
+HAL compare callback runs after HAL clears the flag; only then does the driver
+call the existing `HAL_TIM_PWM_Stop()` finalizer.
+
+The finalizer preserves HAL `ChannelState` and disables only the selected
+channel. The STM32 HAL used here gates its `__HAL_TIM_DISABLE()` operation on
+all `CCxE/CCxNE` outputs being clear, so a shared TIM3/TIM4 counter continues
+for other enabled channels. `stop_pending` is per semantic channel: SetAngle,
+ApplyPWM, Motion writes, and Enable are rejected/BUSY until its finalizer runs;
+Motion cannot rewrite that channel and Enable cannot race a pending stop.
+Disable All arms each channel independently and does not insert a Neutral write.
+
+This physical safe-stop wait is bounded by at most one complete PWM frame plus
+compare-ISR service time: approximately 3 ms plus ISR latency in the current
+configuration. It is a frame-level electrical edge guarantee, not the separate
+750 ms graceful Motion STOP transition. Safety ownership and the high-level
+Motion/Safety state change immediately; a safety event interrupts any graceful
+ramp and never waits 750 ms for logical target interpolation.
+
+Host tests verify this decision/state policy and the one-frame bound, not the
+physical waveform. The remaining evidence is explicitly:
+`Physical no-jump Disable: Pending Hardware Re-verification`.
+The planned bench checks are: (A) Enable → SetAngle → individual Release PWM;
+(B) repeat A several times; (C) Motion → Stop → Disable All; and (D)
+simultaneous multi-channel Enable → Disable All. A logic analyzer or oscilloscope is an
+optional root-cause confirmation: before the fix, inspect whether the last HIGH
+pulse was truncated; after the fix, the last pulse must be either complete or
+already in its LOW window when output is disabled. No runt pulse is acceptable.
+
 ## Bench-provisional gait profile
 
 `SimpleGaitGenerator` emits five semantic logical targets in this order:
@@ -105,12 +155,15 @@ FrontRight, FrontLeft, FrontAxis, RearRight, RearLeft
 ```
 
 The current table-driven provisional profile uses 0.5 Hz, 1000 cdeg paddle
-amplitude, a π front/rear phase relation, 50% amplitude on the reduced side for
-turning, backward stroke-sign inversion, and ±1000 cdeg FrontAxis bias for
-ASCEND/DESCEND candidates. Paddle modes drive the four paddles; ASCEND and
-DESCEND require all five enabled channels. Rear operational output is clamped
-to −3000…+4500 cdeg with a diagnostic counter. These values are bring-up
-parameters, not hydrodynamic or water-tested calibration.
+amplitude, a π front/rear phase relation, same-phase front and rear pairs,
+50% amplitude on the reduced side for turning, and ±1000 cdeg FrontAxis bias
+for ASCEND/DESCEND candidates. `FORWARD` keeps the approved front/rear
+approximately 180° phase relation; the larger rear paddle area is a mechanical
+fact only and does not establish a front/rear amplitude ratio. `BACKWARD` has no
+SimpleGait profile and remains Pending. Paddle modes drive the four paddles;
+ASCEND and DESCEND require all five enabled channels. Rear operational output
+is clamped to −3000…+4500 cdeg with a diagnostic counter. These values are
+bring-up parameters, not hydrodynamic or water-tested calibration.
 
 The target path is intentionally explicit:
 
@@ -160,7 +213,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
   -File .\RoboBeetleFirmware\tests\run_host_tests.ps1
 ```
 
-The runner compiles and executes 19 Firmware test programs with C11,
+The runner compiles and executes 20 Firmware test programs with C11,
 `-Wall -Wextra -Werror`, and a separate `app_main_jy901s_api` compile
 contract. Motion-specific assertions cover:
 
@@ -180,6 +233,9 @@ contract. Motion-specific assertions cover:
 - manual Servo `BUSY` arbitration during STOPPING;
 - old/new ownership union through an acknowledged mode transition;
 - immediate Disable All and heartbeat/liveness takeover;
+- PWM1 safe-stop decisions at `CNT == CCR`, `CNT > CCR`, and `CNT < CCR`,
+  stale-flag clearing/recheck policy, per-channel pending ownership, one-frame
+  latency bound, shared-timer independence, and no Neutral write on Disable All;
 - no auto-resume after interrupted stop;
 - idempotent STOP while already STOPPED;
 - exact `0x15` payload, duplicate replay, invalid-payload rejection, and

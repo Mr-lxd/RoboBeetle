@@ -67,6 +67,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Servo/servo_descriptor.c
     Core/Servo/servo_service.c
     Core/Servo/servo_driver_stm32.c
+    Core/Servo/servo_pwm_stop_policy.c
     Core/Safety/safety_supervisor.c
 )
 

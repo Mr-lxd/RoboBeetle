@@ -12,7 +12,6 @@ typedef struct
     float left_scale;
     float right_scale;
     float rear_phase_offset_rad;
-    float stroke_sign;
 } simple_profile_t;
 
 static const simple_profile_t profiles[MOTION_COUNT] = {
@@ -22,7 +21,6 @@ static const simple_profile_t profiles[MOTION_COUNT] = {
         .left_scale = 0.0F,
         .right_scale = 0.0F,
         .rear_phase_offset_rad = 0.0F,
-        .stroke_sign = 0.0F,
     },
     [MOTION_FORWARD] = {
         .paddle_amplitude_cdeg = MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG,
@@ -30,15 +28,6 @@ static const simple_profile_t profiles[MOTION_COUNT] = {
         .left_scale = 1.0F,
         .right_scale = 1.0F,
         .rear_phase_offset_rad = MOTION_PI_F,
-        .stroke_sign = 1.0F,
-    },
-    [MOTION_BACKWARD] = {
-        .paddle_amplitude_cdeg = MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG,
-        .front_axis_bias_cdeg = 0.0F,
-        .left_scale = 1.0F,
-        .right_scale = 1.0F,
-        .rear_phase_offset_rad = MOTION_PI_F,
-        .stroke_sign = -1.0F,
     },
     [MOTION_TURN_LEFT] = {
         .paddle_amplitude_cdeg = MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG,
@@ -46,7 +35,6 @@ static const simple_profile_t profiles[MOTION_COUNT] = {
         .left_scale = MOTION_PROFILE_TURN_REDUCED_SIDE_SCALE,
         .right_scale = 1.0F,
         .rear_phase_offset_rad = MOTION_PI_F,
-        .stroke_sign = 1.0F,
     },
     [MOTION_TURN_RIGHT] = {
         .paddle_amplitude_cdeg = MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG,
@@ -54,7 +42,6 @@ static const simple_profile_t profiles[MOTION_COUNT] = {
         .left_scale = 1.0F,
         .right_scale = MOTION_PROFILE_TURN_REDUCED_SIDE_SCALE,
         .rear_phase_offset_rad = MOTION_PI_F,
-        .stroke_sign = 1.0F,
     },
     [MOTION_ASCEND] = {
         .paddle_amplitude_cdeg = MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG,
@@ -62,7 +49,6 @@ static const simple_profile_t profiles[MOTION_COUNT] = {
         .left_scale = 1.0F,
         .right_scale = 1.0F,
         .rear_phase_offset_rad = MOTION_PI_F,
-        .stroke_sign = 1.0F,
     },
     [MOTION_DESCEND] = {
         .paddle_amplitude_cdeg = MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG,
@@ -70,7 +56,6 @@ static const simple_profile_t profiles[MOTION_COUNT] = {
         .left_scale = 1.0F,
         .right_scale = 1.0F,
         .rear_phase_offset_rad = MOTION_PI_F,
-        .stroke_sign = 1.0F,
     },
 };
 
@@ -88,7 +73,7 @@ static int32_t paddle_target(
 {
     const float wave = sinf(phase_rad + phase_offset_rad);
     return rounded_cdeg(
-        profile->stroke_sign * profile->paddle_amplitude_cdeg *
+        profile->paddle_amplitude_cdeg *
         side_scale * amplitude_scale * wave);
 }
 
@@ -225,7 +210,7 @@ bool simple_gait_generator_sample(
 bool simple_gait_generator_is_mode_valid(
     motion_mode_t mode)
 {
-    return motion_mode_is_valid(mode);
+    return motion_mode_is_valid(mode) && (mode != MOTION_BACKWARD);
 }
 
 float simple_gait_generator_phase(

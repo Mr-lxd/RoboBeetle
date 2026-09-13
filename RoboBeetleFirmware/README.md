@@ -48,8 +48,12 @@ calibration remain outside this feature.
 
 Protocol V2 `SetMotionMode` (`0x15`) uses the exact three-byte payload
 `schema=1, mode, action`. The stable mode order is `STOP`, `FORWARD`,
-`BACKWARD`, `TURN_LEFT`, `TURN_RIGHT`, `ASCEND`, `DESCEND`; `START` is accepted
-for the six non-STOP modes and `STOP` uses the STOP mode plus STOP action.
+`BACKWARD`, `TURN_LEFT`, `TURN_RIGHT`, `ASCEND`, `DESCEND`; `STOP` uses the
+STOP mode plus STOP action. The wire enum keeps `BACKWARD` for compatibility,
+but the current bench SimpleGait implementation accepts `FORWARD`,
+`TURN_LEFT`, `TURN_RIGHT`, `ASCEND`, and `DESCEND` only. `BACKWARD` is reserved
+pending bench/water verification and is rejected by the generator and Qt
+Console.
 
 Ordinary STOP is graceful: the dispatcher returns its successful ACK when the
 stop request is accepted, `MotionManager` enters `MOTION_STOPPING`, and the
@@ -82,6 +86,32 @@ invent a new leak safety policy. Interrupted Motion never auto-resumes after
 heartbeat recovery or reconnect; explicit Servo re-enable and a new START are
 required. See the full contract and host commands in
 [`../docs/motion-simple-gait.md`](../docs/motion-simple-gait.md).
+
+### PWM Disable safe-stop — [Implemented / Host-Tested]
+
+`Neutral` continues legal calibrated PWM output and records logical `0 degrees`.
+`Disable` and `Disable All` stop PWM drive without writing Neutral; logical
+ownership and Motion/Safety ownership are cleared immediately. On TIM3/TIM4,
+PWM mode 1 is active-high and up-counting. When `CNT >= CCR`, the channel is
+already in its LOW window and can stop immediately. When `CNT < CCR`, the
+driver clears stale `CCxIF`, marks only that channel `stop_pending`, enables
+`CCxIE`, retains `CCxE`, and rechecks the counter/compare/flag before waiting
+for the hardware compare edge. The existing HAL compare callback then performs
+the final `HAL_TIM_PWM_Stop()` after the falling edge, preserving HAL channel
+state. The HAL's `__HAL_TIM_DISABLE()` keeps a shared timer counter running
+while any other `CCxE/CCxNE` output remains enabled, so stopping one channel
+does not stop its siblings.
+
+Pending-stop channels reject SetAngle, ApplyPWM, Motion writes, and Enable with
+`BUSY`; repeated Disable is idempotent. At the current `PSC=15`, `ARR=3002`,
+1 microsecond-tick configuration, the physical shutdown wait is at most one
+complete approximately 3 ms PWM frame plus compare-ISR latency, not the
+separate 750 ms graceful Motion STOP. Safety events interrupt graceful Motion
+immediately and may use only this frame-level safe edge for physical shutdown.
+Host tests prove the decision/state policy, not waveform behavior. The current
+hardware evidence remains `Physical no-jump Disable: Pending Hardware
+Re-verification`; an optional logic-analyzer check must find a complete final
+pulse or a stop already in the LOW window, never a runt pulse.
 
 Enable accepts a multi-bit mask only with all-or-nothing semantics. Requested channels already present in the pre-call enabled mask are idempotent and receive no pulse write, start, or stop. If any newly requested channel fails to start, only channels newly started by that call are stopped and the pre-call enabled state—including the physical pulse of an already-running channel—is preserved. Disable and Disable All retain fail-closed/best-effort stop behavior.
 
@@ -606,7 +636,7 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Motion, Servo, Safety, and Sensors modules and their include directories. The reproducible Firmware host gate is `powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run_host_tests.ps1` from `RoboBeetleFirmware`; it compiles and runs all 19 executable test sources, including the SimpleGait, MotionManager, and Motion-aware Protocol Dispatcher coverage, plus the separate `app_main_jy901s_api.c` compile contract. The runner uses C11, `-Wall -Wextra -Werror`, host HAL stubs where required, and `-lm` for the deterministic sine gait. These host checks complement, but do not replace, the real ARM target build.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Motion, Servo, Safety, and Sensors modules and their include directories. The reproducible Firmware host gate is `powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run_host_tests.ps1` from `RoboBeetleFirmware`; it compiles and runs all 20 executable test sources, including the SimpleGait, MotionManager, Motion-aware Protocol Dispatcher, and PWM safe-stop coverage, plus the separate `app_main_jy901s_api.c` compile contract. The runner uses C11, `-Wall -Wextra -Werror`, host HAL stubs where required, and `-lm` for the deterministic sine gait. These host checks complement, but do not replace, the real ARM target build.
 
 ## App/Main maintainability audit（Historical Reference: PR #6 old image）
 

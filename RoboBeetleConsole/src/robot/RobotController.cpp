@@ -402,7 +402,13 @@ bool RobotController::startMotion(MotionMode mode)
         emit logMessage(QStringLiteral("Motion START rejected: transport is not connected"));
         return false;
     }
-    if (!isValidMotionMode(mode) || mode == MotionMode::Stop) {
+    if (!isValidMotionMode(mode) || mode == MotionMode::Stop
+        || mode == MotionMode::Backward) {
+        if (mode == MotionMode::Backward) {
+            emit logMessage(QStringLiteral(
+                "Motion START rejected: BACKWARD is Pending bench verification"));
+            return false;
+        }
         emit logMessage(QStringLiteral("Motion START rejected: invalid mode"));
         return false;
     }
@@ -416,8 +422,14 @@ bool RobotController::startMotion(MotionMode mode)
         return false;
     }
     if (motionModeTransitionTimer_.isActive()) {
+        if (motionState_ == MotionState::Running && motionMode_ == mode) {
+            return true;
+        }
         emit logMessage(QStringLiteral("Motion START rejected: mode transition in progress (BUSY)"));
         return false;
+    }
+    if (motionState_ == MotionState::Running && motionMode_ == mode) {
+        return true;
     }
     if (!isMotionReady(mode)) {
         emit logMessage(QStringLiteral("Motion START rejected: required Servo channels are not enabled"));
@@ -477,7 +489,8 @@ bool RobotController::isMotionActive() const
 
 bool RobotController::isMotionReady(MotionMode mode) const
 {
-    if (!isConnected() || !isValidMotionMode(mode) || mode == MotionMode::Stop) {
+    if (!isConnected() || !isValidMotionMode(mode) || mode == MotionMode::Stop
+        || mode == MotionMode::Backward) {
         return false;
     }
     const quint16 requiredMask = motionRequiredServoMask(mode);

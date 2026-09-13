@@ -36,10 +36,14 @@ PR #13 evidence is deliberately split: FrontRight `1450/1900 us` are **[Bench Me
 
 The current Motion/simple-gait foundation is documented in
 [`../docs/motion-simple-gait.md`](../docs/motion-simple-gait.md). The Console
-sends `SetMotionMode 0x15`, displays acceptance-time `Running`/`Stopping` and
-the provisional `Stopped` transition, keeps manual Servo controls disabled while
-Motion owns actuators, and leaves global `Disable All` available. Full CPG,
-feedback control, and water-tested gait calibration remain planned.
+sends `SetMotionMode 0x15`, exposes direct Forward / Backward (Pending) / Turn
+Left / Turn Right / Ascend / Descend / Stop buttons, displays
+acceptance-time `Running`/`Stopping` and the provisional `Stopped` transition,
+keeps manual Servo controls disabled while Motion owns actuators, and leaves
+global `Disable All` available. `BACKWARD` remains protocol-compatible but is
+not emitted pending bench/water verification. Per-servo UI uses Enable PWM and
+Release PWM semantics; Release PWM does not insert Neutral. Full CPG, feedback
+control, and water-tested gait calibration remain planned.
 
 This is a hardware-layout compatibility break: the historical v0.4 Servo1/PA6 bring-up object was `RearLeft`, while PR #8 formally assigns PA6/ID0 to `FrontRight` and `RearLeft` to PD13/TIM4_CH2. Do not mix pre-PR8 Console/Firmware binaries with the PR8 five-servo wiring. PR #13 software verification covers the final descriptor and controller contract; target hardware regression for the new descriptor values remains pending.
 
@@ -257,12 +261,12 @@ QApplication
 | Connect / Disconnect | [Implemented] | Connect opens the selected serial port. Disconnect first sends unacknowledged Disable All, then flushes/closes the port. |
 | Heartbeat | [Hardware Verified] host-link policy / target timing [Provisional] | DirectUart sends every 100 ms. The legacy-named Apc220HalfDuplex policy sends a fresh heartbeat immediately after `Connected`, gates user commands until a matching successful ACK, then targets a 250 ms cadence when the stop-and-wait slot is free; due ticks coalesce while a heartbeat is in flight. The current bench transport is DAP UART/COM13/USART1. |
 | ACK / retry / timeout | [Hardware Verified] host-link policy / timing [Provisional] | DirectUart tracks multiple requests; the legacy-named Apc220HalfDuplex policy allows one ACK-requiring request in flight, queues up to `kApc220CommandQueueCapacity` user commands, prioritizes due heartbeat over ordinary command retry, and retries the identical frame at the profile timeout. The current bench transport is DAP UART/COM13/USART1. |
-| Servo Enable / Disable | [Implemented] | UI logical enable changes only after a matching successful ACK. |
+| Servo Enable / Release PWM | [Implemented] | `Enable PWM` changes to `Release PWM` after a matching successful ACK. Release PWM requests Disable and does not insert Neutral; logical UI state changes only after the matching ACK. |
 | Disable All | [Implemented] | Sends the current supported mask `0x001F` for all five semantic channels. |
 | Neutral | [Implemented] | Sends `0x14` with the selected semantic servo mask after Enable ACK and with no pending Disable; FrontAxis/Depth uses Neutral `1745 us`. |
 | Apply PWM | [Implemented] | Explicit button; slider movement alone does not transmit. Requires successful Enable ACK, no pending Disable, and descriptor command-range validation. |
 | Set Angle | [Implemented] | All five angle-capable semantic servos use descriptor-specific input ranges and 0.1° steps; Qt converts to signed cdeg and calls `RobotController::setServoAngle()`. The control requires connection, support, Enable ACK, and no pending Disable request; FrontAxis/Depth is limited to `-90 to +90 degrees`. |
-| Motion / Gait — Bench | [Implemented / Provisional] | Sends exact Protocol V2 `0x15` Start/Stop payloads, reports `Running`, acceptance-time `Stopping`, timer-estimated `Stopped`, or `Faulted`, blocks manual actuator commands while Motion is active or unresolved, supersedes stale queued/in-flight Motion work on STOP, and keeps global Disable All available. The 0.5 Hz / 10° gait profile and 750 ms transition remain provisional. |
+| Motion / Gait — Bench | [Implemented / Provisional] | Direct Forward / Turn / Ascend / Descend / Stop buttons send exact Protocol V2 `0x15` Start/Stop payloads; Backward remains visibly Pending and emits no START. Reports `Running`, acceptance-time `Stopping`, timer-estimated `Stopped`, or `Faulted`, blocks manual actuator commands while Motion is active or unresolved, supersedes stale queued/in-flight Motion work on STOP, and keeps global Disable All available. The 0.5 Hz / 10° gait profile and 750 ms transition remain provisional. |
 | Leak status | [Hardware Verified] | Displays `Leak: Unknown`, `Leak: Dry`, or `LEAK DETECTED` from Protocol V2 `0x20`; disconnect, host-link liveness loss, invalid payload, and stale telemetry return it to Unknown. Monitoring-only; no Servo/Safety action. |
 | JY901S IMU monitor | [Implemented] / physical data [Hardware Verified] | Displays `IMU — JY901S` status, valid fixed-point Acc/Gyro/Angle domains, and diagnostics from Protocol V2 `0x21`; Unknown/invalid/Stale/liveness loss clear values. Read-only; no 3D/history/control/configuration. |
 | ROVMAKER depth monitor | [Hardware Verified] with stable connection | Displays `Depth Sensor — ROVMAKER` lifecycle, validity-gated depth/temperature, sample age, and parser/transport diagnostics from Protocol V2 `0x22`. Read-only; no decoder configuration or control action. Connector robustness and calibration remain pending. |

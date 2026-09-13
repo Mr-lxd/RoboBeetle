@@ -2386,6 +2386,23 @@ void testMotionStartStopStateAndWireContract()
            "the provisional UI transition should finish at Stopped");
 }
 
+void testBackwardRemainsProtocolCompatibleButIsNotBenchStartable()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+
+    const qsizetype writesBefore = transport.writes().size();
+    expect(!controller.isMotionReady(rb::MotionMode::Backward),
+           "BACKWARD must remain unavailable for the bench UI");
+    expect(!controller.startMotion(rb::MotionMode::Backward),
+           "BACKWARD must not send a fake sign-inverted START");
+    expect(transport.writes().size() == writesBefore,
+           "rejected BACKWARD START must not write a protocol frame");
+}
+
 void testMotionStartSerializesDirectModeChange()
 {
     rb::FakeTransport transport;
@@ -2992,6 +3009,7 @@ int main(int argc, char **argv)
     testApc220QueuedWriteFailureDropsCommandAndClearsDisablePending();
     testApc220WriteErrorResetsWithoutInvalidatingRetryState();
     testMotionStartStopStateAndWireContract();
+    testBackwardRemainsProtocolCompatibleButIsNotBenchStartable();
     testMotionStartSerializesDirectModeChange();
     testMotionStartSerializesApc220ModeChange();
     testMotionStopSupersedesInFlightDirectStart();
