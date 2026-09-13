@@ -23,6 +23,15 @@ void appendLe16(QByteArray &data, quint16 value)
     data.append(static_cast<char>((value >> 8U) & 0xffU));
 }
 
+QByteArray motionPayload(MotionMode mode, MotionAction action)
+{
+    QByteArray payload;
+    payload.append(static_cast<char>(1));
+    payload.append(static_cast<char>(mode));
+    payload.append(static_cast<char>(action));
+    return payload;
+}
+
 QString ackResultText(quint8 value)
 {
     switch (static_cast<AckResult>(value)) {
@@ -33,6 +42,7 @@ QString ackResultText(quint8 value)
     case AckResult::ServoNotEnabled: return QStringLiteral("ServoNotEnabled");
     case AckResult::OutOfRange: return QStringLiteral("OutOfRange");
     case AckResult::HardwareFailure: return QStringLiteral("HardwareFailure");
+    case AckResult::Busy: return QStringLiteral("Busy");
     }
     return QStringLiteral("UnknownResult");
 }
@@ -55,6 +65,11 @@ bool isServoActuatorCommand(MessageType type)
         return false;
     }
     return false;
+}
+
+bool isMotionMessage(MessageType type)
+{
+    return type == MessageType::SetMotionMode;
 }
 
 } // namespace
@@ -88,9 +103,15 @@ RobotController::RobotController(ITransport *transport,
     Q_ASSERT(transport_ != nullptr);
     heartbeatTimer_.setInterval(config_.heartbeatIntervalMs);
     retryTimer_.setInterval(qMax(10, config_.ackTimeoutMs / 4));
+    motionStopTimer_.setSingleShot(true);
 
     connect(&heartbeatTimer_, &QTimer::timeout, this, &RobotController::sendHeartbeat);
     connect(&retryTimer_, &QTimer::timeout, this, &RobotController::checkTimeouts);
+    connect(&motionStopTimer_, &QTimer::timeout, this, [this] {
+        if (motionState_ == MotionState::Stopping) {
+            setMotionState(MotionState::Stopped, MotionMode::Stop);
+        }
+    });
     connect(transport_, &ITransport::bytesReceived, this, &RobotController::processIncoming);
     connect(transport_, &ITransport::errorOccurred, this, [this](const QString &message) {
         emit logMessage(QStringLiteral("Transport error: %1").arg(message));
@@ -104,6 +125,7 @@ RobotController::RobotController(ITransport *transport,
         retryTimer_.stop();
         state_ = TransportState::Error;
         resetSchedulerState();
+        failClosedMotionState();
         monitor_.ackStatus = QStringLiteral("Transport error");
         if (wasConnected) {
             emit logMessage(QStringLiteral(
@@ -121,6 +143,7 @@ RobotController::RobotController(ITransport *transport,
         depthMonitor_.handleTransportState(state);
         if (state == TransportState::Connected) {
             resetSchedulerState();
+            setMotionState(MotionState::Stopped, MotionMode::Stop);
             heartbeatReady_ = config_.linkProfile != LinkProfile::Apc220HalfDuplex;
             heartbeatDue_ = config_.linkProfile == LinkProfile::Apc220HalfDuplex;
             nextHeartbeatDueAtMs_ = config_.linkProfile == LinkProfile::Apc220HalfDuplex
@@ -137,6 +160,7 @@ RobotController::RobotController(ITransport *transport,
             heartbeatTimer_.stop();
             retryTimer_.stop();
             resetSchedulerState();
+            failClosedMotionState();
             monitor_.ackStatus = state == TransportState::Error
                 ? QStringLiteral("Transport error")
                 : QStringLiteral("Disconnected");
@@ -171,6 +195,7 @@ void RobotController::connectTransport(const TransportConfiguration &configurati
 void RobotController::disconnectTransport()
 {
     if (isConnected()) {
+        failClosedMotionState();
         const quint16 supportedMask = config_.supportedServoMask;
         const QByteArray payload = maskPayload(supportedMask);
         if (!sendCommand(MessageType::ServoDisable, payload, supportedMask, false)) {
@@ -213,6 +238,7 @@ bool RobotController::disableServo(ServoId id)
     if (markPendingBeforeSend) {
         setDisablePendingMask(static_cast<quint16>(disablePendingMask_ | mask));
     }
+    failClosedMotionState();
     if (!sendCommand(MessageType::ServoDisable, maskPayload(mask), mask)) {
         if (markPendingBeforeSend) {
             setDisablePendingMask(static_cast<quint16>(disablePendingMask_ & ~mask));
@@ -236,6 +262,7 @@ bool RobotController::disableAll()
     if (markPendingBeforeSend) {
         setDisablePendingMask(static_cast<quint16>(disablePendingMask_ | mask));
     }
+    failClosedMotionState();
     if (!sendCommand(MessageType::ServoDisable, maskPayload(mask), mask)) {
         if (markPendingBeforeSend) {
             setDisablePendingMask(static_cast<quint16>(disablePendingMask_ & ~mask));
@@ -250,6 +277,10 @@ bool RobotController::disableAll()
 
 bool RobotController::setServoPwm(ServoId id, quint16 pulseUs)
 {
+    if (isMotionActive()) {
+        emit logMessage(QStringLiteral("Set PWM rejected: Motion owns actuators (BUSY)"));
+        return false;
+    }
     if (rejectUnsupportedServo(id, QStringLiteral("Set PWM"))) {
         return false;
     }
@@ -285,6 +316,10 @@ bool RobotController::setServoPwm(ServoId id, quint16 pulseUs)
 
 bool RobotController::setServoAngle(ServoId id, qint16 angleCentidegrees)
 {
+    if (isMotionActive()) {
+        emit logMessage(QStringLiteral("Set Angle rejected: Motion owns actuators (BUSY)"));
+        return false;
+    }
     if (rejectUnsupportedServo(id, QStringLiteral("Set Angle"))) {
         return false;
     }
@@ -325,6 +360,10 @@ bool RobotController::setServoAngle(ServoId id, qint16 angleCentidegrees)
 
 bool RobotController::neutralServo(ServoId id)
 {
+    if (isMotionActive()) {
+        emit logMessage(QStringLiteral("Neutral rejected: Motion owns actuators (BUSY)"));
+        return false;
+    }
     if (rejectUnsupportedServo(id, QStringLiteral("Neutral"))) {
         return false;
     }
@@ -343,6 +382,65 @@ bool RobotController::neutralServo(ServoId id)
         return false;
     }
     return sendCommand(MessageType::Neutral, maskPayload(servoMask(id)), servoMask(id));
+}
+
+bool RobotController::startMotion(MotionMode mode)
+{
+    if (!isConnected()) {
+        emit logMessage(QStringLiteral("Motion START rejected: transport is not connected"));
+        return false;
+    }
+    if (!isValidMotionMode(mode) || mode == MotionMode::Stop) {
+        emit logMessage(QStringLiteral("Motion START rejected: invalid mode"));
+        return false;
+    }
+    if (motionState_ == MotionState::Stopping) {
+        emit logMessage(QStringLiteral("Motion START rejected: STOPPING (BUSY)"));
+        return false;
+    }
+    if (!isMotionReady(mode)) {
+        emit logMessage(QStringLiteral("Motion START rejected: required Servo channels are not enabled"));
+        return false;
+    }
+
+    return sendCommand(
+        MessageType::SetMotionMode,
+        motionPayload(mode, MotionAction::Start),
+        motionRequiredServoMask(mode),
+        true,
+        MotionRequest{mode, MotionAction::Start});
+}
+
+bool RobotController::stopMotion()
+{
+    if (!isConnected()) {
+        emit logMessage(QStringLiteral("Motion STOP rejected: transport is not connected"));
+        return false;
+    }
+    if (motionState_ == MotionState::Stopping) {
+        return true;
+    }
+    if (motionState_ == MotionState::Stopped || motionState_ == MotionState::Faulted) {
+        return true;
+    }
+
+    return sendCommand(
+        MessageType::SetMotionMode,
+        motionPayload(MotionMode::Stop, MotionAction::Stop),
+        SupportedServoMask,
+        true,
+        MotionRequest{MotionMode::Stop, MotionAction::Stop});
+}
+
+bool RobotController::isMotionReady(MotionMode mode) const
+{
+    if (!isConnected() || !isValidMotionMode(mode) || mode == MotionMode::Stop) {
+        return false;
+    }
+    const quint16 requiredMask = motionRequiredServoMask(mode);
+    return (config_.supportedServoMask & requiredMask) == requiredMask
+        && (enabledMask_ & requiredMask) == requiredMask
+        && (disablePendingMask_ & requiredMask) == 0U;
 }
 
 bool RobotController::isServoEnabled(ServoId id) const
@@ -367,10 +465,16 @@ bool RobotController::isServoSupported(ServoId id) const
 bool RobotController::sendCommand(MessageType type,
                                   const QByteArray &payload,
                                   quint16 affectedMask,
-                                  bool expectAck)
+                                  bool expectAck,
+                                  std::optional<MotionRequest> motionRequest)
 {
     if (!isConnected()) {
         emit logMessage(QStringLiteral("Command rejected: transport is not connected"));
+        return false;
+    }
+
+    if (isMotionActive() && isServoActuatorCommand(type)) {
+        emit logMessage(QStringLiteral("Command rejected: Motion owns actuators (BUSY)"));
         return false;
     }
 
@@ -384,7 +488,7 @@ bool RobotController::sendCommand(MessageType type,
         }
 
         refreshApc220HeartbeatDue();
-        const QueuedCommand command{type, payload, affectedMask};
+        const QueuedCommand command{type, payload, affectedMask, motionRequest};
         const bool isSafetyDisable = type == MessageType::ServoDisable;
         const bool ordinaryAdmissionBlocked = !isSafetyDisable
             && !canStartApc220OrdinaryExchange();
@@ -439,7 +543,9 @@ bool RobotController::sendCommand(MessageType type,
     ++monitor_.txPacketCount;
     emit txHexChanged(QString::fromLatin1(frame.toHex(' ').toUpper()));
     if (expectAck) {
-        pending_.insert(sequence, {sequence, frame, type, affectedMask, nowMs(), 0});
+        pending_.insert(sequence,
+                        {sequence, frame, type, affectedMask, nowMs(), 0,
+                         motionRequest});
         monitor_.ackStatus = QStringLiteral("Waiting for ACK seq=%1").arg(sequence);
     }
     updateMonitor();
@@ -458,7 +564,8 @@ bool RobotController::dispatchApc220Command(const QueuedCommand &command)
     }
 
     pending_.insert(sequence,
-                    {sequence, frame, command.type, command.affectedMask, nowMs(), 0});
+                    {sequence, frame, command.type, command.affectedMask, nowMs(), 0,
+                     command.motionRequest});
     const bool writeSucceeded = transport_->write(frame);
     const bool stillConnected = isConnected();
     if (!writeSucceeded || !stillConnected) {
@@ -898,6 +1005,15 @@ void RobotController::handleAck(const Packet &packet)
     } else if (request->type == MessageType::ServoDisable) {
         clearDisablePending();
         setEnabledMask(static_cast<quint16>(enabledMask_ & ~request->servoMask));
+    } else if (request->type == MessageType::SetMotionMode
+               && request->motionRequest.has_value()) {
+        const MotionRequest motion = *request->motionRequest;
+        if (motion.action == MotionAction::Start) {
+            setMotionState(MotionState::Running, motion.mode);
+        } else {
+            setMotionState(MotionState::Stopping, MotionMode::Stop);
+            motionStopTimer_.start(kMotionTransitionDurationMs);
+        }
     }
     monitor_.ackStatus = QStringLiteral("ACK seq=%1").arg(requestSequence);
     if (config_.linkProfile == LinkProfile::Apc220HalfDuplex) {
@@ -967,7 +1083,7 @@ void RobotController::checkTimeouts()
         if (it->type != MessageType::Heartbeat && !priorityCommandQueue_.isEmpty()) {
             const PendingRequest request = it.value();
             bool supersededByDisable = false;
-            if (isServoActuatorCommand(request.type)) {
+            if (isActuatorCommand(request.type)) {
                 for (const QueuedCommand &priority : priorityCommandQueue_) {
                     if (priority.type == MessageType::ServoDisable
                         && (priority.affectedMask & request.servoMask) != 0U) {
@@ -1017,6 +1133,9 @@ void RobotController::checkTimeouts()
         if (it == pending_.end() || now - it->sentAtMs < config_.ackTimeoutMs) {
             continue;
         }
+        if (it->type == MessageType::Heartbeat) {
+            failClosedMotionState();
+        }
         if (it->retries >= config_.maxRetries) {
             const MessageType timedOutType = it->type;
             if (timedOutType == MessageType::ServoDisable) {
@@ -1056,6 +1175,7 @@ void RobotController::updateMonitor()
 
 void RobotController::resetSchedulerState()
 {
+    motionStopTimer_.stop();
     pending_.clear();
     priorityCommandQueue_.clear();
     commandQueue_.clear();
@@ -1076,7 +1196,7 @@ void RobotController::clearQueuedCommandsForDisable(quint16 affectedMask)
 {
     const auto shouldDrop = [affectedMask](const QueuedCommand &command) {
         return (command.affectedMask & affectedMask) != 0U
-            && isServoActuatorCommand(command.type);
+            && isActuatorCommand(command.type);
     };
 
     QQueue<QueuedCommand> retainedPriority;
@@ -1099,7 +1219,7 @@ void RobotController::clearQueuedCommandsForDisable(quint16 affectedMask)
 
     if (deferredRetry_.has_value()
         && (deferredRetry_->servoMask & affectedMask) != 0U
-        && isServoActuatorCommand(deferredRetry_->type)) {
+        && isActuatorCommand(deferredRetry_->type)) {
         deferredRetry_.reset();
     }
 }
@@ -1114,6 +1234,7 @@ void RobotController::failClosedApc220Actuators()
     setEnabledMask(0);
     setDisablePendingMask(0);
     markApc220LivenessLost();
+    failClosedMotionState();
     if (firstFailClosed) {
         emit logMessage(QStringLiteral(
             "Conservative host-link liveness lost; logical Servo state and stale actuator commands were cleared"));
@@ -1167,6 +1288,24 @@ void RobotController::setLeakState(LeakState state)
     emit leakStateChanged(leakState_);
 }
 
+void RobotController::failClosedMotionState()
+{
+    motionStopTimer_.stop();
+    if (isMotionActive()) {
+        setMotionState(MotionState::Faulted, MotionMode::Stop);
+    }
+}
+
+void RobotController::setMotionState(MotionState state, MotionMode mode)
+{
+    if (motionState_ == state && motionMode_ == mode) {
+        return;
+    }
+    motionState_ = state;
+    motionMode_ = mode;
+    emit motionStateChanged(motionState_, motionMode_);
+}
+
 void RobotController::markApc220LivenessLost()
 {
     setLeakState(LeakState::Unknown);
@@ -1203,8 +1342,18 @@ QByteArray RobotController::maskPayload(quint16 mask)
 qint64 RobotController::nowMs()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
+        std::chrono::steady_clock::now().time_since_epoch())
         .count();
+}
+
+bool RobotController::isMotionCommand(MessageType type)
+{
+    return isMotionMessage(type);
+}
+
+bool RobotController::isActuatorCommand(MessageType type)
+{
+    return isServoActuatorCommand(type) || isMotionCommand(type);
 }
 
 } // namespace rb

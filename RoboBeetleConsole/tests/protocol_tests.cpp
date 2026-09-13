@@ -1,5 +1,6 @@
 #include "protocol/Crc16.h"
 #include "protocol/PacketCodec.h"
+#include "robot/RobotCommand.h"
 #include "protocol/StreamDecoder.h"
 
 #include <QByteArray>
@@ -169,6 +170,25 @@ void testInterruptedFrameReset()
            "reset must discard an interrupted frame and resynchronize");
 }
 
+void testMotionModeWireContract()
+{
+    QByteArray payload;
+    payload.append(static_cast<char>(1));
+    payload.append(static_cast<char>(rb::MotionMode::Forward));
+    payload.append(static_cast<char>(rb::MotionAction::Start));
+
+    const QByteArray wire = rb::PacketCodec::encodeWire(
+        {rb::MessageType::SetMotionMode, 0x1234, payload});
+    const rb::DecodeResult decoded = rb::PacketCodec::decodeWire(
+        wire.first(wire.size() - 1));
+
+    expect(decoded.ok(), "Motion mode command should encode and decode");
+    expect(decoded.packet.type == rb::MessageType::SetMotionMode,
+           "Motion mode command should retain message ID 0x15");
+    expect(decoded.packet.payload == payload && payload.size() == 3,
+           "Motion mode payload should be exactly schema/mode/action");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -179,6 +199,7 @@ int main(int argc, char **argv)
     testSplitAndStickyFrames();
     testValidationErrorsAndRecovery();
     testInterruptedFrameReset();
+    testMotionModeWireContract();
     if (failures == 0) {
         std::cout << "All protocol tests passed\n";
     }

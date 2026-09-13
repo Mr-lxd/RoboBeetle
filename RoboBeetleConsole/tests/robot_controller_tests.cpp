@@ -150,7 +150,8 @@ void installSynchronousAcks(rb::FakeTransport &transport,
             || requestType == rb::MessageType::ServoEnable
             || requestType == rb::MessageType::SetServoPwm
             || requestType == rb::MessageType::SetServoAngle
-            || requestType == rb::MessageType::Neutral;
+            || requestType == rb::MessageType::Neutral
+            || requestType == rb::MessageType::SetMotionMode;
         if (!expectsAck) {
             return;
         }
@@ -2279,6 +2280,197 @@ void testApc220WriteErrorResetsWithoutInvalidatingRetryState()
            "APC220 write error should clear scheduler state");
 }
 
+void connectAndEnablePaddles(rb::FakeTransport &transport,
+                             rb::RobotController &controller)
+{
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+    const rb::ServoId paddles[] = {
+        rb::ServoId::FrontRight,
+        rb::ServoId::FrontLeft,
+        rb::ServoId::RearRight,
+        rb::ServoId::RearLeft,
+    };
+    for (const rb::ServoId id : paddles) {
+        expect(controller.enableServo(id),
+               "Motion setup should send each paddle Enable");
+        acknowledgeLast(transport);
+    }
+}
+
+void testMotionStartStopStateAndWireContract()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+
+    expect(controller.motionState() == rb::MotionState::Stopped,
+           "Motion should start in Stopped state");
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "Forward Motion START should be sent");
+    const rb::Packet start = lastPacket(transport);
+    QByteArray expectedStart;
+    expectedStart.append(static_cast<char>(1));
+    expectedStart.append(static_cast<char>(rb::MotionMode::Forward));
+    expectedStart.append(static_cast<char>(rb::MotionAction::Start));
+    expect(start.type == rb::MessageType::SetMotionMode &&
+               start.payload == expectedStart,
+           "Motion START should use exact schema/mode/action payload");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "successful START ACK should enter Running");
+
+    expect(controller.stopMotion(),
+           "ordinary Motion STOP should be sent");
+    const rb::Packet stop = lastPacket(transport);
+    QByteArray expectedStop;
+    expectedStop.append(static_cast<char>(1));
+    expectedStop.append(static_cast<char>(rb::MotionMode::Stop));
+    expectedStop.append(static_cast<char>(rb::MotionAction::Stop));
+    expect(stop.type == rb::MessageType::SetMotionMode &&
+               stop.payload == expectedStop,
+           "Motion STOP should use canonical STOP payload");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Stopping,
+           "STOP ACK should enter Stopping before the provisional ramp ends");
+    waitForMs(800);
+    expect(controller.motionState() == rb::MotionState::Stopped,
+           "the provisional UI transition should finish at Stopped");
+}
+
+void testMotionManualArbitrationBusyAndDisableAllPreemption()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "manual arbitration setup should start Motion");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "manual arbitration setup should reach Running");
+
+    const qsizetype writesBeforeManual = transport.writes().size();
+    expect(!controller.setServoAngle(rb::ServoId::FrontRight, 0),
+           "manual SetAngle should be rejected while Motion is Running");
+    expect(!controller.setServoPwm(rb::ServoId::FrontRight, 1450),
+           "manual SetPWM should be rejected while Motion is Running");
+    expect(!controller.neutralServo(rb::ServoId::FrontRight),
+           "manual Neutral should be rejected while Motion is Running");
+    expect(transport.writes().size() == writesBeforeManual,
+           "locally rejected manual commands must not write frames");
+
+    expect(controller.stopMotion(),
+           "manual arbitration setup should request STOP");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Stopping,
+           "manual arbitration setup should reach Stopping");
+    expect(!controller.setServoAngle(rb::ServoId::FrontRight, 0),
+           "manual SetAngle should be rejected while Motion is Stopping");
+
+    expect(controller.disableAll(),
+           "Disable All must remain available during Motion STOPPING");
+    expect(lastPacket(transport).type == rb::MessageType::ServoDisable,
+           "Disable All must retain the Servo Disable safety path");
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "Disable All should immediately fault/terminate local Motion state");
+}
+
+void testMotionBusyAckAndReconnectDoesNotResume()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    connectAndEnablePaddles(transport, controller);
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "BUSY ACK setup should start Forward Motion");
+    acknowledgeLast(transport);
+
+    expect(controller.startMotion(rb::MotionMode::TurnLeft),
+           "a mode change should be sent while Running");
+    const rb::Packet modeChange = lastPacket(transport);
+    acknowledge(transport, modeChange, rb::AckResult::Busy,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "BUSY mode-change ACK should preserve the prior Running state");
+    expect(controller.monitor().ackStatus.contains(QStringLiteral("Busy")),
+           "BUSY ACK should be visible in the protocol monitor");
+
+    expect(controller.stopMotion(),
+           "reconnect test should request graceful STOP");
+    acknowledgeLast(transport);
+    expect(controller.motionState() == rb::MotionState::Stopping,
+           "reconnect test should enter Stopping before link loss");
+    const qsizetype writesBeforeLinkLoss = transport.writes().size();
+    transport.simulateError(QStringLiteral("link lost"));
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "link loss should immediately fault/clear local Motion state");
+    transport.simulateConnected();
+    expect(!controller.isMotionActive(),
+           "reconnect must not auto-resume the interrupted Motion");
+    expect(transport.writes().size() == writesBeforeLinkLoss,
+           "reconnect must not emit an automatic Motion command");
+}
+
+void testApc220MotionCommandsUseTheExistingBoundedScheduler()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 1000;
+    config.heartbeatSafetyBudgetMs = 5000;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+
+    const rb::ServoId paddles[] = {
+        rb::ServoId::FrontRight,
+        rb::ServoId::FrontLeft,
+        rb::ServoId::RearRight,
+        rb::ServoId::RearLeft,
+    };
+    for (const rb::ServoId id : paddles) {
+        expect(controller.enableServo(id),
+               "APC220 Motion setup should queue/send each paddle Enable");
+        acknowledgeLast(transport);
+    }
+
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "APC220 Motion START should occupy the one-flight slot");
+    const rb::Packet start = lastPacket(transport);
+    expect(controller.startMotion(rb::MotionMode::TurnLeft),
+           "a second Motion command should enter the bounded APC220 queue");
+    expect(controller.queuedCommandCount() == 1,
+           "APC220 should retain one queued Motion command behind START");
+
+    acknowledge(transport, start, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(controller.motionState() == rb::MotionState::Running,
+           "START ACK should make the queued-Motion fixture Running");
+    expect(lastPacket(transport).type == rb::MessageType::SetMotionMode,
+           "queued Motion command should dispatch after START ACK");
+
+    const rb::Packet modeChange = lastPacket(transport);
+    expect(controller.stopMotion(),
+           "STOP should queue behind an in-flight Motion mode change");
+    expect(controller.queuedCommandCount() == 1,
+           "STOP should be represented by one queued Motion request");
+    expect(controller.disableAll(),
+           "Disable All should preempt queued Motion commands");
+    expect(controller.queuedCommandCount() == 1,
+           "Disable All should retain only its safety-priority request");
+    expect(controller.motionState() == rb::MotionState::Faulted,
+           "Disable All should immediately fail-close local Motion state");
+
+    acknowledge(transport, modeChange, rb::AckResult::Ok,
+                rb::MessageType::SetMotionMode);
+    expect(lastPacket(transport).type == rb::MessageType::ServoDisable,
+           "Disable All should dispatch before stale queued Motion work");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -2343,6 +2535,10 @@ int main(int argc, char **argv)
     testApc220RetryWriteFailureConsumesRetryBudget();
     testApc220QueuedWriteFailureDropsCommandAndClearsDisablePending();
     testApc220WriteErrorResetsWithoutInvalidatingRetryState();
+    testMotionStartStopStateAndWireContract();
+    testMotionManualArbitrationBusyAndDisableAllPreemption();
+    testMotionBusyAckAndReconnectDoesNotResume();
+    testApc220MotionCommandsUseTheExistingBoundedScheduler();
     if (failures == 0) {
         std::cout << "All robot controller tests passed\n";
     }
