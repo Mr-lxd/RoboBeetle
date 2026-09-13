@@ -112,14 +112,17 @@ Motion START are required.
 
 TIM3/TIM4 are configured as PWM mode 1, active-high, up-counting timers with
 `PSC=15`, `ARR=3002`, and a 1 microsecond timer tick. The resulting period is
-`ARR+1 = 3003` ticks, approximately 3 ms / 333 Hz. For an enabled channel,
-`CNT >= CCR` means the falling edge has already occurred and Disable can finish
-immediately. When `CNT < CCR`, the driver clears the stale `CCxIF`, publishes a
-per-channel `stop_pending` bit, enables that channel's `CCxIE`, and leaves
-`CCxE` enabled. It rechecks `CNT`, `CCR`, and `CCxIF` after arming so a compare
-edge during the arm sequence cannot cause an unnecessary full-frame wait. The
-HAL compare callback runs after HAL clears the flag; only then does the driver
-call the existing `HAL_TIM_PWM_Stop()` finalizer.
+`ARR+1 = 3003` ticks, approximately 3 ms / 333 Hz. Because HAL enables
+`OCxPE`, a readable `CCR` can be a preload value while the current shadow
+compare still drives the pin. Therefore a logically active channel whose timer
+is running never uses `CNT`/`CCR` ordering to infer LOW: it always clears the
+stale `CCxIF`, publishes a per-channel `stop_pending` bit, enables that
+channel's `CCxIE`, and leaves `CCxE` enabled until the next real compare edge.
+The driver re-reads `CNT`, `CCR`, and `CCxIF` after arming for the race audit,
+but only `CCxIF` can authorize same-edge finalization. The HAL compare callback
+runs after HAL clears the flag; only then does the driver call the existing
+`HAL_TIM_PWM_Stop()` finalizer. A timer that is not running, or a channel that
+is already inactive, may finalize immediately.
 
 The finalizer preserves HAL `ChannelState` and disables only the selected
 channel. The STM32 HAL used here gates its `__HAL_TIM_DISABLE()` operation on
@@ -233,9 +236,10 @@ contract. Motion-specific assertions cover:
 - manual Servo `BUSY` arbitration during STOPPING;
 - old/new ownership union through an acknowledged mode transition;
 - immediate Disable All and heartbeat/liveness takeover;
-- PWM1 safe-stop decisions at `CNT == CCR`, `CNT > CCR`, and `CNT < CCR`,
-  stale-flag clearing/recheck policy, per-channel pending ownership, one-frame
-  latency bound, shared-timer independence, and no Neutral write on Disable All;
+- PWM1 safe-stop conservative active-running policy, including the
+  preload/shadow mismatch regression, stale-flag clearing/recheck policy,
+  per-channel pending ownership, one-frame latency bound, shared-timer
+  independence, and no Neutral write on Disable All;
 - no auto-resume after interrupted stop;
 - idempotent STOP while already STOPPED;
 - exact `0x15` payload, duplicate replay, invalid-payload rejection, and

@@ -281,23 +281,22 @@ static void servo_driver_stop(
             return;
         }
 
+        const bool channel_active =
+            (driver->active_mask & channel_mask) != 0U;
+
         /* Repeated Disable after completion is an intentional no-op. */
-        if ((driver->active_mask & channel_mask) == 0U)
+        if (!channel_active)
         {
             servo_driver_exit_critical(irq_state);
             return;
         }
 
-        const uint32_t counter = __HAL_TIM_GET_COUNTER(binding->timer);
-        const uint32_t compare = __HAL_TIM_GET_COMPARE(
-            binding->timer,
-            binding->hal_channel);
         const bool timer_running =
             (binding->timer->Instance->CR1 & TIM_CR1_CEN) != 0U;
 
-        if (!timer_running ||
-            (servo_pwm_stop_policy_decide(counter, compare) ==
-             SERVO_PWM_STOP_IMMEDIATE))
+        if (servo_pwm_stop_policy_decide(
+                timer_running,
+                channel_active) == SERVO_PWM_STOP_IMMEDIATE)
         {
             servo_driver_finalize_stop(driver, servo_id, binding);
             servo_driver_exit_critical(irq_state);
@@ -318,6 +317,12 @@ static void servo_driver_stop(
          * the counter and flag so that the race cannot wait a full extra frame
          * when the falling edge is already available.
          */
+        /*
+         * Re-read CNT/CCR as part of the arm-sequence audit, but do not use
+         * their ordering as a level decision: with OCxPE, CCR may be the
+         * next preload while the current shadow compare still drives HIGH.
+         * CCxIF is the only post-arm evidence accepted for same-edge finalize.
+         */
         const uint32_t counter_after_arm = __HAL_TIM_GET_COUNTER(
             binding->timer);
         const uint32_t compare_after_arm = __HAL_TIM_GET_COMPARE(
@@ -326,11 +331,9 @@ static void servo_driver_stop(
         const bool compare_event_after_arm = __HAL_TIM_GET_FLAG(
             binding->timer,
             flag);
-        if (compare_event_after_arm ||
-            (servo_pwm_stop_policy_decide(
-                 counter_after_arm,
-                 compare_after_arm) ==
-             SERVO_PWM_STOP_IMMEDIATE))
+        (void)counter_after_arm;
+        (void)compare_after_arm;
+        if (compare_event_after_arm)
         {
             servo_driver_finalize_stop(driver, servo_id, binding);
         }

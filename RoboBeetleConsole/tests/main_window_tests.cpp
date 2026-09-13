@@ -282,6 +282,15 @@ void testMotionPanelLifecycleAndManualArbitration()
            "direct Forward button should reach Running after ACK");
     expect(hasLabelText(panel, QStringLiteral("Running — Forward")),
            "Motion panel should display the running mode");
+    expect(forwardButton->isCheckable()
+               && forwardButton->styleSheet().contains(QStringLiteral(":checked")),
+           "Motion buttons must provide an explicit checked highlight style");
+    expect(forwardButton->isChecked()
+               && !turnLeftButton->isChecked()
+               && !turnRightButton->isChecked()
+               && !ascendButton->isChecked()
+               && !descendButton->isChecked(),
+           "the active Forward button must be checked exclusively");
 
     for (QPushButton *button : window.findChildren<QPushButton *>()) {
         if (button->text() == QStringLiteral("Set Angle")
@@ -317,6 +326,10 @@ void testMotionPanelLifecycleAndManualArbitration()
            "Motion panel should settle at Stopped after the provisional duration");
     expect(hasLabelText(panel, QStringLiteral("Stopped")),
            "Motion panel should show Stopped after the ramp timer");
+    expect(!forwardButton->isChecked() && !turnLeftButton->isChecked()
+               && !turnRightButton->isChecked()
+               && !ascendButton->isChecked() && !descendButton->isChecked(),
+           "Motion button highlight must clear after graceful STOP completes");
 }
 
 } // namespace

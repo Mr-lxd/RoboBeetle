@@ -102,15 +102,20 @@ Mask assignments are the frozen five semantic bits from the PR #13 descriptor co
 
 #### PWM Disable safe-stop
 
-TIM3/TIM4 use PWM mode 1, active-high, up-counting output compare. For a
-channel-local Disable, `CNT >= CCR` means the falling edge has already occurred
-and the HAL PWM channel may be stopped immediately. If `CNT < CCR`, Firmware
-clears the stale `CCxIF`, records a per-channel pending-stop bit, enables only
-that channel's `CCxIE`, keeps `CCxE` active, and rechecks `CNT`/`CCR`/`CCxIF`
-after arming. The existing HAL timer IRQ clears the compare flag and invokes
-the callback after the falling edge; the callback then finalizes that channel
-through `HAL_TIM_PWM_Stop()` so HAL channel state remains consistent. A race
-may emit one additional complete legal pulse, but never a truncated pulse.
+TIM3/TIM4 use PWM mode 1, active-high, up-counting output compare, and HAL
+enables `OCxPE` preload. For a logically active channel whose timer is running,
+Firmware never uses readable `CNT`/`CCR` ordering as proof that the current
+output is LOW: the readable `CCR` may be a preload while the current shadow
+compare still drives HIGH. It clears the stale `CCxIF`, records a
+per-channel pending-stop bit, enables only that channel's `CCxIE`, and keeps
+`CCxE` active until the next real compare event. Firmware re-reads
+`CNT`/`CCR`/`CCxIF` after arming for the race audit, but only `CCxIF` can
+authorize same-edge finalization. The existing HAL timer IRQ clears the
+compare flag and invokes the callback after the falling edge; the callback
+then finalizes that channel through `HAL_TIM_PWM_Stop()` so HAL channel state
+remains consistent. A timer that is not running, or an already inactive
+channel, may finalize immediately. A race may emit one additional complete
+legal pulse, but never a truncated pulse.
 
 Pending-stop ownership rejects SetAngle, ApplyPWM, Motion writes, and Enable
 with `Busy=7`; repeated Disable is idempotent. TIM3/TIM4 channels are finalized

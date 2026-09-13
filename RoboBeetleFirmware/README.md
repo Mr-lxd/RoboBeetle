@@ -92,15 +92,18 @@ required. See the full contract and host commands in
 `Neutral` continues legal calibrated PWM output and records logical `0 degrees`.
 `Disable` and `Disable All` stop PWM drive without writing Neutral; logical
 ownership and Motion/Safety ownership are cleared immediately. On TIM3/TIM4,
-PWM mode 1 is active-high and up-counting. When `CNT >= CCR`, the channel is
-already in its LOW window and can stop immediately. When `CNT < CCR`, the
-driver clears stale `CCxIF`, marks only that channel `stop_pending`, enables
-`CCxIE`, retains `CCxE`, and rechecks the counter/compare/flag before waiting
-for the hardware compare edge. The existing HAL compare callback then performs
-the final `HAL_TIM_PWM_Stop()` after the falling edge, preserving HAL channel
-state. The HAL's `__HAL_TIM_DISABLE()` keeps a shared timer counter running
-while any other `CCxE/CCxNE` output remains enabled, so stopping one channel
-does not stop its siblings.
+PWM mode 1 is active-high and up-counting, with HAL `OCxPE` preload enabled.
+For any logically active channel with a running timer, the driver never uses
+readable `CNT`/`CCR` ordering as proof that the current output is LOW: it
+clears stale `CCxIF`, marks only that channel `stop_pending`, enables its
+`CCxIE`, retains `CCxE`, and waits for the next real compare event. It re-reads
+`CNT`, `CCR`, and `CCxIF` after arming for race diagnostics, but only `CCxIF`
+can authorize same-edge finalization. The existing HAL compare callback then
+performs the final `HAL_TIM_PWM_Stop()` after the falling edge, preserving HAL
+channel state. A timer that is not running, or an already inactive channel,
+may finalize immediately. The HAL's `__HAL_TIM_DISABLE()` keeps a shared timer
+counter running while any other `CCxE/CCxNE` output remains enabled, so
+stopping one channel does not stop its siblings.
 
 Pending-stop channels reject SetAngle, ApplyPWM, Motion writes, and Enable with
 `BUSY`; repeated Disable is idempotent. At the current `PSC=15`, `ARR=3002`,
@@ -110,8 +113,10 @@ separate 750 ms graceful Motion STOP. Safety events interrupt graceful Motion
 immediately and may use only this frame-level safe edge for physical shutdown.
 Host tests prove the decision/state policy, not waveform behavior. The current
 hardware evidence remains `Physical no-jump Disable: Pending Hardware
-Re-verification`; an optional logic-analyzer check must find a complete final
-pulse or a stop already in the LOW window, never a runt pulse.
+Re-verification`; the dedicated host regression models a preload/shadow
+mismatch (readable preload 1000 μs while the current shadow pulse is 1900 μs)
+and requires deferral. An optional logic-analyzer check must find a complete
+final pulse or a stop already in the LOW window, never a runt pulse.
 
 Enable accepts a multi-bit mask only with all-or-nothing semantics. Requested channels already present in the pre-call enabled mask are idempotent and receive no pulse write, start, or stop. If any newly requested channel fails to start, only channels newly started by that call are stopped and the pre-call enabled state—including the physical pulse of an already-running channel—is preserved. Disable and Disable All retain fail-closed/best-effort stop behavior.
 

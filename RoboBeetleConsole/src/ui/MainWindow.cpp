@@ -354,14 +354,19 @@ QWidget *MainWindow::createMotionPanel()
     const int modeCount = static_cast<int>(sizeof(modes) / sizeof(modes[0]));
     for (int index = 0; index < modeCount; ++index) {
         const MotionMode mode = modes[index];
-        motionButtons_[static_cast<std::size_t>(mode)] = new QPushButton(
-            motionModeText(mode), box);
+        auto *button = new QPushButton(motionModeText(mode), box);
+        button->setCheckable(true);
+        button->setAutoExclusive(false);
+        button->setStyleSheet(QStringLiteral(
+            "QPushButton:checked { background-color: #1976D2; color: white; "
+            "font-weight: bold; }"));
+        motionButtons_[static_cast<std::size_t>(mode)] = button;
         if (mode == MotionMode::Backward) {
-            motionButtons_[static_cast<std::size_t>(mode)]->setEnabled(false);
-            motionButtons_[static_cast<std::size_t>(mode)]->setToolTip(
+            button->setEnabled(false);
+            button->setToolTip(
                 QStringLiteral("Pending water-tank verification; no BACKWARD START is emitted."));
         }
-        connect(motionButtons_[static_cast<std::size_t>(mode)],
+        connect(button,
                 &QPushButton::clicked,
                 this,
                 [this, mode] {
@@ -719,6 +724,9 @@ void MainWindow::refreshMotionUi()
         }
         const MotionMode mode = static_cast<MotionMode>(index);
         const bool pendingMode = mode == MotionMode::Backward;
+        button->setChecked(
+            !pendingMode && state == MotionState::Running
+            && controller_->motionMode() == mode);
         button->setEnabled(
             !pendingMode && connected && state != MotionState::Stopping
             && !transitioning && controller_->isMotionReady(mode));

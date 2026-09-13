@@ -99,7 +99,7 @@ static void reset_timer_registers(TIM_TypeDef *timer)
     timer->ARR = 3002U;
 }
 
-static void test_safe_low_stop_is_immediate(void)
+static void test_running_pwm_always_defers_even_at_readable_compare(void)
 {
     TIM_TypeDef timer_registers = {0};
     TIM_HandleTypeDef timer = {0};
@@ -115,18 +115,74 @@ static void test_safe_low_stop_is_immediate(void)
            "safe-stop test channel must start");
     timer_registers.CCR1 = 1500U;
     timer_registers.CNT = 1500U;
+    timer_registers.SR = TIM_SR_CC1IF;
+    ops->stop(&driver, SERVO_ID_FRONT_RIGHT);
+
+    expect(stop_calls == stops_before,
+           "running PWM must defer even when readable CNT >= CCR");
+    expect((timer_registers.SR & TIM_SR_CC1IF) == 0U,
+           "deferred running stop must clear a stale CC1 flag");
+    expect((timer_registers.CCER & TIM_CCER_CC1E) != 0U,
+           "deferred running stop must retain CC1 output");
+    expect((timer_registers.DIER & TIM_DIER_CC1IE) != 0U,
+           "deferred running stop must arm CC1 interrupt");
+    expect(servo_driver_stm32_stop_pending_mask(&driver) ==
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT),
+           "deferred running stop must retain pending ownership");
+}
+
+static void test_preload_shadow_mismatch_never_truncates_running_pulse(void)
+{
+    TIM_TypeDef timer_registers = {0};
+    TIM_HandleTypeDef timer = {0};
+    servo_driver_stm32_t driver = {0};
+    const servo_service_driver_ops_t *ops = servo_driver_stm32_ops();
+    const unsigned int stops_before = stop_calls;
+
+    reset_timer_registers(&timer_registers);
+    timer.Instance = &timer_registers;
+    servo_driver_stm32_init(&driver, &timer, NULL);
+
+    expect(ops->start(&driver, SERVO_ID_FRONT_RIGHT),
+           "preload/shadow regression channel must start");
+    /*
+     * Host HAL mocks expose one CCR only.  Model the hazardous observation:
+     * the readable preload is 1000 while the current shadow pulse is still
+     * 1900 and CNT is 1500.  The driver must not infer LOW from that mismatch.
+     */
+    timer_registers.CCR1 = 1000U;
+    timer_registers.CNT = 1500U;
+    ops->stop(&driver, SERVO_ID_FRONT_RIGHT);
+
+    expect(stop_calls == stops_before,
+           "preload/shadow mismatch must not truncate a running pulse");
+    expect(servo_driver_stm32_stop_pending_mask(&driver) ==
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT),
+           "preload/shadow mismatch must defer to compare");
+    expect((timer_registers.CCER & TIM_CCER_CC1E) != 0U,
+           "preload/shadow mismatch must retain the active output");
+}
+
+static void test_stopped_timer_stop_is_immediate(void)
+{
+    TIM_TypeDef timer_registers = {0};
+    TIM_HandleTypeDef timer = {0};
+    servo_driver_stm32_t driver = {0};
+    const servo_service_driver_ops_t *ops = servo_driver_stm32_ops();
+    const unsigned int stops_before = stop_calls;
+
+    reset_timer_registers(&timer_registers);
+    timer.Instance = &timer_registers;
+    servo_driver_stm32_init(&driver, &timer, NULL);
+    expect(ops->start(&driver, SERVO_ID_FRONT_RIGHT),
+           "stopped-timer regression channel must start");
+    timer_registers.CR1 &= ~TIM_CR1_CEN;
     ops->stop(&driver, SERVO_ID_FRONT_RIGHT);
 
     expect(stop_calls == stops_before + 1U,
-           "CNT >= CCR must call HAL stop immediately");
-    expect((timer_registers.CCER & TIM_CCER_CC1E) == 0U,
-           "immediate safe stop must disable only CC1 output");
-    expect((timer_registers.DIER & TIM_DIER_CC1IE) == 0U,
-           "immediate safe stop must not leave CC1 interrupt armed");
+           "inactive timer may finalize PWM stop immediately");
     expect(servo_driver_stm32_stop_pending_mask(&driver) == 0U,
-           "immediate safe stop must not leave pending ownership");
-    expect(servo_driver_stm32_safe_stop_finalization_count(&driver) == 1U,
-           "immediate safe stop must record one finalization");
+           "inactive timer immediate stop must not remain pending");
 }
 
 static void test_high_stop_waits_for_compare_and_preserves_hal_state(void)
@@ -488,7 +544,9 @@ int main(void)
     test_all_valid_channels_start(&driver, &tim3, &tim4);
     test_servo_enable_for_ch1_channels(&driver, &tim3_registers, &tim4_registers);
     test_invalid_channel_fails_closed(&driver, &tim3_registers);
-    test_safe_low_stop_is_immediate();
+    test_running_pwm_always_defers_even_at_readable_compare();
+    test_preload_shadow_mismatch_never_truncates_running_pulse();
+    test_stopped_timer_stop_is_immediate();
     test_high_stop_waits_for_compare_and_preserves_hal_state();
     test_shared_timer_channels_finalize_independently();
     test_pending_stop_is_idempotent_and_blocks_reenable();

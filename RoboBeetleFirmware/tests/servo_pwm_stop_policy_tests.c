@@ -1,6 +1,7 @@
 #include "servo_pwm_stop_policy.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 
 static int failures = 0;
@@ -14,24 +15,21 @@ static void expect(bool condition, const char *message)
     }
 }
 
-static void test_pwm1_active_high_boundary(void)
+static void test_running_active_pwm_always_defers(void)
 {
-    expect(servo_pwm_stop_policy_decide(1500U, 1500U) ==
-               SERVO_PWM_STOP_IMMEDIATE,
-           "CNT == CCR is already in the safe LOW window");
-    expect(servo_pwm_stop_policy_decide(1800U, 1500U) ==
-               SERVO_PWM_STOP_IMMEDIATE,
-           "CNT > CCR is already in the safe LOW window");
-    expect(servo_pwm_stop_policy_decide(1499U, 1500U) ==
+    expect(servo_pwm_stop_policy_decide(true, true) ==
                SERVO_PWM_STOP_DEFER_TO_COMPARE,
-           "CNT < CCR must defer until the compare falling edge");
+           "running active PWM must always defer to a real compare edge");
 }
 
-static void test_zero_compare_is_immediate(void)
+static void test_inactive_state_is_immediate(void)
 {
-    expect(servo_pwm_stop_policy_decide(0U, 0U) ==
+    expect(servo_pwm_stop_policy_decide(false, true) ==
                SERVO_PWM_STOP_IMMEDIATE,
-           "CCR == 0 has no HIGH pulse to protect");
+           "a stopped timer may finalize immediately");
+    expect(servo_pwm_stop_policy_decide(true, false) ==
+               SERVO_PWM_STOP_IMMEDIATE,
+           "an inactive channel may finalize immediately");
 }
 
 static void test_deferred_stop_has_one_frame_bound(void)
@@ -48,8 +46,8 @@ static void test_deferred_stop_has_one_frame_bound(void)
 
 int main(void)
 {
-    test_pwm1_active_high_boundary();
-    test_zero_compare_is_immediate();
+    test_running_active_pwm_always_defers();
+    test_inactive_state_is_immediate();
     test_deferred_stop_has_one_frame_bound();
 
     if (failures == 0)
