@@ -126,17 +126,21 @@ but calls them only `legacy_node[0..3]`; these names carry no historical Servo
 ID meaning. Each node stores:
 
 - phase `phi_i` in radians;
-- amplitude state `r_i` and derivative `r_dot_i` in logical degrees;
-- offset state `x_i` and derivative `x_dot_i` in logical degrees per second;
+- amplitude state `r_i`, derivative `r_dot_i`, and source acceleration-memory
+  value `r_ddot_mem_i` in logical degree model units;
+- offset state `x_i`, derivative `x_dot_i`, and source acceleration-memory value
+  `x_ddot_mem_i` in logical degree model units;
+- phase-rate memory `phi_dot_mem_i` in radians per second;
 - the current target amplitude `R_i` and target offset `X_i`;
 - the source output-memory value `theta_i` in logical degrees;
 - the source discrete derivative input `theta_dot_i` and its previous scaled
   output sample held by the source UnitDelay state.
 
 Each directed source coupling slot stores the target phase state and its
-derivative. The centralized model profile stores `beta_i`, `T_i`, `k_v_i`,
-`a_i`, `b_i`, `c_ij`, `w_ij`, desired phase `DeltaPhi_ij`, target amplitudes,
-target offsets, and the fixed integration step.
+derivative plus its source acceleration-memory value. The centralized model
+profile stores `beta_i`, `T_i`, `k_v_i`, `a_i`, `b_i`, `c_ij`, `w_ij`, desired
+phase `DeltaPhi_ij`, target amplitudes, target offsets, and the fixed
+integration step.
 
 Units are explicit:
 
@@ -144,11 +148,30 @@ Units are explicit:
 | --- | --- |
 | `phi`, phase coupling, desired phase | radian |
 | `r`, `x`, target amplitude, target offset, raw output | logical degree |
+| `r_dot`, `x_dot`, `r_ddot_mem`, `x_ddot_mem` | source discrete model units |
+| `phi_dot_mem` | radian per second |
 | `T` | second |
 | `nu` | Hz |
 | `a`, `b`, `c`, `k_v` | source model gain units |
 | `joint_targets_t` | signed centidegree |
 | nominal integration step | second, `0.01` |
+
+The frozen per-node derivative observation is part of the state contract even
+though the generated C keeps it as a local expression rather than a named
+state:
+
+| Node | production field | exact source expression | initial value | unit | consumed by |
+| --- | --- | --- | ---: | --- | --- |
+| 0 | `theta_dot[0]` | `rtb_TSamp - UD_DSTATE`, where `rtb_TSamp = 100 * Memory19_PreviousInput` | `0` | logical degree/s | `exp(-k_v_0 * theta_dot[0])` in `nu_0` |
+| 1 | `theta_dot[1]` | `rtb_TSamp_d - UD_DSTATE_o`, where `rtb_TSamp_d = 100 * Memory7_PreviousInput` | `0` | logical degree/s | `exp(-k_v_1 * theta_dot[1])` in `nu_1` |
+| 2 | `theta_dot[2]` | `rtb_TSamp_p - UD_DSTATE_b`, where `rtb_TSamp_p = 100 * Memory11_PreviousInput` | `0` | logical degree/s | `exp(-k_v_2 * theta_dot[2])` in `nu_2` |
+| 3 | `theta_dot[3]` | `rtb_TSamp_b - UD_DSTATE_a`, where `rtb_TSamp_b = 100 * Memory15_PreviousInput` | `0` | logical degree/s | `exp(-k_v_3 * theta_dot[3])` in `nu_3` |
+
+`theta_dot[i]` is computed from the step-entry output-memory and UnitDelay
+values before any Euler state write; it is a scaled discrete difference, not
+an analytic derivative or a post-Euler difference. The UnitDelay value is the
+previous scaled output sample and is updated to `100 * output_memory[i]` only
+after the current `theta_dot[i]` has been consumed.
 
 ### Frozen `theta_dot_i` source semantics
 
@@ -204,11 +227,19 @@ For every source step, the order is frozen as follows:
    `UD_DSTATE_b` followed by node 2 integrators; and node 3 `UD_DSTATE_a`
    followed by node 3 integrators. Each UnitDelay receives the current
    pre-step scaled sample (`UD_i[k+1] = TSamp_i[k]`).
-6. The remaining phase-target integrators and their derivative-memory arrays
-   receive their `0.01` Euler updates after those per-node writes. No
-   derivative expression is recalculated after a state write, and the source
-   does not recompute output-memory values from post-Euler oscillator states
-   until a later step.
+6. The per-node Euler writes use the previous `Memory*_PreviousInput` values:
+   phase uses the previous phase-rate memory, amplitude derivative uses the
+   previous amplitude-acceleration memory, and offset derivative uses the
+   previous offset-acceleration memory. The current phase-rate, amplitude
+   acceleration, and offset acceleration expressions are written to their
+   corresponding source memories only after these state updates.
+7. The 12 phase-target integrators and their derivative-memory arrays receive
+   their `0.01` Euler updates after the per-node writes: each target state uses
+   the pre-step target derivative, each target derivative uses the previous
+   target-acceleration memory, and the current target acceleration is then
+   stored for the next step. No derivative expression is recalculated after a
+   state write, and the source does not recompute output-memory values from
+   post-Euler oscillator states until a later step.
 
 The new core must expose `theta_dot_i` and the corresponding previous-scaled
 sample in its golden snapshot. This prevents an implementation from replacing
@@ -385,9 +416,10 @@ The adapter's profiles are:
 | DESCEND | Forward paddle topology | none | `-1000 cdeg * bias_scale` |
 | BACKWARD | invalid | not implemented | not applicable |
 
-Turn is implemented by changing the target amplitude vector in the semantic
-profile. The core contains no `TURN_LEFT` or `TURN_RIGHT` branch. Front/rear
-phase topology and the signed source convention remain unchanged.
+Turn is implemented by applying the profile's left/right amplitude scale at
+the semantic adapter output boundary. The core retains the source-shaped
+target-amplitude vector and contains no `TURN_LEFT` or `TURN_RIGHT` branch.
+Front/rear phase topology and the signed source convention remain unchanged.
 
 `FrontAxis` is a profile bias only; it is not a fifth oscillator. ASCEND and
 DESCEND remain `Bench Provisional / Pending Water Verification`.
@@ -423,10 +455,10 @@ Reset and lifecycle behavior is:
    target amplitude, the core's amplitude dynamics respond smoothly, and
    MotionManager blends the old and new logical target vectors over 750 ms.
 
-The adapter may update the requested profile during `sample`; the next
-elapsed-time advance integrates toward that target. This intentional one
-nominal-step command latency avoids an instantaneous amplitude jump and is
-covered by the target-change tests.
+The existing generator ABI supplies the mode to `sample`, so the side-scale
+differential is applied when logical targets are emitted. This keeps turn
+policy in the semantic adapter without changing source-core state or adding
+a mode branch to the numerical model.
 
 ## Paper/source discrepancy record
 
@@ -534,9 +566,9 @@ measured_period / nominal_period
 
 It does not label `T=2.0 s` as the actual oscillator period unless the measured
 source-compatible trajectory supports that conclusion. The same measurement
-is taken from the independent legacy reference path when available so the
-production core's long-run period can be compared without treating `1/T` as a
-fixed output frequency.
+is taken from the production adapter's deterministic trajectory; the separate
+source differential check compares the core states directly without treating
+`1/T` as a fixed output frequency.
 
 ### Adapter and integration
 

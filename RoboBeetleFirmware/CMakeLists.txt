@@ -28,6 +28,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 project(${CMAKE_PROJECT_NAME})
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
+option(ROBOBEETLE_CPG_TARGET_BENCHMARK
+       "Enable the STM32F407 CPG DWT benchmark"
+       OFF)
+
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
 
@@ -55,6 +59,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Communication/imu_telemetry_policy.c
     Core/Communication/telemetry_scheduler.c
     Core/Communication/protocol_dispatcher.c
+    Core/Motion/cpg_core.c
+    Core/Motion/cpg_gait_generator.c
     Core/Motion/simple_gait_generator.c
     Core/Motion/motion_manager.c
     Core/Sensors/leak_sensor.c
@@ -87,6 +93,15 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
 )
+
+if(ROBOBEETLE_CPG_TARGET_BENCHMARK)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        Core/App/cpg_target_benchmark.c
+    )
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+        ROBOBEETLE_CPG_TARGET_BENCHMARK=1
+    )
+endif()
 
 # Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)

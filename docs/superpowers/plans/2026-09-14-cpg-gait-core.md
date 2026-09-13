@@ -34,6 +34,8 @@ Create or modify only these implementation surfaces:
 - RoboBeetleFirmware/Core/Motion/cpg_gait_generator.c
 - RoboBeetleFirmware/Core/App/app_main.h
 - RoboBeetleFirmware/Core/App/app_main.c
+- RoboBeetleFirmware/Core/App/cpg_target_benchmark.h
+- RoboBeetleFirmware/Core/App/cpg_target_benchmark.c
 - RoboBeetleFirmware/CMakeLists.txt
 - RoboBeetleFirmware/tests/run_host_tests.ps1
 - RoboBeetleFirmware/tests/test_cpg_core.c
@@ -76,13 +78,16 @@ int main(void)
 typedef struct
 {
     double phase[4];
-    double phase_rate[4];
+    double phase_rate_memory[4];
     double amplitude[4];
     double amplitude_dot[4];
+    double amplitude_accel_memory[4];
     double offset[4];
     double offset_dot[4];
-    double phase_target[4];
-    double phase_target_dot[4];
+    double offset_accel_memory[4];
+    double phase_target[12];
+    double phase_target_dot[12];
+    double phase_target_accel_memory[12];
     double output_memory[4];
     double unit_delay[4];
     double theta_dot[4];
@@ -92,8 +97,10 @@ typedef struct
 
 - [ ] Define a small oracle fixture in the test source with the exact legacy state names and source-order semantics:
   - node order 0..3;
-  - phase state, phase-rate memory, amplitude state, amplitude derivative state, offset state, offset derivative state;
-  - phase-target state and derivative state;
+  - phase state and phase-rate memory;
+  - amplitude state, amplitude derivative state, and amplitude-acceleration memory;
+  - offset state, offset derivative state, and offset-acceleration memory;
+  - 12 directed phase-target states, derivatives, and acceleration memories;
   - output-memory state;
   - UnitDelay state corresponding to UD_DSTATE, UD_DSTATE_o, UD_DSTATE_b, UD_DSTATE_a;
   - theta_dot[4] as the externally inspectable scaled discrete difference.
@@ -120,7 +127,7 @@ static void legacy_oracle_step(legacy_oracle_t *state,
     double next_phase_rate[4];
     double next_amplitude_dot[4];
     double next_offset_dot[4];
-    double next_phase_target_dot[4];
+    double next_phase_target_dot[12];
 
     for (size_t i = 0U; i < 4U; ++i)
     {
@@ -151,7 +158,9 @@ Replace the body only after the source equations and array indices have been tra
   - a state after a nonzero output-memory transition where theta_dot is nonzero;
   - all four theta_dot values and all four UnitDelay values at the same checkpoints;
   - emitted delayed output and newly computed output-memory values;
-  - phase, amplitude, amplitude derivative, offset, offset derivative, phase-target, and phase-target derivative.
+  - phase, phase-rate memory, amplitude, amplitude derivative, amplitude-acceleration memory;
+  - offset, offset derivative, offset-acceleration memory;
+  - all 12 phase-target, phase-target derivative, and phase-target acceleration-memory values.
 - [ ] **Step 3: Store literal golden values, including derivatives.** Each checkpoint must use literals in the test source, for example:
 
 ~~~c
@@ -234,13 +243,16 @@ typedef struct
 {
     cpg_model_params_t params;
     double phase[CPG_CORE_NODE_COUNT];
-    double phase_rate[CPG_CORE_NODE_COUNT];
+    double phase_rate_memory[CPG_CORE_NODE_COUNT];
     double amplitude[CPG_CORE_NODE_COUNT];
     double amplitude_dot[CPG_CORE_NODE_COUNT];
+    double amplitude_accel_memory[CPG_CORE_NODE_COUNT];
     double offset[CPG_CORE_NODE_COUNT];
     double offset_dot[CPG_CORE_NODE_COUNT];
+    double offset_accel_memory[CPG_CORE_NODE_COUNT];
     double phase_target[CPG_CORE_EDGE_COUNT];
     double phase_target_dot[CPG_CORE_EDGE_COUNT];
+    double phase_target_accel_memory[CPG_CORE_EDGE_COUNT];
     double output_memory[CPG_CORE_NODE_COUNT];
     double raw_output[CPG_CORE_NODE_COUNT];
     double unit_delay[CPG_CORE_NODE_COUNT];
@@ -290,16 +302,20 @@ for (size_t i = 0U; i < CPG_CORE_NODE_COUNT; ++i)
 {
     next.unit_delay[i] = 100.0 * core->output_memory[i];
     next.phase[i] = core->phase[i] +
-                    core->phase_rate[i] * core->params.step_s;
+                    core->phase_rate_memory[i] * core->params.step_s;
     next.amplitude[i] = core->amplitude[i] +
                        core->amplitude_dot[i] * core->params.step_s;
     next.offset[i] = core->offset[i] +
                     core->offset_dot[i] * core->params.step_s;
-    next.phase_rate[i] = next_phase_rate[i];
+    next.phase_rate_memory[i] = next_phase_rate[i];
     next.amplitude_dot[i] = core->amplitude_dot[i] +
-                           next_amplitude_dot[i] * core->params.step_s;
+                           core->amplitude_accel_memory[i] *
+                           core->params.step_s;
     next.offset_dot[i] = core->offset_dot[i] +
-                        next_offset_dot[i] * core->params.step_s;
+                        core->offset_accel_memory[i] *
+                        core->params.step_s;
+    next.amplitude_accel_memory[i] = next_amplitude_dot[i];
+    next.offset_accel_memory[i] = next_offset_dot[i];
 }
 for (size_t e = 0U; e < CPG_CORE_EDGE_COUNT; ++e)
 {
@@ -307,8 +323,9 @@ for (size_t e = 0U; e < CPG_CORE_EDGE_COUNT; ++e)
                            core->phase_target_dot[e] *
                            core->params.step_s;
     next.phase_target_dot[e] = core->phase_target_dot[e] +
-                               next_phase_target_dot[e] *
+                               core->phase_target_accel_memory[e] *
                                core->params.step_s;
+    next.phase_target_accel_memory[e] = next_phase_target_dot[e];
 }
 *core = next;
 ~~~
@@ -382,6 +399,9 @@ The generated source uses `target_offset = 0`, `desired_phase = 0`, `a = 20`, `b
   - phase-rate equations use the exact source 2 * beta * (1 - beta) term;
   - nu_i uses exp(-k_v_i * theta_dot_i) from the pre-Euler value;
   - theta_dot_i = 100.0 * output_memory_i - unit_delay_i;
+  - phase, amplitude, offset, and phase-target integrators consume the
+    previous source derivative-memory values before current accelerations are
+    stored;
   - output is the delayed source memory value;
   - new output memory is computed from pre-Euler state and then state updates occur in source node order;
   - no analytic derivative, no post-Euler derivative recomputation, and no phase wrapping unless the oracle proves the source performs it;
@@ -449,11 +469,11 @@ bool cpg_gait_generator_sample(cpg_gait_generator_t *generator,
 - [ ] Define the production profile with:
   - front and rear logical amplitudes of 10 degrees;
   - nominal_period_s = 2.0 as a nominal period parameter only;
-  - a bounded turn differential that preserves semantic signs;
+  - a bounded turn differential applied at the adapter output boundary that preserves semantic signs;
   - FrontAxis profile bias fields only;
   - no rear -30 degree clamp in this adapter.
 - [ ] Keep source-compatible 30-degree / 1-second defaults available for golden/oracle tests so adapter tests can distinguish legacy numeric reproduction from production profile policy.
-- [ ] Implement advance, sample, mode validation, and diagnostics through the existing interface. sample must convert logical degrees to centidegrees with a documented rounding policy and add only profile-level axis/turn bias.
+- [ ] Implement advance, sample, mode validation, and diagnostics through the existing interface. sample must convert logical degrees to centidegrees with a documented rounding policy and add only profile-level axis/turn output scaling and bias.
 
 The adapter's core-to-joint mapping and centidegree conversion must be visible in one function:
 
@@ -553,13 +573,15 @@ The test must call the safety supervisor before MotionManager at the stale times
 - Create: `docs/cpg-gait-performance.md`
 - Modify: `RoboBeetleFirmware/CMakeLists.txt` only for the benchmark option and source registration
 - Modify: `RoboBeetleFirmware/Core/App/app_main.c` only for the benchmark entry point when the option is enabled
+- Create: `RoboBeetleFirmware/Core/App/cpg_target_benchmark.h`
+- Create: `RoboBeetleFirmware/Core/App/cpg_target_benchmark.c`
 - Modify: `RoboBeetleFirmware/tests/app_main_jy901s_api_tests.c` for compile-contract coverage
 
 - [ ] **Step 1: Add the disabled-by-default target option.** Define the option without changing the normal firmware build:
 
 ~~~cmake
 option(ROBOBEETLE_CPG_TARGET_BENCHMARK
-       "Enable STM32F407 CPG DWT benchmark"
+       "Enable the STM32F407 CPG DWT benchmark"
        OFF)
 ~~~
 
@@ -593,6 +615,12 @@ Enable `CoreDebug->DEMCR` and `DWT->CTRL` once, warm up the core, run a fixed re
   - 70 ms catch-up;
   - 100 ms catch-up;
   - maximum bounded catch-up of 100 substeps.
+- [ ] Add `RoboBeetleFirmware/Core/App/cpg_target_benchmark.h` and
+  `cpg_target_benchmark.c` with a debugger-readable volatile report containing
+  SystemCoreClock, repetition count, min/median/max cycles, and converted
+  microseconds for every required case. Keep the real `__DSB`/`__ISB` path
+  target-only; the host compile contract may use a no-op barrier macro solely
+  to check the C/header integration on x86.
 - [ ] Ensure the target benchmark uses DWT->CYCCNT with the required counter enable, barriers, warm-up, and repeated measurements. Report clock frequency, repetition count, min/max/median or equivalent robust statistic, cycles, and converted microseconds. Keep benchmark output separate from Protocol V2 and do not alter runtime behavior when the option is off.
 - [ ] Add a host compile contract for benchmark-disabled and benchmark-enabled preprocessor paths where MCU headers are available; do not pretend the host compiler is target evidence.
 - [ ] Use the actual firmware toolchain to record baseline and CPG image sizes. If arm-none-eabi-gcc or the build tooling is absent, record the exact command and failure as [UNKNOWN]/not run; do not switch to float and do not claim target performance.
@@ -663,7 +691,7 @@ The test must run the same initialized production profile twice, use a fixed tra
 
 - [ ] Run git diff --check.
 - [ ] Run rg -n -i ("T" + "B" + "D|" + "T" + "O" + "D|" + "F" + "I" + "X" + "M" + "E") docs/cpg-gait-core.md docs/cpg-gait-performance.md docs/superpowers/specs/2026-09-14-cpg-gait-core-design.md and resolve every hit in changed documentation.
-- [ ] Run the complete host test runner. The expected final count is existing 20 executables plus four new CPG core, adapter, safety/catch-up, and period executables, with the app compile contract. Report actual count and every failure.
+- [ ] Run the complete host test runner. The expected final count is existing 20 executables plus four new CPG core, adapter, safety/catch-up, and period executables, plus nine app/backend/benchmark compile-contract objects. Report actual count and every failure.
 - [ ] Run app compile contract with both backend selections and any available CMake/Ninja firmware configure/build. If Qt6 is unavailable, report exact configure boundary and do not label it a pass.
 - [ ] Run ARM target build/size/timing commands if toolchain is available. Otherwise include exact not-run evidence and leave performance status [UNKNOWN].
 - [ ] Inspect git status --short, git diff --stat, and full diff for scope. Confirm no daplink.cfg, leak-telemetry plan, Qt, Protocol, calibration, or unrelated files changed.
