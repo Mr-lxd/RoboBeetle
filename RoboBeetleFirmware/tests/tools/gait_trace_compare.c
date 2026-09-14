@@ -331,11 +331,15 @@ int gait_trace_compare_generate(const char *output_dir)
     success = true;
 
 cleanup:
-    if (!close_file(&simple_file) ||
-        !close_file(&cpg_file) ||
-        !close_file(&internal_file))
     {
-        success = false;
+        const bool simple_closed = close_file(&simple_file);
+        const bool cpg_closed = close_file(&cpg_file);
+        const bool internal_closed = close_file(&internal_file);
+
+        if (!simple_closed || !cpg_closed || !internal_closed)
+        {
+            success = false;
+        }
     }
     return success ? 0 : 1;
 }
