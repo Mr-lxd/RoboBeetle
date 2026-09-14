@@ -252,5 +252,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host 'PASS cpg_target_benchmark.c compile contract'
 
+$clockContractScript = Join-Path $PSScriptRoot 'clock_config_contract_tests.ps1'
+& powershell -NoProfile -ExecutionPolicy Bypass -File $clockContractScript
+if ($LASTEXITCODE -ne 0) {
+    throw 'Clock configuration contract check failed'
+}
+
 Write-Host ("All Firmware host tests passed: " + $cases.Count +
     " executables + 9 app/backend/benchmark compile-contract objects")
