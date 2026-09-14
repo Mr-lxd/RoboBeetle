@@ -154,8 +154,8 @@ The following evidence is deliberately not inferred from host tests:
 | SimpleGait Front/Rear physical anti-phase | **Hardware Verified** |
 | FrontAxis desk direction: `+10` downward / `-10` upward | **Bench Mechanical Verified** |
 | FrontAxis post-fix end-to-end retest | **Pending Hardware Verification** |
-| STM32F407 ARM build/program verify | **Pending** under the existing target gate |
-| CPG FLASH/RAM and DWT timing evidence | **Pending**; production core remains `double` |
+| STM32F407 ARM build | **PASS** in the supplied PR #15 target evidence; Program Verify not supplied |
+| CPG FLASH/RAM and DWT timing evidence | **Measured** in the supplied PR #15 target evidence; production core remains `double`; FLASH/RAM deltas not supplied |
 | FrontRight/FrontLeft paddle sign against the SimpleGait baseline | **Hardware Verified** |
 | Explicit logical-to-physical side identity | **Pending explicit hardware side confirmation** |
 | Front shell operational limits: FR `1860 us`, FL `1160 us`; common Motion cap `+2800 cdeg` | **Bench Hardware Measured / Software Enforced** |

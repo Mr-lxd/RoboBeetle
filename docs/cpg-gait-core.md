@@ -62,8 +62,10 @@ by eye. That similarity is expected and non-blocking; it does not establish
 numerical identity and does not justify changing the verified CPG. True water
 propulsion, Turn hydrodynamic effectiveness, and Ascend/Descend hydrodynamics
 remain **[Pending Water Verification]**. The DWT target-performance runbook is
-in [`cpg-gait-performance.md`](cpg-gait-performance.md), with real STM32F407
-measurements still pending.
+in [`cpg-gait-performance.md`](cpg-gait-performance.md). The current supplied
+STM32F407 evidence records ARM Build **[PASS]** and a nominal isolated CPG
+deadline **[PASS]**; Program Verify and system-level foreground timing remain
+separate evidence items.
 
 ## Historical source provenance
 

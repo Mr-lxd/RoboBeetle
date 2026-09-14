@@ -1416,10 +1416,10 @@ SimpleGait mechanical-remap 诊断结果。历史表格与旧 image 的证据不
   heartbeat/liveness deadline, SafetySupervisor/liveness owns the final decision
   before any catch-up or actuator write; no post-gap CPG actuator command and no
   automatic resume are allowed after a safety abort。
-- ARM Build/Program Verify and target performance evidence (FLASH delta, RAM delta,
-  nominal 10 ms substep, representative 20/70/100 ms catch-up, and worst bounded
-  catch-up) remain **[Pending]** when ARM tools or target measurements are absent;
-  no host timing is substituted and no `double`→`float` production change is made。
+- The supplied current STM32F407 run records ARM Build **[PASS]** and target
+  performance measurements at `SystemCoreClock=16,000,000 Hz`; Program Verify
+  is not supplied, FLASH/RAM deltas lack a same-configuration baseline, and no
+  host timing is substituted. The production CPG remains `double`。
 
 ### 2026-09-14 CPG desktop physical verification
 
@@ -1443,4 +1443,34 @@ does not prove numerical identity, and does not justify changing the frozen CPG
 math. True water propulsion, Turn hydrodynamic effectiveness, and Ascend/Descend
 hydrodynamics remain **[Pending Water Verification]**. STM32F407 ARM Build,
 Program Verify, FLASH/RAM delta, nominal/catch-up timing, and bounded worst-case
-timing remain **[Pending]** until a real target run supplies those measurements。
+timing are now split by evidence: ARM Build is **[PASS]**, the supplied target
+run records the nominal and catch-up measurements below, Program Verify is
+**[Not supplied]**, and FLASH/RAM deltas are **[Not supplied]** without a
+same-configuration baseline。
+
+### 2026-09-15 PR #15 STM32F407 target performance evidence
+
+The current real target evidence supplied for PR #15 used
+`SystemCoreClock=16,000,000 Hz` and `repetitions=32`. Values are recorded
+exactly; no estimates are added.
+
+| Case | Min | Median | Max |
+| --- | ---: | ---: | ---: |
+| CPG nominal 10 ms | 3071 us | 3072 us | 3076 us |
+| 20 ms catch-up | 6127 us | 6127 us | 6131 us |
+| 70 ms catch-up | 25504 us | 25508 us | 25510 us |
+| 100 ms catch-up | 39436 us | 39440 us | 39442 us |
+| 1000 ms bounded / 100 substeps | 478438 us | 478446 us | 478453 us |
+
+Nominal cycles were `49149 / 49153 / 49217` min/median/max. The supplied
+evidence did not include catch-up cycle fields, so they are not reconstructed
+from microseconds. Benchmark ELF usage was FLASH `55060 B / 512 KB = 10.50%`
+and RAM `5440 B / 128 KB = 4.15%`.
+
+The isolated nominal CPG deadline is **[PASS]** because `3072 us < 10000 us`,
+with `30.72%` median compute utilization at 16 MHz. This does not claim a
+large system-level real-time margin: UART, sensors, protocol, and foreground
+work were not included. The `1000 ms` bounded case is not normal operating
+load. Safety-before-catch-up remains mandatory: SafetySupervisor/liveness must
+abort before MotionManager can perform catch-up or emit a post-gap actuator
+command, and recovery must not auto-resume motion。

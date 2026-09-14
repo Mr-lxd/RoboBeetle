@@ -50,21 +50,47 @@ trajectory telemetry.
 
 ### Target evidence matrix
 
-The target measurements below are **[Pending User STM32F407 Run]**. No host
-executable time, visual desktop result, or unconnected debugger estimate may
-populate them.
+The following values are the current real STM32F407 target evidence supplied
+for PR #15. They are recorded exactly; no host-executable timing, visual
+desktop result, or unconnected debugger estimate is substituted. The run used
+`SystemCoreClock=16,000,000 Hz` and `repetitions=32`.
 
-| Evidence | Status | Required direct evidence |
+| Evidence | Status | Recorded result |
 | --- | --- | --- |
-| ARM firmware build | **[Pending User STM32F407 Run]** | Successful STM32F407 build with captured toolchain and linker configuration |
-| FLASH delta | **[Pending User STM32F407 Run]** | Same-configuration baseline/CPG `text`, `data`, and `bss` comparison |
-| RAM delta | **[Pending User STM32F407 Run]** | Same-configuration baseline/CPG `data + bss` comparison |
-| nominal 10 ms CPG substep | **[Pending User STM32F407 Run]** | DWT cycle and microsecond report |
-| 20 ms catch-up | **[Pending User STM32F407 Run]** | DWT report for two source-equivalent substeps |
-| 70 ms catch-up | **[Pending User STM32F407 Run]** | DWT report for seven source-equivalent substeps |
-| 100 ms catch-up | **[Pending User STM32F407 Run]** | DWT report for ten source-equivalent substeps |
-| worst bounded catch-up | **[Pending User STM32F407 Run]** | DWT report for 100 executed substeps from 1000 ms input |
-| real-time budget decision | **[Pending User STM32F407 Run]** | Measured worst case compared with the project budget; no threshold is assumed here |
+| ARM firmware build | **[ARM Build: PASS]** | STM32F407 target build completed |
+| target clock | **[Measured target evidence]** | `SystemCoreClock=16,000,000 Hz` |
+| benchmark ELF FLASH | **[Measured target evidence]** | `55060 B / 512 KB = 10.50%` |
+| benchmark ELF RAM | **[Measured target evidence]** | `5440 B / 128 KB = 4.15%` |
+| FLASH delta | **[Not supplied]** | No same-configuration pre-CPG baseline size was supplied; the absolute benchmark ELF size above is retained |
+| RAM delta | **[Not supplied]** | No same-configuration pre-CPG baseline size was supplied; the absolute benchmark ELF size above is retained |
+| nominal 10 ms CPG substep | **[Measured target evidence]** | `3071 / 3072 / 3076 us` min/median/max; cycles `49149 / 49153 / 49217` min/median/max |
+| 20 ms catch-up | **[Measured target evidence]** | `6127 / 6127 / 6131 us` min/median/max |
+| 70 ms catch-up | **[Measured target evidence]** | `25504 / 25508 / 25510 us` min/median/max |
+| 100 ms catch-up | **[Measured target evidence]** | `39436 / 39440 / 39442 us` min/median/max |
+| worst bounded catch-up | **[Measured target evidence]** | `478438 / 478446 / 478453 us` min/median/max for 100 executed substeps from 1000 ms input |
+| nominal isolated CPG deadline | **[PASS]** | `3072 us < 10000 us`; median compute utilization `30.72%` |
+| system-level foreground timing margin | **[Pending separate investigation]** | UART, sensor, protocol, and foreground jitter are not included in this isolated benchmark |
+| Program Verify | **[Not supplied]** | No independent DAP/ST-LINK program-verification record was supplied |
+
+Catch-up cycle fields other than the nominal row were not included in the
+supplied evidence and are intentionally not reconstructed from microseconds.
+
+### PR #15 target-performance conclusion
+
+The nominal 10 ms CPG isolated target compute deadline is **PASS** because
+`3072 us < 10000 us`. The nominal median compute utilization at the measured
+16 MHz clock is **30.72%**.
+
+This is an isolated CPG compute result. It does not establish a large
+system-level real-time margin: UART, sensor, protocol, and foreground work are
+outside the measurement. System-level foreground timing margin requires a
+separate scheduler/UART jitter investigation. Servo-stutter investigation is
+explicitly deferred.
+
+The `1000 ms` bounded case is not a normal operating load. Its median is
+`478446 us`, and a foreground gap beyond the heartbeat/liveness contract must
+be rejected by SafetySupervisor/liveness before MotionManager can perform
+actuator catch-up.
 
 ## DWT benchmark implementation
 
@@ -239,7 +265,9 @@ arm-none-eabi-gcc.exe=NOT_FOUND
 arm-none-eabi-size.exe=NOT_FOUND
 ```
 
-Therefore no ARM image size, DWT cycle/microsecond result, Program Verify
-result, or target real-time conclusion is claimed here. The production core
-remains `double`; a failure to meet the eventual budget must start a separate
-double-reference/float-production parity design rather than changing this PR.
+Therefore this checkout did not independently reproduce the ARM image size,
+DWT result, or Program Verify record during this documentation-only closeout.
+The recorded target values above remain the supplied STM32F407 evidence. The
+production core remains `double`; if a future clock or target run fails its
+approved budget, that must start a separate double-reference/float-production
+parity design rather than changing PR #15.

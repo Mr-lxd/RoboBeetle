@@ -4,9 +4,10 @@ This document records the Motion / Gait control foundation carried into
 `feature/cpg-gait-core`. It is a host-test/software contract. The completed
 SimpleGait mechanical baseline has Hardware Verified Front/Rear physical
 anti-phase; the latest CPG desktop physical gait is also Hardware Verified for
-the recorded desktop checks. ARM build/program performance evidence, true
-water propulsion, and hydrodynamic effectiveness remain separate pending
-categories.
+the recorded desktop checks. The supplied PR #15 evidence records ARM Build
+PASS and measured isolated CPG target performance; Program Verify and
+system-level foreground margin remain separate evidence categories. True water
+propulsion and hydrodynamic effectiveness remain pending.
 
 The normal Firmware default is `MOTION_DEFAULT_GAIT_BACKEND_CPG=1`. An
 explicit `MOTION_DEFAULT_GAIT_BACKEND_CPG=0` build retains SimpleGait as the
