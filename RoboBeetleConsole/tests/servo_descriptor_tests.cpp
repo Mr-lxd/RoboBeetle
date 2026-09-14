@@ -108,8 +108,8 @@ int main()
     expect(table[4].displayName == std::string_view("RearLeft"),
            "RearLeft display name must be ASCII and semantic");
 
-    expectSavoX(table[0], 2020, 1580, 1140, 1140, 2020);
-    expectSavoX(table[1], 1000, 1450, 1900, 1000, 1900);
+    expectSavoX(table[0], 1140, 1580, 2020, 1140, 2020);
+    expectSavoX(table[1], 1900, 1450, 1000, 1000, 1900);
     expect(table[2].hardwareName == std::string_view("HDKJ S3150D"),
            "FrontAxis hardware name must match");
     expect(table[2].angleSupported && !table[2].calibrationPending,

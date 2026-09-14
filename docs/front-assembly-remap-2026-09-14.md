@@ -9,7 +9,10 @@ change before CPG target-hardware verification:
   front leg;
 - the former physical FrontRight actuator is now on the robot's actual left
   front leg;
-- the FrontAxis actuator was installed with its physical direction reversed.
+  - the FrontAxis actuator retains the current TIM3_CH3 binding and logical
+    calibration direction; a desk observation found `ASCEND (+10 degrees)`
+    tilts the front portion downward and `DESCEND (-10 degrees)` tilts it
+    upward. This is **Bench Mechanical Verified** only.
 
 This is a descriptor-layer coordinate remap, not a gait redesign. Logical
 names, Protocol V2 IDs, masks, body-frame angle signs, CPG node semantics,
@@ -30,8 +33,8 @@ Legacy Source-Compatible CPG v1
 
 | Logical actuator | ID / mask | Physical binding | Logical calibration: negative / neutral / positive | Raw numeric command bounds |
 | --- | --- | --- | --- | --- |
-| FrontRight | `0` / `0x0001` | former FrontLeft, TIM3_CH2 / PA7 | `-45/0/+45 cdeg -> 2020/1580/1140 us` | `1140..2020 us` |
-| FrontLeft | `1` / `0x0002` | former FrontRight, TIM3_CH1 / PA6 | `-45/0/+45 cdeg -> 1000/1450/1900 us` | `1000..1900 us` |
+| FrontRight | `0` / `0x0001` | former FrontLeft, TIM3_CH2 / PA7 | `-45/0/+45 cdeg -> 1140/1580/2020 us` | `1140..2020 us` |
+| FrontLeft | `1` / `0x0002` | former FrontRight, TIM3_CH1 / PA6 | `-45/0/+45 cdeg -> 1900/1450/1000 us` | `1000..1900 us` |
 | FrontAxis (`Depth`) | `2` / `0x0004` | same physical channel, TIM3_CH3 / PB0 | `-90/0/+90 cdeg -> 2430/1745/1060 us` | `1060..2430 us` |
 | RearRight | `3` / `0x0008` | unchanged, TIM4_CH1 / PD12 | `-45/0/+45 cdeg -> 1110/1570/2030 us` | `1110..2030 us` |
 | RearLeft | `4` / `0x0010` | unchanged, TIM4_CH2 / PD13 | `-45/0/+45 cdeg -> 1940/1450/960 us` | `960..1940 us` |
@@ -41,8 +44,8 @@ reversed merely because a logical calibration endpoint decreases with angle.
 The existing signed-delta interpolation in
 `RoboBeetleFirmware/Core/Servo/servo_calibration.c` remains authoritative;
 there is no separate reverse flag. For FrontAxis, its raw envelope and
-neutral remain `1060..2430 us` and `1745 us`, while only the logical endpoint
-direction is reversed. The signed-delta midpoint results are `-45 degrees ->
+neutral remain `1060..2430 us` and `1745 us`; FrontAxis is unchanged by this
+calibration fix. Its signed-delta midpoint results remain `-45 degrees ->
 2087 us` and `+45 degrees -> 1403 us` under the existing integer truncation.
 
 The former pre-remap logical descriptor values are retained as historical
@@ -53,6 +56,34 @@ FrontRight:  TIM3_CH1 / PA6,  -45/0/+45 -> 1000/1450/1900 us, raw 1000..1900
 FrontLeft:   TIM3_CH2 / PA7,  -45/0/+45 -> 2020/1580/1140 us, raw 1140..2020
 FrontAxis:   TIM3_CH3 / PB0,  -90/0/+90 -> 1060/1745/2430 us, raw 1060..2430
 ```
+
+## Calibration evidence chain
+
+### Stage 1 — physical side swap only
+
+The first remap changed only the logical side-to-channel binding: logical
+FrontRight moved to TIM3_CH2 / the former physical FrontLeft actuator, and
+logical FrontLeft moved to TIM3_CH1 / the former physical FrontRight actuator.
+SimpleGait was deliberately kept as the known logical anti-phase baseline.
+The real bench result was that the physical front and rear paddles still moved
+in the same direction. That result showed that channel swapping alone did not
+correct the rotated front assembly: both front paddle angle coordinates were
+also inverted.
+
+### Stage 2 — final front angle-sign correction
+
+This calibration-fix commit keeps the Stage 1 physical channel swap and
+reverses only the two front logical endpoint pairs:
+
+```text
+FrontRight: TIM3_CH2, -45/0/+45 -> 1140/1580/2020 us, raw 1140..2020
+FrontLeft:  TIM3_CH1, -45/0/+45 -> 1900/1450/1000 us, raw 1000..1900
+```
+
+The change is intentionally below MotionManager. `SimpleGaitGenerator`
+continues to emit the same logical front/rear phase relationship, and CPG
+production math is unchanged. The existing signed-delta calibration function
+continues to map logical angles to pulses; no extra gait sign is applied.
 
 ## Semantic invariants
 
@@ -74,7 +105,8 @@ FrontAxis:   TIM3_CH3 / PB0,  -90/0/+90 -> 1060/1745/2430 us, raw 1060..2430
 
 Firmware descriptor, calibration, driver-binding, ServoService, Protocol
 Dispatcher, CPG/Motion/Safety host regressions, and the matching Qt descriptor
-tests pass. The front assembly remap is therefore **Software Verified**.
+tests pass. The final logical calibration contract is therefore **Software
+Verified**. This does not replace the required post-fix hardware retest.
 
 The following evidence is deliberately not inferred from host tests:
 
@@ -83,10 +115,12 @@ The following evidence is deliberately not inferred from host tests:
 | Logical descriptor/table parity | **Software Verified** |
 | Logical FrontRight -> physical TIM3_CH2 / actual right front leg | **Pending Hardware Verification** |
 | Logical FrontLeft -> physical TIM3_CH1 / actual left front leg | **Pending Hardware Verification** |
-| FrontAxis logical sign after physical reversal | **Pending Hardware Verification** |
+| FrontAxis desk direction: `+10` downward / `-10` upward | **Bench Mechanical Verified** |
+| FrontAxis post-fix end-to-end retest | **Pending Hardware Verification** |
 | STM32F407 ARM build/program verify | **Pending** under the existing target gate |
 | CPG FLASH/RAM and DWT timing evidence | **Pending**; production core remains `double` |
-| Physical Forward/Turn/Ascend/Descend behavior | **Pending** |
+| Physical FrontRight/FrontLeft sign and side mapping | **Pending Hardware Verification** |
+| Physical Forward anti-phase and Turn Left/Right side identity | **Pending Hardware Verification** |
 | Water/hydrodynamic behavior | **Pending Water Verification** |
 
 The CPG long-run host result remains a nominal-period measurement, not a
@@ -102,9 +136,9 @@ dependence and is unrelated to the mechanical remap.
 | --- | --- | --- |
 | A — FrontRight | Enable only logical FrontRight; Set Angle `+10` and `-10` | The robot's actual right front leg moves; no left-front motion |
 | B — FrontLeft | Enable only logical FrontLeft; Set Angle `+10` and `-10` | The robot's actual left front leg moves; no right-front motion |
-| C — FrontAxis | Command `0`, `+10`, and `-10` degrees | Physical direction agrees with the logical sign after the reversal |
-| D — Forward CPG | Run Forward and inspect front sides, then Turn Left/Right | Front pair is on the correct physical sides; no side swap in turns |
-| E — Ascend/Descend | Desk-only mechanical test of both logical signs | Mechanism direction only; hydrodynamic effect remains **Pending Water Verification** |
+| C — Forward | Run SimpleGait Forward | FrontRight + FrontLeft move together; rear pair moves together; front and rear pairs move physically opposite |
+| D — Turn Left/Right | Run both turn modes after the Forward check | Actual left/right side identity is preserved; no channel swap |
+| E — FrontAxis / Ascend / Descend | Command FrontAxis `0`, `+10`, `-10`; run desk-only Ascend/Descend | `+FrontAxis` tilts the front portion downward and `-FrontAxis` upward; hydrodynamic effect remains **Pending Water Verification** |
 
 Do not label any row above **Hardware Verified** until the current image is
 built, programmed, and the stated physical behavior is observed.
