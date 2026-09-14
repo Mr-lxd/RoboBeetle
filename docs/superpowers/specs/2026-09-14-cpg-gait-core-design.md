@@ -416,9 +416,24 @@ The adapter's profiles are:
 | DESCEND | Forward paddle topology | none | `-1000 cdeg * bias_scale` |
 | BACKWARD | invalid | not implemented | not applicable |
 
-Turn is implemented by applying the profile's left/right amplitude scale at
-the semantic adapter output boundary. The core retains the source-shaped
-target-amplitude vector and contains no `TURN_LEFT` or `TURN_RIGHT` branch.
+Turn is implemented by selecting a mode-specific signed target-amplitude
+vector in the semantic adapter before the next core advance. If `F` is the
+front amplitude, `R` is the rear amplitude, and `s` is the profile's reduced
+side scale, the vectors are:
+
+```text
+FORWARD/ASCEND/DESCEND: [-F, +R, +R, -F]
+TURN_LEFT:              [-F, +R, s*R, -s*F]
+TURN_RIGHT:             [-s*F, s*R, +R, -F]
+```
+
+The left pair is legacy nodes 3/2 and the right pair is legacy nodes 0/1.
+The adapter returns the current raw CPG state with only the existing global
+`amplitude_scale`; it does not apply an additional left/right output scale.
+Consequently a turn sample cannot jump solely because of mode selection. The
+next 10 ms core advances consume the new target through the legacy
+`r/r_dot/r_ddot` state and preserve the existing `theta_dot -> nu_i` feedback.
+The numerical core contains no `TURN_LEFT` or `TURN_RIGHT` branch.
 Front/rear phase topology and the signed source convention remain unchanged.
 
 `FrontAxis` is a profile bias only; it is not a fifth oscillator. ASCEND and
@@ -428,6 +443,14 @@ The adapter rounds raw logical degrees to signed centidegrees when constructing
 `joint_targets_t`. It does not clamp rear targets. Rear targets then pass
 through the existing MotionManager common sanitizer (`-3000..+4500 cdeg`) and
 the existing ServoService logical-angle and calibration checks.
+
+Adapter regressions verify both mode semantics and the dynamic production
+trajectory: each turn mode installs its expected signed target vector, the
+current sample remains the current raw output, and later 10 ms advances move
+the amplitude state toward the installed target. A 5000-step production run
+samples actual advanced CPG output, confirms exact front/rear pair symmetry,
+keeps the signed effective front/rear phase error within the documented
+approximate-phase bound, and enforces a 1500 cdeg conservative output envelope.
 
 ## Mode, reset, and ownership semantics
 
@@ -455,10 +478,13 @@ Reset and lifecycle behavior is:
    target amplitude, the core's amplitude dynamics respond smoothly, and
    MotionManager blends the old and new logical target vectors over 750 ms.
 
-The existing generator ABI supplies the mode to `sample`, so the side-scale
-differential is applied when logical targets are emitted. This keeps turn
-policy in the semantic adapter without changing source-core state or adding
-a mode branch to the numerical model.
+The existing generator ABI supplies the mode to `sample`, so the adapter
+installs the corresponding target vector when logical targets are emitted.
+During a MotionManager mode transition, the destination-mode sample is the
+last sample and therefore leaves the destination vector installed for the
+next core advance. MotionManager still owns the actuator-level 750 ms blend;
+the adapter does not change source-core state ordering or add a mode branch to
+the numerical model.
 
 ## Paper/source discrepancy record
 

@@ -162,7 +162,7 @@ The production Forward profile uses front and rear logical target amplitudes of 
 R = {-front_amplitude, +rear_amplitude, +rear_amplitude, -front_amplitude}
 ~~~
 
-This creates same-phase front and rear pairs and approximately pi-separated front versus rear output through the approved signed semantic mapping. The adapter converts logical degrees to centidegrees with double lround. Turn modes apply the profile's 0.5 reduced-side scale. ASCEND/DESCEND add only the profile FrontAxis bias. FrontAxis is not a fifth oscillator.
+This creates same-phase front and rear pairs and approximately pi-separated front versus rear output through the approved signed semantic mapping. The adapter converts logical degrees to centidegrees with double lround. For TURN_LEFT it installs the same signed vector with legacy nodes 3/2 (left front/rear) multiplied by the profile's 0.5 reduced-side scale; for TURN_RIGHT it multiplies nodes 0/1 (right front/rear). It does not post-scale the current raw output, so the next 10 ms advances move the core amplitude state toward the turn target. ASCEND/DESCEND add only the profile FrontAxis bias. FrontAxis is not a fifth oscillator.
 
 Backward is rejected by cpg_gait_generator_is_mode_valid and sample; the adapter never fakes reverse motion by sign inversion. The adapter does not apply rear limits. MotionManager remains the sole owner of the operational rear guard of -3000 to +4500 cdeg.
 

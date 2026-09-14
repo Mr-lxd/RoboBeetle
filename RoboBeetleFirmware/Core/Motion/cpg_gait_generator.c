@@ -11,12 +11,24 @@ static int32_t rounded_cdeg(double value)
 
 static void cpg_profile_target_amplitudes(
     const cpg_gait_profile_t *profile,
+    motion_mode_t mode,
     double target_amplitude[CPG_CORE_NODE_COUNT])
 {
     target_amplitude[0] = -profile->front_amplitude_deg;
     target_amplitude[1] = profile->rear_amplitude_deg;
     target_amplitude[2] = profile->rear_amplitude_deg;
     target_amplitude[3] = -profile->front_amplitude_deg;
+
+    if (mode == MOTION_TURN_LEFT)
+    {
+        target_amplitude[2] *= profile->turn_reduced_side_scale;
+        target_amplitude[3] *= profile->turn_reduced_side_scale;
+    }
+    else if (mode == MOTION_TURN_RIGHT)
+    {
+        target_amplitude[0] *= profile->turn_reduced_side_scale;
+        target_amplitude[1] *= profile->turn_reduced_side_scale;
+    }
 }
 
 static void cpg_profile_periods(
@@ -70,7 +82,10 @@ void cpg_gait_generator_init_with_profile(
 
     generator->profile = *profile;
     cpg_legacy_source_compatible_default_params(&params);
-    cpg_profile_target_amplitudes(profile, target_amplitude);
+    cpg_profile_target_amplitudes(
+        profile,
+        MOTION_FORWARD,
+        target_amplitude);
     cpg_profile_periods(profile, period_s);
     (void)memcpy(
         params.target_amplitude,
@@ -116,8 +131,7 @@ bool cpg_gait_generator_sample(
     float bias_scale,
     joint_targets_t *targets)
 {
-    double left_scale = 1.0;
-    double right_scale = 1.0;
+    double target_amplitude[CPG_CORE_NODE_COUNT];
     const double amplitude = (double)amplitude_scale;
     const double bias = (double)bias_scale;
     const cpg_core_t *core;
@@ -135,24 +149,23 @@ bool cpg_gait_generator_sample(
         return true;
     }
 
-    if (mode == MOTION_TURN_LEFT)
-    {
-        left_scale = generator->profile.turn_reduced_side_scale;
-    }
-    else if (mode == MOTION_TURN_RIGHT)
-    {
-        right_scale = generator->profile.turn_reduced_side_scale;
-    }
+    cpg_profile_target_amplitudes(
+        &generator->profile,
+        mode,
+        target_amplitude);
+    cpg_core_set_target_amplitudes(
+        &generator->core,
+        target_amplitude);
 
     core = &generator->core;
     targets->front_right_cdeg = rounded_cdeg(
-        100.0 * core->raw_output[0] * right_scale * amplitude);
+        100.0 * core->raw_output[0] * amplitude);
     targets->front_left_cdeg = rounded_cdeg(
-        100.0 * core->raw_output[3] * left_scale * amplitude);
+        100.0 * core->raw_output[3] * amplitude);
     targets->rear_right_cdeg = rounded_cdeg(
-        100.0 * core->raw_output[1] * right_scale * amplitude);
+        100.0 * core->raw_output[1] * amplitude);
     targets->rear_left_cdeg = rounded_cdeg(
-        100.0 * core->raw_output[2] * left_scale * amplitude);
+        100.0 * core->raw_output[2] * amplitude);
     targets->front_axis_cdeg = rounded_cdeg(
         generator->profile.front_axis_bias_cdeg[mode] * bias);
     return true;

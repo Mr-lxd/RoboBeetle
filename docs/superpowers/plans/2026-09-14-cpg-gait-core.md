@@ -469,11 +469,12 @@ bool cpg_gait_generator_sample(cpg_gait_generator_t *generator,
 - [ ] Define the production profile with:
   - front and rear logical amplitudes of 10 degrees;
   - nominal_period_s = 2.0 as a nominal period parameter only;
-  - a bounded turn differential applied at the adapter output boundary that preserves semantic signs;
+  - a bounded, signed mode-specific target-amplitude vector: reduce legacy
+    nodes 3/2 for TURN_LEFT and nodes 0/1 for TURN_RIGHT;
   - FrontAxis profile bias fields only;
   - no rear -30 degree clamp in this adapter.
 - [ ] Keep source-compatible 30-degree / 1-second defaults available for golden/oracle tests so adapter tests can distinguish legacy numeric reproduction from production profile policy.
-- [ ] Implement advance, sample, mode validation, and diagnostics through the existing interface. sample must convert logical degrees to centidegrees with a documented rounding policy and add only profile-level axis/turn output scaling and bias.
+- [ ] Implement advance, sample, mode validation, and diagnostics through the existing interface. sample must install the mode-specific target-amplitude vector, convert the current raw logical degrees to centidegrees with a documented rounding policy, and add only the profile-level FrontAxis bias and global amplitude scale.
 
 The adapter's core-to-joint mapping and centidegree conversion must be visible in one function:
 
@@ -486,11 +487,18 @@ targets->front_axis_cdeg = rounded_cdeg(
     generator->profile.front_axis_bias_cdeg[mode] * (double)bias_scale);
 ~~~
 
-Apply turn scaling to the semantic left or right target before conversion, and use `lround` on the double value. Do not invoke MotionManager's rear sanitizer from this file.
+Install turn scaling in the signed core target-amplitude vector before the next
+advance; do not apply a second left/right scale to the current raw output. Use
+`lround` on the double value for centidegree conversion. Do not invoke
+MotionManager's rear sanitizer from this file.
 - [ ] Add test_cpg_gait_generator.c RED/GREEN assertions for:
   - deterministic initialization;
   - logical mapping and sign/phase topology;
   - production amplitudes and nominal-period metadata;
+  - mode-specific turn target vectors, no current-sample post-scale jump,
+    and subsequent amplitude-state convergence;
+  - a long-run dynamically advanced production profile with pair symmetry,
+    approximate anti-phase, and a conservative output envelope;
   - FrontAxis as bias only;
   - Forward accepted;
   - Backward rejected or reported disabled without changing signs;
