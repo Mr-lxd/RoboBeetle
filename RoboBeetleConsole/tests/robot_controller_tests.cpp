@@ -723,28 +723,28 @@ void testPwmCalibrationAndBounds()
     rb::RobotController controller(&transport, config);
     const rb::ServoDescriptor *descriptor = rb::servoDescriptor(rb::ServoId::FrontRight);
     expect(descriptor != nullptr, "FrontRight descriptor must exist");
-    expect(descriptor->commandMinPwmUs == 1000, "SAVOX command minimum must be 1000 us");
-    expect(descriptor->neutralPwmUs == 1450, "SAVOX neutral must be 1450 us");
-    expect(descriptor->commandMaxPwmUs == 1900, "SAVOX command maximum must be 1900 us");
+    expect(descriptor->commandMinPwmUs == 1140, "SAVOX command minimum must be 1140 us");
+    expect(descriptor->neutralPwmUs == 1580, "SAVOX neutral must be 1580 us");
+    expect(descriptor->commandMaxPwmUs == 2020, "SAVOX command maximum must be 2020 us");
     controller.connectTransport({"COM_TEST", 9600});
     transport.simulateConnected();
     controller.enableServo(rb::ServoId::Servo1);
     acknowledgeLast(transport);
     const qsizetype before = transport.writes().size();
 
-    expect(!controller.setServoPwm(rb::ServoId::Servo1, 999),
+    expect(!controller.setServoPwm(rb::ServoId::Servo1, 1139),
            "SAVOX PWM below command range must be rejected");
-    expect(!controller.setServoPwm(rb::ServoId::Servo1, 1901),
+    expect(!controller.setServoPwm(rb::ServoId::Servo1, 2021),
            "SAVOX PWM above command range must be rejected");
     expect(transport.writes().size() == before, "rejected commands must not write frames");
 
-    expect(controller.setServoPwm(rb::ServoId::Servo1, 1000),
+    expect(controller.setServoPwm(rb::ServoId::Servo1, 1140),
            "SAVOX PWM minimum boundary must be accepted");
-    expect(lastPacket(transport).payload == QByteArray::fromHex("0100e803"),
+    expect(lastPacket(transport).payload == QByteArray::fromHex("01007404"),
            "SAVOX PWM minimum must be encoded as count, FrontRight, uint16 LE");
-    expect(controller.setServoPwm(rb::ServoId::Servo1, 1900),
+    expect(controller.setServoPwm(rb::ServoId::Servo1, 2020),
            "SAVOX PWM maximum boundary must be accepted");
-    expect(lastPacket(transport).payload == QByteArray::fromHex("01006c07"),
+    expect(lastPacket(transport).payload == QByteArray::fromHex("0100e407"),
            "SAVOX PWM maximum must be encoded as count, FrontRight, uint16 LE");
 }
 
@@ -965,8 +965,8 @@ void testSemanticServoCommandBoundaries()
         bool angleSupported;
     };
     const BoundaryCase cases[] = {
-        {rb::ServoId::FrontRight, 1000, 1900, -4500, 4500, true},
-        {rb::ServoId::FrontLeft, 1140, 2020, -4500, 4500, true},
+        {rb::ServoId::FrontRight, 1140, 2020, -4500, 4500, true},
+        {rb::ServoId::FrontLeft, 1000, 1900, -4500, 4500, true},
         {rb::ServoId::FrontAxis, 1060, 2430, -9000, 9000, true},
         {rb::ServoId::RearRight, 1110, 2030, -4500, 4500, true},
         {rb::ServoId::RearLeft, 960, 1940, -4500, 4500, true},

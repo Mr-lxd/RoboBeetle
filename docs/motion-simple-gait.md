@@ -157,7 +157,7 @@ already in its LOW window when output is disabled. No runt pulse is acceptable.
 FrontRight, FrontLeft, FrontAxis, RearRight, RearLeft
 ```
 
-The current table-driven provisional profile uses 0.5 Hz, 1000 cdeg paddle
+The fallback `SimpleGaitGenerator` table uses 0.5 Hz, 1000 cdeg paddle
 amplitude, a π front/rear phase relation, same-phase front and rear pairs,
 50% amplitude on the reduced side for turning, and ±1000 cdeg FrontAxis bias
 for ASCEND/DESCEND candidates. `FORWARD` keeps the approved front/rear
@@ -167,6 +167,12 @@ SimpleGait profile and remains Pending. Paddle modes drive the four paddles;
 ASCEND and DESCEND require all five enabled channels. Rear operational output
 is clamped to −3000…+4500 cdeg with a diagnostic counter. These values are
 bring-up parameters, not hydrodynamic or water-tested calibration.
+
+The production Legacy Source-Compatible CPG profile uses `2.0 s` as a nominal
+period parameter. Its measured steady-state period is not assumed to be exactly
+`2.0 s` or `0.5 Hz`; the source-compatible `nu_i` dependence determines the
+observed frequency. See [`cpg-gait-core.md`](cpg-gait-core.md) for the current
+long-run measurement.
 
 The target path is intentionally explicit:
 

@@ -108,15 +108,15 @@ int main()
     expect(table[4].displayName == std::string_view("RearLeft"),
            "RearLeft display name must be ASCII and semantic");
 
-    expectSavoX(table[0], 1000, 1450, 1900, 1000, 1900);
-    expectSavoX(table[1], 2020, 1580, 1140, 1140, 2020);
+    expectSavoX(table[0], 2020, 1580, 1140, 1140, 2020);
+    expectSavoX(table[1], 1000, 1450, 1900, 1000, 1900);
     expect(table[2].hardwareName == std::string_view("HDKJ S3150D"),
            "FrontAxis hardware name must match");
     expect(table[2].angleSupported && !table[2].calibrationPending,
            "FrontAxis must support calibrated angles and have calibration complete");
-    expect(table[2].electricalMinPwmUs == 1060 && table[2].neutralPwmUs == 1745
-               && table[2].electricalMaxPwmUs == 2430,
-           "FrontAxis electrical calibration must match 1060/1745/2430 us");
+    expect(table[2].electricalMinPwmUs == 2430 && table[2].neutralPwmUs == 1745
+               && table[2].electricalMaxPwmUs == 1060,
+           "FrontAxis electrical calibration must match 2430/1745/1060 us");
     expect(table[2].electricalMinAngleCdeg == -9000
                && table[2].electricalMaxAngleCdeg == 9000,
            "FrontAxis calibration angle envelope must match +/-90 degrees");
