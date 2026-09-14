@@ -30,7 +30,8 @@
 #include <stdint.h>
 
 #ifndef MOTION_DEFAULT_GAIT_BACKEND_CPG
-#define MOTION_DEFAULT_GAIT_BACKEND_CPG 1
+/* Diagnostic bench image: isolate mechanical remap with SimpleGait. */
+#define MOTION_DEFAULT_GAIT_BACKEND_CPG 0
 #endif
 
 static uint8_t protocol_wire_buffer[

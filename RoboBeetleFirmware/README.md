@@ -48,6 +48,22 @@ contract.
 
 ## Current Motion / SimpleGait foundation — [Implemented / Software Verified]
 
+Current bench image evidence:
+
+```text
+Motion backend: SimpleGait (bench-remap verification)
+```
+
+`Core/App/app_main.c` defaults `MOTION_DEFAULT_GAIT_BACKEND_CPG` to `0`, so
+the normal Debug/bench build passes only
+`simple_gait_generator_interface(&simple_gait_generator)` to
+`MotionManager`. The CPG sources remain linked and all CPG tests remain
+required. A later CPG verification image may explicitly compile with
+`-DMOTION_DEFAULT_GAIT_BACKEND_CPG=1`; this temporary default is not a CPG
+retirement and does not establish physical or hydrodynamic verification. The
+separate `ROBOBEETLE_CPG_TARGET_BENCHMARK` option remains OFF by default. See
+[`../docs/simple-gait-bench-remap-2026-09-14.md`](../docs/simple-gait-bench-remap-2026-09-14.md).
+
 Protocol V2 `SetMotionMode` (`0x15`) uses the exact three-byte payload
 `schema=1, mode, action`. The stable mode order is `STOP`, `FORWARD`,
 `BACKWARD`, `TURN_LEFT`, `TURN_RIGHT`, `ASCEND`, `DESCEND`; `STOP` uses the
@@ -643,7 +659,7 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Motion, Servo, Safety, and Sensors modules and their include directories. The reproducible Firmware host gate is `powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run_host_tests.ps1` from `RoboBeetleFirmware`; it compiles and runs all 20 executable test sources, including the SimpleGait, MotionManager, Motion-aware Protocol Dispatcher, and PWM safe-stop coverage, plus the separate `app_main_jy901s_api.c` compile contract. The runner uses C11, `-Wall -Wextra -Werror`, host HAL stubs where required, and `-lm` for the deterministic sine gait. These host checks complement, but do not replace, the real ARM target build.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Motion, Servo, Safety, and Sensors modules and their include directories. The reproducible Firmware host gate is `powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run_host_tests.ps1` from `RoboBeetleFirmware`; it compiles and runs all 25 executable test sources, including the SimpleGait, app-main SimpleGait backend-selection, MotionManager, Motion-aware Protocol Dispatcher, CPG, and PWM safe-stop coverage, plus the four backend/benchmark app compile contracts and the CPG benchmark compile contract. The runner uses C11, `-Wall -Wextra -Werror`, host HAL stubs where required, and `-lm` for the deterministic sine gait. These host checks complement, but do not replace, the real ARM target build.
 
 ## App/Main maintainability audit（Historical Reference: PR #6 old image）
 

@@ -83,6 +83,35 @@ $cases = @(
         'Core/Servo/servo_pwm_stop_policy.c',
         'Core/Safety/safety_supervisor.c'
     ); Link = @('-lm'); Extra = $halWarningArgs }
+    @{ Name = 'app_main_backend_tests'; Sources = @(
+        'tests/app_main_backend_tests.c',
+        'Core/App/app_main.c',
+        'Core/Src/rb_protocol_v2.c',
+        'Core/Communication/ring_buffer.c',
+        'Core/Communication/uart_transport_stm32.c',
+        'Core/Communication/jy901s_transport_stm32.c',
+        'Core/Communication/depth_transport_stm32.c',
+        'Core/Communication/depth_telemetry.c',
+        'Core/Communication/imu_telemetry_policy.c',
+        'Core/Communication/telemetry_scheduler.c',
+        'Core/Communication/protocol_dispatcher.c',
+        'Core/Motion/cpg_core.c',
+        'Core/Motion/cpg_gait_generator.c',
+        'Core/Motion/simple_gait_generator.c',
+        'Core/Motion/motion_manager.c',
+        'Core/Sensors/leak_sensor.c',
+        'Core/Sensors/leak_sensor_stm32.c',
+        'Core/Sensors/leak_telemetry_policy.c',
+        'Core/Sensors/jy901s_parser.c',
+        'Core/Sensors/jy901s_telemetry.c',
+        'Core/Sensors/depth_parser.c',
+        'Core/Servo/servo_calibration.c',
+        'Core/Servo/servo_descriptor.c',
+        'Core/Servo/servo_service.c',
+        'Core/Servo/servo_driver_stm32.c',
+        'Core/Servo/servo_pwm_stop_policy.c',
+        'Core/Safety/safety_supervisor.c'
+    ); Link = @('-lm', '-Wl,--wrap=motion_manager_init'); Extra = $halWarningArgs }
 )
 
 function Invoke-HostCase {

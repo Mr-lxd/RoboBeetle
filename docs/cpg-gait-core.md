@@ -15,7 +15,7 @@ Legacy Source-Compatible CPG v1
     -> ServoCalibration
 ~~~
 
-SimpleGaitGenerator remains available as an alternate backend. Forward is implemented. Backward remains pending/disabled. This implementation does not add closed-loop CPG, IMU feedback, depth feedback, ROS2, Protocol V2, Qt gait selection, or legacy raw PWM/CCR mappings.
+SimpleGaitGenerator remains available as an alternate backend. Forward is implemented. Backward remains pending/disabled. Before CPG target/hardware verification, the normal Debug/bench image intentionally selects SimpleGait as a temporary mechanical-remap diagnostic; see [`simple-gait-bench-remap-2026-09-14.md`](simple-gait-bench-remap-2026-09-14.md). This does not add closed-loop CPG, IMU feedback, depth feedback, ROS2, Protocol V2, Qt gait selection, or legacy raw PWM/CCR mappings.
 
 ## Historical source provenance
 
