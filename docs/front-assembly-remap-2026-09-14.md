@@ -88,6 +88,24 @@ continues to emit the same logical front/rear phase relationship, and CPG
 production math is unchanged. The existing signed-delta calibration function
 continues to map logical angles to pulses; no extra gait sign is applied.
 
+## SimpleGait mechanical-remap verification closeout
+
+The SimpleGait diagnostic image was exercised on the installed mechanism after
+the front remap, front angle-sign correction, and shell-limit checkpoint. The
+Forward result is **Hardware Verified** for this bench baseline: the FrontRight
+and FrontLeft pair moves in the same phase, the RearRight and RearLeft pair
+moves in the same phase, and the front group moves physically opposite to the
+rear group, reversing after a half cycle. The previous Front/Rear
+same-direction anomaly is therefore **Closed for SimpleGait**.
+
+This result freezes the current front remap and sign contract; it does not
+change either calibration tuple, either raw shell-safe command bound, or the
+Motion front cap. The final front paddle sign is **Hardware Verified against
+the SimpleGait bench baseline**, and the installed shell limits are
+**Bench Hardware Measured**. True water propulsion, Turn effectiveness,
+Ascend/Descend hydrodynamic effect, and physical CPG gait remain separate
+pending evidence categories.
+
 ## Semantic invariants
 
 - `SERVO_ID_FRONT_RIGHT` always means the robot's actual right front leg;
@@ -124,13 +142,19 @@ The following evidence is deliberately not inferred from host tests:
 | Logical descriptor/table parity | **Software Verified** |
 | Logical FrontRight -> physical TIM3_CH2 / actual right front leg | **Pending explicit hardware side confirmation** |
 | Logical FrontLeft -> physical TIM3_CH1 / actual left front leg | **Pending explicit hardware side confirmation** |
+| SimpleGait Front/Rear physical anti-phase | **Hardware Verified** |
 | FrontAxis desk direction: `+10` downward / `-10` upward | **Bench Mechanical Verified** |
 | FrontAxis post-fix end-to-end retest | **Pending Hardware Verification** |
 | STM32F407 ARM build/program verify | **Pending** under the existing target gate |
 | CPG FLASH/RAM and DWT timing evidence | **Pending**; production core remains `double` |
-| Physical FrontRight/FrontLeft sign and side mapping | **Pending Hardware Verification** |
-| Front shell operational limits: FR `1860 us`, FL `1160 us`; common Motion cap `+2800 cdeg` | **Software Verified / Bench Measured input** |
-| Physical Forward anti-phase and Turn Left/Right side identity | **Pending Hardware Verification** |
+| FrontRight/FrontLeft paddle sign against the SimpleGait baseline | **Hardware Verified** |
+| Explicit logical-to-physical side identity | **Pending explicit hardware side confirmation** |
+| Front shell operational limits: FR `1860 us`, FL `1160 us`; common Motion cap `+2800 cdeg` | **Bench Hardware Measured / Software Enforced** |
+| SimpleGait physical Forward anti-phase | **Hardware Verified** |
+| True forward propulsion | **Pending Water Verification** |
+| Turn effectiveness | **Pending Water Verification** |
+| Physical CPG gait | **Pending Hardware Verification** |
+| Ascend/Descend hydrodynamic effect | **Pending Water Verification** |
 | Water/hydrodynamic behavior | **Pending Water Verification** |
 
 The CPG long-run host result remains a nominal-period measurement, not a
@@ -141,10 +165,10 @@ ratio `0.752413793`; this is governed by the source-compatible `nu_i`
 dependence and is unrelated to the mechanical remap.
 
 The current SimpleGait amplitude is only `+/-10 degrees`, well below the
-`+28 degree` front cap. Therefore the automatic Forward same-direction
-anomaly is still open and is not explained or claimed solved by this shell
-limit. The static anti-phase pose below is required before routing the next
-root-cause investigation.
+`+28 degree` front cap, so the shell limit was not the explanation for the
+old same-direction symptom. The latest installed SimpleGait result now closes
+that symptom for this backend. The static anti-phase pose and recorded
+Forward result remain the mechanical reference for the next CPG validation.
 
 ## Required post-push hardware checklist
 
@@ -152,16 +176,16 @@ root-cause investigation.
 | --- | --- | --- |
 | A — physical identity | Operate only Qt logical FrontRight at `+10` and `-10`, then only Qt logical FrontLeft at `+10` and `-10`; record the actual physical side for each | Explicit table `logical FrontRight -> physical ?` and `logical FrontLeft -> physical ?`; no inference from historical wiring |
 | B — static anti-phase | Neutral all paddles, then set `FrontRight=+10`, `FrontLeft=+10`, `RearRight=-10`, `RearLeft=-10`; repeat with every sign reversed | First pose: front pair backward/rear pair forward; second pose: front pair forward/rear pair backward |
-| C — automatic Forward | Run SimpleGait Forward only after A/B | Front pair same-phase, rear pair same-phase, front/rear physical anti-phase; current same-direction symptom remains **Pending** until observed |
-| D — Turn Left/Right | Run both turn modes after the static Forward check | Actual left/right side identity is preserved; no channel swap |
+| C — automatic Forward | Run SimpleGait Forward only after A/B | Front pair same-phase, rear pair same-phase, front/rear physical anti-phase; recorded result **Hardware Verified** for the SimpleGait baseline |
+| D — Turn Left/Right | Run both turn modes after the static Forward check | Actual left/right side identity and water effectiveness remain **Pending Water Verification** |
 | E — FrontAxis / Ascend / Descend | Command FrontAxis `0`, `+10`, `-10`; run desk-only Ascend/Descend | `+FrontAxis` tilts the front portion downward and `-FrontAxis` upward; hydrodynamic effect remains **Pending Water Verification** |
 
 Do not label any row above **Hardware Verified** until the current image is
 built, programmed, and the stated physical behavior is observed.
 
-If static pose B is physically anti-phase but automatic Forward remains
-same-direction, keep calibration unchanged and investigate Motion runtime,
-backend selection, transition, or actuator command path. If static pose B is
-also physically same-direction, investigate logical ID/physical channel
-identity or rear logical sign from the recorded measurements; do not choose a
-new mapping from assumption alone.
+The recorded SimpleGait baseline is the reference boundary for the next phase.
+If CPG Forward is physically wrong while this SimpleGait baseline remains
+correct, keep calibration unchanged and investigate CPG state, semantic
+adapter, backend selection, transition, or actuator command path. Do not
+reopen the front remap from a CPG-only symptom. Any contradictory new physical
+measurement must be recorded before changing the mapping.

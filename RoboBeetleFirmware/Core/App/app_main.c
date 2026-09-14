@@ -30,8 +30,8 @@
 #include <stdint.h>
 
 #ifndef MOTION_DEFAULT_GAIT_BACKEND_CPG
-/* Diagnostic bench image: isolate mechanical remap with SimpleGait. */
-#define MOTION_DEFAULT_GAIT_BACKEND_CPG 0
+/* Normal bench image: validate the source-compatible CPG backend. */
+#define MOTION_DEFAULT_GAIT_BACKEND_CPG 1
 #endif
 
 static uint8_t protocol_wire_buffer[

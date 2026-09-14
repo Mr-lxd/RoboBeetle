@@ -15,7 +15,35 @@ Legacy Source-Compatible CPG v1
     -> ServoCalibration
 ~~~
 
-SimpleGaitGenerator remains available as an alternate backend. Forward is implemented. Backward remains pending/disabled. Before CPG target/hardware verification, the normal Debug/bench image intentionally selects SimpleGait as a temporary mechanical-remap diagnostic; see [`simple-gait-bench-remap-2026-09-14.md`](simple-gait-bench-remap-2026-09-14.md). This does not add closed-loop CPG, IMU feedback, depth feedback, ROS2, Protocol V2, Qt gait selection, or legacy raw PWM/CCR mappings.
+SimpleGaitGenerator remains available as an alternate backend. Its Forward
+mechanical-remap baseline is **Hardware Verified**: the front pair and rear
+pair are each same-phase, and the installed front group is physically
+anti-phase to the rear group. Backward remains pending/disabled. The normal
+Debug/bench image now defaults to CPG with
+`MOTION_DEFAULT_GAIT_BACKEND_CPG=1`; an explicit `=0` build reproduces the
+completed SimpleGait diagnostic baseline. This does not add closed-loop CPG,
+IMU feedback, depth feedback, ROS2, Protocol V2, Qt gait selection, or legacy
+raw PWM/CCR mappings.
+
+## Backend selection and debug boundary
+
+`app_main_init()` initializes both generator objects but registers exactly one
+`GaitGenerator` with MotionManager according to the compile-time backend
+selection. The default `=1` path is
+
+```text
+Qt -> Protocol Motion -> MotionManager -> CPGGaitGenerator
+    -> LogicalJointTargets -> Motion common guard -> ServoService
+    -> ServoCalibration -> PWM
+```
+
+The explicit `MOTION_DEFAULT_GAIT_BACKEND_CPG=0` path selects
+`SimpleGaitGenerator` through the same downstream pipeline and is retained as
+the installed mechanical baseline. If CPG later fails the physical
+Front/Rear anti-phase check while this SimpleGait result remains correct, the
+debug boundary is CPG state, semantic adapter, backend selection, transition,
+or actuator command path. Do not reopen Servo calibration or the front remap
+from a CPG-only symptom. Physical CPG gait remains **Pending**.
 
 ## Historical source provenance
 
@@ -177,7 +205,7 @@ Safety-before-catch-up is enforced in two places:
 
 Therefore a 700 ms foreground gap after a stale heartbeat cannot run 70 CPG steps and cannot emit a ServoService command. A stale abort leaves MotionManager faulted; a later heartbeat alone does not auto-resume it.
 
-RoboBeetleFirmware/tests/test_cpg_safety_catchup.c covers the active-motion -> timeout gap -> safety abort -> no post-gap CPG step -> no post-gap Servo write -> no auto-resume sequence, plus live 20/70/100 ms catch-up and common MotionManager front/rear clamping.
+RoboBeetleFirmware/tests/test_cpg_safety_catchup.c covers the active-motion -> timeout gap -> safety abort -> no post-gap CPG step -> no post-gap Servo write -> no auto-resume sequence, plus live 20/70/100 ms catch-up, CPG output beyond the installed front/rear limits, and common MotionManager front/rear clamping before ServoService observes the target.
 
 ## Long-run period evidence
 

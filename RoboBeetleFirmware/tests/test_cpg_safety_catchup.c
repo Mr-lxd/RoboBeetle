@@ -185,9 +185,11 @@ static void test_live_catch_up_has_expected_substeps(void)
                &fixture.generator.core) == steps_before + 19U);
 }
 
-static void test_rear_clamp_remains_in_motion_manager(void)
+static void test_cpg_output_clamp_remains_in_motion_manager(void)
 {
     fixture_t fixture;
+    int16_t front_right_angle;
+    int16_t front_left_angle;
     int16_t rear_right_angle;
     int16_t rear_left_angle;
 
@@ -198,10 +200,20 @@ static void test_rear_clamp_remains_in_motion_manager(void)
         760U);
     assert(motion_manager_process(&fixture.manager, 760U) ==
            MOTION_MANAGER_RESULT_OK);
+    fixture.generator.core.output_memory[0] = 100.0;
     fixture.generator.core.output_memory[1] = 100.0;
     fixture.generator.core.output_memory[2] = 100.0;
+    fixture.generator.core.output_memory[3] = 100.0;
     assert(motion_manager_process(&fixture.manager, 770U) ==
            MOTION_MANAGER_RESULT_OK);
+    assert(servo_service_logical_angle_cdeg(
+               &fixture.servo_service,
+               SERVO_ID_FRONT_RIGHT,
+               &front_right_angle));
+    assert(servo_service_logical_angle_cdeg(
+               &fixture.servo_service,
+               SERVO_ID_FRONT_LEFT,
+               &front_left_angle));
     assert(servo_service_logical_angle_cdeg(
                &fixture.servo_service,
                SERVO_ID_REAR_RIGHT,
@@ -210,16 +222,18 @@ static void test_rear_clamp_remains_in_motion_manager(void)
                &fixture.servo_service,
                SERVO_ID_REAR_LEFT,
                &rear_left_angle));
+    assert(front_right_angle == MOTION_FRONT_MAX_CDEG);
+    assert(front_left_angle == MOTION_FRONT_MAX_CDEG);
     assert(rear_right_angle == MOTION_REAR_MAX_CDEG);
     assert(rear_left_angle == MOTION_REAR_MAX_CDEG);
     assert(motion_manager_operational_clamp_count(
-               &fixture.manager) >= 2U);
+               &fixture.manager) >= 4U);
 }
 
 int main(void)
 {
     test_safety_abort_precedes_stale_catch_up();
     test_live_catch_up_has_expected_substeps();
-    test_rear_clamp_remains_in_motion_manager();
+    test_cpg_output_clamp_remains_in_motion_manager();
     return 0;
 }

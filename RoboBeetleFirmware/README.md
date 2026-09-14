@@ -1,6 +1,6 @@
 # RoboBeetleFirmware
 
-RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for the Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, the PR #11 low-rate JY901S telemetry path, and the first Motion / SimpleGait foundation. This README records the merged hardware-verified modularization baseline, the PR #8 wiring baseline, the PR #9 leak-status hardware acceptance, the PR #10/PR #11 JY901S evidence boundaries, the PR #13 final four-paddle calibration contract, and the bench-provisional STOP contract. The JY901S physical receive and end-to-end monitoring path are hardware verified; the Motion/simple-gait source has host-test evidence, while this feature image's ARM Build, Program Verify, and Hardware Verified statuses remain **[Pending]**. Separate ROVMAKER depth-sensor calibration, USART3 UART/checksum physical-link quality, body-frame mapping, and final magnetic/yaw calibration remain pending.
+RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for the Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, the PR #11 low-rate JY901S telemetry path, and the Motion / CPG foundation with a completed SimpleGait mechanical baseline. This README records the merged hardware-verified modularization baseline, the PR #8 wiring baseline, the PR #9 leak-status hardware acceptance, the PR #10/PR #11 JY901S evidence boundaries, the PR #13 final four-paddle calibration contract, the SimpleGait Front/Rear anti-phase hardware result, and the bench-provisional STOP contract. The JY901S physical receive and end-to-end monitoring path and the SimpleGait mechanical baseline are hardware verified within their stated boundaries; this feature image's ARM Build, Program Verify, and physical CPG gait statuses remain **[Pending]**. Separate ROVMAKER depth-sensor calibration, USART3 UART/checksum physical-link quality, body-frame mapping, water propulsion, and final magnetic/yaw calibration remain pending.
 
 The recent Servo, LeakStatus, and JY901S hardware runs used the wired DAP UART/COM13 host path above. APC220 is an earlier/legacy transport record, was not enabled in those runs, and is not current JY901S or PR #11 hardware evidence.
 
@@ -34,7 +34,7 @@ The four paddle servos share one logical convention: `0 degrees` is mechanical n
 
 `FrontAxis/Depth` retains its raw envelope `1060–2430 us` and Neutral `1745 us`, with logical calibration `2430 us = -90 degrees`, `1745 us = 0 degrees`, and `1060 us = +90 degrees`. The desk-only mechanical direction `+10 degrees` downward / `-10 degrees` upward is **[Bench Mechanical Verified]**; post-fix end-to-end re-verification remains **[Pending Hardware Verification]**. This is the bench actuator, not the separate ROVMAKER depth sensor. It does not establish hydrodynamic optimization, installed trim, autonomous depth-control calibration, magnetic/yaw calibration, or final body-frame calibration. Waterproof capability is **[Unverified]**: the seller parameter page says “not waterproof,” while the product photo/shell says “Water proof Robot Servo.” Do not claim or test direct immersion without reliable IP/sealing evidence.
 
-PR #13 evidence is deliberately retained as a pre-remap historical baseline: former logical FrontRight `1450/1900 us` are **[Bench Measured]** and `1000 us` is **[Symmetry-Derived / User Accepted]**; former logical FrontLeft `1580/1140 us` are **[Bench Measured]** and `2020 us` is **[Symmetry-Derived / User Accepted]**; RearRight `1110/1570/2030 us` and RearLeft `1940/1450/960 us` are **[Bench Hardware Verified]** user bench results. The final front calibration contract and raw shell command bounds are **[Software Verified]** by host tests; explicit logical-to-physical side identity, static anti-phase, and the automatic SimpleGait Forward same-direction anomaly remain **[Pending Hardware Verification]**. ARM Build, Program Verify, and overall Hardware Verified status also remain **[Pending]**. Water/hydrodynamic behavior remains **[Pending Water Verification]**. Do not copy prior PR or old-image PASS into this feature status.
+PR #13 evidence is deliberately retained as a pre-remap historical baseline: former logical FrontRight `1450/1900 us` are **[Bench Measured]** and `1000 us` is **[Symmetry-Derived / User Accepted]**; former logical FrontLeft `1580/1140 us` are **[Bench Measured]** and `2020 us` is **[Symmetry-Derived / User Accepted]**; RearRight `1110/1570/2030 us` and RearLeft `1940/1450/960 us` are **[Bench Hardware Verified]** user bench results. The final front calibration contract and raw shell command bounds are **[Software Verified]** by host tests, the SimpleGait Front/Rear physical anti-phase is **[Hardware Verified]** as the mechanical baseline, and the prior same-direction anomaly is **[Closed for SimpleGait]**. Explicit logical-to-physical side identity, Turn effectiveness, true forward propulsion, water behavior, physical CPG gait, ARM Build, and Program Verify remain **[Pending]** in their respective evidence categories. Do not copy prior PR or old-image PASS into this feature status.
 
 The current Motion/gait foundation is documented in
 [`../docs/motion-simple-gait.md`](../docs/motion-simple-gait.md). It emits
@@ -46,22 +46,23 @@ water-tested gait calibration remain outside this feature. See
 [`../docs/cpg-gait-core.md`](../docs/cpg-gait-core.md) for the production CPG
 contract.
 
-## Current Motion / SimpleGait foundation — [Implemented / Software Verified]
+## Current Motion / CPG foundation — [Implemented / Software Verified]
 
-Current bench image evidence:
+Current normal bench image configuration:
 
 ```text
-Motion backend: SimpleGait (bench-remap verification)
+Motion backend: CPG (next target validation)
+SimpleGait diagnostic baseline: Front/Rear physical anti-phase [Hardware Verified]
 ```
 
-`Core/App/app_main.c` defaults `MOTION_DEFAULT_GAIT_BACKEND_CPG` to `0`, so
+`Core/App/app_main.c` defaults `MOTION_DEFAULT_GAIT_BACKEND_CPG` to `1`, so
 the normal Debug/bench build passes only
-`simple_gait_generator_interface(&simple_gait_generator)` to
-`MotionManager`. The CPG sources remain linked and all CPG tests remain
-required. A later CPG verification image may explicitly compile with
-`-DMOTION_DEFAULT_GAIT_BACKEND_CPG=1`; this temporary default is not a CPG
-retirement and does not establish physical or hydrodynamic verification. The
-separate `ROBOBEETLE_CPG_TARGET_BENCHMARK` option remains OFF by default. See
+`cpg_gait_generator_interface(&cpg_gait_generator)` to `MotionManager`.
+The explicit `-DMOTION_DEFAULT_GAIT_BACKEND_CPG=0` override reproduces the
+completed SimpleGait mechanical baseline. The CPG sources remain linked and
+all CPG and SimpleGait tests remain required; each build registers exactly one
+generator. The separate `ROBOBEETLE_CPG_TARGET_BENCHMARK` option remains OFF
+by default. See
 [`../docs/simple-gait-bench-remap-2026-09-14.md`](../docs/simple-gait-bench-remap-2026-09-14.md).
 
 Protocol V2 `SetMotionMode` (`0x15`) uses the exact three-byte payload
@@ -93,7 +94,7 @@ tracker, and raw SetPWM marks that channel's pose unknown. Motion START refuses
 an unknown required pose through the existing internal
 `MOTION_MANAGER_RESULT_HARDWARE_FAILURE` mapping, so Protocol V2 keeps its
 existing result values. A known non-neutral pose is cross-faded to the gait
-target over the same 750 ms transition. SimpleGaitGenerator emits logical
+target over the same 750 ms transition. The selected generator emits logical
 targets only; MotionManager applies the common front operational guard
 (`-4500…+2800 cdeg`) and rear operational guard (`-3000…+4500 cdeg`) before
 Servo calibration and owns its diagnostic count.
@@ -660,7 +661,7 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Motion, Servo, Safety, and Sensors modules and their include directories. The reproducible Firmware host gate is `powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run_host_tests.ps1` from `RoboBeetleFirmware`; it compiles and runs all 25 executable test sources, including the SimpleGait, app-main SimpleGait backend-selection, MotionManager, Motion-aware Protocol Dispatcher, CPG, and PWM safe-stop coverage, plus the four backend/benchmark app compile contracts and the CPG benchmark compile contract. The runner uses C11, `-Wall -Wextra -Werror`, host HAL stubs where required, and `-lm` for the deterministic sine gait. These host checks complement, but do not replace, the real ARM target build.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Motion, Servo, Safety, and Sensors modules and their include directories. The reproducible Firmware host gate is `powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run_host_tests.ps1` from `RoboBeetleFirmware`; it compiles and runs all 27 executable test sources, including the SimpleGait, default/override app-main backend-selection, MotionManager, Motion-aware Protocol Dispatcher, CPG, and PWM safe-stop coverage, plus the four backend/benchmark app compile contracts and the CPG benchmark compile contract. The runner uses C11, `-Wall -Wextra -Werror`, host HAL stubs where required, and `-lm` for the deterministic sine gait. These host checks complement, but do not replace, the real ARM target build.
 
 ## App/Main maintainability audit（Historical Reference: PR #6 old image）
 

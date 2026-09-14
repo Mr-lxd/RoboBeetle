@@ -83,7 +83,7 @@ $cases = @(
         'Core/Servo/servo_pwm_stop_policy.c',
         'Core/Safety/safety_supervisor.c'
     ); Link = @('-lm'); Extra = $halWarningArgs }
-    @{ Name = 'app_main_backend_tests'; Sources = @(
+    @{ Name = 'app_main_backend_template'; Sources = @(
         'tests/app_main_backend_tests.c',
         'Core/App/app_main.c',
         'Core/Src/rb_protocol_v2.c',
@@ -113,6 +113,31 @@ $cases = @(
         'Core/Safety/safety_supervisor.c'
     ); Link = @('-lm', '-Wl,--wrap=motion_manager_init'); Extra = $halWarningArgs }
 )
+
+$backendTemplate = $cases | Where-Object {
+    $_.Name -eq 'app_main_backend_template'
+}
+$cases = @($cases | Where-Object {
+    $_.Name -ne 'app_main_backend_template'
+})
+$cases += @{
+    Name = 'app_main_backend_default_tests'
+    Sources = $backendTemplate.Sources
+    Link = $backendTemplate.Link
+    Extra = $halWarningArgs
+}
+$cases += @{
+    Name = 'app_main_backend_simple_override_tests'
+    Sources = $backendTemplate.Sources
+    Link = $backendTemplate.Link
+    Extra = @($halWarningArgs + '-DMOTION_DEFAULT_GAIT_BACKEND_CPG=0')
+}
+$cases += @{
+    Name = 'app_main_backend_cpg_override_tests'
+    Sources = $backendTemplate.Sources
+    Link = $backendTemplate.Link
+    Extra = @($halWarningArgs + '-DMOTION_DEFAULT_GAIT_BACKEND_CPG=1')
+}
 
 function Invoke-HostCase {
     param(

@@ -9,6 +9,10 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#ifndef MOTION_DEFAULT_GAIT_BACKEND_CPG
+#define MOTION_DEFAULT_GAIT_BACKEND_CPG 1
+#endif
+
 static int failures = 0;
 static unsigned int motion_manager_init_calls = 0U;
 static gait_generator_t captured_generator;
@@ -123,16 +127,35 @@ int main(void)
 
     expect(motion_manager_init_calls == 1U,
            "app_main must initialize exactly one MotionManager generator");
+#if MOTION_DEFAULT_GAIT_BACKEND_CPG
+    expect(captured_generator.ops == cpg_interface.ops,
+           "selected app_main backend must be CPG");
+    expect(captured_generator.ops != simple_interface.ops,
+           "selected app_main backend must not be SimpleGait");
+#else
     expect(captured_generator.ops == simple_interface.ops,
-           "default bench app_main backend must be SimpleGait");
+           "selected app_main backend must be SimpleGait");
     expect(captured_generator.ops != cpg_interface.ops,
-           "default bench app_main backend must not be CPG");
+           "selected app_main backend must not be CPG");
+#endif
     expect(captured_generator.context != NULL,
-           "selected SimpleGait context must be non-null");
+           "selected backend context must be non-null");
 
     if ((captured_generator.ops != NULL) &&
         (captured_generator.context != NULL))
     {
+#if MOTION_DEFAULT_GAIT_BACKEND_CPG
+        captured_generator.ops->advance(
+            captured_generator.context,
+            10U);
+        expect(captured_generator.ops->sample(
+                   captured_generator.context,
+                   MOTION_FORWARD,
+                   1.0F,
+                   1.0F,
+                   &targets),
+               "selected CPG backend must sample Forward");
+#else
         captured_generator.ops->advance(
             captured_generator.context,
             500U);
@@ -148,11 +171,16 @@ int main(void)
                    targets.rear_right_cdeg == -1000 &&
                    targets.rear_left_cdeg == -1000,
                "selected bench generator must preserve SimpleGait Forward anti-phase");
+#endif
     }
 
     if (failures == 0)
     {
+#if MOTION_DEFAULT_GAIT_BACKEND_CPG
+        (void)puts("All app_main CPG backend selection tests passed");
+#else
         (void)puts("All app_main SimpleGait backend selection tests passed");
+#endif
     }
 
     return failures == 0 ? 0 : 1;

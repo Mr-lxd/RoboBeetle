@@ -228,3 +228,24 @@ git push origin feature/cpg-gait-core
 Do not create a PR and do not merge. Re-query PR #15 and require OPEN,
 non-draft, unmerged state with the new head SHA. Finish with the exact phrase
 `READY FOR STATIC ANTI-PHASE HARDWARE DIAGNOSIS`.
+
+## Follow-up: restore CPG after the SimpleGait hardware baseline
+
+The later SimpleGait mechanical-remap checkpoint supersedes the earlier
+diagnostic expectation that automatic Forward anti-phase was unresolved. The
+recorded SimpleGait Front/Rear physical anti-phase and front sign are now
+**[Hardware Verified]** for the tested baseline; the same-direction anomaly is
+**[Closed for SimpleGait]**. The calibration, remap, shell limits, and Motion
+guards are frozen for the CPG target-validation phase.
+
+- [x] Restore `MOTION_DEFAULT_GAIT_BACKEND_CPG=1` in the normal Firmware image.
+- [x] Retain explicit `=0` SimpleGait and explicit `=1` CPG selection tests with
+  exactly one registered generator/output path per build.
+- [x] Add a real CPG-output-through-MotionManager-to-ServoService clamp regression
+  for both front and rear common guards.
+- [x] Update the canonical control/evidence documents and PR #15 body without
+  changing CPG math, semantic adapter, calibration, or Qt UI.
+- [x] Re-run Firmware host/compile contracts, clean Qt build/CTest, header
+  self-sufficiency, diff checks, and the scoped branch/PR audit before push.
+- [x] Push one independent checkpoint to `feature/cpg-gait-core`; leave PR #15
+  OPEN and unmerged.

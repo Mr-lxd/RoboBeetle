@@ -1384,3 +1384,38 @@ start PC Qt application
 ---
 
 **最终判定**：现有目录足以恢复机器人“高层机电结构与控制意图”，但不足以安全恢复“可发送的硬件控制协议”。首次运动之前最关键的缺口不是视觉模型，而是固件/Qt源码、协议、舵机标定、通道映射和失联安全状态。FOMO 应接在期望偏航/步态参数边界，并在这些缺口关闭前保持硬件发送禁用。
+
+## 2026-09-14 SimpleGait mechanical-remap verification closeout
+
+本节是当前 PR #15 的最新 hardware/control handoff，覆盖前一节历史记录之后的
+SimpleGait mechanical-remap 诊断结果。历史表格与旧 image 的证据不因本节而被
+重写或升级。
+
+- Diagnostic image/backend used `MOTION_DEFAULT_GAIT_BACKEND_CPG=0` (SimpleGait)。
+- SimpleGait Forward 的 Front pair same-phase、Rear pair same-phase、Front vs Rear
+  physical anti-phase 为 **[Hardware Verified]**；half-cycle 后相位反转；此前
+  same-direction anomaly 为 **[Closed for SimpleGait]**。
+- Front paddle sign against the SimpleGait bench baseline 为 **[Hardware Verified]**；
+  connector-side identity 仍需独立实物确认，不由该结果单独推出。
+- Installed front shell limits 为 **[Bench Hardware Measured]**：FrontRight
+  increasing-pulse backward maximum `1860 us`，FrontLeft decreasing-pulse
+  backward minimum `1160 us`。
+- Frozen calibration/remap remains FrontRight `1140/1580/2020 us` and FrontLeft
+  `1900/1450/1000 us`; Motion common guards remain front `-4500..+2800 cdeg`
+  and rear `-3000..+4500 cdeg`。
+- Normal Firmware default is now `MOTION_DEFAULT_GAIT_BACKEND_CPG=1`; explicit
+  `=0` retains the SimpleGait baseline and explicit `=1` selects CPG. Each build
+  registers exactly one generator/output path; no output mixing is permitted。
+- Legacy Source-Compatible CPG v1 math, `theta_dot` semantics, semantic adapter,
+  `double` production precision, and signed target-amplitude TURN dynamics remain
+  unchanged. Physical CPG gait is **[Pending]**。
+- True water propulsion, Turn effectiveness, and Ascend/Descend hydrodynamics are
+  **[Pending Water Verification]**。
+- Safety-before-catch-up remains mandatory: when a foreground gap has crossed the
+  heartbeat/liveness deadline, SafetySupervisor/liveness owns the final decision
+  before any catch-up or actuator write; no post-gap CPG actuator command and no
+  automatic resume are allowed after a safety abort。
+- ARM Build/Program Verify and target performance evidence (FLASH delta, RAM delta,
+  nominal 10 ms substep, representative 20/70/100 ms catch-up, and worst bounded
+  catch-up) remain **[Pending]** when ARM tools or target measurements are absent;
+  no host timing is substituted and no `double`→`float` production change is made。

@@ -1,9 +1,15 @@
 # Motion / Gait — Bench-Provisional STOP Contract
 
-This document records the first Motion / Gait control foundation added on
-`feature/motion-simple-gait`. It is a host-test/software contract. The branch
-does not claim an ARM build, programming/verification, or physical actuator
-verification until those steps are independently run.
+This document records the Motion / Gait control foundation carried into
+`feature/cpg-gait-core`. It is a host-test/software contract. The completed
+SimpleGait mechanical baseline has Hardware Verified Front/Rear physical
+anti-phase; ARM build/program evidence, true water propulsion, and physical
+CPG gait remain separate pending categories.
+
+The normal Firmware default is `MOTION_DEFAULT_GAIT_BACKEND_CPG=1`. An
+explicit `MOTION_DEFAULT_GAIT_BACKEND_CPG=0` build retains SimpleGait as the
+mechanical baseline. Each build registers exactly one generator with
+MotionManager.
 
 ## Wire contract
 
@@ -176,17 +182,21 @@ period parameter. Its measured steady-state period is not assumed to be exactly
 observed frequency. See [`cpg-gait-core.md`](cpg-gait-core.md) for the current
 long-run measurement.
 
-The target path is intentionally explicit:
+The normal target path is intentionally explicit:
 
 ```text
 Motion command
   → MotionManager
-  → SimpleGaitGenerator
+  → CPGGaitGenerator
   → logical joint targets (cdeg)
   → ServoService Motion-owned angle API
   → existing Servo calibration
   → PWM driver
 ```
+
+The explicit `MOTION_DEFAULT_GAIT_BACKEND_CPG=0` diagnostic override replaces
+only the generator node with `SimpleGaitGenerator`; the downstream guard,
+ServoService, calibration, and PWM path are identical.
 
 ## Qt behavior
 
@@ -224,7 +234,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
   -File .\RoboBeetleFirmware\tests\run_host_tests.ps1
 ```
 
-The runner compiles and executes 20 Firmware test programs with C11,
+The runner compiles and executes 27 Firmware test programs with C11,
 `-Wall -Wextra -Werror`, and a separate `app_main_jy901s_api` compile
 contract. Motion-specific assertions cover:
 
@@ -245,6 +255,10 @@ contract. Motion-specific assertions cover:
 - manual Servo `BUSY` arbitration during STOPPING;
 - old/new ownership union through an acknowledged mode transition;
 - immediate Disable All and heartbeat/liveness takeover;
+- default CPG backend selection plus explicit SimpleGait (`=0`) and CPG (`=1`)
+  backend-selection tests, with exactly one registered generator per build;
+- CPG output beyond the installed front/rear limits is clamped by the common
+  MotionManager sanitizer before ServoService observes it;
 - PWM1 safe-stop conservative active-running policy, including the
   preload/shadow mismatch regression, stale-flag clearing/recheck policy,
   per-channel pending ownership, one-frame latency bound, shared-timer
