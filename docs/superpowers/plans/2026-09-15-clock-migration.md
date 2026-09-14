@@ -60,17 +60,11 @@ The new script must read RoboBeetleFirmware/Core/Src/main.c and RoboBeetleFirmwa
         throw 'PLL must not remain disabled'
     }
 
-    @(
-        'RCC.AHBFreq_Value=168000000',
-        'RCC.APB1Freq_Value=42000000',
-        'RCC.APB2Freq_Value=84000000',
-        'RCC.CortexFreq_Value=168000000',
-        'RCC.PLLCLKFreq_Value=168000000',
-        'RCC.PLLQCLKFreq_Value=48000000',
-        'RCC.VCOInputFreq_Value=1000000',
-        'RCC.VCOOutputFreq_Value=336000000',
-        'RCC.SYSCLKFreq_VALUE=168000000'
-    ) | ForEach-Object { Assert-Contains $ioc $_ }
+    # Assert exact .ioc key/value lines and require the RCC source inputs to
+    # appear in RCC.IPParameters: PLLSourceVirtual, PLLM, PLLN, PLLP, PLLQ,
+    # SYSCLKSource, AHBCLKDivider, APB1CLKDivider, APB2CLKDivider, and
+    # PWR_Regulator_Voltage_Scale. Also assert PCC.Vdd=3.3, the timer-kernel
+    # and derived values, TIM3/TIM4 PSC=83, and all three UART baud values.
 
     $timerKernelHz = 84000000
     $prescaler = 83
@@ -86,7 +80,7 @@ Run from RoboBeetleFirmware:
 
     powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\clock_config_contract_tests.ps1
 
-Expected: FAIL because the current source contains RCC_PLL_NONE, selects RCC_SYSCLKSOURCE_HSI, uses APB DIV1, and uses TIM3/TIM4 prescaler 15.
+Expected: FAIL because the current source contains RCC_PLL_NONE, selects RCC_SYSCLKSOURCE_HSI, uses APB DIV1, and uses TIM3/TIM4 prescaler 15. During the later regeneration-safety hardening, the same test also failed on the missing `.ioc` source input `RCC.AHBCLKDivider=RCC_SYSCLK_DIV1` before the input keys were added.
 
 - [x] Step 3: Register the contract test in the existing host gate.
 
@@ -96,7 +90,7 @@ Append an invocation of clock_config_contract_tests.ps1 to run_host_tests.ps1, c
 
 Files:
 - Modify: RoboBeetleFirmware/Core/Src/main.c, SystemClock_Config
-- Modify: RoboBeetleFirmware/RoboBeetleFirmware.ioc, derived RCC values
+- Modify: RoboBeetleFirmware/RoboBeetleFirmware.ioc, RCC source inputs and derived values
 - Read-only verification: RoboBeetleFirmware/Core/Src/system_stm32f4xx.c
 - Read-only verification: RoboBeetleFirmware/Core/Inc/stm32f4xx_hal_conf.h
 
@@ -123,11 +117,42 @@ The resulting SystemClock_Config() must retain PWR clock enable and PWR_REGULATO
 
 The implementation must preserve the existing HAL_ERROR handling. The expected clocks are SYSCLK/HCLK=168 MHz, PCLK1=42 MHz, PCLK2=84 MHz, and PLLQ=48 MHz. HSE remains unused in this first implementation; the 25 MHz HSE_VALUE definition is not an activation of HSE.
 
-- [x] Step 2: Synchronize only the .ioc derived clock metadata.
+- [x] Step 2: Persist the CubeMX RCC source inputs and synchronized metadata.
 
-Set the derived values to AHB/Cortex/SYSCLK 168000000, APB1 42000000, APB2 84000000, PLLCLK 168000000, PLLQCLK 48000000, VCO input 1000000, and VCO output 336000000. Do not add an HSE requirement or change unrelated peripheral metadata.
+Use the STM32CubeMX F4 `.ioc` key spelling, not guessed aliases, and persist
+the actual inputs:
 
-- [ ] Step 3: Confirm device limits before target programming.
+    RCC.PLLSourceVirtual=RCC_PLLSOURCE_HSI
+    RCC.PLLM=16
+    RCC.PLLN=336
+    RCC.PLLP=RCC_PLLP_DIV2
+    RCC.PLLQ=7
+    RCC.SYSCLKSource=RCC_SYSCLKSOURCE_PLLCLK
+    RCC.AHBCLKDivider=RCC_SYSCLK_DIV1
+    RCC.APB1CLKDivider=RCC_HCLK_DIV4
+    RCC.APB2CLKDivider=RCC_HCLK_DIV2
+    RCC.PWR_Regulator_Voltage_Scale=PWR_REGULATOR_VOLTAGE_SCALE1
+
+Retain `PCC.Vdd=3.3` and set the corresponding derived/kernel values to
+AHB/HCLK/FCLK/Cortex/SYSCLK 168000000, APB1 42000000, APB2 84000000,
+APB1 timer 84000000, APB2 timer 168000000, PLLCLK 168000000, PLLQCLK
+48000000, VCO input 1000000, and VCO output 336000000. Include every RCC
+input key in `RCC.IPParameters`. Do not add an HSE requirement or change
+unrelated peripheral metadata.
+
+The exact key spellings were cross-checked against F4 FW 1.28.3 `.ioc`
+examples before editing. The contract test must assert each exact key/value
+line and its `RCC.IPParameters` membership, so derived-only metadata cannot
+pass.
+
+- [x] Step 3: Record the CubeMX regeneration parity status.
+
+The workspace has no STM32CubeMX 6.18.1 executable, so do not claim a
+regeneration PASS. Record `CubeMX regeneration verification = Pending user/tool
+run` and leave the manual Generate Code comparison for a user/tool run with
+CubeMX 6.18.1 and STM32Cube FW_F4 V1.28.3.
+
+- [ ] Step 4: Confirm device limits before target programming.
 
 Check the STM32F407 HAL/device definitions for Scale 1 and FLASH_LATENCY_5, and confirm the actual board VDD is in the voltage range for 168 MHz. If the physical MCU, VDD, VCAP, or regulator evidence does not satisfy the F407 conditions, stop before programming and report the exact mismatch.
 
@@ -286,15 +311,29 @@ Files:
 
 - [x] Step 1: Write the clock evidence report only from captured results.
 
-The report must include exact RCC/APB/TIM/UART/SysTick configuration, target register readback, ARM size delta, ordered bring-up results, 16/168 DWT table, long-run period result, and explicit unavailable evidence. It must not upgrade water evidence, alter PR #15 CPG evidence, or claim system-level real-time margin from isolated CPG timing.
+The report must include exact RCC/APB/TIM/UART/SysTick configuration, the
+regeneration-safe `.ioc` input keys and `RCC.IPParameters` membership, target
+register readback when available (otherwise an explicit Pending marker), ARM
+size delta when available, ordered bring-up results, 16/168 DWT table, long-run
+period result, and explicit unavailable evidence. If CubeMX is not available,
+it must say `CubeMX regeneration verification = Pending user/tool run` and must
+not claim a Generate Code parity PASS. It must not upgrade water evidence,
+alter PR #15 CPG evidence, or claim system-level real-time margin from isolated
+CPG timing.
 
-- [ ] Step 2: Run final verification before any completion claim.
+- [x] Step 2: Run final verification before any completion claim.
 
-Run git diff --check, the full Firmware host gate, the ARM build/size command, and the exact target/physical checks that are actually available. Confirm the only intended production changes are RCC configuration and TIM3/TIM4 PSC, and confirm no CPG, calibration, gait, UART, or safety semantic diff exists.
+Run git diff --check, the full Firmware host gate, the ARM build/size command,
+and the exact target/physical checks that are actually available. Record ARM,
+CubeMX, and target checks as Pending when their tools are unavailable. Confirm
+the only intended production changes are RCC configuration and TIM3/TIM4 PSC,
+and confirm no CPG, calibration, gait, UART, or safety semantic diff exists.
 
-- [ ] Step 3: Request external review before merge.
+- [x] Step 3: Push the reviewed clock branch for external re-review.
 
-Push the clock branch only after the plan is approved and implementation verification is complete. Do not merge PR #15 or the future clock PR in this task; preserve the dependency order CPG PR first, clock PR second.
+Push the clock branch only after the plan is approved and implementation
+verification is complete. Do not merge PR #15 or the future clock PR in this
+task; preserve the dependency order CPG PR first, clock PR second.
 
 ## Approval gate
 

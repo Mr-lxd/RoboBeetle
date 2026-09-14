@@ -5,10 +5,11 @@
 The approved clock migration is implemented on branch `codex/clock-migration`,
 based on PR #15 reviewed head `b7e2787fe9eb4fdd46de0fd7380a23bbc961cc52`.
 PR #15 remains the first integration dependency; this branch is intentionally
-separate and is not merged here. The configuration and host contract checks are
-software-verified. ARM build, debugger readback, DWT measurements, and physical
-bring-up remain **Pending** because the target toolchain and hardware evidence
-are not available in this workspace.
+separate and is not merged here. The source/configuration and host contract
+checks are software-verified. CubeMX regeneration, ARM build, debugger
+readback, DWT measurements, and physical bring-up remain **Pending** because
+the CubeMX/target tools and hardware evidence are not available in this
+workspace.
 
 No servo actuator power was enabled, and no claim of Hardware Verified or Water
 Verified is made by this document.
@@ -28,10 +29,48 @@ Verified is made by this document.
 | Voltage scale | Scale 1 |
 | Flash latency | `FLASH_LATENCY_5` |
 
-The arithmetic is `16 MHz / 16 × 336 / 2 = 168 MHz`; the derived `.ioc`
-metadata records AHB/Cortex/SYSCLK 168000000, APB1 42000000, APB2 84000000,
-PLLQ 48000000, VCO input 1000000, and VCO output 336000000. HSE remains unused;
-the `.ioc` HSE value is not an HSE activation.
+The arithmetic is `16 MHz / 16 × 336 / 2 = 168 MHz`. HSE remains unused; the
+`.ioc` HSE value is not an HSE activation.
+
+## Regeneration-safe CubeMX `.ioc` contract
+
+`RoboBeetleFirmware.ioc` retains the project metadata
+`MxCube.Version=6.18.1` and `ProjectManager.FirmwarePackage=STM32Cube FW_F4
+V1.28.3`. It now persists the actual RCC input selections, rather than only
+the calculated frequency results:
+
+| `.ioc` key | Value |
+| --- | --- |
+| `RCC.PLLSourceVirtual` | `RCC_PLLSOURCE_HSI` |
+| `RCC.PLLM` / `RCC.PLLN` | `16` / `336` |
+| `RCC.PLLP` / `RCC.PLLQ` | `RCC_PLLP_DIV2` / `7` |
+| `RCC.SYSCLKSource` | `RCC_SYSCLKSOURCE_PLLCLK` |
+| `RCC.AHBCLKDivider` | `RCC_SYSCLK_DIV1` |
+| `RCC.APB1CLKDivider` / `RCC.APB2CLKDivider` | `RCC_HCLK_DIV4` / `RCC_HCLK_DIV2` |
+| `RCC.PWR_Regulator_Voltage_Scale` | `PWR_REGULATOR_VOLTAGE_SCALE1` |
+| `PCC.Vdd` | `3.3` |
+
+The related timer-kernel, core, and frequency metadata is also persisted:
+`RCC.APB1TimFreq_Value=84000000`, `RCC.APB2TimFreq_Value=168000000`,
+`RCC.HCLKFreq_Value=168000000`, `RCC.FCLKCortexFreq_Value=168000000`,
+`RCC.PLLQCLKFreq_Value=48000000`, and the existing VCO/PLL/SYSCLK/APB
+derived values. Every RCC input key above is included in `RCC.IPParameters`.
+The key spelling was cross-checked against F4 FW 1.28.3 `.ioc` examples for
+the AHB/APB/PLL fields and the voltage-scale field ([F407 clock example](https://github.com/ATGXicefires/STM32_final_project/blob/fdeb2cb41e223864361e150f1cd632a02d37ffaa/NIM_Assistant_F407/NIM_Assistant_F407.ioc),
+[F407 source/voltage example](https://github.com/Sonboy97/STM32F407/blob/7be643b3dd96ccc8f10c069879eea57b8349c58e/FSBL/FSBL.ioc)).
+
+`clock_config_contract_tests.ps1` now checks both sides of the contract: the
+production `main.c` assignments and exact `.ioc` key/value pairs, including
+membership in `RCC.IPParameters`, voltage metadata, TIM3/TIM4 prescalers, and
+all three UART baud values. It therefore cannot pass an HSI-direct or
+derived-only `.ioc` beside a PLL-based `main.c`.
+
+CubeMX 6.18.1 was not available in this workspace, so no `.ioc` Generate Code
+run or generated-file comparison was performed. **CubeMX regeneration
+verification = Pending user/tool run.** This document intentionally makes no
+regeneration PASS claim. The pending check is to open this `.ioc` with
+CubeMX 6.18.1 and STM32Cube FW_F4 V1.28.3, Generate Code, then inspect the
+generated `SystemClock_Config()` and rerun the contract test.
 
 The local STM32F407 HAL/device definitions identify Scale 1 and 5 wait states
 as the configuration for the approved 168 MHz candidate. Actual board VDD,
@@ -76,7 +115,8 @@ changed in this branch.
 | Check | Result |
 | --- | --- |
 | Focused clock contract before implementation | RED as expected: legacy `RCC_PLL_NONE` was missing the required PLL contract |
-| Focused clock contract after implementation | PASS `clock_config_contract_tests` |
+| Focused clock contract after implementation | PASS `clock_config_contract_tests`: main.c + `.ioc` source inputs + `RCC.IPParameters` + derived values + TIM/UART contracts |
+| CubeMX 6.18.1 regeneration parity | **Pending user/tool run**: CubeMX executable unavailable; no Generate Code comparison and no PASS claim |
 | Firmware host gate | PASS: 29 executables + 9 app/backend/benchmark compile-contract objects, including the clock contract |
 | Public-header self-sufficiency | PASS: 34 headers with host C11 `-Wall -Wextra -Werror`; CMSIS host pointer-width warnings explicitly suppressed |
 | ARM compiler / `arm-none-eabi-size` | **Pending / NOT_FOUND** in this environment; no ARM image or size claim made |
