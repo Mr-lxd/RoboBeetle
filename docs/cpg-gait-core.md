@@ -156,7 +156,7 @@ core node 1 -> rear_right_cdeg
 core node 2 -> rear_left_cdeg
 ~~~
 
-The production Forward profile uses front and rear logical target amplitudes of 10 degrees, sets every core period parameter to 2.0 seconds, and records 2.0 seconds as nominal_period_s. The signed source-compatible target convention is:
+The production Forward profile uses front and rear logical target amplitudes of 10 degrees, sets every core period parameter to `T=2.0 s` as a nominal period parameter, and records `nominal_period_s=2.0`. The signed source-compatible target convention is:
 
 ~~~text
 R = {-front_amplitude, +rear_amplitude, +rear_amplitude, -front_amplitude}
@@ -164,7 +164,7 @@ R = {-front_amplitude, +rear_amplitude, +rear_amplitude, -front_amplitude}
 
 This creates same-phase front and rear pairs and approximately pi-separated front versus rear output through the approved signed semantic mapping. The adapter converts logical degrees to centidegrees with double lround. For TURN_LEFT it installs the same signed vector with legacy nodes 3/2 (left front/rear) multiplied by the profile's 0.5 reduced-side scale; for TURN_RIGHT it multiplies nodes 0/1 (right front/rear). It does not post-scale the current raw output, so the next 10 ms advances move the core amplitude state toward the turn target. ASCEND/DESCEND add only the profile FrontAxis bias. FrontAxis is not a fifth oscillator.
 
-Backward is rejected by cpg_gait_generator_is_mode_valid and sample; the adapter never fakes reverse motion by sign inversion. The adapter does not apply rear limits. MotionManager remains the sole owner of the operational rear guard of -3000 to +4500 cdeg.
+Backward is rejected by cpg_gait_generator_is_mode_valid and sample; the adapter never fakes reverse motion by sign inversion. The adapter does not apply installed mechanical limits. MotionManager remains the sole owner of the operational front guard of -4500 to +2800 cdeg and rear guard of -3000 to +4500 cdeg.
 
 ## Elapsed-time and safety contract
 
@@ -177,7 +177,7 @@ Safety-before-catch-up is enforced in two places:
 
 Therefore a 700 ms foreground gap after a stale heartbeat cannot run 70 CPG steps and cannot emit a ServoService command. A stale abort leaves MotionManager faulted; a later heartbeat alone does not auto-resume it.
 
-RoboBeetleFirmware/tests/test_cpg_safety_catchup.c covers the active-motion -> timeout gap -> safety abort -> no post-gap CPG step -> no post-gap Servo write -> no auto-resume sequence, plus live 20/70/100 ms catch-up and common MotionManager rear clamping.
+RoboBeetleFirmware/tests/test_cpg_safety_catchup.c covers the active-motion -> timeout gap -> safety abort -> no post-gap CPG step -> no post-gap Servo write -> no auto-resume sequence, plus live 20/70/100 ms catch-up and common MotionManager front/rear clamping.
 
 ## Long-run period evidence
 
@@ -194,4 +194,4 @@ cycles=29
 transient_exclusion_ms=5000
 ~~~
 
-This result is intentionally not labeled as 0.5 Hz. The actual frequency is an emergent result of the source-compatible nu_i dependence on beta, theta_dot, k_v, and the coupled state. The 2.0 s value remains a nominal period parameter until a target-representative long-run measurement says otherwise.
+This result is intentionally not labeled as 0.5 Hz. The actual frequency is an emergent result of the source-compatible nu_i dependence on beta, theta_dot, k_v, and the coupled state. The `T=2.0 s` value remains a nominal period parameter until a target-representative long-run measurement says otherwise.

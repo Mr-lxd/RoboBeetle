@@ -22,19 +22,19 @@ The current implementation freezes five semantic IDs and the supported mask at `
 
 | ID / mask | Semantic actuator | Hardware / timer channel | Capability and command envelope |
 |---:|---|---|---|
-| `0` / `0x0001` | `FrontRight` | SAVOX SW-0250MG+, TIM3_CH2 / PA7 | PWM 1140–2020 μs; angle −45…+45°; calibration 1140/1580/2020 μs; Neutral 1580 μs |
-| `1` / `0x0002` | `FrontLeft` | SAVOX SW-0250MG+, TIM3_CH1 / PA6 | PWM 1000–1900 μs; angle −45…+45°; calibration 1900/1450/1000 μs; Neutral 1450 μs; logical-angle-reversed PWM |
+| `0` / `0x0001` | `FrontRight` | SAVOX SW-0250MG+, TIM3_CH2 / PA7 | command PWM 1140–1860 μs; calibration −45…+45° = 1140/1580/2020 μs; Neutral 1580 μs |
+| `1` / `0x0002` | `FrontLeft` | SAVOX SW-0250MG+, TIM3_CH1 / PA6 | command PWM 1160–1900 μs; calibration −45…+45° = 1900/1450/1000 μs; Neutral 1450 μs; logical-angle-reversed PWM |
 | `2` / `0x0004` | `Depth` (`FrontAxis` internal ID) | HDKJ S3150D, TIM3_CH3 / PB0 | Calibration 2430/1745/1060 μs; software PWM 1060–2430 μs; software angle −90…+90°; Neutral 1745 μs; logical-angle-reversed PWM; Console `calibrationPending=false` |
 | `3` / `0x0008` | `RearRight` | GDW IPX896HV, TIM4_CH1 / PD12 | PWM 1110–2030 μs; angle −45…+45°; calibration 1110/1570/2030 μs; Neutral 1570 μs |
 | `4` / `0x0010` | `RearLeft` | GDW IPX896HV, TIM4_CH2 / PD13 | PWM 960–1940 μs; angle −45…+45°; calibration 1940/1450/960 μs; Neutral 1450 μs; angle-inverted PWM |
 
 TIM3 and TIM4 run at approximately 333 Hz with a 1 μs tick (PSC=15, ARR=3002). `servo_descriptor` is pure C and HAL-independent: it stores abstract timer/channel selectors, never `TIM_CHANNEL_x` constants. `servo_driver_stm32` is the only layer that maps those selectors to `TIM_HandleTypeDef *` and HAL channel values.
 
-The four paddle servos share one logical convention: `0 degrees` is mechanical neutral, `+45 degrees` is the backward paddle stroke that produces forward propulsion, and `-45 degrees` is the opposite direction. FrontRight is `-4500/0/+4500 cdeg → 1140/1580/2020 us`; FrontLeft is `-4500/0/+4500 cdeg → 1900/1450/1000 us`; RearRight is `-4500/0/+4500 cdeg → 1110/1570/2030 us`; RearLeft is `-4500/0/+4500 cdeg → 1940/1450/960 us`. FrontLeft and RearLeft mappings intentionally decrease PWM as logical angle increases; raw PWM validation still uses the independent ascending numeric bounds shown in the table. All four use angle command limits `-4500..+4500 cdeg`.
+The four paddle servos share one logical convention: `0 degrees` is mechanical neutral, `+45 degrees` is the backward paddle stroke that produces forward propulsion, and `-45 degrees` is the opposite direction. FrontRight is `-4500/0/+4500 cdeg → 1140/1580/2020 us`; FrontLeft is `-4500/0/+4500 cdeg → 1900/1450/1000 us`; RearRight is `-4500/0/+4500 cdeg → 1110/1570/2030 us`; RearLeft is `-4500/0/+4500 cdeg → 1940/1450/960 us`. FrontLeft and RearLeft mappings intentionally decrease PWM as logical angle increases; raw PWM validation still uses the independent ascending numeric bounds shown in the table. The calibration angle envelopes remain `-4500..+4500 cdeg`; MotionManager separately enforces the installed operational envelope `-4500..+2800 cdeg` for both front channels and `-3000..+4500 cdeg` for both rear channels.
 
 `FrontAxis/Depth` retains its raw envelope `1060–2430 us` and Neutral `1745 us`, with logical calibration `2430 us = -90 degrees`, `1745 us = 0 degrees`, and `1060 us = +90 degrees`. The desk-only mechanical direction `+10 degrees` downward / `-10 degrees` upward is **[Bench Mechanical Verified]**; post-fix end-to-end re-verification remains **[Pending Hardware Verification]**. This is the bench actuator, not the separate ROVMAKER depth sensor. It does not establish hydrodynamic optimization, installed trim, autonomous depth-control calibration, magnetic/yaw calibration, or final body-frame calibration. Waterproof capability is **[Unverified]**: the seller parameter page says “not waterproof,” while the product photo/shell says “Water proof Robot Servo.” Do not claim or test direct immersion without reliable IP/sealing evidence.
 
-PR #13 evidence is deliberately retained as a pre-remap historical baseline: former logical FrontRight `1450/1900 us` are **[Bench Measured]** and `1000 us` is **[Symmetry-Derived / User Accepted]**; former logical FrontLeft `1580/1140 us` are **[Bench Measured]** and `2020 us` is **[Symmetry-Derived / User Accepted]**; RearRight `1110/1570/2030 us` and RearLeft `1940/1450/960 us` are **[Bench Hardware Verified]** user bench results. The final front calibration contract is **[Software Verified]** by host tests; post-fix physical channel/sign, Forward/Turn behavior, ARM Build, Program Verify, and overall Hardware Verified status remain **[Pending]**. Water/hydrodynamic behavior remains **[Pending Water Verification]**. Do not copy prior PR or old-image PASS into this feature status.
+PR #13 evidence is deliberately retained as a pre-remap historical baseline: former logical FrontRight `1450/1900 us` are **[Bench Measured]** and `1000 us` is **[Symmetry-Derived / User Accepted]**; former logical FrontLeft `1580/1140 us` are **[Bench Measured]** and `2020 us` is **[Symmetry-Derived / User Accepted]**; RearRight `1110/1570/2030 us` and RearLeft `1940/1450/960 us` are **[Bench Hardware Verified]** user bench results. The final front calibration contract and raw shell command bounds are **[Software Verified]** by host tests; explicit logical-to-physical side identity, static anti-phase, and the automatic SimpleGait Forward same-direction anomaly remain **[Pending Hardware Verification]**. ARM Build, Program Verify, and overall Hardware Verified status also remain **[Pending]**. Water/hydrodynamic behavior remains **[Pending Water Verification]**. Do not copy prior PR or old-image PASS into this feature status.
 
 The current Motion/gait foundation is documented in
 [`../docs/motion-simple-gait.md`](../docs/motion-simple-gait.md). It emits
@@ -94,8 +94,9 @@ an unknown required pose through the existing internal
 `MOTION_MANAGER_RESULT_HARDWARE_FAILURE` mapping, so Protocol V2 keeps its
 existing result values. A known non-neutral pose is cross-faded to the gait
 target over the same 750 ms transition. SimpleGaitGenerator emits logical
-targets only; MotionManager applies the common rear operational guard
-(`-3000…+4500 cdeg`) before Servo calibration and owns its diagnostic count.
+targets only; MotionManager applies the common front operational guard
+(`-4500…+2800 cdeg`) and rear operational guard (`-3000…+4500 cdeg`) before
+Servo calibration and owns its diagnostic count.
 
 The PA11 leak path remains monitoring-only in the current source and has no
 leak-to-Safety trip. If a future leak safety trip is added, it must call the

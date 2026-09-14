@@ -30,6 +30,7 @@ typedef struct
     unsigned int stop_calls;
     uint8_t last_servo_id;
     uint16_t last_pulse_us;
+    uint16_t current_pulse[SERVO_DESCRIPTOR_COUNT];
 } fake_driver_t;
 
 static void fake_write_pulse(
@@ -42,6 +43,7 @@ static void fake_write_pulse(
     ++driver->write_calls;
     driver->last_servo_id = servo_id;
     driver->last_pulse_us = pulse_us;
+    driver->current_pulse[servo_id] = pulse_us;
 }
 
 static bool fake_start(
@@ -557,7 +559,7 @@ static void test_start_crossfades_from_recorded_manual_pose(void)
     expect(servo_service_set_angle(
                &fixture.servo_service,
                SERVO_ID_FRONT_RIGHT,
-               3000) == SERVO_SERVICE_RESULT_OK,
+               2500) == SERVO_SERVICE_RESULT_OK,
            "manual FrontRight pose should be established before Motion START");
     expect(servo_service_set_angle(
                &fixture.servo_service,
@@ -569,16 +571,35 @@ static void test_start_crossfades_from_recorded_manual_pose(void)
                &fixture.manager,
                MOTION_FORWARD) == MOTION_MANAGER_RESULT_OK,
            "Motion START should accept a known non-neutral pose");
-    expect(motion_manager_last_targets(&fixture.manager)->front_right_cdeg == 3000 &&
+    expect(motion_manager_last_targets(&fixture.manager)->front_right_cdeg == 2500 &&
                motion_manager_last_targets(&fixture.manager)->front_left_cdeg == -2500,
            "Motion START should retain the recorded logical pose before its first tick");
 
     (void)motion_manager_process(&fixture.manager, 0U);
     (void)motion_manager_process(&fixture.manager, 10U);
-    expect(motion_manager_last_targets(&fixture.manager)->front_right_cdeg == 2974,
+    expect(motion_manager_last_targets(&fixture.manager)->front_right_cdeg == 2480,
            "FrontRight should cross-fade from its manual logical pose");
     expect(motion_manager_last_targets(&fixture.manager)->front_left_cdeg == -2480,
            "mirrored FrontLeft should cross-fade from its manual logical pose");
+}
+
+static void test_motion_start_rejects_front_pose_outside_operational_envelope(void)
+{
+    fixture_t fixture;
+
+    fixture_init(&fixture, 0x001BU);
+    expect(servo_service_set_angle(
+               &fixture.servo_service,
+               SERVO_ID_FRONT_RIGHT,
+               3000) == SERVO_SERVICE_RESULT_OK,
+           "manual FrontRight setup should accept the full calibration range");
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_FORWARD) == MOTION_MANAGER_RESULT_HARDWARE_FAILURE,
+           "Motion START should reject a front pose above +2800 cdeg");
+    expect(motion_manager_state(&fixture.manager) == MOTION_STATE_STOPPED &&
+               !servo_service_motion_is_active(&fixture.servo_service),
+           "out-of-envelope front pose rejection should not acquire Motion ownership");
 }
 
 static void test_motion_start_rejects_unknown_raw_pwm_pose(void)
@@ -793,11 +814,11 @@ static void test_common_motion_guard_clamps_alternate_generator_output(void)
     fake_gait_generator_t generator = {
         .advanced_ms = 0U,
         .targets = {
-            .front_right_cdeg = 0,
-            .front_left_cdeg = 0,
+            .front_right_cdeg = -5000,
+            .front_left_cdeg = 4000,
             .front_axis_cdeg = 0,
             .rear_right_cdeg = -4000,
-            .rear_left_cdeg = 0,
+            .rear_left_cdeg = 5000,
         },
     };
 
@@ -812,11 +833,73 @@ static void test_common_motion_guard_clamps_alternate_generator_output(void)
     (void)motion_manager_process(&fixture.manager, 0U);
     safety_supervisor_on_heartbeat(&fixture.safety_supervisor, 750U);
     (void)motion_manager_process(&fixture.manager, 750U);
+    expect(motion_manager_last_targets(&fixture.manager)->front_right_cdeg ==
+               MOTION_FRONT_MIN_CDEG,
+            "common Motion output guard should clamp FrontRight to -4500");
+    expect(motion_manager_last_targets(&fixture.manager)->front_left_cdeg ==
+               MOTION_FRONT_MAX_CDEG,
+            "common Motion output guard should clamp FrontLeft to +2800");
     expect(motion_manager_last_targets(&fixture.manager)->rear_right_cdeg ==
                MOTION_REAR_MIN_CDEG,
-           "common Motion output guard should clamp alternate rear output to -3000");
-    expect(motion_manager_operational_clamp_count(&fixture.manager) == 1U,
-           "common Motion output guard should own its clamp diagnostic");
+            "common Motion output guard should clamp RearRight to -3000");
+    expect(motion_manager_last_targets(&fixture.manager)->rear_left_cdeg ==
+               MOTION_REAR_MAX_CDEG,
+            "common Motion output guard should clamp RearLeft to +4500");
+    expect(motion_manager_operational_clamp_count(&fixture.manager) == 4U,
+            "common Motion output guard should count each front and rear clamp");
+}
+
+static void test_simple_gait_production_pipeline_preserves_physical_directions(void)
+{
+    fixture_t fixture;
+    const joint_targets_t *targets;
+
+    fixture_init(&fixture, 0x001BU);
+    fixture.generator.phase_rad = -MOTION_PI_F / 4.0F;
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_FORWARD) == MOTION_MANAGER_RESULT_OK,
+           "SimpleGait pipeline setup should start FORWARD");
+
+    (void)motion_manager_process(&fixture.manager, 0U);
+    keep_host_alive(&fixture, 750U);
+    expect(motion_manager_process(&fixture.manager, 750U) ==
+               MOTION_MANAGER_RESULT_OK,
+           "SimpleGait quarter-cycle tick should be accepted");
+
+    targets = motion_manager_last_targets(&fixture.manager);
+    expect(targets->front_right_cdeg == 1000 &&
+               targets->front_left_cdeg == 1000 &&
+               targets->rear_right_cdeg == -1000 &&
+               targets->rear_left_cdeg == -1000,
+           "SimpleGait quarter-cycle must produce the logical anti-phase target pattern");
+    expect(fixture.driver.current_pulse[SERVO_ID_FRONT_RIGHT] > 1580U,
+           "FrontRight logical +10 degrees must map above neutral for backward stroke");
+    expect(fixture.driver.current_pulse[SERVO_ID_FRONT_LEFT] < 1450U,
+           "FrontLeft logical +10 degrees must map below neutral for backward stroke");
+    expect(fixture.driver.current_pulse[SERVO_ID_REAR_RIGHT] < 1570U,
+           "RearRight logical -10 degrees must map below neutral for recovery stroke");
+    expect(fixture.driver.current_pulse[SERVO_ID_REAR_LEFT] > 1450U,
+           "RearLeft logical -10 degrees must map above neutral for recovery stroke");
+
+    safety_supervisor_on_heartbeat(&fixture.safety_supervisor, 1750U);
+    expect(motion_manager_process(&fixture.manager, 1750U) ==
+               MOTION_MANAGER_RESULT_OK,
+           "SimpleGait half-cycle tick should be accepted");
+    targets = motion_manager_last_targets(&fixture.manager);
+    expect(targets->front_right_cdeg == -1000 &&
+               targets->front_left_cdeg == -1000 &&
+               targets->rear_right_cdeg == 1000 &&
+               targets->rear_left_cdeg == 1000,
+           "SimpleGait half-cycle must reverse every logical target sign");
+    expect(fixture.driver.current_pulse[SERVO_ID_FRONT_RIGHT] < 1580U,
+           "FrontRight half-cycle must reverse below neutral");
+    expect(fixture.driver.current_pulse[SERVO_ID_FRONT_LEFT] > 1450U,
+           "FrontLeft half-cycle must reverse above neutral");
+    expect(fixture.driver.current_pulse[SERVO_ID_REAR_RIGHT] > 1570U,
+           "RearRight half-cycle must reverse above neutral");
+    expect(fixture.driver.current_pulse[SERVO_ID_REAR_LEFT] < 1450U,
+           "RearLeft half-cycle must reverse below neutral");
 }
 
 static void test_stop_transition_reapplies_operational_sanitizer(void)
@@ -833,6 +916,7 @@ static void test_stop_transition_reapplies_operational_sanitizer(void)
 
     /* Model a retained transition target from an alternate Motion path. */
     fixture.manager.last_targets.rear_right_cdeg = -4500;
+    fixture.manager.last_targets.front_left_cdeg = 5000;
     expect(motion_manager_request_stop_at(&fixture.manager, 100U) ==
                MOTION_MANAGER_RESULT_OK,
            "STOP sanitizer setup should enter STOPPING");
@@ -844,8 +928,11 @@ static void test_stop_transition_reapplies_operational_sanitizer(void)
     expect(motion_manager_last_targets(&fixture.manager)->rear_right_cdeg ==
                MOTION_REAR_MIN_CDEG,
            "STOPPING must clamp retained rear targets to the operational minimum");
-    expect(motion_manager_operational_clamp_count(&fixture.manager) == 1U,
-           "STOPPING sanitizer should use the common clamp diagnostic");
+    expect(motion_manager_last_targets(&fixture.manager)->front_left_cdeg ==
+               MOTION_FRONT_MAX_CDEG,
+           "STOPPING must clamp retained front targets to the operational maximum");
+    expect(motion_manager_operational_clamp_count(&fixture.manager) == 2U,
+           "STOPPING sanitizer should count front and rear operational clamps");
 }
 
 int main(void)
@@ -860,12 +947,14 @@ int main(void)
     test_disable_all_preempts_stop_immediately();
     test_start_crossfades_from_recorded_manual_pose();
     test_motion_start_rejects_unknown_raw_pwm_pose();
+    test_motion_start_rejects_front_pose_outside_operational_envelope();
     test_motion_start_rejects_rear_pose_outside_operational_envelope();
     test_motion_process_uses_actual_elapsed_wall_time();
     test_motion_process_elapsed_time_is_wrap_safe();
     test_graceful_stop_uses_actual_750_ms_duration();
     test_stop_elapsed_time_starts_at_acceptance();
     test_common_motion_guard_clamps_alternate_generator_output();
+    test_simple_gait_production_pipeline_preserves_physical_directions();
     test_stop_transition_reapplies_operational_sanitizer();
 
     if (failures == 0)

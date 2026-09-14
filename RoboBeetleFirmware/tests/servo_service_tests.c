@@ -274,8 +274,8 @@ static void test_command_ranges_and_capabilities(void)
         uint16_t min_pulse_us;
         uint16_t max_pulse_us;
     } paddle_cases[] = {
-        {SERVO_ID_FRONT_RIGHT, 1140U, 2020U},
-        {SERVO_ID_FRONT_LEFT, 1000U, 1900U},
+        {SERVO_ID_FRONT_RIGHT, 1140U, 1860U},
+        {SERVO_ID_FRONT_LEFT, 1160U, 1900U},
         {SERVO_ID_REAR_RIGHT, 1110U, 2030U},
         {SERVO_ID_REAR_LEFT, 960U, 1940U},
     };

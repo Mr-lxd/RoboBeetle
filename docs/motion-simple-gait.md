@@ -72,19 +72,20 @@ channel to logical neutral; SetAngle, Neutral, and Motion angle writes update
 the tracker. Raw SetPWM deliberately marks that channel's logical pose
 unknown because no inverse pulse-to-angle contract is assumed. START rejects
 an unknown required pose with the existing `HARDWARE_FAILURE` result mapping;
-it also rejects a known rear logical pose outside the operational envelope
-`-3000…+4500 cdeg` before acquiring Motion ownership. After a valid known pose
-is available, START cross-fades the recorded logical targets to the selected
+it also rejects a known front logical pose outside `-4500…+2800 cdeg` or a
+known rear logical pose outside `-3000…+4500 cdeg` before acquiring Motion
+ownership. After a valid known pose is available, START cross-fades the recorded logical targets to the selected
 gait target over the same provisional 750 ms window, including the mirrored
 left/right channels. During either the initial START ramp or a mode cross-fade,
 only a repeated START for the current transition target is idempotently
 accepted; a different mode returns `BUSY` without overwriting the transition.
 
 The generator emits logical targets only. The common MotionManager output
-guard enforces the rear operational envelope `-3000…+4500 cdeg` immediately
-before Servo calibration/PWM conversion and owns the clamp diagnostic. STOPPING
-applies the same guard after interpolating its retained targets, so a future
-alternate gait generator or retained transition vector cannot bypass it.
+guard enforces the front operational envelope `-4500…+2800 cdeg` and rear
+operational envelope `-3000…+4500 cdeg` immediately before Servo
+calibration/PWM conversion and owns the clamp diagnostic. STOPPING applies the
+same guard after interpolating its retained targets, so a future alternate gait
+generator or retained transition vector cannot bypass it.
 
 `Disable`/`Disable All`, heartbeat/liveness loss, and the existing
 `SafetySupervisor` fail-safe path bypass the ramp. `app_main` evaluates the
@@ -164,11 +165,12 @@ for ASCEND/DESCEND candidates. `FORWARD` keeps the approved front/rear
 approximately 180° phase relation; the larger rear paddle area is a mechanical
 fact only and does not establish a front/rear amplitude ratio. `BACKWARD` has no
 SimpleGait profile and remains Pending. Paddle modes drive the four paddles;
-ASCEND and DESCEND require all five enabled channels. Rear operational output
-is clamped to −3000…+4500 cdeg with a diagnostic counter. These values are
+ASCEND and DESCEND require all five enabled channels. Front operational output
+is clamped to −4500…+2800 cdeg and rear operational output to
+−3000…+4500 cdeg, each through the common diagnostic counter. These values are
 bring-up parameters, not hydrodynamic or water-tested calibration.
 
-The production Legacy Source-Compatible CPG profile uses `2.0 s` as a nominal
+The production Legacy Source-Compatible CPG profile uses `T=2.0 s` as a nominal
 period parameter. Its measured steady-state period is not assumed to be exactly
 `2.0 s` or `0.5 Hz`; the source-compatible `nu_i` dependence determines the
 observed frequency. See [`cpg-gait-core.md`](cpg-gait-core.md) for the current
@@ -234,9 +236,10 @@ contract. Motion-specific assertions cover:
 - actual 10/20/70/100 ms Motion wall-time gaps and uint32 timestamp wrap;
 - non-neutral manual-pose START cross-fade, mirrored left/right handoff, and
   raw SetPWM unknown-pose rejection through existing `HARDWARE_FAILURE`;
-- START rejection for known rear poses outside the operational envelope;
-- generator-independent rear envelope clamping, including the STOPPING path,
-  and Motion-owned diagnostics;
+- START rejection for known front and rear poses outside their operational
+  envelopes;
+- generator-independent front/rear envelope clamping, including the STOPPING
+  path, and Motion-owned diagnostics;
 - idempotent same-target START and `BUSY` rejection for reentrant different
   modes during START/mode transitions;
 - manual Servo `BUSY` arbitration during STOPPING;

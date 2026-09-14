@@ -722,10 +722,14 @@ void testPwmCalibrationAndBounds()
     const rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
     rb::RobotController controller(&transport, config);
     const rb::ServoDescriptor *descriptor = rb::servoDescriptor(rb::ServoId::FrontRight);
+    const rb::ServoDescriptor *frontLeft = rb::servoDescriptor(rb::ServoId::FrontLeft);
     expect(descriptor != nullptr, "FrontRight descriptor must exist");
+    expect(frontLeft != nullptr, "FrontLeft descriptor must exist");
     expect(descriptor->commandMinPwmUs == 1140, "SAVOX command minimum must be 1140 us");
     expect(descriptor->neutralPwmUs == 1580, "SAVOX neutral must be 1580 us");
-    expect(descriptor->commandMaxPwmUs == 2020, "SAVOX command maximum must be 2020 us");
+    expect(descriptor->commandMaxPwmUs == 1860, "FrontRight command maximum must be 1860 us");
+    expect(frontLeft->commandMinPwmUs == 1160, "FrontLeft command minimum must be 1160 us");
+    expect(frontLeft->commandMaxPwmUs == 1900, "FrontLeft command maximum must be 1900 us");
     controller.connectTransport({"COM_TEST", 9600});
     transport.simulateConnected();
     controller.enableServo(rb::ServoId::Servo1);
@@ -734,7 +738,7 @@ void testPwmCalibrationAndBounds()
 
     expect(!controller.setServoPwm(rb::ServoId::Servo1, 1139),
            "SAVOX PWM below command range must be rejected");
-    expect(!controller.setServoPwm(rb::ServoId::Servo1, 2021),
+    expect(!controller.setServoPwm(rb::ServoId::Servo1, 1861),
            "SAVOX PWM above command range must be rejected");
     expect(transport.writes().size() == before, "rejected commands must not write frames");
 
@@ -742,10 +746,29 @@ void testPwmCalibrationAndBounds()
            "SAVOX PWM minimum boundary must be accepted");
     expect(lastPacket(transport).payload == QByteArray::fromHex("01007404"),
            "SAVOX PWM minimum must be encoded as count, FrontRight, uint16 LE");
-    expect(controller.setServoPwm(rb::ServoId::Servo1, 2020),
+    expect(controller.setServoPwm(rb::ServoId::Servo1, 1860),
            "SAVOX PWM maximum boundary must be accepted");
-    expect(lastPacket(transport).payload == QByteArray::fromHex("0100e407"),
+    expect(lastPacket(transport).payload == QByteArray::fromHex("01004407"),
            "SAVOX PWM maximum must be encoded as count, FrontRight, uint16 LE");
+
+    expect(controller.enableServo(rb::ServoId::FrontLeft),
+           "FrontLeft enable should be sent for its raw command-bound test");
+    acknowledgeLast(transport);
+    const qsizetype frontLeftBefore = transport.writes().size();
+    expect(!controller.setServoPwm(rb::ServoId::FrontLeft, 1159),
+           "FrontLeft PWM below shell command range must be rejected");
+    expect(!controller.setServoPwm(rb::ServoId::FrontLeft, 1901),
+           "FrontLeft PWM above command range must be rejected");
+    expect(transport.writes().size() == frontLeftBefore,
+           "FrontLeft rejected commands must not write frames");
+    expect(controller.setServoPwm(rb::ServoId::FrontLeft, 1160),
+           "FrontLeft PWM minimum boundary must be accepted");
+    expect(lastPacket(transport).payload == QByteArray::fromHex("01018804"),
+           "FrontLeft PWM minimum must be encoded as count, FrontLeft, uint16 LE");
+    expect(controller.setServoPwm(rb::ServoId::FrontLeft, 1900),
+           "FrontLeft PWM maximum boundary must be accepted");
+    expect(lastPacket(transport).payload == QByteArray::fromHex("01016c07"),
+           "FrontLeft PWM maximum must be encoded as count, FrontLeft, uint16 LE");
 }
 
 void testSetAngleEncodingAndBounds()
@@ -965,8 +988,8 @@ void testSemanticServoCommandBoundaries()
         bool angleSupported;
     };
     const BoundaryCase cases[] = {
-        {rb::ServoId::FrontRight, 1140, 2020, -4500, 4500, true},
-        {rb::ServoId::FrontLeft, 1000, 1900, -4500, 4500, true},
+        {rb::ServoId::FrontRight, 1140, 1860, -4500, 4500, true},
+        {rb::ServoId::FrontLeft, 1160, 1900, -4500, 4500, true},
         {rb::ServoId::FrontAxis, 1060, 2430, -9000, 9000, true},
         {rb::ServoId::RearRight, 1110, 2030, -4500, 4500, true},
         {rb::ServoId::RearLeft, 960, 1940, -4500, 4500, true},
