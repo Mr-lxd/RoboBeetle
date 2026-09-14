@@ -1408,7 +1408,8 @@ SimpleGait mechanical-remap 诊断结果。历史表格与旧 image 的证据不
   registers exactly one generator/output path; no output mixing is permitted。
 - Legacy Source-Compatible CPG v1 math, `theta_dot` semantics, semantic adapter,
   `double` production precision, and signed target-amplitude TURN dynamics remain
-  unchanged. Physical CPG gait is **[Pending]**。
+  unchanged. The later CPG-default desktop physical gait exercise is recorded
+  below; this historical SimpleGait closeout itself does not establish that result。
 - True water propulsion, Turn effectiveness, and Ascend/Descend hydrodynamics are
   **[Pending Water Verification]**。
 - Safety-before-catch-up remains mandatory: when a foreground gap has crossed the
@@ -1419,3 +1420,27 @@ SimpleGait mechanical-remap 诊断结果。历史表格与旧 image 的证据不
   nominal 10 ms substep, representative 20/70/100 ms catch-up, and worst bounded
   catch-up) remain **[Pending]** when ARM tools or target measurements are absent;
   no host timing is substituted and no `double`→`float` production change is made。
+
+### 2026-09-14 CPG desktop physical verification
+
+The CPG-default desktop image passed the recorded physical/mechanical exercise:
+
+- Forward。
+- Front pair same phase。
+- Rear pair same phase。
+- Front versus Rear physical opposite motion。
+- Turn Left。
+- Turn Right。
+- Ascend mechanical direction。
+- Descend mechanical direction。
+- Stop。
+- Disable All。
+
+This CPG desktop physical gait result is **[Hardware Verified]** within the
+desktop mechanical scope. The steady-state CPG motion looked similar to the
+SimpleGait sinusoidal baseline; that similarity is expected and non-blocking,
+does not prove numerical identity, and does not justify changing the frozen CPG
+math. True water propulsion, Turn hydrodynamic effectiveness, and Ascend/Descend
+hydrodynamics remain **[Pending Water Verification]**. STM32F407 ARM Build,
+Program Verify, FLASH/RAM delta, nominal/catch-up timing, and bounded worst-case
+timing remain **[Pending]** until a real target run supplies those measurements。

@@ -12,6 +12,16 @@ if ([string]::IsNullOrWhiteSpace($BuildRoot)) {
 $firmwareRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $buildRootPath = (Resolve-Path (New-Item -ItemType Directory -Force -Path $BuildRoot)).Path
 $gcc = (Get-Command gcc -ErrorAction Stop).Source
+$traceOutputRoot = Join-Path $buildRootPath 'gait-trace'
+$traceTestOutputPathA = Join-Path $traceOutputRoot 'test-a'
+$traceTestOutputPathB = Join-Path $traceOutputRoot 'test-b'
+$traceToolOutputPath = Join-Path $traceOutputRoot 'tool'
+foreach ($tracePath in @(
+        $traceTestOutputPathA,
+        $traceTestOutputPathB,
+        $traceToolOutputPath)) {
+    New-Item -ItemType Directory -Force -Path $tracePath | Out-Null
+}
 
 $includeArgs = @(
     '-DSTM32F407xx',
@@ -44,6 +54,8 @@ $cases = @(
     @{ Name = 'cpg_safety_catchup_tests'; Sources = @('tests/test_cpg_safety_catchup.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c', 'Core/Motion/motion_manager.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c'); Link = @('-lm') },
     @{ Name = 'cpg_period_tests'; Sources = @('tests/test_cpg_period.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c'); Link = @('-lm') },
     @{ Name = 'simple_gait_generator_tests'; Sources = @('tests/simple_gait_generator_tests.c', 'Core/Motion/simple_gait_generator.c'); Link = @('-lm') },
+    @{ Name = 'gait_trace_compare_tests'; Sources = @('tests/gait_trace_compare_tests.c', 'tests/tools/gait_trace_compare.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c'); Link = @('-lm'); Arguments = @($traceTestOutputPathA, $traceTestOutputPathB) },
+    @{ Name = 'gait_trace_compare_tool'; Sources = @('tests/tools/gait_trace_compare_main.c', 'tests/tools/gait_trace_compare.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c'); Link = @('-lm'); Arguments = @($traceToolOutputPath) },
     @{ Name = 'motion_manager_tests'; Sources = @('tests/motion_manager_tests.c', 'Core/Motion/motion_manager.c', 'Core/Motion/simple_gait_generator.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c'); Link = @('-lm') },
     @{ Name = 'protocol_dispatcher_tests'; Sources = @('tests/protocol_dispatcher_tests.c', 'Core/Communication/protocol_dispatcher.c', 'Core/Motion/motion_manager.c', 'Core/Motion/simple_gait_generator.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c'); Link = @('-lm') },
     @{ Name = 'jy901s_parser_tests'; Sources = @('tests/jy901s_parser_tests.c', 'Core/Sensors/jy901s_parser.c'); Link = @() },
@@ -157,7 +169,12 @@ function Invoke-HostCase {
         throw "Host compile failed: $($Case.Name)"
     }
 
-    & $outputPath
+    $arguments = @()
+    if ($null -ne $Case.Arguments) {
+        $arguments = @($Case.Arguments)
+    }
+
+    & $outputPath @arguments
     if ($LASTEXITCODE -ne 0) {
         throw "Host test failed: $($Case.Name)"
     }

@@ -106,6 +106,15 @@ the SimpleGait bench baseline**, and the installed shell limits are
 Ascend/Descend hydrodynamic effect, and physical CPG gait remain separate
 pending evidence categories.
 
+The later CPG-default desktop exercise passed Forward, front-pair synchrony,
+rear-pair synchrony, physical Front-versus-Rear opposite motion, Turn Left,
+Turn Right, Ascend mechanical direction, Descend mechanical direction, Stop,
+and Disable All. This is **Hardware Verified** desktop physical CPG gait
+evidence. The CPG's visual similarity to SimpleGait is expected and
+non-blocking; it is not a numerical identity claim. Water propulsion, Turn
+hydrodynamic effectiveness, and Ascend/Descend hydrodynamics remain **Pending
+Water Verification**.
+
 ## Semantic invariants
 
 - `SERVO_ID_FRONT_RIGHT` always means the robot's actual right front leg;
@@ -153,7 +162,7 @@ The following evidence is deliberately not inferred from host tests:
 | SimpleGait physical Forward anti-phase | **Hardware Verified** |
 | True forward propulsion | **Pending Water Verification** |
 | Turn effectiveness | **Pending Water Verification** |
-| Physical CPG gait | **Pending Hardware Verification** |
+| CPG desktop physical gait: Forward/Turn/Ascend/Descend/Stop/Disable All | **Hardware Verified** |
 | Ascend/Descend hydrodynamic effect | **Pending Water Verification** |
 | Water/hydrodynamic behavior | **Pending Water Verification** |
 

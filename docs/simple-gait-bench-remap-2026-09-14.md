@@ -5,7 +5,8 @@
 This records the completed SimpleGait mechanical-remap diagnostic for the
 2026-09-14 front assembly. It isolated the SimpleGait stimulus from the
 source-compatible CPG dynamics and established the installed mechanical
-baseline before the next CPG target/hardware verification phase.
+baseline before the CPG desktop verification and the next target-performance
+measurement phase.
 
 ## Build evidence
 
@@ -67,8 +68,10 @@ diagnostic benchmark does not mix CPG output into a SimpleGait build.
   timing conclusions, Protocol V2, Motion safety ordering, and Qt UI are
   unchanged. The SimpleGait result freezes the front remap/sign boundary for
   future CPG debugging.
-- This result does not prove physical CPG gait, Turn effectiveness, true water
-  propulsion, FrontAxis hydrodynamic effect, or target timing.
+- The subsequent normal CPG desktop exercise is recorded separately as
+  **Hardware Verified** for its listed mechanical checks. This SimpleGait
+  record does not prove CPG target timing, true water propulsion, Turn
+  hydrodynamic effectiveness, or FrontAxis hydrodynamic effect.
 
 ## Required hardware checkpoint
 

@@ -3,13 +3,47 @@
 This document records the Motion / Gait control foundation carried into
 `feature/cpg-gait-core`. It is a host-test/software contract. The completed
 SimpleGait mechanical baseline has Hardware Verified Front/Rear physical
-anti-phase; ARM build/program evidence, true water propulsion, and physical
-CPG gait remain separate pending categories.
+anti-phase; the latest CPG desktop physical gait is also Hardware Verified for
+the recorded desktop checks. ARM build/program performance evidence, true
+water propulsion, and hydrodynamic effectiveness remain separate pending
+categories.
 
 The normal Firmware default is `MOTION_DEFAULT_GAIT_BACKEND_CPG=1`. An
 explicit `MOTION_DEFAULT_GAIT_BACKEND_CPG=0` build retains SimpleGait as the
 mechanical baseline. Each build registers exactly one generator with
 MotionManager.
+
+The host-only comparison tool is
+`RoboBeetleFirmware/tests/tools/gait_trace_compare.c`; it produces deterministic
+SimpleGait/CPG integer-target CSVs and a separate CPG internal-state CSV. The
+trace is offline evidence only and adds no Protocol V2 telemetry or Qt runtime
+backend selector.
+
+### Host-only SimpleGait versus CPG trace
+
+The trace runner samples both production generators at 10 ms on one fixed
+timeline: `[0,5000)` `FORWARD`, `[5000,8000)` `TURN_LEFT`, `[8000,11000)`
+`FORWARD`, `[11000,14000)` `TURN_RIGHT`, `[14000,17000)` `FORWARD`, followed
+by one final `STOP` row at `17000 ms`. It advances each generator by exactly
+10 ms before every row after the initialized `0 ms` sample and uses amplitude
+and bias scales of `1.0F`.
+
+`gait_trace_simple.csv` and `gait_trace_cpg.csv` each contain 1701 rows with
+the canonical integer logical-target fields
+`time_ms,backend,mode,front_right_cdeg,front_left_cdeg,rear_right_cdeg,`
+`rear_left_cdeg,front_axis_cdeg`, followed by the host-only
+`guarded_*_cdeg` projection. The raw fields are the generator requests; the
+projection applies the existing Motion common guards, front `-4500..+2800`
+and rear `-3000..+4500 cdeg`, while leaving `FrontAxis` unchanged. This is an
+algorithm-request versus installed-safe-command comparison aid, not a
+replacement for MotionManager's production sanitizer and not a PWM trace.
+
+`gait_trace_cpg_internal.csv` contains the same timeline with CPG phase,
+amplitude, target amplitude, `theta_dot0..theta_dot3`, and `raw_output0..3`
+written at double precision for host-only research. These states are not
+Protocol V2 telemetry. The deterministic regression compares all three files
+byte-for-byte across two generated directories and validates the timeline,
+mode boundaries, final STOP zeros, headers, row counts, and guard bounds.
 
 ## Wire contract
 
@@ -28,8 +62,9 @@ The stable mode order is:
 4 TURN_RIGHT 5 ASCEND      6 DESCEND     7 COUNT (sentinel)
 ```
 
-`STOP` uses mode 0 and action `STOP`. The current bench SimpleGait implementation
-accepts `FORWARD`, `TURN_LEFT`, `TURN_RIGHT`, `ASCEND`, and `DESCEND` for
+`STOP` uses mode 0 and action `STOP`. The selected CPG generator, and the
+explicit SimpleGait diagnostic generator, accept `FORWARD`, `TURN_LEFT`,
+`TURN_RIGHT`, `ASCEND`, and `DESCEND` for
 `START`. `BACKWARD` remains in the enum and wire schema for compatibility, but
 is reserved pending bench/water verification; the Firmware generator rejects it
 and the Qt Console does not emit it. A successful STOP ACK means that the stop
@@ -234,7 +269,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
   -File .\RoboBeetleFirmware\tests\run_host_tests.ps1
 ```
 
-The runner compiles and executes 27 Firmware test programs with C11,
+The runner compiles and executes 29 Firmware test programs with C11,
 `-Wall -Wextra -Werror`, and a separate `app_main_jy901s_api` compile
 contract. Motion-specific assertions cover:
 

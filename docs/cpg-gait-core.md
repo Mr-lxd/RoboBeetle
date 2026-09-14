@@ -43,7 +43,27 @@ the installed mechanical baseline. If CPG later fails the physical
 Front/Rear anti-phase check while this SimpleGait result remains correct, the
 debug boundary is CPG state, semantic adapter, backend selection, transition,
 or actuator command path. Do not reopen Servo calibration or the front remap
-from a CPG-only symptom. Physical CPG gait remains **Pending**.
+from a CPG-only symptom. The latest CPG desktop physical gait is
+**Hardware Verified** for the recorded Forward, synchrony, opposite-motion,
+Turn Left/Right, Ascend/Descend mechanical-direction, Stop, and Disable All
+checks. Water propulsion and hydrodynamic effectiveness remain pending.
+
+## Latest CPG desktop verification
+
+The normal CPG-default Firmware image completed a real desktop hardware
+exercise on 2026-09-14. The observed Forward gait passed front-pair synchrony,
+rear-pair synchrony, and physical opposite motion between the Front and Rear
+groups. Turn Left, Turn Right, Ascend mechanical direction, Descend mechanical
+direction, Stop, and Disable All also passed. This is **[Hardware Verified]**
+desktop physical CPG gait evidence.
+
+The steady-state CPG motion looked similar to the SimpleGait sinusoidal motion
+by eye. That similarity is expected and non-blocking; it does not establish
+numerical identity and does not justify changing the verified CPG. True water
+propulsion, Turn hydrodynamic effectiveness, and Ascend/Descend hydrodynamics
+remain **[Pending Water Verification]**. The DWT target-performance runbook is
+in [`cpg-gait-performance.md`](cpg-gait-performance.md), with real STM32F407
+measurements still pending.
 
 ## Historical source provenance
 
