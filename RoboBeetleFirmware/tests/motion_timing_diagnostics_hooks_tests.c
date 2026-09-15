@@ -40,6 +40,46 @@ int main(void)
                MOTION_TIMING_RUN_STATE_RUNNING,
            "begin_run must enable diagnostic hooks");
 
+    motion_timing_diagnostics_record_uart_enqueue(
+        MOTION_TIMING_TX_ACK,
+        MOTION_TIMING_UART_EVENT_ENQUEUED);
+    motion_timing_diagnostics_record_uart_enqueue(
+        MOTION_TIMING_TX_IMU,
+        MOTION_TIMING_UART_EVENT_COALESCED);
+    motion_timing_diagnostics_record_uart_completed(
+        MOTION_TIMING_TX_ACK);
+    motion_timing_diagnostics_record_uart_dropped(
+        MOTION_TIMING_TX_DEPTH);
+    motion_timing_diagnostics_record_uart_queue_full(false);
+    motion_timing_diagnostics_record_uart_start_busy();
+    motion_timing_diagnostics_record_uart_start_error();
+    motion_timing_diagnostics_record_uart_error(true);
+    motion_timing_diagnostics_record_uart_rearm(
+        MOTION_TIMING_UART_REARM_ATTEMPT);
+    motion_timing_diagnostics_record_uart_rearm(
+        MOTION_TIMING_UART_REARM_BUSY);
+    motion_timing_diagnostics_record_uart_rearm(
+        MOTION_TIMING_UART_REARM_ERROR);
+    motion_timing_diagnostics_record_uart_unexpected_callback();
+    motion_timing_diagnostics_record_uart_high_water(3U);
+    motion_timing_diagnostics_record_uart_busy_recovery();
+    motion_timing_diagnostics_record_uart_reinitialization();
+
+    expect(motion_timing_report.uart_transport.enqueued_count[
+               MOTION_TIMING_TX_ACK] == 1U,
+           "UART enqueue hook must count accepted frames");
+    expect(motion_timing_report.uart_transport.coalesced_count[
+               MOTION_TIMING_TX_IMU] == 1U,
+           "UART enqueue hook must count coalesced frames");
+    expect(motion_timing_report.uart_transport.completed_count[
+               MOTION_TIMING_TX_ACK] == 1U &&
+               motion_timing_report.uart_transport.dropped_count[
+                   MOTION_TIMING_TX_DEPTH] == 1U,
+           "UART completion/drop hooks must classify frame ownership");
+    expect(motion_timing_report.uart_transport.high_water_mark == 3U &&
+               motion_timing_report.uart_transport.busy_recovery_count == 1U,
+           "UART recovery hooks must retain bounded transport evidence");
+
     mark = motion_timing_diagnostics_loop_begin();
     motion_timing_diagnostics_record_rx(
         MOTION_TIMING_RX_HOST,

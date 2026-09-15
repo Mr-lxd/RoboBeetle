@@ -44,6 +44,8 @@ $halWarningArgs = @('-Wno-pointer-to-int-cast', '-Wno-int-to-pointer-cast')
 $cases = @(
     @{ Name = 'protocol_golden_vectors'; Sources = @('tests/protocol_golden_vectors.c', 'Core/Src/rb_protocol_v2.c'); Link = @() },
     @{ Name = 'ring_buffer_tests'; Sources = @('tests/ring_buffer_tests.c', 'Core/Communication/ring_buffer.c'); Link = @() },
+    @{ Name = 'uart_tx_queue_tests'; Sources = @('tests/uart_tx_queue_tests.c', 'Core/Communication/uart_tx_queue.c'); Link = @() },
+    @{ Name = 'uart_transport_stm32_tests'; Sources = @('tests/uart_transport_stm32_tests.c', 'Core/Communication/uart_transport_stm32.c', 'Core/Communication/uart_tx_queue.c', 'Core/Communication/ring_buffer.c'); Link = @(); Extra = @($halWarningArgs + '-DROBOBEETLE_UART_TRANSPORT_HOST_TEST=1') },
     @{ Name = 'servo_descriptor_tests'; Sources = @('tests/servo_descriptor_tests.c', 'Core/Servo/servo_descriptor.c'); Link = @() },
     @{ Name = 'servo_calibration_tests'; Sources = @('tests/servo_calibration_tests.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c'); Link = @() },
     @{ Name = 'servo_pwm_stop_policy_tests'; Sources = @('tests/servo_pwm_stop_policy_tests.c', 'Core/Servo/servo_pwm_stop_policy.c'); Link = @() },
@@ -64,6 +66,7 @@ $cases = @(
         'Core/Diagnostics/motion_timing_diagnostics.c',
         'Core/Src/rb_protocol_v2.c',
         'Core/Communication/ring_buffer.c',
+        'Core/Communication/uart_tx_queue.c',
         'Core/Communication/uart_transport_stm32.c',
         'Core/Communication/jy901s_transport_stm32.c',
         'Core/Communication/depth_transport_stm32.c',
@@ -87,13 +90,14 @@ $cases = @(
         'Core/Servo/servo_driver_stm32.c',
         'Core/Servo/servo_pwm_stop_policy.c',
         'Core/Safety/safety_supervisor.c'
-    ); Link = @('-lm'); Extra = @($halWarningArgs + '-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=1' + '-DROBOBEETLE_MOTION_TIMING_HOST_TEST=1') },
+    ); Link = @('-lm'); Extra = @($halWarningArgs + '-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=1' + '-DROBOBEETLE_MOTION_TIMING_HOST_TEST=1' + '-DROBOBEETLE_UART_TRANSPORT_HOST_TEST=1') },
     @{ Name = 'app_main_reduced_telemetry_tests'; Sources = @(
         'tests/app_main_reduced_telemetry_tests.c',
         'Core/App/app_main.c',
         'Core/Diagnostics/motion_timing_diagnostics.c',
         'Core/Src/rb_protocol_v2.c',
         'Core/Communication/ring_buffer.c',
+        'Core/Communication/uart_tx_queue.c',
         'Core/Communication/uart_transport_stm32.c',
         'Core/Communication/jy901s_transport_stm32.c',
         'Core/Communication/depth_transport_stm32.c',
@@ -117,7 +121,7 @@ $cases = @(
         'Core/Servo/servo_driver_stm32.c',
         'Core/Servo/servo_pwm_stop_policy.c',
         'Core/Safety/safety_supervisor.c'
-    ); Link = @('-lm'); Extra = @($halWarningArgs + '-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=1' + '-DROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY=1' + '-DROBOBEETLE_MOTION_TIMING_HOST_TEST=1') },
+    ); Link = @('-lm'); Extra = @($halWarningArgs + '-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=1' + '-DROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY=1' + '-DROBOBEETLE_MOTION_TIMING_HOST_TEST=1' + '-DROBOBEETLE_UART_TRANSPORT_HOST_TEST=1') },
     @{ Name = 'gait_trace_compare_tests'; Sources = @('tests/gait_trace_compare_tests.c', 'tests/tools/gait_trace_compare.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c'); Link = @('-lm'); Arguments = @($traceTestOutputPathA, $traceTestOutputPathB) },
     @{ Name = 'gait_trace_compare_tool'; Sources = @('tests/tools/gait_trace_compare_main.c', 'tests/tools/gait_trace_compare.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c'); Link = @('-lm'); Arguments = @($traceToolOutputPath) },
     @{ Name = 'motion_manager_tests'; Sources = @('tests/motion_manager_tests.c', 'Core/Diagnostics/motion_timing_diagnostics.c', 'Core/Motion/motion_manager.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c'); Link = @('-lm'); Extra = @($halWarningArgs + '-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=1' + '-DROBOBEETLE_MOTION_TIMING_HOST_TEST=1') },
@@ -135,6 +139,7 @@ $cases = @(
         'Core/App/app_main.c',
         'Core/Src/rb_protocol_v2.c',
         'Core/Communication/ring_buffer.c',
+        'Core/Communication/uart_tx_queue.c',
         'Core/Communication/uart_transport_stm32.c',
         'Core/Communication/jy901s_transport_stm32.c',
         'Core/Communication/depth_transport_stm32.c',
@@ -158,12 +163,13 @@ $cases = @(
         'Core/Servo/servo_driver_stm32.c',
         'Core/Servo/servo_pwm_stop_policy.c',
         'Core/Safety/safety_supervisor.c'
-    ); Link = @('-lm'); Extra = $halWarningArgs }
+    ); Link = @('-lm'); Extra = @($halWarningArgs + '-DROBOBEETLE_UART_TRANSPORT_HOST_TEST=1') }
     @{ Name = 'app_main_backend_template'; Sources = @(
         'tests/app_main_backend_tests.c',
         'Core/App/app_main.c',
         'Core/Src/rb_protocol_v2.c',
         'Core/Communication/ring_buffer.c',
+        'Core/Communication/uart_tx_queue.c',
         'Core/Communication/uart_transport_stm32.c',
         'Core/Communication/jy901s_transport_stm32.c',
         'Core/Communication/depth_transport_stm32.c',
@@ -187,7 +193,7 @@ $cases = @(
         'Core/Servo/servo_driver_stm32.c',
         'Core/Servo/servo_pwm_stop_policy.c',
         'Core/Safety/safety_supervisor.c'
-    ); Link = @('-lm', '-Wl,--wrap=motion_manager_init_with_backends'); Extra = $halWarningArgs }
+    ); Link = @('-lm', '-Wl,--wrap=motion_manager_init_with_backends'); Extra = @($halWarningArgs + '-DROBOBEETLE_UART_TRANSPORT_HOST_TEST=1') }
 )
 
 $backendTemplate = $cases | Where-Object {
@@ -200,19 +206,19 @@ $cases += @{
     Name = 'app_main_backend_default_tests'
     Sources = $backendTemplate.Sources
     Link = $backendTemplate.Link
-    Extra = $halWarningArgs
+    Extra = @($halWarningArgs + '-DROBOBEETLE_UART_TRANSPORT_HOST_TEST=1')
 }
 $cases += @{
     Name = 'app_main_backend_simple_override_tests'
     Sources = $backendTemplate.Sources
     Link = $backendTemplate.Link
-    Extra = @($halWarningArgs + '-DMOTION_DEFAULT_GAIT_BACKEND_CPG=0')
+    Extra = @($halWarningArgs + '-DROBOBEETLE_UART_TRANSPORT_HOST_TEST=1' + '-DMOTION_DEFAULT_GAIT_BACKEND_CPG=0')
 }
 $cases += @{
     Name = 'app_main_backend_cpg_override_tests'
     Sources = $backendTemplate.Sources
     Link = $backendTemplate.Link
-    Extra = @($halWarningArgs + '-DMOTION_DEFAULT_GAIT_BACKEND_CPG=1')
+    Extra = @($halWarningArgs + '-DROBOBEETLE_UART_TRANSPORT_HOST_TEST=1' + '-DMOTION_DEFAULT_GAIT_BACKEND_CPG=1')
 }
 
 function Invoke-HostCase {

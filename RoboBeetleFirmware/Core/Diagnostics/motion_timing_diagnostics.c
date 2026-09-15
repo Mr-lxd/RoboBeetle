@@ -439,7 +439,46 @@ static uint32_t previous_tick_duration_cycles;
 static motion_timing_gap_context_t gap_context;
 static uint32_t configured_clock_hz;
 static uint32_t configured_flags;
-static bool recording;
+
+typedef enum
+{
+    MOTION_TIMING_GATE_RESETTING = 0,
+    MOTION_TIMING_GATE_RUNNING,
+    MOTION_TIMING_GATE_FROZEN
+} motion_timing_recording_gate_t;
+
+static volatile motion_timing_recording_gate_t recording_gate =
+    MOTION_TIMING_GATE_FROZEN;
+
+#if defined(ROBOBEETLE_MOTION_TIMING_HOST_TEST)
+static uint32_t motion_timing_irq_save(void)
+{
+    return 0U;
+}
+
+static void motion_timing_irq_restore(uint32_t primask)
+{
+    (void)primask;
+}
+#else
+static uint32_t motion_timing_irq_save(void)
+{
+    const uint32_t primask = __get_PRIMASK();
+
+    __disable_irq();
+    return primask;
+}
+
+static void motion_timing_irq_restore(uint32_t primask)
+{
+    __set_PRIMASK(primask);
+}
+#endif
+
+static bool motion_timing_is_recording(void)
+{
+    return recording_gate == MOTION_TIMING_GATE_RUNNING;
+}
 
 static void motion_timing_clear_gap_context(void)
 {
@@ -556,6 +595,11 @@ static uint32_t motion_timing_measure_delta(
 
 void motion_timing_diagnostics_init(uint32_t runtime_backend)
 {
+    uint32_t primask = motion_timing_irq_save();
+
+    recording_gate = MOTION_TIMING_GATE_RESETTING;
+    motion_timing_irq_restore(primask);
+
     configured_flags = MOTION_TIMING_DIAGNOSTIC_FLAG_ENABLED;
 
 #if ROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY
@@ -579,7 +623,6 @@ void motion_timing_diagnostics_init(uint32_t runtime_backend)
         configured_flags,
         runtime_backend,
         motion_timing_reset_marker);
-    recording = false;
     have_loop_entry = false;
     have_motion_tick = false;
     loop_entry_mark = 0U;
@@ -587,10 +630,19 @@ void motion_timing_diagnostics_init(uint32_t runtime_backend)
     motion_tick_start_mark = 0U;
     previous_tick_duration_cycles = 0U;
     motion_timing_clear_gap_context();
+
+    primask = motion_timing_irq_save();
+    recording_gate = MOTION_TIMING_GATE_FROZEN;
+    motion_timing_irq_restore(primask);
 }
 
 void motion_timing_diagnostics_begin_run(uint32_t runtime_backend)
 {
+    uint32_t primask = motion_timing_irq_save();
+
+    recording_gate = MOTION_TIMING_GATE_RESETTING;
+    motion_timing_irq_restore(primask);
+
     ++motion_timing_run_marker;
     ++motion_timing_reset_marker;
     motion_timing_report_initialize(
@@ -603,7 +655,6 @@ void motion_timing_diagnostics_begin_run(uint32_t runtime_backend)
     motion_timing_report.run_state = MOTION_TIMING_RUN_STATE_RUNNING;
     motion_timing_report.termination_reason =
         MOTION_TIMING_TERMINATION_NONE;
-    recording = true;
     have_loop_entry = false;
     have_motion_tick = false;
     loop_entry_mark = 0U;
@@ -611,18 +662,27 @@ void motion_timing_diagnostics_begin_run(uint32_t runtime_backend)
     motion_tick_start_mark = 0U;
     previous_tick_duration_cycles = 0U;
     motion_timing_clear_gap_context();
+
+    primask = motion_timing_irq_save();
+    recording_gate = MOTION_TIMING_GATE_RUNNING;
+    motion_timing_irq_restore(primask);
 }
 
 void motion_timing_diagnostics_freeze(uint32_t termination_reason)
 {
-    if (!recording)
+    uint32_t primask = motion_timing_irq_save();
+
+    if (!motion_timing_is_recording())
     {
+        motion_timing_irq_restore(primask);
         return;
     }
 
-    recording = false;
+    recording_gate = MOTION_TIMING_GATE_FROZEN;
     motion_timing_report.run_state = MOTION_TIMING_RUN_STATE_FROZEN;
     motion_timing_report.termination_reason = termination_reason;
+    motion_timing_irq_restore(primask);
+
     have_loop_entry = false;
     have_motion_tick = false;
     loop_entry_mark = 0U;
@@ -648,7 +708,7 @@ motion_timing_mark_t motion_timing_diagnostics_loop_begin(void)
 {
     const motion_timing_mark_t mark = motion_timing_read_cycles();
 
-    if (!recording)
+    if (!motion_timing_is_recording())
     {
         have_loop_entry = false;
         return mark;
@@ -667,7 +727,7 @@ motion_timing_mark_t motion_timing_diagnostics_loop_begin(void)
 
 void motion_timing_diagnostics_loop_end(motion_timing_mark_t start)
 {
-    if (recording)
+    if (motion_timing_is_recording())
     {
         motion_timing_distribution_record_cycles(
             &motion_timing_report.app_loop_body,
@@ -683,7 +743,7 @@ void motion_timing_diagnostics_record_rx(
 {
     uint32_t duration_cycles;
 
-    if (!recording)
+    if (!motion_timing_is_recording())
     {
         return;
     }
@@ -709,7 +769,7 @@ void motion_timing_diagnostics_record_tx(
 {
     uint32_t duration_cycles;
 
-    if (!recording)
+    if (!motion_timing_is_recording())
     {
         return;
     }
@@ -719,8 +779,15 @@ void motion_timing_diagnostics_record_tx(
         &motion_timing_report,
         kind,
         byte_count,
-        status,
+        (status == 0U) || (status == 1U)
+            ? MOTION_TIMING_STATUS_OK
+            : MOTION_TIMING_STATUS_ERROR,
         duration_cycles);
+    /* Preserve the wire-independent enqueue result in the fixed report. */
+    if (kind < MOTION_TIMING_TX_COUNT)
+    {
+        motion_timing_report.tx[kind].last_status = status;
+    }
     motion_timing_gap_context_record_tx(
         kind,
         byte_count,
@@ -731,7 +798,7 @@ static void motion_timing_diagnostics_record_motion_span(
     volatile motion_timing_distribution_t *distribution,
     motion_timing_mark_t start)
 {
-    if (recording)
+    if (motion_timing_is_recording())
     {
         motion_timing_distribution_record_cycles(
             distribution,
@@ -768,7 +835,7 @@ void motion_timing_diagnostics_motion_tick_begin(uint32_t elapsed_ms)
     const motion_timing_mark_t mark = motion_timing_read_cycles();
     uint32_t interval_cycles = 0U;
 
-    if (!recording)
+    if (!motion_timing_is_recording())
     {
         return;
     }
@@ -804,7 +871,7 @@ void motion_timing_diagnostics_motion_tick_end(uint32_t result)
 {
     uint32_t duration_cycles;
 
-    if (!recording || !have_motion_tick)
+    if (!motion_timing_is_recording() || !have_motion_tick)
     {
         return;
     }
@@ -823,6 +890,187 @@ void motion_timing_diagnostics_motion_tick_end(uint32_t result)
     {
         motion_timing_increment_saturated(
             &motion_timing_report.motion.result_error_count);
+    }
+}
+
+void motion_timing_diagnostics_record_uart_enqueue(
+    motion_timing_tx_kind_t kind,
+    uint32_t event)
+{
+    if (!motion_timing_is_recording() ||
+        (kind >= MOTION_TIMING_TX_COUNT))
+    {
+        return;
+    }
+
+    switch (event)
+    {
+        case MOTION_TIMING_UART_EVENT_ENQUEUED:
+            motion_timing_increment_saturated(
+                &motion_timing_report.uart_transport.enqueued_count[kind]);
+            break;
+
+        case MOTION_TIMING_UART_EVENT_COALESCED:
+            motion_timing_increment_saturated(
+                &motion_timing_report.uart_transport.coalesced_count[kind]);
+            break;
+
+        case MOTION_TIMING_UART_EVENT_REJECTED:
+            motion_timing_increment_saturated(
+                &motion_timing_report.uart_transport.rejected_count[kind]);
+            break;
+
+        default:
+            motion_timing_increment_saturated(
+                &motion_timing_report.diagnostic_invalid_count);
+            break;
+    }
+}
+
+void motion_timing_diagnostics_record_uart_completed(
+    motion_timing_tx_kind_t kind)
+{
+    if (motion_timing_is_recording() &&
+        (kind < MOTION_TIMING_TX_COUNT))
+    {
+        motion_timing_increment_saturated(
+            &motion_timing_report.uart_transport.completed_count[kind]);
+    }
+}
+
+void motion_timing_diagnostics_record_uart_dropped(
+    motion_timing_tx_kind_t kind)
+{
+    if (motion_timing_is_recording() &&
+        (kind < MOTION_TIMING_TX_COUNT))
+    {
+        motion_timing_increment_saturated(
+            &motion_timing_report.uart_transport.dropped_count[kind]);
+    }
+}
+
+void motion_timing_diagnostics_record_uart_queue_full(
+    bool control_queue)
+{
+    if (!motion_timing_is_recording())
+    {
+        return;
+    }
+
+    if (control_queue)
+    {
+        motion_timing_increment_saturated(
+            &motion_timing_report.uart_transport.control_queue_full_count);
+    }
+    else
+    {
+        motion_timing_increment_saturated(
+            &motion_timing_report.uart_transport.telemetry_queue_full_count);
+    }
+}
+
+void motion_timing_diagnostics_record_uart_start_busy(void)
+{
+    if (motion_timing_is_recording())
+    {
+        motion_timing_increment_saturated(
+            &motion_timing_report.uart_transport.start_busy_count);
+    }
+}
+
+void motion_timing_diagnostics_record_uart_start_error(void)
+{
+    if (motion_timing_is_recording())
+    {
+        motion_timing_increment_saturated(
+            &motion_timing_report.uart_transport.start_error_count);
+    }
+}
+
+void motion_timing_diagnostics_record_uart_error(
+    bool rx_rearm_required)
+{
+    if (!motion_timing_is_recording())
+    {
+        return;
+    }
+
+    motion_timing_increment_saturated(
+        &motion_timing_report.uart_transport.uart_error_count);
+    if (rx_rearm_required)
+    {
+        motion_timing_increment_saturated(
+            &motion_timing_report.uart_transport.rx_error_count);
+    }
+}
+
+void motion_timing_diagnostics_record_uart_rearm(
+    uint32_t result)
+{
+    if (!motion_timing_is_recording())
+    {
+        return;
+    }
+
+    switch (result)
+    {
+        case MOTION_TIMING_UART_REARM_ATTEMPT:
+            motion_timing_increment_saturated(
+                &motion_timing_report.uart_transport.rx_rearm_attempt_count);
+            break;
+
+        case MOTION_TIMING_UART_REARM_BUSY:
+            motion_timing_increment_saturated(
+                &motion_timing_report.uart_transport.rx_rearm_busy_count);
+            break;
+
+        case MOTION_TIMING_UART_REARM_ERROR:
+            motion_timing_increment_saturated(
+                &motion_timing_report.uart_transport.rx_rearm_error_count);
+            break;
+
+        default:
+            motion_timing_increment_saturated(
+                &motion_timing_report.diagnostic_invalid_count);
+            break;
+    }
+}
+
+void motion_timing_diagnostics_record_uart_unexpected_callback(void)
+{
+    if (motion_timing_is_recording())
+    {
+        motion_timing_increment_saturated(
+            &motion_timing_report.uart_transport.unexpected_callback_count);
+    }
+}
+
+void motion_timing_diagnostics_record_uart_high_water(
+    uint32_t high_water_mark)
+{
+    if (motion_timing_is_recording() &&
+        (high_water_mark >
+         motion_timing_report.uart_transport.high_water_mark))
+    {
+        motion_timing_report.uart_transport.high_water_mark = high_water_mark;
+    }
+}
+
+void motion_timing_diagnostics_record_uart_busy_recovery(void)
+{
+    if (motion_timing_is_recording())
+    {
+        motion_timing_increment_saturated(
+            &motion_timing_report.uart_transport.busy_recovery_count);
+    }
+}
+
+void motion_timing_diagnostics_record_uart_reinitialization(void)
+{
+    if (motion_timing_is_recording())
+    {
+        motion_timing_increment_saturated(
+            &motion_timing_report.uart_transport.reinitialization_count);
     }
 }
 

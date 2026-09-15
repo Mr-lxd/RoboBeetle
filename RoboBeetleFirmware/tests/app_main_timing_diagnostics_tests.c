@@ -11,6 +11,7 @@
 static int failures;
 static uint8_t *host_rx_destination;
 static unsigned int tx_call_count;
+static unsigned int blocking_tx_call_count;
 
 static void expect(bool condition, const char *message)
 {
@@ -39,6 +40,22 @@ HAL_StatusTypeDef HAL_UART_Receive_IT(
     return HAL_OK;
 }
 
+HAL_StatusTypeDef HAL_UART_Transmit_IT(
+    UART_HandleTypeDef *huart,
+    const uint8_t *data,
+    uint16_t size)
+{
+    (void)data;
+    (void)size;
+    if (huart == NULL)
+    {
+        return HAL_ERROR;
+    }
+    ++tx_call_count;
+    huart->gState = HAL_UART_STATE_BUSY_TX;
+    return HAL_OK;
+}
+
 HAL_StatusTypeDef HAL_UART_Transmit(
     UART_HandleTypeDef *huart,
     const uint8_t *data,
@@ -49,8 +66,34 @@ HAL_StatusTypeDef HAL_UART_Transmit(
     (void)data;
     (void)size;
     (void)timeout;
-    ++tx_call_count;
+    ++blocking_tx_call_count;
     return HAL_OK;
+}
+
+HAL_StatusTypeDef HAL_UART_AbortTransmit_IT(
+    UART_HandleTypeDef *huart)
+{
+    if (huart != NULL)
+    {
+        huart->gState = HAL_UART_STATE_READY;
+    }
+    return HAL_OK;
+}
+
+HAL_UART_StateTypeDef HAL_UART_GetState(
+    const UART_HandleTypeDef *huart)
+{
+    if (huart == NULL)
+    {
+        return HAL_UART_STATE_RESET;
+    }
+    return (HAL_UART_StateTypeDef)(huart->gState | huart->RxState);
+}
+
+uint32_t HAL_UART_GetError(
+    const UART_HandleTypeDef *huart)
+{
+    return huart == NULL ? HAL_UART_ERROR_NONE : huart->ErrorCode;
 }
 
 uint32_t HAL_GetTick(void)
@@ -103,6 +146,11 @@ static void send_heartbeat(
         }
     }
     app_main_process();
+    while (uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_ACTIVE)
+    {
+        host_uart->gState = HAL_UART_STATE_READY;
+        uart_transport_stm32_on_tx_complete(host_uart);
+    }
 }
 
 HAL_StatusTypeDef HAL_TIM_PWM_Stop(
@@ -160,6 +208,8 @@ int main(void)
     send_heartbeat(&uart1, 3U);
     expect(tx_call_count == 6U,
            "normal diagnostic Heartbeats must preserve ACK and optional TX");
+    expect(blocking_tx_call_count == 0U,
+           "normal diagnostic Heartbeats must not use blocking TX");
     expect(motion_timing_report.tx[MOTION_TIMING_TX_ACK].call_count == 3U,
            "diagnostics must classify all ACK transmissions");
     expect(motion_timing_report.tx[MOTION_TIMING_TX_LEAK].call_count == 1U,
@@ -168,6 +218,15 @@ int main(void)
            "diagnostics must classify IMU transmissions");
     expect(motion_timing_report.tx[MOTION_TIMING_TX_DEPTH].call_count == 1U,
            "diagnostics must classify Depth transmissions");
+    expect(motion_timing_report.uart_transport.enqueued_count[
+               MOTION_TIMING_TX_ACK] == 3U &&
+               motion_timing_report.uart_transport.completed_count[
+                   MOTION_TIMING_TX_ACK] == 3U,
+           "diagnostics must distinguish accepted and physically completed ACK TX");
+    expect(motion_timing_report.tx[MOTION_TIMING_TX_ACK].last_status ==
+               UART_TX_ENQUEUED &&
+               motion_timing_report.tx[MOTION_TIMING_TX_ACK].ok_count == 3U,
+           "foreground TX timing must retain the enqueue result semantics");
 
     if (failures == 0)
     {

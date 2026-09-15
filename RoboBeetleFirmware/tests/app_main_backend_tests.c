@@ -59,6 +59,21 @@ HAL_StatusTypeDef HAL_UART_Receive_IT(
     return HAL_OK;
 }
 
+HAL_StatusTypeDef HAL_UART_Transmit_IT(
+    UART_HandleTypeDef *huart,
+    const uint8_t *data,
+    uint16_t size)
+{
+    (void)data;
+    (void)size;
+    if (huart == NULL)
+    {
+        return HAL_ERROR;
+    }
+    huart->gState = HAL_UART_STATE_BUSY_TX;
+    return HAL_OK;
+}
+
 HAL_StatusTypeDef HAL_UART_Transmit(
     UART_HandleTypeDef *huart,
     const uint8_t *data,
@@ -70,6 +85,32 @@ HAL_StatusTypeDef HAL_UART_Transmit(
     (void)size;
     (void)timeout;
     return HAL_OK;
+}
+
+HAL_StatusTypeDef HAL_UART_AbortTransmit_IT(
+    UART_HandleTypeDef *huart)
+{
+    if (huart != NULL)
+    {
+        huart->gState = HAL_UART_STATE_READY;
+    }
+    return HAL_OK;
+}
+
+HAL_UART_StateTypeDef HAL_UART_GetState(
+    const UART_HandleTypeDef *huart)
+{
+    if (huart == NULL)
+    {
+        return HAL_UART_STATE_RESET;
+    }
+    return (HAL_UART_StateTypeDef)(huart->gState | huart->RxState);
+}
+
+uint32_t HAL_UART_GetError(
+    const UART_HandleTypeDef *huart)
+{
+    return huart == NULL ? HAL_UART_ERROR_NONE : huart->ErrorCode;
 }
 
 uint32_t HAL_GetTick(void)

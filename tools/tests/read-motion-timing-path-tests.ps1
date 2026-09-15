@@ -21,6 +21,17 @@ foreach ($fragment in @(
     }
 }
 
+foreach ($fragment in @(
+        '$reportSize = 1432',
+        '$abiVersion -ne 4',
+        'uart_transport = $uartTransport',
+        'Read-U32 $bytes (1300 + (4 * $index))'
+    )) {
+    if (-not $source.Contains($fragment)) {
+        throw "readout helper is missing the fixed ABI v4 decoder fragment: $fragment"
+    }
+}
+
 $dumpCommandIndex = $source.IndexOf('$dumpCommand =', [StringComparison]::Ordinal)
 if ($dumpCommandIndex -lt 0) {
     throw 'readout helper does not construct a dump_image command'

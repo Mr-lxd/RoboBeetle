@@ -23,6 +23,11 @@ static void test_trial_lifecycle_and_freeze(void)
     uint32_t first_run_marker;
 
     motion_timing_diagnostics_init(MOTION_GAIT_BACKEND_CPG_VALUE);
+    motion_timing_diagnostics_record_uart_completed(
+        MOTION_TIMING_TX_ACK);
+    expect(motion_timing_report.uart_transport.completed_count[
+               MOTION_TIMING_TX_ACK] == 0U,
+           "UART events before begin_run must not enter the report");
     motion_timing_diagnostics_begin_run(MOTION_GAIT_BACKEND_CPG_VALUE);
     first_run_marker = motion_timing_report.run_marker;
     expect(motion_timing_report.run_state == MOTION_TIMING_RUN_STATE_RUNNING,
@@ -36,6 +41,11 @@ static void test_trial_lifecycle_and_freeze(void)
         mark);
     motion_timing_diagnostics_motion_tick_begin(10U);
     motion_timing_diagnostics_motion_tick_end(MOTION_TIMING_STATUS_OK);
+    motion_timing_diagnostics_record_uart_enqueue(
+        MOTION_TIMING_TX_ACK,
+        MOTION_TIMING_UART_EVENT_ENQUEUED);
+    motion_timing_diagnostics_record_uart_completed(
+        MOTION_TIMING_TX_ACK);
     expect(motion_timing_report.motion.accepted_tick_count == 1U,
            "first trial must collect Motion counters");
 
@@ -47,6 +57,23 @@ static void test_trial_lifecycle_and_freeze(void)
                MOTION_TIMING_TERMINATION_NORMAL_STOP,
            "normal stop reason must be retained");
     frozen_report = motion_timing_report;
+
+    motion_timing_diagnostics_record_uart_enqueue(
+        MOTION_TIMING_TX_IMU,
+        MOTION_TIMING_UART_EVENT_ENQUEUED);
+    motion_timing_diagnostics_record_uart_completed(
+        MOTION_TIMING_TX_IMU);
+    motion_timing_diagnostics_record_uart_dropped(
+        MOTION_TIMING_TX_IMU);
+    motion_timing_diagnostics_record_uart_start_busy();
+    motion_timing_diagnostics_record_uart_start_error();
+    motion_timing_diagnostics_record_uart_error(true);
+    motion_timing_diagnostics_record_uart_rearm(
+        MOTION_TIMING_UART_REARM_ATTEMPT);
+    motion_timing_diagnostics_record_uart_unexpected_callback();
+    motion_timing_diagnostics_record_uart_high_water(9U);
+    motion_timing_diagnostics_record_uart_busy_recovery();
+    motion_timing_diagnostics_record_uart_reinitialization();
 
     mark = motion_timing_diagnostics_loop_begin();
     motion_timing_diagnostics_record_rx(
@@ -73,7 +100,11 @@ static void test_trial_lifecycle_and_freeze(void)
            "a new trial must publish its selected backend");
     expect(motion_timing_report.motion.accepted_tick_count == 0U &&
                motion_timing_report.rx_drain[MOTION_TIMING_RX_HOST].byte_count ==
-                   0U,
+                   0U &&
+               motion_timing_report.uart_transport.completed_count[
+                   MOTION_TIMING_TX_ACK] == 0U &&
+               motion_timing_report.uart_transport.enqueued_count[
+                   MOTION_TIMING_TX_IMU] == 0U,
            "a new trial must clear the previous trial counters");
 
     motion_timing_diagnostics_motion_tick_begin(20U);

@@ -84,6 +84,13 @@ static bool protocol_send_ack(
     uint8_t request_type,
     rbp2_result_t result);
 
+static bool protocol_tx_result_accepted(
+    uart_tx_enqueue_result_t result)
+{
+    return (result == UART_TX_ENQUEUED) ||
+           (result == UART_TX_COALESCED);
+}
+
 #if !MOTION_TIMING_REDUCED_TELEMETRY_ACTIVE
 static bool protocol_send_leak_status(
     leak_sensor_state_t state);
@@ -302,7 +309,7 @@ static bool protocol_send_ack(
 {
     uint8_t payload[4];
     uint8_t wire[RBP2_MAX_WIRE_SIZE];
-    HAL_StatusTypeDef transmit_status;
+    uart_tx_enqueue_result_t enqueue_result;
 
     payload[0] =
         (uint8_t)(request_sequence & 0xFFU);
@@ -330,17 +337,18 @@ static bool protocol_send_ack(
             motion_timing_diagnostics_mark();
 #endif
 
-        transmit_status = uart_transport_stm32_transmit(
+        enqueue_result = uart_transport_stm32_enqueue(
             wire,
-            (uint16_t)wire_length);
+            (uint16_t)wire_length,
+            UART_TX_MESSAGE_ACK);
 #if MOTION_TIMING_DIAGNOSTICS_ACTIVE
         motion_timing_diagnostics_record_tx(
             MOTION_TIMING_TX_ACK,
             (uint32_t)wire_length,
-            (uint32_t)transmit_status,
+            (uint32_t)enqueue_result,
             timing_start);
 #endif
-        return transmit_status == HAL_OK;
+        return protocol_tx_result_accepted(enqueue_result);
     }
 
     return false;
@@ -352,7 +360,7 @@ static bool protocol_send_leak_status(
 {
     uint8_t payload[1];
     uint8_t wire[RBP2_MAX_WIRE_SIZE];
-    HAL_StatusTypeDef transmit_status;
+    uart_tx_enqueue_result_t enqueue_result;
 
     if (!leak_sensor_state_is_valid(state))
     {
@@ -380,17 +388,18 @@ static bool protocol_send_leak_status(
         motion_timing_diagnostics_mark();
 #endif
 
-    transmit_status = uart_transport_stm32_transmit(
-               wire,
-               (uint16_t)wire_length);
+    enqueue_result = uart_transport_stm32_enqueue(
+        wire,
+        (uint16_t)wire_length,
+        UART_TX_MESSAGE_LEAK);
 #if MOTION_TIMING_DIAGNOSTICS_ACTIVE
     motion_timing_diagnostics_record_tx(
         MOTION_TIMING_TX_LEAK,
         (uint32_t)wire_length,
-        (uint32_t)transmit_status,
+        (uint32_t)enqueue_result,
         timing_start);
 #endif
-    return transmit_status == HAL_OK;
+    return protocol_tx_result_accepted(enqueue_result);
 }
 
 static bool protocol_send_imu_snapshot(void)
@@ -401,7 +410,7 @@ static bool protocol_send_imu_snapshot(void)
     jy901s_imu_telemetry_diagnostics_t transport_diagnostics;
     uint8_t payload[JY901S_IMU_TELEMETRY_PAYLOAD_LENGTH];
     uint8_t wire[RBP2_MAX_WIRE_SIZE];
-    HAL_StatusTypeDef transmit_status;
+    uart_tx_enqueue_result_t enqueue_result;
 
     jy901s_parser_get_state(&jy901s_parser, &state);
     jy901s_parser_get_stats(&jy901s_parser, &parser_stats);
@@ -445,17 +454,18 @@ static bool protocol_send_imu_snapshot(void)
         motion_timing_diagnostics_mark();
 #endif
 
-    transmit_status = uart_transport_stm32_transmit(
-               wire,
-               (uint16_t)wire_length);
+    enqueue_result = uart_transport_stm32_enqueue(
+        wire,
+        (uint16_t)wire_length,
+        UART_TX_MESSAGE_IMU);
 #if MOTION_TIMING_DIAGNOSTICS_ACTIVE
     motion_timing_diagnostics_record_tx(
         MOTION_TIMING_TX_IMU,
         (uint32_t)wire_length,
-        (uint32_t)transmit_status,
+        (uint32_t)enqueue_result,
         timing_start);
 #endif
-    return transmit_status == HAL_OK;
+    return protocol_tx_result_accepted(enqueue_result);
 }
 
 static bool protocol_send_depth_snapshot(void)
@@ -467,7 +477,7 @@ static bool protocol_send_depth_snapshot(void)
     depth_telemetry_diagnostics_t diagnostics;
     uint8_t payload[DEPTH_TELEMETRY_PAYLOAD_LENGTH];
     uint8_t wire[RBP2_MAX_WIRE_SIZE];
-    HAL_StatusTypeDef transmit_status;
+    uart_tx_enqueue_result_t enqueue_result;
     const uint32_t now_ms = HAL_GetTick();
 
     depth_parser_get_state(&depth_parser, &state);
@@ -527,17 +537,18 @@ static bool protocol_send_depth_snapshot(void)
         motion_timing_diagnostics_mark();
 #endif
 
-    transmit_status = uart_transport_stm32_transmit(
-               wire,
-               (uint16_t)wire_length);
+    enqueue_result = uart_transport_stm32_enqueue(
+        wire,
+        (uint16_t)wire_length,
+        UART_TX_MESSAGE_DEPTH);
 #if MOTION_TIMING_DIAGNOSTICS_ACTIVE
     motion_timing_diagnostics_record_tx(
         MOTION_TIMING_TX_DEPTH,
         (uint32_t)wire_length,
-        (uint32_t)transmit_status,
+        (uint32_t)enqueue_result,
         timing_start);
 #endif
-    return transmit_status == HAL_OK;
+    return protocol_tx_result_accepted(enqueue_result);
 }
 #endif
 
@@ -718,6 +729,7 @@ void app_main_process(void)
             app_main_apply_safety_stop();
         }
     }
+    uart_transport_stm32_process();
 #if MOTION_TIMING_DIAGNOSTICS_ACTIVE
     motion_timing_diagnostics_loop_end(app_loop_start);
 #endif
