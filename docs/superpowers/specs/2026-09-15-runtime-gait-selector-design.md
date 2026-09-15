@@ -257,11 +257,18 @@ Behavior:
   disables further selector changes; it never queues a second selector;
 - the requested value is retained separately while its ACK is pending;
 - matching ACK `OK` updates the confirmed backend;
-- only an ACK matching the original request sequence and
-  `SetGaitBackend` type can confirm the request;
-- `BUSY`, invalid/error ACK (including a sequence/type mismatch), timeout,
-  transport error, or write failure clears the pending request but preserves
-  the previous confirmed value;
+- ACK correlation first looks up the pending request by ACK request sequence.
+  An ACK with an unrelated sequence is unmatched for this selector: it does
+  not clear selector pending state or change the confirmed backend, and the
+  existing unmatched/other-command ACK handling remains responsible for it;
+- when the ACK sequence matches the selector request, a request-type mismatch
+  clears the selector pending state, preserves the previous confirmed value,
+  and cannot confirm the requested backend;
+- when both sequence and request type match, result `OK` clears pending and
+  updates the confirmed backend; any non-`OK` result, including `BUSY`, clears
+  pending and preserves the previous confirmed value;
+- timeout, transport error, or write failure for the selector request clears
+  pending and preserves the previous confirmed value;
 - disconnect and reconnect reset the controller's backend state to `UNKNOWN`;
 - the controller never starts/stops Motion as part of backend selection;
 - the controller never sends Servo targets for a backend selection.
@@ -319,8 +326,12 @@ Add tests for:
 - timeout/error without falsely confirming a request;
 - selector serialization rejects or disables a second request while the first
   is queued/in flight/retrying;
-- ACK sequence/type mismatch cannot confirm a selector and clears its pending
-  state;
+- an unrelated ACK sequence leaves selector pending and confirmed state
+  unchanged;
+- a matching sequence with the wrong request type clears selector pending but
+  leaves confirmed state unchanged;
+- a matching `SetGaitBackend` ACK `OK` clears pending and confirms the
+  requested backend;
 - disconnect/reconnect returning selector state to `UNKNOWN`;
 - MainWindow combo presence and command dispatch;
 - no Qt trajectory or Servo-frame path is used by selector handling.
