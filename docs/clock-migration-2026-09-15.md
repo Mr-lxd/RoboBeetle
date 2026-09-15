@@ -2,13 +2,21 @@
 
 ## Status and dependency
 
-The approved clock migration is implemented on the reconstructed branch
+The approved clock migration was reconstructed on branch
 `feature/clock-migration-168mhz`, replayed from the preserved Clock-only history
 of `codex/clock-migration` after PR #15 reviewed head
 `b7e2787fe9eb4fdd46de0fd7380a23bbc961cc52`. PR #15 was merged into `main` as
-`d7cdea5d03e642aa07079af4cb1170496afad533`; this Clock branch remains separate
-and is not merged here. The source/configuration and host contract checks are
-software-verified. The user has now supplied target/tool evidence
+`d7cdea5d03e642aa07079af4cb1170496afad533`.
+
+PR #16 was merged into `main` as
+`c2b95e2c66bce060545e8e2d6eaf4556517d2cd1`.
+The externally reviewed Clock Migration head was
+`60ae29366d7fda4825272cc46ab02217164adc80`.
+The approved 168 MHz Clock Migration source/configuration is therefore now
+part of `main`. The later closeout commit only updates evidence documentation
+and does not alter production firmware behavior.
+
+The source/configuration and host contract checks are software-verified. The user has now supplied target/tool evidence
 for 168 MHz CubeMX regeneration, ARM Build, Program Verify,
 SystemCoreClock/RCC/TIM readback, the three UART/runtime links, individual
 servo safety behavior, and the direct DWT A/B benchmark. HAL tick target
