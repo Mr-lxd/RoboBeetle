@@ -5,6 +5,10 @@
 （9600 8-N-1）。APC220 仅保留为早期/legacy transport 记录，未参与近期
 验证，也不是当前启用的硬件链路。
 
+本文件中 2026-09-05 及更早的历史章节可能保留 HSI 16 MHz、PLL off、TIM
+PSC=15 等旧 image 快照；它们不覆盖当前 Clock Migration image。最新的
+168 MHz target bring-up 记录见本文档末尾的 2026-09-15 章节。
+
 ## 2026-09-10 Leak detection sensor bring-up（PR #9，end-to-end Hardware Verified）
 
 本阶段在 PR #8 五舵机分支之后采用 stacked branch，实现第一条最小数字漏水检测路径及其 monitoring-only Protocol V2/Qt 显示，不改变 Servo 行为或 Safety 行为。漏水模块由 3.3 V 供电，与 STM32 共地；数字输出 `D0` 接 STM32 `PA11`，模拟输出 `A0` 暂不使用。PA11 → Firmware → Protocol V2 → Qt 的完整路径已经完成实机验收。
@@ -1474,3 +1478,81 @@ work were not included. The `1000 ms` bounded case is not normal operating
 load. Safety-before-catch-up remains mandatory: SafetySupervisor/liveness must
 abort before MotionManager can perform catch-up or emit a post-gap actuator
 command, and recovery must not auto-resume motion。
+
+## 2026-09-15 Clock Migration 168 MHz target bring-up (user-supplied)
+
+This section supplements, and does not rewrite, the historical 16 MHz PR #15
+performance evidence above. The supplied report is associated with clock branch
+commit `24bd2a409c8298a8950a1ad4b3ae5174a0ebcd75`. It supplies CubeMX
+regeneration = PASS, ARM Build 168 MHz = PASS, and Program Verify = PASS; raw
+debugger dumps, BRR values, detailed build/size logs, the Generate Code
+transcript/diff, and the Program Verify transcript were not included.
+
+| Check | Measurement / result | Evidence class |
+| --- | --- | --- |
+| CubeMX 6.18.1 regeneration | User-supplied Generate Code parity result | CubeMX / Tool Evidence / PASS |
+| ARM Build 168 MHz | User-supplied target build result | Target Build Evidence / PASS |
+| Program Verify 168 MHz | User-supplied programming and verification result | Target Program Evidence / PASS |
+| CLOCK READBACK | `SystemCoreClock = 168000000`; RCC PLL/APB runtime readback passed | Target Measured / PASS |
+| RCC clock tree | PLL/APB runtime register readback passed; raw values not supplied | Target Measured / PASS |
+| TIM3/TIM4 registers | Runtime readback `PSC=83`, `ARR=3002` | Target Measured / PASS |
+| PWM TIMEBASE CONTRACT | SystemCoreClock/RCC/TIM readback plus `84 MHz / (83 + 1) = 1 MHz = 1 us/count` | Target Measured / calculated contract / PASS |
+| USART1 / APC | USART1 `9600`; APC link operational | Target Measured + Hardware Verified / PASS |
+| USART3 / JY901S | USART3 `9600`; JY901S `Receiving` | Target Measured + Hardware Verified / PASS |
+| USART6 / ROVMAKER | USART6 `115200`; Depth `Receiving` | Target Measured + Hardware Verified / PASS |
+| INDIVIDUAL SERVO SAFE BRING-UP | Neutral, small-angle, Release, and Disable behavior | Hardware Verified / PASS |
+| Unexpected movement | None observed after the 168 MHz migration | Hardware Verified / PASS |
+| PWM PHYSICAL WAVEFORM SCOPE MEASUREMENT | No oscilloscope/logic-analyzer pulse-width capture supplied | Pending |
+| HAL TICK PHYSICAL/TARGET VERIFICATION | One-second target interval measurement not supplied | Pending |
+| GAIT AFTER CLOCK MIGRATION | No new Forward/Turn/Ascend/Descend/SimpleGait/CPG exercise supplied | Pending |
+| DWT 16/168 A/B | Direct target benchmark and frozen 16 MHz comparison recorded below | Target Performance Evidence / PASS |
+| Water | Not supplied | Pending Water Verification |
+
+The target/runtime, CubeMX, ARM Build, Program Verify, and individual-servo
+claims above are real-target/tool evidence supplied by the user. They do not
+upgrade the historical 16 MHz image, do not establish SimpleGait or CPG runtime
+behavior, and do not establish water verification. The physical PWM waveform,
+HAL tick interval, gait exercise, and Water remain separate evidence items.
+
+### 2026-09-15 Clock Migration 168 MHz DWT A/B benchmark (user-supplied)
+
+The user supplied a direct STM32F407 target benchmark from the temporary
+`ROBOBEETLE_CPG_TARGET_BENCHMARK=ON` image. The target reported
+`SystemCoreClock = 168000000 Hz` and `repetitions = 32`. Values are recorded
+exactly; no ideal 10.5x scaling is claimed.
+
+| Case | Cycles min / median / max | Microseconds min / median / max |
+| --- | ---: | ---: |
+| CPG nominal 10 ms | `51371 / 51371 / 51455` | `305 / 305 / 306 us` |
+| 20 ms catch-up | `102373 / 102447 / 102466` | `609 / 609 / 609 us` |
+| 70 ms catch-up | `426627 / 426704 / 426790` | `2539 / 2539 / 2540 us` |
+| 100 ms catch-up | `661035 / 661069 / 661175` | `3934 / 3934 / 3935 us` |
+| 1000 ms bounded / 100 substeps | `8080787 / 8081297 / 8081955` | `48099 / 48102 / 48106 us` |
+
+Benchmark image usage was FLASH `55084 B / 512 KB = 10.51%` and RAM
+`5440 B / 128 KB = 4.15%`. The supplied `arm-none-eabi-size` output was
+`text=54988`, `data=92`, `bss=5344`, `dec=60424`.
+
+The frozen 16 MHz median comparison is:
+
+| Case | 16 MHz median | 168 MHz median | Measured speedup |
+| --- | ---: | ---: | ---: |
+| Nominal 10 ms | `3072 us` | `305 us` | approximately `10.07x` |
+| 20 ms catch-up | `6127 us` | `609 us` | approximately `10.06x` |
+| 70 ms catch-up | `25508 us` | `2539 us` | approximately `10.05x` |
+| 100 ms catch-up | `39440 us` | `3934 us` | approximately `10.03x` |
+| 1000 ms bounded / 100 substeps | `478446 us` | `48102 us` | approximately `9.95x` |
+
+Nominal isolated compute utilization improved from `30.72%` to `3.05%`
+because `305 us < 10000 us`. The measured nominal median cycle count rose
+slightly from `49153` at 16 MHz to `51371` at 168 MHz while wall time improved
+by approximately 10x. The frozen baseline has no catch-up cycle fields, so no
+catch-up cycle delta is reconstructed. The isolated 168 MHz CPG compute
+deadline is **[PASS]**, but this does not prove zero Motion jitter or solve
+blocking UART behavior. Servo stutter investigation remains separate.
+
+The `ROBOBEETLE_CPG_TARGET_BENCHMARK=ON` image is temporary and is not the
+production image. Normal operation must be rebuilt with
+`ROBOBEETLE_CPG_TARGET_BENCHMARK=OFF`. This evidence update does not change
+production source, CPG mathematics, Servo calibration, or the normal build
+configuration.
