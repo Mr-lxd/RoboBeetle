@@ -1,0 +1,444 @@
+# Motion Cadence / Servo Stutter Investigation Design Specification
+
+## Status and scope
+
+This is the design for a new, independent investigation after the Runtime
+SimpleGait / CPG selector closeout. The selector PR #17 is merged into main as:
+
+~~~
+ac36092ca3011a538420273d721794ac7a7d0a5a
+~~~
+
+The investigation branch is
+codex/motion-cadence-stutter-investigation, based on that merge commit. This
+document defines measurement and diagnosis only. It does not implement a
+cadence fix, change the foreground order, or change any production behavior.
+
+The question is whether observed servo stutter is caused by irregular
+foreground Motion target updates, by the cost of communication and blocking
+transmit work, or by a stable software cadence interacting with PWM,
+electrical, servo-internal, or mechanical behavior.
+
+The previous selector validation is context, not new cadence evidence:
+SimpleGait and CPG selection is functionally available, dry-bench visual
+difference was inconclusive, and water behavior remains pending. Water is not
+required to begin this software timing investigation.
+
+## Evidence boundary
+
+The following boundaries remain frozen:
+
+| Item | Status in this investigation |
+| --- | --- |
+| Clock source and 168 MHz configuration | Existing merged evidence; not re-opened here |
+| Firmware host tests | Software evidence only |
+| PWM physical waveform on a scope or logic analyzer | **Pending** |
+| HAL tick physical/target measurement | **Pending** |
+| Post-clock Forward/Turn/Ascend/Descend/CPG gait exercise | **Pending** unless separately supplied |
+| Water verification | **Pending** |
+
+The 168 MHz CPG DWT benchmark remains isolated compute evidence. It does not
+prove foreground cadence, zero Motion jitter, PWM waveform regularity, or
+servo health. No result in this investigation may promote host timing,
+debugger-read counters, or a stable logical target cadence into physical PWM
+or water evidence.
+
+The investigation must not modify CPG equations, beta, Forward Euler dt,
+theta_dot semantics, phase coupling, production double, Servo calibration,
+Clock/RCC/PWM configuration, safety timeout values, UART baud, or the current
+168 MHz production configuration.
+
+## Investigation questions
+
+1. How often does app_main_process() reach MotionManager under each
+   communication load?
+2. Which foreground region consumes the time before MotionManager is reached:
+   RX queue draining, parser work, blocking TX, or another operation?
+3. When MotionManager receives a delayed elapsed_ms, how many generator state
+   steps and how many Servo target writes occur?
+4. Does CPG isolated compute cost explain a measured whole-loop gap, or is the
+   gap present for both generators?
+5. If logical Motion updates are regular, does the physical PWM waveform still
+   contain irregular periods or pulse widths?
+6. If the waveform is regular, do supply, ground/noise, servo deadband, load,
+   backlash, or linkage effects explain the visible symptom?
+
+The design deliberately separates correlation from causation. A blocking call
+is a confirmed timing hazard in source, not a confirmed physical root cause
+until the target counters and physical measurements correlate with the symptom.
+
+## Source-grounded current path
+
+### Foreground order
+
+RoboBeetleFirmware/Core/App/app_main.c:532-588 is the current cooperative
+application loop. One pass performs the following operations in this order:
+
+1. jy901s_transport_stm32_poll();
+2. depth_transport_stm32_poll();
+3. leak GPIO sampling through leak_sensor_stm32_read_level();
+4. an unbounded while (uart_transport_stm32_pop(&byte)) host USART1
+   extraction and Protocol V2 dispatch;
+5. an unbounded while (jy901s_transport_stm32_pop(&byte)) USART3 parser
+   drain;
+6. an unbounded while (depth_transport_stm32_pop(&byte)) USART6 parser
+   drain;
+7. one HAL_GetTick() capture;
+8. safety_supervisor_process();
+9. motion_manager_process() when Safety has not requested the existing
+   fail-safe stop.
+
+The code does not impose a per-pass byte or time budget on any of the three
+drains. The storage sizes are 128 bytes for the host ring buffer
+(Core/Communication/ring_buffer.h:7), 256 bytes for JY901S
+(jy901s_transport_stm32.c:9), and 512 bytes for Depth
+(depth_transport_stm32.h:9). Because the ring buffer reserves one slot to
+distinguish full from empty, the usable capacities are one less than those
+storage sizes.
+
+This ordering is a static timing hazard because work already present in a
+queue is consumed before the MotionManager call. It is not proof that a queue
+is full or that a particular physical stutter came from a queue.
+
+### Blocking transmit path
+
+The four current host-link transmit call sites are in
+RoboBeetleFirmware/Core/App/app_main.c:
+
+- ACK: protocol_send_ack() at approximately lines 285-316;
+- LeakStatus: protocol_send_leak_status() at approximately lines 322-351;
+- IMU snapshot: protocol_send_imu_snapshot() at approximately lines 354-402;
+- Depth snapshot: protocol_send_depth_snapshot() at approximately lines
+  405-470.
+
+All four call uart_transport_stm32_transmit(). That function
+(RoboBeetleFirmware/Core/Communication/uart_transport_stm32.c:42-50) calls:
+
+~~~c
+HAL_UART_Transmit(uart_handle, data, length, 100U);
+~~~
+
+The call is synchronous and has a 100 ms HAL timeout. At the configured 9600
+baud, wire serialization is also nonzero. The exact occupied time depends on
+HAL state, frame length, and link conditions, so source inspection alone does
+not establish a 100 ms stall on every call.
+
+For an accepted Heartbeat, protocol_feed_byte() sends the ACK first and may
+then send one selected telemetry item according to the existing policy and
+telemetry_scheduler_select() (app_main.c:167-239). Thus a single host RX byte
+stream can cause multiple sequential blocking transmissions. The
+investigation records ACK, LeakStatus, IMU, and Depth separately; it does not
+change their policy.
+
+### MotionManager schedule
+
+RoboBeetleFirmware/Core/Motion/motion_manager.c:794-832 implements a
+minimum-cadence elapsed-time gate:
+
+~~~text
+elapsed_ms = now_ms - last_tick_ms
+elapsed_ms < MOTION_GAIT_TICK_MS  -> return without a tick
+otherwise:
+    last_tick_ms = now_ms
+    motion_manager_tick(elapsed_ms)
+~~~
+
+MOTION_GAIT_TICK_MS is fixed at 10 ms by
+Core/Motion/motion_config.h:4,20-21. The schedule is not a timer interrupt and
+does not replay one Servo output for each nominal 10 ms slot.
+
+Before generator advancement, motion_manager_process() checks SafetySupervisor
+liveness. This safety-before-catch-up ordering remains unchanged. A
+stale-liveness abort must not be interpreted as a normal-load cadence sample.
+
+### Exact 30 ms delayed-call behavior
+
+For a steady-state MOTION_STATE_RUNNING manager with no mode transition, a
+call delayed by 30 ms has the following source-defined behavior:
+
+| Backend | Generator advancement | Generator samples | Servo target application |
+| --- | --- | ---: | --- |
+| SimpleGait | One simple_gait_generator_advance(..., 30); phase advances by the 30 ms elapsed duration and is wrapped | 1 | One motion_manager_apply_targets() pass; one write per channel in write_mask |
+| CPG | One cpg_gait_generator_advance(..., 30); cpg_core_advance_elapsed_ms() consumes three 10 ms source-equivalent steps | 1 | One motion_manager_apply_targets() pass; one write per channel in write_mask |
+
+The SimpleGait behavior is implemented at
+Core/Motion/simple_gait_generator.c:153-168, and its target is sampled at
+:170-221. The CPG elapsed-step and cap are implemented at
+Core/Motion/cpg_core.c:308-345; the adapter is advanced and sampled at
+Core/Motion/cpg_gait_generator.c:129-185.
+
+Therefore the CPG internal state can advance by three 10 ms substeps while the
+actuator-facing logical target is emitted only once after the delayed
+foreground call. SimpleGait advances its phase by the same elapsed duration
+and also emits only one target. This is a candidate explanation for
+discontinuous target-update cadence, not an authorization to add catch-up
+Servo writes.
+
+During a START transition, MotionManager samples once after its generator
+advance and blends that target with the start pose. During a MODE transition,
+it samples the old and new modes but still applies one blended target pass.
+Those transition cases must be tagged or excluded when interpreting steady
+state cadence.
+
+The current CPG adapter also calls cpg_core_set_target_amplitudes() during
+sample (cpg_gait_generator.c:166-172) so Motion-mode modulation remains a
+separate mutable parameter concern. This investigation must observe that
+existing behavior without changing it.
+
+### Servo output boundary
+
+MotionManager applies logical centidegree targets through
+servo_service_set_angle_from_motion() (Core/Motion/motion_manager.c:301-338
+and Core/Servo/servo_service.c:402-447). ServoService converts through the
+existing calibration table before the STM32 driver writes timer compare
+registers. The selector and this investigation never bypass that boundary.
+
+servo_driver_stm32.c uses the existing timer compare/preload safe-stop policy.
+A source counter showing regular logical writes cannot prove that the physical
+PWM pulse widths are regular; a scope or logic analyzer remains required for
+that distinction.
+
+## Hypotheses and falsification
+
+| ID | Hypothesis | Measurement that supports it | Measurement that weakens it |
+| --- | --- | --- | --- |
+| H1 | Unbounded RX drains delay MotionManager | Large drain byte counts/durations precede long Motion intervals; both backends show similar gaps | Long intervals occur with empty/short drains |
+| H2 | Blocking host TX contributes to gaps | TX blocking duration, call count, or timeout/error events correlate with long Motion intervals | Long intervals remain when TX duration is small and stable |
+| H3 | CPG isolated compute is the primary cause | CPG-only tick/generator span is materially larger and CPG has extra gaps under the same load | SimpleGait has similar gaps, or reduced-telemetry build removes gaps |
+| H4 | Logical cadence is stable but physical output is irregular | Motion intervals and target writes are regular while scope shows irregular PWM period/width | Scope waveform is regular during the symptom |
+| H5 | Electrical/servo/mechanical behavior is primary | Stable software and PWM timing, but supply/current/noise/load/deadband/backlash changes the symptom | Symptom tracks software gap counters instead |
+
+These are falsifiable alternatives. The investigation must not label UART,
+CPG, PWM, or mechanics as the root cause before the corresponding evidence
+exists.
+
+## Timing diagnostics architecture
+
+### Compile-time boundary
+
+The future instrumentation is gated by:
+
+~~~
+ROBOBEETLE_MOTION_TIMING_DIAGNOSTICS
+~~~
+
+The default is OFF. The normal production image therefore has no DWT
+initialization, no diagnostic RAM report, no diagnostic UART traffic, and no
+diagnostic work in the loop. An ON image is a measurement image and must be
+identified as such; it is not a production image.
+
+The planned implementation module is:
+
+~~~
+RoboBeetleFirmware/Core/App/motion_timing_diagnostics.h
+RoboBeetleFirmware/Core/App/motion_timing_diagnostics.c
+~~~
+
+The module owns only counters and readout data. It does not own scheduler
+decisions, Motion state, generator state, Servo output, Safety state, or
+Protocol state.
+
+### DWT source and wrap handling
+
+On STM32F407, the ON image enables CoreDebug->DEMCR.TRCENA, clears/enables
+DWT->CYCCNT, and uses the same barrier pattern as the existing
+cpg_target_benchmark.c:64-84. Each measured span uses unsigned 32-bit
+subtraction:
+
+~~~c
+delta = finish - start;
+~~~
+
+This is wrap-safe for spans shorter than one 32-bit counter period. At
+168 MHz, one full 32-bit cycle period is approximately 25.56 seconds, so the
+implementation must not leave a single span open longer than that. Long-run
+totals use a wider accumulator updated from short deltas. The report records
+SystemCoreClock at initialization so conversion to microseconds is explicit
+and not inferred from a host clock.
+
+Diagnostics are updated in the cooperative foreground context. The design
+does not add a diagnostic ISR, lock, printf, or transport. The volatile report
+is halted/read by a debugger after a defined exercise window.
+
+### Counter definitions
+
+The future report must contain enough raw counts to separate queue work, TX
+work, Motion work, and physical follow-up:
+
+| Counter group | Required fields and definition |
+| --- | --- |
+| App loop | pass count; body duration min/median/max/total cycles; interval from one loop entry to the next; largest observed interval |
+| Host USART1 RX drain | drain-call count; bytes popped; nonempty-drain count; duration min/median/max/total cycles |
+| JY901S USART3 drain | same fields, plus parser event/error counters copied only if already available without a new telemetry surface |
+| Depth USART6 drain | same fields, plus existing parser/error counters copied only if already available without a new telemetry surface |
+| Host TX | call count, bytes, status, min/median/max/total duration by ACK, LEAK, IMU, and DEPTH; timeout/error count |
+| Motion tick | tick count at the exact motion_manager_tick() invocation; requested elapsed_ms; actual tick-to-tick interval in cycles; min/median/max/total and gap buckets above 10, 12, 15, 20, and 30 ms |
+| Motion span | total motion_manager_tick() duration; generator advance span where separable; target sample/apply span where separable; returned result count |
+| Run identity | diagnostics version, SystemCoreClock, backend label, build SHA/configuration, and an explicit reset/run marker |
+
+The TX classification is attached at the existing protocol_send_ack,
+protocol_send_leak_status, protocol_send_imu_snapshot, and
+protocol_send_depth_snapshot call sites. It is not guessed by scanning COBS
+bytes and it does not change the wire format.
+
+The Motion tick timestamp is taken only when the existing elapsed gate accepts
+a tick, not on every motion_manager_process() call. The report retains both
+the actual tick interval and the elapsed_ms argument so a delayed call is not
+confused with a normal 10 ms check that returned early.
+
+The report may use a fixed histogram or fixed percentile-friendly sample
+window, but it must not allocate from the heap or stream samples over UART.
+The exact finite window and saturation counters are part of the TDD task; an
+overflow must be visible rather than silently wrapping a diagnostic statistic.
+
+### Instrumentation placement
+
+The implementation plan places hooks at these boundaries without changing
+control flow:
+
+1. app_main_process() entry/exit;
+2. each existing while (..._pop()) drain entry/exit and byte increment;
+3. each existing protocol transmit call-site before/after
+   uart_transport_stm32_transmit();
+4. the accepted-tick path immediately around the existing
+   motion_manager_tick() call;
+5. optional nested spans around the existing generator advance, sample, and
+   Servo application calls, using compile-time no-op hooks when disabled.
+
+No hook may call HAL_UART_Transmit, alter a queue, change last_tick_ms,
+advance a generator, write a Servo, or suppress a Safety action.
+
+## Readout and target procedure
+
+RAM-only readout is the preferred first implementation. The future report is a
+debugger-readable volatile object, analogous to
+cpg_target_benchmark_report; it is not Protocol V2 telemetry.
+
+The preferred command-line path, if the target tools are available, is:
+
+1. build an ON diagnostic ELF with the exact branch SHA and configuration;
+2. use arm-none-eabi-nm to resolve the report symbol and
+   arm-none-eabi-size to record image sizes;
+3. halt the STM32F407 after the fixed exercise window;
+4. read the report through an OpenOCD/debugger memory command or inspect the
+   symbol in the debugger;
+5. save raw counter values together with clock, backend, workload, trial, and
+   board metadata.
+
+A future tools/read-motion-timing.ps1 may automate symbol lookup and
+debugger/OpenOCD readout, but it must fail loudly when
+arm-none-eabi-nm, OpenOCD, the ELF symbol, or the target connection is missing.
+It must never fall back to UART printing or claim a target result from a host
+executable. If OpenOCD is unavailable, a debugger Watch/Expressions read of
+the same volatile symbol is the approved fallback.
+
+At this design baseline, arm-none-eabi-gcc.exe, arm-none-eabi-size.exe, and
+openocd.exe are not available in the current Codex environment. No target
+readout is claimed.
+
+## A/B measurement matrix
+
+Every cell uses the same board, power setup, firmware optimization/linker
+configuration, exercise duration, host command pattern, and sensor stream.
+Each cell must include at least three fixed-duration trials and preserve raw
+reports; the implementation runbook will use 60 seconds per trial unless a
+reviewed target constraint requires a shorter, explicitly recorded window.
+
+| Cell | Backend | Communication condition | Purpose |
+| --- | --- | --- | --- |
+| A | CPG | Normal communication load and current optional telemetry behavior | Baseline current production behavior with timing counters |
+| B | SimpleGait | The identical normal load as A | Determine whether gaps are backend-independent |
+| C | CPG | Reduced-telemetry diagnostic condition; Heartbeat receive/ACK and Safety remain active | Isolate optional TX/telemetry contribution |
+| D | SimpleGait | The identical reduced-telemetry diagnostic condition as C | Separate backend cost from optional communication cost |
+
+The C/D reduced-telemetry condition is diagnostic-only and must never become
+the production default. It may suppress only optional telemetry for the
+measurement image; it must not disable or lengthen the Heartbeat path, Safety
+Supervisor checks, host-liveness timeout, or actuator fail-safe behavior. The
+implementation plan must make this condition an explicit build/test
+configuration and record it in the report. If the no-telemetry-policy-change
+scope is interpreted as forbidding even a diagnostic-only suppression, C/D
+must remain marked NOT RUN until an externally reviewed load fixture can
+reduce optional telemetry without changing firmware policy; A/B must not be
+silently relabeled as C/D.
+
+Heartbeat and Safety are never disabled to make a cell smoother. A stale
+heartbeat must continue to prevent Motion catch-up and Servo writes according
+to the existing Safety contract.
+
+### Interpretation rules
+
+- A and B both show the same long Motion intervals under normal load:
+  generator mathematics is unlikely to be the primary explanation; inspect
+  queue and TX spans.
+- A/B show gaps but C/D become smooth with lower TX/telemetry work:
+  communication/TX work is implicated, subject to correlation in raw counters.
+- CPG differs from SimpleGait only when generator advance/sample spans differ
+  materially: generator cost is implicated; the existing isolated CPG benchmark
+  is supporting evidence only.
+- Motion tick intervals and logical writes are regular in all cells, but the
+  scope shows irregular PWM: software cadence is not the immediate cause;
+  investigate timer waveform, supply, ground/noise, and driver/servo behavior.
+- Software and PWM are both regular while the visible symptom changes with
+  load, linkage, or servo replacement: investigate current sag, mechanical
+  backlash, load, deadband, and servo internal control behavior.
+
+No cell can establish water propulsion or hydrodynamic effectiveness.
+
+## Physical follow-up kept separate
+
+After logical timing is characterized, a physical check should observe at
+least one active PWM channel with a scope or logic analyzer while recording
+the same counter run. The check must distinguish:
+
+- frame period regularity;
+- pulse-width regularity;
+- missing/runt pulses;
+- timer output state during any safe-stop event.
+
+Also record actuator supply voltage at the servo load, current/transient
+behavior if available, common-ground integrity, and whether the symptom tracks
+mechanical load, backlash, linkage, or a different servo. The existing OCxPE
+safe-stop contract means readable CNT/CCR values are not by themselves
+physical waveform evidence.
+
+These checks remain Pending until actually performed.
+
+## Acceptance criteria for the investigation phase
+
+The phase is complete only when:
+
+1. source facts above are preserved and cited in the implementation;
+2. diagnostics compile out of the normal image and add no UART traffic when
+   disabled;
+3. host tests cover counter arithmetic, saturation/wrap handling, backend
+   labels, and disabled/enabled compile contracts;
+4. target trials produce raw reports for the documented A/B matrix, or
+   unavailable target tools are recorded as not run;
+5. any claimed software correlation is supported by raw counters;
+6. PWM physical and water statuses retain their Pending boundary;
+7. no production scheduling, UART architecture, CPG math, Clock, PWM, Servo
+   calibration, Safety, or stutter fix is included in this phase.
+
+The output of this phase is an evidence-backed root-cause report or a bounded
+list of remaining alternatives. A remediation such as queue budgeting,
+nonblocking TX, scheduler reordering, PWM changes, or Servo replacement is a
+separate reviewed task.
+
+## Explicit non-goals
+
+This design does not authorize:
+
+- HAL_UART_Transmit() to DMA or IT;
+- reordering Motion ahead of communication;
+- RX byte/time budgets;
+- changing baud from 9600;
+- changing Heartbeat interval, Safety timeout, or existing telemetry policy in
+  the production image;
+- changing MOTION_GAIT_TICK_MS;
+- adding catch-up Servo writes or scheduler changes;
+- changing CPG mathematics, profile parameters, reset semantics, or numeric
+  representation;
+- changing Servo calibration, PWM frequency, timer registers, or Clock/RCC;
+- changing JY901S, Depth, Leak, APC, or Safety semantics;
+- implementing a Servo stutter, blocking UART, or cadence fix.
