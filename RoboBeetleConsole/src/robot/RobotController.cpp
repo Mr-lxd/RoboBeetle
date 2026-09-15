@@ -63,6 +63,7 @@ bool isServoActuatorCommand(MessageType type)
     case MessageType::ImuSnapshot:
     case MessageType::DepthSnapshot:
     case MessageType::SetMotionMode:
+    case MessageType::SetGaitBackend:
         return false;
     }
     return false;
@@ -126,15 +127,21 @@ RobotController::RobotController(ITransport *transport,
     connect(transport_, &ITransport::errorOccurred, this, [this](const QString &message) {
         emit logMessage(QStringLiteral("Transport error: %1").arg(message));
         if (config_.linkProfile != LinkProfile::Apc220HalfDuplex) {
+            clearGaitBackendOutstanding();
             return;
         }
 
+        const std::optional<GaitBackend> confirmedBeforeError = confirmedGaitBackend_;
         const bool wasConnected = state_ == TransportState::Connected;
         const bool wasAlreadyError = state_ == TransportState::Error;
         heartbeatTimer_.stop();
         retryTimer_.stop();
         state_ = TransportState::Error;
         resetSchedulerState();
+        if (confirmedBeforeError.has_value()) {
+            confirmedGaitBackend_ = confirmedBeforeError;
+            emit gaitBackendStateChanged();
+        }
         failClosedMotionState();
         monitor_.ackStatus = QStringLiteral("Transport error");
         if (wasConnected) {
@@ -480,6 +487,39 @@ bool RobotController::stopMotion()
     return accepted;
 }
 
+bool RobotController::setGaitBackend(GaitBackend backend)
+{
+    if (!isValidGaitBackend(backend)) {
+        emit logMessage(QStringLiteral("Gait backend selection rejected: invalid backend"));
+        return false;
+    }
+    if (pendingGaitBackend_.has_value()) {
+        emit logMessage(QStringLiteral(
+            "Gait backend selection rejected: another selector is awaiting ACK (BUSY)"));
+        return false;
+    }
+    if (!isConnected()) {
+        emit logMessage(QStringLiteral(
+            "Gait backend selection rejected: transport is not connected"));
+        return false;
+    }
+
+    pendingGaitBackend_ = backend;
+    emit gaitBackendStateChanged();
+    const QByteArray payload(1, static_cast<char>(backend));
+    const bool accepted = sendCommand(
+        MessageType::SetGaitBackend,
+        payload,
+        0,
+        true,
+        std::nullopt,
+        backend);
+    if (!accepted) {
+        clearGaitBackendPending();
+    }
+    return accepted;
+}
+
 bool RobotController::isMotionActive() const
 {
     return motionState_ == MotionState::Running
@@ -522,7 +562,8 @@ bool RobotController::sendCommand(MessageType type,
                                   const QByteArray &payload,
                                   quint16 affectedMask,
                                   bool expectAck,
-                                  std::optional<MotionRequest> motionRequest)
+                                  std::optional<MotionRequest> motionRequest,
+                                  std::optional<GaitBackend> gaitBackendRequest)
 {
     if (!isConnected()) {
         emit logMessage(QStringLiteral("Command rejected: transport is not connected"));
@@ -544,7 +585,8 @@ bool RobotController::sendCommand(MessageType type,
         }
 
         refreshApc220HeartbeatDue();
-        const QueuedCommand command{type, payload, affectedMask, motionRequest};
+        const QueuedCommand command{
+            type, payload, affectedMask, motionRequest, gaitBackendRequest};
         const bool isSafetyDisable = type == MessageType::ServoDisable;
         const bool isMotionStop = type == MessageType::SetMotionMode
             && motionRequest.has_value()
@@ -615,7 +657,7 @@ bool RobotController::sendCommand(MessageType type,
     if (expectAck) {
         pending_.insert(sequence,
                         {sequence, frame, type, affectedMask, nowMs(), 0,
-                         motionRequest});
+                         motionRequest, false, false, gaitBackendRequest});
         monitor_.ackStatus = QStringLiteral("Waiting for ACK seq=%1").arg(sequence);
     }
     updateMonitor();
@@ -627,6 +669,9 @@ bool RobotController::dispatchApc220Command(const QueuedCommand &command)
     const quint16 sequence = nextSequence_++;
     const QByteArray frame = PacketCodec::encodeWire({command.type, sequence, command.payload});
     if (frame.isEmpty()) {
+        if (command.gaitBackendRequest.has_value()) {
+            clearGaitBackendPending();
+        }
         noteWriteFailure(QStringLiteral("message 0x%1 sequence %2")
                              .arg(static_cast<quint8>(command.type), 2, 16, QLatin1Char('0'))
                              .arg(sequence));
@@ -635,12 +680,16 @@ bool RobotController::dispatchApc220Command(const QueuedCommand &command)
 
     pending_.insert(sequence,
                     {sequence, frame, command.type, command.affectedMask, nowMs(), 0,
-                     command.motionRequest});
+                     command.motionRequest, false, false,
+                     command.gaitBackendRequest});
     const bool writeSucceeded = transport_->write(frame);
     const bool stillConnected = isConnected();
     if (!writeSucceeded || !stillConnected) {
         if (pending_.contains(sequence)) {
             pending_.remove(sequence);
+        }
+        if (command.gaitBackendRequest.has_value()) {
+            clearGaitBackendPending();
         }
         noteWriteFailure(QStringLiteral("message 0x%1 sequence %2")
                              .arg(static_cast<quint8>(command.type), 2, 16, QLatin1Char('0'))
@@ -684,6 +733,10 @@ bool RobotController::dispatchApc220Retry(quint16 sequence)
                             .arg(retryCount)
                             .arg(config_.maxRetries)
                             .arg(sequence));
+        if (current->gaitBackendRequest.has_value()) {
+            pending_.erase(current);
+            clearGaitBackendPending();
+        }
         updateMonitor();
         return false;
     }
@@ -913,9 +966,20 @@ void RobotController::handlePacket(const Packet &packet)
                 request = *deferredRetry_;
             }
             if (request.has_value() && request->type != requestType) {
+                if (request->gaitBackendRequest.has_value()) {
+                    if (it != pending_.end()) {
+                        pending_.erase(it);
+                    } else {
+                        deferredRetry_.reset();
+                    }
+                    clearGaitBackendPending();
+                }
                 monitor_.ackStatus = QStringLiteral("Error type mismatch seq=%1")
                                          .arg(sequence);
                 emit logMessage(monitor_.ackStatus);
+                if (request->gaitBackendRequest.has_value()) {
+                    pumpApc220Scheduler();
+                }
                 return;
             }
             if (!request.has_value()) {
@@ -930,6 +994,9 @@ void RobotController::handlePacket(const Packet &packet)
                 pending_.erase(it);
             } else {
                 deferredRetry_.reset();
+            }
+            if (request->gaitBackendRequest.has_value()) {
+                clearGaitBackendPending();
             }
             if (request->type == MessageType::ServoDisable) {
                 setDisablePendingMask(
@@ -1036,8 +1103,12 @@ void RobotController::handleAck(const Packet &packet)
                 static_cast<quint16>(disablePendingMask_ & ~request->servoMask));
         }
     };
+    const bool isGaitBackendRequest = request->gaitBackendRequest.has_value();
     if (request->type != requestType) {
         clearDisablePending();
+        if (isGaitBackendRequest) {
+            clearGaitBackendPending();
+        }
         if (isApc220 && isHeartbeat) {
             heartbeatReady_ = false;
             heartbeatDue_ = true;
@@ -1053,6 +1124,9 @@ void RobotController::handleAck(const Packet &packet)
     monitor_.lastAckRttMs = ackRttMs;
     if (result != static_cast<quint8>(AckResult::Ok)) {
         clearDisablePending();
+        if (isGaitBackendRequest) {
+            clearGaitBackendPending();
+        }
         if (isApc220 && isHeartbeat) {
             heartbeatReady_ = false;
             heartbeatDue_ = true;
@@ -1085,6 +1159,10 @@ void RobotController::handleAck(const Packet &packet)
     } else if (request->type == MessageType::ServoDisable && !request->cancelled) {
         clearDisablePending();
         setEnabledMask(static_cast<quint16>(enabledMask_ & ~request->servoMask));
+    } else if (isGaitBackendRequest) {
+        clearGaitBackendPending();
+        confirmedGaitBackend_ = *request->gaitBackendRequest;
+        emit gaitBackendStateChanged();
     } else if (request->type == MessageType::SetMotionMode
                && !request->cancelled
                && !request->motionCancelled
@@ -1159,11 +1237,15 @@ void RobotController::checkTimeouts()
         if (it->retries >= config_.maxRetries) {
             const MessageType timedOutType = it->type;
             const quint16 sequence = it->sequence;
+            const bool isGaitBackendRequest = it->gaitBackendRequest.has_value();
             if (timedOutType == MessageType::ServoDisable) {
                 setDisablePendingMask(
                     static_cast<quint16>(disablePendingMask_ & ~it->servoMask));
             }
             pending_.erase(it);
+            if (isGaitBackendRequest) {
+                clearGaitBackendPending();
+            }
             ++monitor_.timeoutCount;
             monitor_.ackStatus = QStringLiteral("ACK timeout seq=%1").arg(sequence);
             emit logMessage(QStringLiteral("ACK timeout after %1 retries for message 0x%2 seq=%3")
@@ -1246,11 +1328,15 @@ void RobotController::checkTimeouts()
         }
         if (it->retries >= config_.maxRetries) {
             const MessageType timedOutType = it->type;
+            const bool isGaitBackendRequest = it->gaitBackendRequest.has_value();
             if (timedOutType == MessageType::ServoDisable) {
                 setDisablePendingMask(
                     static_cast<quint16>(disablePendingMask_ & ~it->servoMask));
             }
             pending_.erase(it);
+            if (isGaitBackendRequest) {
+                clearGaitBackendPending();
+            }
             ++monitor_.timeoutCount;
             monitor_.ackStatus = QStringLiteral("ACK timeout seq=%1").arg(sequence);
             emit logMessage(QStringLiteral("ACK timeout after %1 retries for message 0x%2 seq=%3")
@@ -1259,7 +1345,13 @@ void RobotController::checkTimeouts()
                                 .arg(sequence));
             continue;
         }
-        if (transport_->write(it->frame)) {
+        const QByteArray retryFrame = it->frame;
+        const bool writeSucceeded = transport_->write(retryFrame);
+        it = pending_.find(sequence);
+        if (it == pending_.end()) {
+            continue;
+        }
+        if (writeSucceeded) {
             ++it->retries;
             it->sentAtMs = now;
             ++monitor_.txPacketCount;
@@ -1270,7 +1362,12 @@ void RobotController::checkTimeouts()
                                 .arg(sequence));
         } else {
             noteWriteFailure(QStringLiteral("retry seq=%1").arg(sequence));
-            it->sentAtMs = now;
+            if (it->gaitBackendRequest.has_value()) {
+                pending_.erase(it);
+                clearGaitBackendPending();
+            } else {
+                it->sentAtMs = now;
+            }
         }
     }
     updateMonitor();
@@ -1283,6 +1380,8 @@ void RobotController::updateMonitor()
 
 void RobotController::resetSchedulerState()
 {
+    const bool gaitStateWasKnown = confirmedGaitBackend_.has_value()
+        || pendingGaitBackend_.has_value();
     motionStopTimer_.stop();
     motionModeTransitionTimer_.stop();
     pending_.clear();
@@ -1302,6 +1401,11 @@ void RobotController::resetSchedulerState()
     motionTransitionOwnedMask_ = 0;
     lastLeakTelemetryAtMs_ = -1;
     markApc220LivenessLost();
+    confirmedGaitBackend_.reset();
+    pendingGaitBackend_.reset();
+    if (gaitStateWasKnown) {
+        emit gaitBackendStateChanged();
+    }
 }
 
 void RobotController::clearQueuedCommandsForDisable(quint16 affectedMask)
@@ -1558,6 +1662,53 @@ void RobotController::setLeakState(LeakState state)
     }
     leakState_ = state;
     emit leakStateChanged(leakState_);
+}
+
+void RobotController::clearGaitBackendPending()
+{
+    if (!pendingGaitBackend_.has_value()) {
+        return;
+    }
+    pendingGaitBackend_.reset();
+    emit gaitBackendStateChanged();
+}
+
+void RobotController::clearGaitBackendOutstanding()
+{
+    bool changed = pendingGaitBackend_.has_value();
+    const QList<quint16> sequences = pending_.keys();
+    for (const quint16 sequence : sequences) {
+        const auto it = pending_.find(sequence);
+        if (it != pending_.end() && it->gaitBackendRequest.has_value()) {
+            pending_.erase(it);
+            changed = true;
+        }
+    }
+    if (deferredRetry_.has_value() && deferredRetry_->gaitBackendRequest.has_value()) {
+        deferredRetry_.reset();
+        changed = true;
+    }
+
+    const auto removeQueuedSelectors = [&changed](QQueue<QueuedCommand> &queue) {
+        QQueue<QueuedCommand> retained;
+        while (!queue.isEmpty()) {
+            const QueuedCommand command = queue.dequeue();
+            if (command.gaitBackendRequest.has_value()) {
+                changed = true;
+            } else {
+                retained.enqueue(command);
+            }
+        }
+        queue = std::move(retained);
+    };
+    removeQueuedSelectors(priorityCommandQueue_);
+    removeQueuedSelectors(motionStopCommandQueue_);
+    removeQueuedSelectors(commandQueue_);
+
+    if (changed) {
+        pendingGaitBackend_.reset();
+        emit gaitBackendStateChanged();
+    }
 }
 
 void RobotController::failClosedMotionState()

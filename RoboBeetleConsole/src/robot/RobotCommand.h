@@ -69,6 +69,12 @@ enum class MotionState : quint8 {
     Faulted,
 };
 
+enum class GaitBackend : quint8 {
+    SimpleGait = 0,
+    CPG = 1,
+    Count,
+};
+
 inline constexpr int kMotionTransitionDurationMs = 750;
 
 constexpr bool isValidMotionMode(quint8 value)
@@ -80,6 +86,21 @@ constexpr bool isValidMotionMode(MotionMode mode)
 {
     return isValidMotionMode(static_cast<quint8>(mode));
 }
+
+constexpr bool isValidGaitBackend(quint8 value)
+{
+    return value < static_cast<quint8>(GaitBackend::Count);
+}
+
+constexpr bool isValidGaitBackend(GaitBackend backend)
+{
+    return isValidGaitBackend(static_cast<quint8>(backend));
+}
+
+static_assert(static_cast<quint8>(GaitBackend::SimpleGait) == 0,
+              "SimpleGait backend value must remain zero");
+static_assert(static_cast<quint8>(GaitBackend::CPG) == 1,
+              "CPG backend value must remain one");
 
 constexpr quint16 motionRequiredServoMask(MotionMode mode)
 {

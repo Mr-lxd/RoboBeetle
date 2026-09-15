@@ -99,6 +99,35 @@ void acknowledge(rb::FakeTransport &transport,
     transport.injectBytes(rb::PacketCodec::encodeWire({rb::MessageType::Ack, 0x8000, payload}));
 }
 
+void acknowledgeSequence(rb::FakeTransport &transport,
+                          quint16 sequence,
+                          rb::AckResult result,
+                          rb::MessageType acknowledgedType)
+{
+    QByteArray payload;
+    payload.append(static_cast<char>(sequence & 0xffU));
+    payload.append(static_cast<char>((sequence >> 8U) & 0xffU));
+    payload.append(static_cast<char>(acknowledgedType));
+    payload.append(static_cast<char>(result));
+    transport.injectBytes(rb::PacketCodec::encodeWire(
+        {rb::MessageType::Ack, 0x8000, payload}));
+}
+
+void injectError(rb::FakeTransport &transport,
+                 quint16 sequence,
+                 rb::MessageType requestType,
+                 quint16 errorCode = 0x0001)
+{
+    QByteArray payload;
+    payload.append(static_cast<char>(sequence & 0xffU));
+    payload.append(static_cast<char>((sequence >> 8U) & 0xffU));
+    payload.append(static_cast<char>(requestType));
+    payload.append(static_cast<char>(errorCode & 0xffU));
+    payload.append(static_cast<char>((errorCode >> 8U) & 0xffU));
+    transport.injectBytes(rb::PacketCodec::encodeWire(
+        {rb::MessageType::Error, 0x8000, payload}));
+}
+
 void injectLeakStatus(rb::FakeTransport &transport, quint8 state)
 {
     transport.injectBytes(rb::PacketCodec::encodeWire(
@@ -2907,6 +2936,131 @@ void testMotionFailClosedIgnoresLateMotionAck()
            "a late successful Motion ACK must not resurrect Faulted Motion");
 }
 
+void testGaitBackendAckCorrelationAndLifecycle()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 5;
+    config.maxRetries = 0;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    expect(!controller.confirmedGaitBackend().has_value(),
+           "gait backend must start UNKNOWN before an ACK-confirmed selection");
+    expect(controller.setGaitBackend(rb::GaitBackend::SimpleGait),
+           "the first gait backend selector request should be sent");
+    const rb::Packet first = lastPacket(transport);
+    expect(first.type == rb::MessageType::SetGaitBackend,
+           "gait backend selection must use SetGaitBackend");
+    expect(first.payload.size() == 1
+               && static_cast<quint8>(first.payload.front()) == 0U,
+           "SimpleGait selector payload must be exactly one byte with value zero");
+    expect(controller.isGaitBackendChangePending(),
+           "selector request must remain pending until its matching ACK");
+    expect(controller.requestedGaitBackend().has_value()
+               && *controller.requestedGaitBackend() == rb::GaitBackend::SimpleGait,
+           "pending selector must expose the requested backend");
+
+    expect(!controller.setGaitBackend(rb::GaitBackend::CPG),
+           "a second selector request must be rejected while one is pending");
+    acknowledgeSequence(transport, static_cast<quint16>(first.sequence + 1U),
+                        rb::AckResult::Ok, rb::MessageType::SetGaitBackend);
+    expect(controller.isGaitBackendChangePending(),
+           "an ACK with an unrelated sequence must not clear selector pending state");
+    expect(!controller.confirmedGaitBackend().has_value(),
+           "an unrelated selector ACK must not confirm a backend");
+
+    acknowledgeSequence(transport, first.sequence, rb::AckResult::Ok,
+                        rb::MessageType::SetMotionMode);
+    expect(!controller.isGaitBackendChangePending(),
+           "a matching-sequence wrong-type ACK must clear selector pending state");
+    expect(!controller.confirmedGaitBackend().has_value(),
+           "a wrong-type ACK must not confirm the requested backend");
+
+    expect(controller.setGaitBackend(rb::GaitBackend::SimpleGait),
+           "selector should be reusable after a matching-sequence mismatch");
+    const rb::Packet simpleRequest = lastPacket(transport);
+    acknowledgeSequence(transport, simpleRequest.sequence, rb::AckResult::Ok,
+                        rb::MessageType::SetGaitBackend);
+    expect(!controller.isGaitBackendChangePending(),
+           "matching successful selector ACK must clear pending state");
+    expect(controller.confirmedGaitBackend().has_value()
+               && *controller.confirmedGaitBackend() == rb::GaitBackend::SimpleGait,
+           "matching successful selector ACK must confirm SimpleGait");
+
+    expect(controller.setGaitBackend(rb::GaitBackend::CPG),
+           "CPG selector request should be sent after SimpleGait confirmation");
+    const rb::Packet busyRequest = lastPacket(transport);
+    acknowledgeSequence(transport, busyRequest.sequence, rb::AckResult::Busy,
+                        rb::MessageType::SetGaitBackend);
+    expect(!controller.isGaitBackendChangePending(),
+           "BUSY selector ACK must clear pending state");
+    expect(controller.confirmedGaitBackend().has_value()
+               && *controller.confirmedGaitBackend() == rb::GaitBackend::SimpleGait,
+           "BUSY selector ACK must preserve the prior confirmed backend");
+
+    expect(controller.setGaitBackend(rb::GaitBackend::CPG),
+           "selector error case should send a new CPG request");
+    const rb::Packet errorRequest = lastPacket(transport);
+    injectError(transport, errorRequest.sequence, rb::MessageType::SetGaitBackend);
+    expect(!controller.isGaitBackendChangePending(),
+           "matching selector Error must clear pending state");
+    expect(controller.confirmedGaitBackend().has_value()
+               && *controller.confirmedGaitBackend() == rb::GaitBackend::SimpleGait,
+           "selector Error must preserve the prior confirmed backend");
+
+    expect(controller.setGaitBackend(rb::GaitBackend::CPG),
+           "selector transport-error case should send a new CPG request");
+    emit transport.errorOccurred(QStringLiteral("selector transport error"));
+    expect(!controller.isGaitBackendChangePending(),
+           "selector transport error must clear pending state");
+    expect(controller.confirmedGaitBackend().has_value()
+               && *controller.confirmedGaitBackend() == rb::GaitBackend::SimpleGait,
+           "selector transport error must preserve the prior confirmed backend");
+
+    transport.setWriteErrorSignals(false);
+    transport.setWriteSucceeds(false);
+    expect(!controller.setGaitBackend(rb::GaitBackend::CPG),
+           "selector write failure must be reported");
+    expect(!controller.isGaitBackendChangePending(),
+           "selector write failure must clear pending state");
+    expect(controller.confirmedGaitBackend().has_value()
+               && *controller.confirmedGaitBackend() == rb::GaitBackend::SimpleGait,
+           "selector write failure must preserve the prior confirmed backend");
+
+    transport.setWriteSucceeds(true);
+    expect(controller.setGaitBackend(rb::GaitBackend::CPG),
+           "selector timeout case should send a new CPG request");
+    waitForMs(40);
+    expect(!controller.isGaitBackendChangePending(),
+           "terminal selector timeout must clear pending state");
+    expect(controller.confirmedGaitBackend().has_value()
+               && *controller.confirmedGaitBackend() == rb::GaitBackend::SimpleGait,
+           "selector timeout must preserve the prior confirmed backend");
+
+    expect(controller.setGaitBackend(rb::GaitBackend::CPG),
+           "selector should be reusable after timeout");
+    const rb::Packet confirmedCpgRequest = lastPacket(transport);
+    acknowledgeSequence(transport, confirmedCpgRequest.sequence, rb::AckResult::Ok,
+                        rb::MessageType::SetGaitBackend);
+    expect(controller.confirmedGaitBackend().has_value()
+               && *controller.confirmedGaitBackend() == rb::GaitBackend::CPG,
+           "matching selector ACK must confirm CPG");
+    const qsizetype writesBeforeDisconnect = transport.writes().size();
+    transport.simulateError(QStringLiteral("link lost"));
+    expect(!controller.confirmedGaitBackend().has_value(),
+           "disconnect must reset confirmed gait backend to UNKNOWN");
+    expect(!controller.isGaitBackendChangePending(),
+           "disconnect must clear selector pending state");
+    transport.simulateConnected();
+    expect(!controller.confirmedGaitBackend().has_value(),
+           "reconnect must keep gait backend UNKNOWN until a new ACK");
+    expect(transport.writes().size() == writesBeforeDisconnect,
+           "reconnect must not emit an automatic gait backend selector");
+}
+
 void testApc220MotionCommandsUseTheExistingBoundedScheduler()
 {
     rb::FakeTransport transport;
@@ -2963,6 +3117,46 @@ void testApc220MotionCommandsUseTheExistingBoundedScheduler()
            "late APC220 Motion ACK must not resurrect Disable All fail-closed state");
     expect(lastPacket(transport).type == rb::MessageType::ServoDisable,
            "Disable All should dispatch before stale queued Motion work");
+}
+
+void testApc220GaitBackendSelectorIsSerialized()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::apc220Provisional();
+    config.heartbeatIntervalMs = 10000;
+    config.ackTimeoutMs = 1000;
+    config.heartbeatSafetyBudgetMs = 5000;
+    rb::RobotController controller(&transport, config);
+    connectApcAndAcknowledgeHeartbeat(transport, controller);
+
+    expect(controller.enableServo(rb::ServoId::FrontRight),
+           "APC selector serialization setup should occupy the ACK slot");
+    const rb::Packet enable = lastPacket(transport);
+    expect(controller.setGaitBackend(rb::GaitBackend::CPG),
+           "APC selector should be accepted into the bounded command queue");
+    expect(controller.isGaitBackendChangePending(),
+           "queued APC selector must remain pending before dispatch");
+    expect(controller.queuedCommandCount() == 1,
+           "queued APC selector must occupy exactly one command entry");
+    expect(lastPacket(transport).sequence == enable.sequence
+               && lastPacket(transport).type == rb::MessageType::ServoEnable,
+           "queued selector must not overtake the in-flight command");
+    expect(!controller.setGaitBackend(rb::GaitBackend::SimpleGait),
+           "APC selector must reject a second request while the first is queued");
+
+    acknowledge(transport, enable, rb::AckResult::Ok,
+                rb::MessageType::ServoEnable);
+    expect(!transport.writes().isEmpty()
+               && lastPacket(transport).type == rb::MessageType::SetGaitBackend,
+           "APC selector must dispatch after the prior ACK releases the slot");
+    const rb::Packet selector = lastPacket(transport);
+    acknowledge(transport, selector, rb::AckResult::Ok,
+                rb::MessageType::SetGaitBackend);
+    expect(!controller.isGaitBackendChangePending(),
+           "APC selector ACK must clear the serialized pending state");
+    expect(controller.confirmedGaitBackend().has_value()
+               && *controller.confirmedGaitBackend() == rb::GaitBackend::CPG,
+           "APC selector ACK must confirm the requested CPG backend");
 }
 
 } // namespace
@@ -3045,7 +3239,9 @@ int main(int argc, char **argv)
     testApcMotionDisableOwnershipAndQueuedPreemption();
     testMotionBusyAckAndReconnectDoesNotResume();
     testMotionFailClosedIgnoresLateMotionAck();
+    testGaitBackendAckCorrelationAndLifecycle();
     testApc220MotionCommandsUseTheExistingBoundedScheduler();
+    testApc220GaitBackendSelectorIsSerialized();
     if (failures == 0) {
         std::cout << "All robot controller tests passed\n";
     }
