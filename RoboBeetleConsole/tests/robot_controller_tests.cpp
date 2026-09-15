@@ -3292,15 +3292,18 @@ void testApc220SelectorEvictionByMotionStopClearsLifecycle()
     expect(!transport.writes().isEmpty()
                && lastPacket(transport).type == rb::MessageType::SetMotionMode,
            "Motion STOP should dispatch after the in-flight command ACK");
+    acknowledgeLast(transport);
+    while (controller.queuedCommandCount() > 0) {
+        expect(lastPacket(transport).type == rb::MessageType::Heartbeat,
+               "Motion STOP should release the remaining non-selector fixture work");
+        acknowledgeLast(transport);
+    }
     for (qsizetype index = 0; index < transport.writes().size(); ++index) {
         if (index >= 2) {
             expect(packetAt(transport, index).type != rb::MessageType::SetGaitBackend,
                    "a Motion STOP eviction must not replay the dropped selector");
         }
     }
-
-    controller.commandQueue_.clear();
-    controller.motionStopCommandQueue_.clear();
 }
 
 void testApc220SelectorLivenessFailClosedClearsLifecycle()
