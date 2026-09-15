@@ -1,4 +1,5 @@
 #include "motion_manager.h"
+#include "motion_timing_diagnostics.h"
 
 #include "motion_config.h"
 
@@ -316,6 +317,10 @@ static motion_manager_result_t motion_manager_apply_targets(
         targets->rear_right_cdeg,
         targets->rear_left_cdeg,
     };
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    const motion_timing_mark_t apply_start =
+        motion_timing_diagnostics_mark();
+#endif
 
     for (size_t index = 0U; index < SERVO_DESCRIPTOR_COUNT; ++index)
     {
@@ -331,10 +336,16 @@ static motion_manager_result_t motion_manager_apply_targets(
                 ids[index],
                 values[index]) != SERVO_SERVICE_RESULT_OK)
         {
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+            motion_timing_diagnostics_record_apply(apply_start);
+#endif
             return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
         }
     }
 
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_record_apply(apply_start);
+#endif
     return MOTION_MANAGER_RESULT_OK;
 }
 
@@ -345,14 +356,24 @@ static motion_manager_result_t motion_manager_sample(
     float bias_scale,
     joint_targets_t *targets)
 {
-    if ((manager->generator.ops == NULL) ||
-        (manager->generator.ops->sample == NULL) ||
-        !manager->generator.ops->sample(
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    const motion_timing_mark_t sample_start =
+        motion_timing_diagnostics_mark();
+#endif
+    const bool sample_ok =
+        (manager->generator.ops != NULL) &&
+        (manager->generator.ops->sample != NULL) &&
+        manager->generator.ops->sample(
             manager->generator.context,
             mode,
             amplitude_scale,
             bias_scale,
-            targets))
+            targets);
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_record_sample(sample_start);
+#endif
+
+    if (!sample_ok)
     {
         return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
     }
@@ -408,9 +429,16 @@ static motion_manager_result_t motion_manager_tick(
         return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
     }
 
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    const motion_timing_mark_t advance_start =
+        motion_timing_diagnostics_mark();
+#endif
     manager->generator.ops->advance(
         manager->generator.context,
         elapsed_ms);
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_record_generator_advance(advance_start);
+#endif
 
     if (manager->transition == MOTION_MANAGER_TRANSITION_START)
     {
@@ -618,6 +646,9 @@ motion_manager_result_t motion_manager_set_gait_backend(
     selected->ops->reset(selected->context);
     manager->generator = *selected;
     manager->gait_backend = backend;
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_set_runtime_backend((uint32_t)backend);
+#endif
     return MOTION_MANAGER_RESULT_OK;
 }
 
@@ -636,6 +667,10 @@ motion_manager_result_t motion_manager_start(
     joint_targets_t start_targets;
     uint16_t required_mask;
     motion_manager_result_t result;
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    const bool start_from_stopped =
+        (manager != NULL) && (manager->state == MOTION_STATE_STOPPED);
+#endif
 
     if ((manager == NULL) || !motion_mode_is_valid(mode) ||
         (mode == MOTION_STOP))
@@ -746,6 +781,13 @@ motion_manager_result_t motion_manager_start(
     manager->start_from_targets = start_targets;
     manager->stop_start_targets = start_targets;
     manager->scheduler_started = 0U;
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    if (start_from_stopped)
+    {
+        motion_timing_diagnostics_begin_run(
+            (uint32_t)manager->gait_backend);
+    }
+#endif
     return MOTION_MANAGER_RESULT_OK;
 }
 
@@ -788,6 +830,10 @@ motion_manager_result_t motion_manager_request_stop_at(
     manager->last_tick_ms = now_ms;
     manager->scheduler_started = 1U;
     manager->state = MOTION_STATE_STOPPING;
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_freeze(
+        MOTION_TIMING_TERMINATION_NORMAL_STOP);
+#endif
     return MOTION_MANAGER_RESULT_OK;
 }
 
@@ -808,6 +854,10 @@ motion_manager_result_t motion_manager_process(
     if ((manager->safety_supervisor != NULL) &&
         !safety_supervisor_is_host_alive(manager->safety_supervisor))
     {
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+        motion_timing_diagnostics_freeze(
+            MOTION_TIMING_TERMINATION_SAFETY_STOP);
+#endif
         motion_manager_stop_immediate(manager);
         return MOTION_MANAGER_RESULT_HOST_NOT_ALIVE;
     }
@@ -828,7 +878,15 @@ motion_manager_result_t motion_manager_process(
     }
 
     manager->last_tick_ms = now_ms;
-    return motion_manager_tick(manager, elapsed_ms);
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_motion_tick_begin(elapsed_ms);
+#endif
+    const motion_manager_result_t result =
+        motion_manager_tick(manager, elapsed_ms);
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_motion_tick_end((uint32_t)result);
+#endif
+    return result;
 }
 
 void motion_manager_stop_immediate(
@@ -846,6 +904,14 @@ void motion_manager_stop_immediate(
     {
         return;
     }
+
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    if (was_active)
+    {
+        motion_timing_diagnostics_freeze(
+            MOTION_TIMING_TERMINATION_FAULT);
+    }
+#endif
 
     if (manager->servo_service != NULL)
     {

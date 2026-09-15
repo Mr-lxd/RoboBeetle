@@ -2,6 +2,7 @@
 #include "motion_manager.h"
 #include "cpg_gait_generator.h"
 #include "simple_gait_generator.h"
+#include "motion_timing_diagnostics.h"
 
 #include "safety_supervisor.h"
 #include "servo_descriptor.h"
@@ -1160,6 +1161,105 @@ static void test_legacy_and_missing_backend_registration_never_guess_or_mutate(v
            "missing reset infrastructure must not mutate manager or output");
 }
 
+static void test_motion_timing_hooks_follow_accepted_tick_gate(void)
+{
+    fixture_t fixture;
+    fake_gait_generator_t generator = {
+        .advanced_ms = 0U,
+        .targets = {0},
+    };
+
+    motion_timing_diagnostics_init(
+        MOTION_GAIT_BACKEND_SIMPLE_GAIT_VALUE);
+    fixture_init_with_generator(
+        &fixture,
+        0x001BU,
+        fake_gait_interface(&generator));
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_FORWARD) == MOTION_MANAGER_RESULT_OK,
+           "timing hook setup should start Motion");
+    expect(motion_timing_report.run_state == MOTION_TIMING_RUN_STATE_RUNNING,
+           "a successful Motion START must begin a diagnostic trial");
+
+    (void)motion_manager_process(&fixture.manager, 0U);
+    expect(motion_timing_report.motion.accepted_tick_count == 0U,
+           "first scheduler initialization must not count a Motion tick");
+
+    safety_supervisor_on_heartbeat(&fixture.safety_supervisor, 10U);
+    (void)motion_manager_process(&fixture.manager, 10U);
+    expect(motion_timing_report.motion.accepted_tick_count == 1U,
+           "accepted 10 ms process call must count a Motion tick");
+    expect(motion_timing_report.motion.tick_duration_cycles.count == 1U,
+           "accepted Motion tick must record its duration");
+    expect(motion_timing_report.motion.generator_advance_cycles.count == 1U,
+           "accepted Motion tick must record generator advance duration");
+    expect(motion_timing_report.motion.sample_cycles.count == 1U,
+           "accepted Motion tick must record target sample duration");
+    expect(motion_timing_report.motion.apply_cycles.count == 1U,
+           "accepted Motion tick must record target apply duration");
+
+    safety_supervisor_on_heartbeat(&fixture.safety_supervisor, 12U);
+    (void)motion_manager_process(&fixture.manager, 12U);
+    expect(motion_timing_report.motion.accepted_tick_count == 1U,
+           "sub-threshold process call must not count a Motion tick");
+
+    safety_supervisor_on_heartbeat(&fixture.safety_supervisor, 22U);
+    (void)motion_manager_process(&fixture.manager, 22U);
+    expect(motion_timing_report.motion.accepted_tick_count == 2U,
+           "second accepted process call must count a Motion tick");
+    expect(motion_timing_report.motion.actual_interval_cycles.count == 1U,
+           "Motion interval must start after the first accepted tick");
+
+    (void)safety_supervisor_process(&fixture.safety_supervisor, 600U);
+    (void)motion_manager_process(&fixture.manager, 600U);
+    expect(motion_timing_report.motion.accepted_tick_count == 2U,
+           "Safety liveness abort must not count a Motion tick");
+    expect(generator.advanced_ms == 22U,
+           "Safety liveness abort must not advance the generator");
+    expect(motion_timing_report.run_state == MOTION_TIMING_RUN_STATE_FROZEN &&
+               motion_timing_report.termination_reason ==
+                   MOTION_TIMING_TERMINATION_SAFETY_STOP,
+           "Safety liveness abort must freeze the diagnostic trial");
+}
+
+static void test_motion_timing_freezes_on_normal_stop_acceptance(void)
+{
+    fixture_t fixture;
+    motion_timing_report_t frozen_report;
+    motion_timing_report_t after_later_hooks;
+
+    motion_timing_diagnostics_init(
+        MOTION_GAIT_BACKEND_SIMPLE_GAIT_VALUE);
+    fixture_init(&fixture, 0x001BU);
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_FORWARD) == MOTION_MANAGER_RESULT_OK,
+           "normal-stop timing setup should start Motion");
+    motion_timing_diagnostics_motion_tick_begin(10U);
+    motion_timing_diagnostics_motion_tick_end(
+        MOTION_TIMING_STATUS_OK);
+
+    expect(motion_manager_request_stop_at(&fixture.manager, 10U) ==
+               MOTION_MANAGER_RESULT_OK,
+           "normal Motion STOP should be accepted for timing freeze");
+    expect(motion_timing_report.run_state == MOTION_TIMING_RUN_STATE_FROZEN &&
+               motion_timing_report.termination_reason ==
+                   MOTION_TIMING_TERMINATION_NORMAL_STOP,
+           "normal Motion STOP acceptance must freeze diagnostics");
+    frozen_report = motion_timing_report;
+
+    motion_timing_diagnostics_motion_tick_begin(30U);
+    motion_timing_diagnostics_motion_tick_end(
+        MOTION_TIMING_STATUS_ERROR);
+    motion_timing_diagnostics_set_runtime_backend(
+        MOTION_GAIT_BACKEND_CPG_VALUE);
+    after_later_hooks = motion_timing_report;
+    expect(memcmp(&frozen_report, &after_later_hooks,
+                  sizeof frozen_report) == 0,
+           "normal-stop frozen evidence must ignore later hooks");
+}
+
 int main(void)
 {
     test_stopped_running_and_start_gate();
@@ -1176,6 +1276,7 @@ int main(void)
     test_motion_start_rejects_rear_pose_outside_operational_envelope();
     test_motion_process_uses_actual_elapsed_wall_time();
     test_motion_process_elapsed_time_is_wrap_safe();
+    test_motion_timing_freezes_on_normal_stop_acceptance();
     test_graceful_stop_uses_actual_750_ms_duration();
     test_stop_elapsed_time_starts_at_acceptance();
     test_common_motion_guard_clamps_alternate_generator_output();
@@ -1184,6 +1285,7 @@ int main(void)
     test_gait_backend_switch_is_stopped_only_and_has_no_output_side_effect();
     test_gait_backend_selector_busy_precedes_value_validation();
     test_legacy_and_missing_backend_registration_never_guess_or_mutate();
+    test_motion_timing_hooks_follow_accepted_tick_gate();
 
     if (failures == 0)
     {

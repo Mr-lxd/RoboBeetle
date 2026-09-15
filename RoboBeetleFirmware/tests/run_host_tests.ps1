@@ -27,6 +27,7 @@ $includeArgs = @(
     '-DSTM32F407xx',
     '-I', (Join-Path $firmwareRoot 'Core\Inc'),
     '-I', (Join-Path $firmwareRoot 'Core\App'),
+    '-I', (Join-Path $firmwareRoot 'Core\Diagnostics'),
     '-I', (Join-Path $firmwareRoot 'Core\Communication'),
     '-I', (Join-Path $firmwareRoot 'Core\Motion'),
     '-I', (Join-Path $firmwareRoot 'Core\Safety'),
@@ -54,9 +55,72 @@ $cases = @(
     @{ Name = 'cpg_safety_catchup_tests'; Sources = @('tests/test_cpg_safety_catchup.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c', 'Core/Motion/motion_manager.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c'); Link = @('-lm') },
     @{ Name = 'cpg_period_tests'; Sources = @('tests/test_cpg_period.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c'); Link = @('-lm') },
     @{ Name = 'simple_gait_generator_tests'; Sources = @('tests/simple_gait_generator_tests.c', 'Core/Motion/simple_gait_generator.c'); Link = @('-lm') },
+    @{ Name = 'motion_timing_diagnostics_tests'; Sources = @('tests/motion_timing_diagnostics_tests.c', 'Core/Diagnostics/motion_timing_diagnostics.c'); Link = @() },
+    @{ Name = 'motion_timing_diagnostics_hooks_tests'; Sources = @('tests/motion_timing_diagnostics_hooks_tests.c', 'Core/Diagnostics/motion_timing_diagnostics.c'); Link = @(); Extra = @($halWarningArgs + '-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=1' + '-DROBOBEETLE_MOTION_TIMING_HOST_TEST=1') },
+    @{ Name = 'motion_timing_diagnostics_lifecycle_tests'; Sources = @('tests/motion_timing_diagnostics_lifecycle_tests.c', 'Core/Diagnostics/motion_timing_diagnostics.c'); Link = @(); Extra = @($halWarningArgs + '-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=1' + '-DROBOBEETLE_MOTION_TIMING_HOST_TEST=1') },
+    @{ Name = 'app_main_timing_diagnostics_tests'; Sources = @(
+        'tests/app_main_timing_diagnostics_tests.c',
+        'Core/App/app_main.c',
+        'Core/Diagnostics/motion_timing_diagnostics.c',
+        'Core/Src/rb_protocol_v2.c',
+        'Core/Communication/ring_buffer.c',
+        'Core/Communication/uart_transport_stm32.c',
+        'Core/Communication/jy901s_transport_stm32.c',
+        'Core/Communication/depth_transport_stm32.c',
+        'Core/Communication/depth_telemetry.c',
+        'Core/Communication/imu_telemetry_policy.c',
+        'Core/Communication/telemetry_scheduler.c',
+        'Core/Communication/protocol_dispatcher.c',
+        'Core/Motion/cpg_core.c',
+        'Core/Motion/cpg_gait_generator.c',
+        'Core/Motion/simple_gait_generator.c',
+        'Core/Motion/motion_manager.c',
+        'Core/Sensors/leak_sensor.c',
+        'Core/Sensors/leak_sensor_stm32.c',
+        'Core/Sensors/leak_telemetry_policy.c',
+        'Core/Sensors/jy901s_parser.c',
+        'Core/Sensors/jy901s_telemetry.c',
+        'Core/Sensors/depth_parser.c',
+        'Core/Servo/servo_calibration.c',
+        'Core/Servo/servo_descriptor.c',
+        'Core/Servo/servo_service.c',
+        'Core/Servo/servo_driver_stm32.c',
+        'Core/Servo/servo_pwm_stop_policy.c',
+        'Core/Safety/safety_supervisor.c'
+    ); Link = @('-lm'); Extra = @($halWarningArgs + '-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=1' + '-DROBOBEETLE_MOTION_TIMING_HOST_TEST=1') },
+    @{ Name = 'app_main_reduced_telemetry_tests'; Sources = @(
+        'tests/app_main_reduced_telemetry_tests.c',
+        'Core/App/app_main.c',
+        'Core/Diagnostics/motion_timing_diagnostics.c',
+        'Core/Src/rb_protocol_v2.c',
+        'Core/Communication/ring_buffer.c',
+        'Core/Communication/uart_transport_stm32.c',
+        'Core/Communication/jy901s_transport_stm32.c',
+        'Core/Communication/depth_transport_stm32.c',
+        'Core/Communication/depth_telemetry.c',
+        'Core/Communication/imu_telemetry_policy.c',
+        'Core/Communication/telemetry_scheduler.c',
+        'Core/Communication/protocol_dispatcher.c',
+        'Core/Motion/cpg_core.c',
+        'Core/Motion/cpg_gait_generator.c',
+        'Core/Motion/simple_gait_generator.c',
+        'Core/Motion/motion_manager.c',
+        'Core/Sensors/leak_sensor.c',
+        'Core/Sensors/leak_sensor_stm32.c',
+        'Core/Sensors/leak_telemetry_policy.c',
+        'Core/Sensors/jy901s_parser.c',
+        'Core/Sensors/jy901s_telemetry.c',
+        'Core/Sensors/depth_parser.c',
+        'Core/Servo/servo_calibration.c',
+        'Core/Servo/servo_descriptor.c',
+        'Core/Servo/servo_service.c',
+        'Core/Servo/servo_driver_stm32.c',
+        'Core/Servo/servo_pwm_stop_policy.c',
+        'Core/Safety/safety_supervisor.c'
+    ); Link = @('-lm'); Extra = @($halWarningArgs + '-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=1' + '-DROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY=1' + '-DROBOBEETLE_MOTION_TIMING_HOST_TEST=1') },
     @{ Name = 'gait_trace_compare_tests'; Sources = @('tests/gait_trace_compare_tests.c', 'tests/tools/gait_trace_compare.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c'); Link = @('-lm'); Arguments = @($traceTestOutputPathA, $traceTestOutputPathB) },
     @{ Name = 'gait_trace_compare_tool'; Sources = @('tests/tools/gait_trace_compare_main.c', 'tests/tools/gait_trace_compare.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c'); Link = @('-lm'); Arguments = @($traceToolOutputPath) },
-    @{ Name = 'motion_manager_tests'; Sources = @('tests/motion_manager_tests.c', 'Core/Motion/motion_manager.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c'); Link = @('-lm') },
+    @{ Name = 'motion_manager_tests'; Sources = @('tests/motion_manager_tests.c', 'Core/Diagnostics/motion_timing_diagnostics.c', 'Core/Motion/motion_manager.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c'); Link = @('-lm'); Extra = @($halWarningArgs + '-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=1' + '-DROBOBEETLE_MOTION_TIMING_HOST_TEST=1') },
     @{ Name = 'protocol_dispatcher_tests'; Sources = @('tests/protocol_dispatcher_tests.c', 'Core/Communication/protocol_dispatcher.c', 'Core/Motion/motion_manager.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c'); Link = @('-lm') },
     @{ Name = 'jy901s_parser_tests'; Sources = @('tests/jy901s_parser_tests.c', 'Core/Sensors/jy901s_parser.c'); Link = @() },
     @{ Name = 'jy901s_telemetry_tests'; Sources = @('tests/jy901s_telemetry_tests.c', 'Core/Sensors/jy901s_telemetry.c', 'Core/Src/rb_protocol_v2.c'); Link = @() },
@@ -186,6 +250,41 @@ foreach ($case in $cases) {
     Invoke-HostCase -Case $case
 }
 
+$diagnosticsCompileContract = Join-Path $buildRootPath 'motion_timing_diagnostics_compile_contract.o'
+foreach ($contract in @(
+        @{ Name = 'off'; Diagnostics = 0; ReducedTelemetry = 0; ExpectedDiagnostics = 0; ExpectedReduced = 0 },
+        @{ Name = 'reduced_without_diagnostics'; Diagnostics = 0; ReducedTelemetry = 1; ExpectedDiagnostics = 0; ExpectedReduced = 0 },
+        @{ Name = 'diagnostics'; Diagnostics = 1; ReducedTelemetry = 0; ExpectedDiagnostics = 1; ExpectedReduced = 0 },
+        @{ Name = 'diagnostics_reduced'; Diagnostics = 1; ReducedTelemetry = 1; ExpectedDiagnostics = 1; ExpectedReduced = 1 }
+    )) {
+    $contractObject = Join-Path $buildRootPath (
+        'motion_timing_diagnostics_compile_contract_' + $contract.Name + '.o')
+    $contractArgs = @($warningArgs + $includeArgs + @(
+        ('-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=' + $contract.Diagnostics),
+        ('-DROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY=' + $contract.ReducedTelemetry),
+        ('-DEXPECT_DIAGNOSTICS_ACTIVE=' + $contract.ExpectedDiagnostics),
+        ('-DEXPECT_REDUCED_TELEMETRY_ACTIVE=' + $contract.ExpectedReduced),
+        (Join-Path $firmwareRoot 'tests\motion_timing_diagnostics_compile_contract.c')
+    ))
+    if ($contract.Diagnostics -eq 0) {
+        $contractExecutable = Join-Path $buildRootPath (
+            'motion_timing_diagnostics_compile_contract_' + $contract.Name + '.exe')
+        & $gcc @($contractArgs + @('-o', $contractExecutable))
+        if ($LASTEXITCODE -eq 0) {
+            & $contractExecutable
+        }
+    }
+    else {
+        & $gcc @(@('-c') + $contractArgs + @('-o', $contractObject))
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw ('Compile-contract check failed: motion timing diagnostics ' +
+            $contract.Name)
+    }
+    Write-Host ('PASS motion_timing_diagnostics compile contract ' +
+        $contract.Name)
+}
+
 foreach ($benchmark in @(0, 1)) {
     foreach ($backend in @(1, 0)) {
         $apiObject = Join-Path $buildRootPath (
@@ -259,4 +358,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ("All Firmware host tests passed: " + $cases.Count +
-    " executables + 9 app/backend/benchmark compile-contract objects")
+    " executables + 13 app/backend/benchmark/diagnostics compile-contract objects")
