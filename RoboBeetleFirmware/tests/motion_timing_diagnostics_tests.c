@@ -26,6 +26,8 @@ _Static_assert(sizeof(motion_timing_tx_report_t) == 84U,
                "TX ABI size changed");
 _Static_assert(sizeof(motion_timing_motion_report_t) == 456U,
                "Motion ABI size changed");
+_Static_assert(sizeof(motion_timing_gap_context_t) == 120U,
+               "worst-gap context ABI size changed");
 _Static_assert(offsetof(motion_timing_report_t, magic) == 0U,
                "magic ABI offset changed");
 _Static_assert(offsetof(motion_timing_report_t, abi_version) == 4U,
@@ -62,7 +64,15 @@ _Static_assert(offsetof(motion_timing_report_t,
 _Static_assert(offsetof(motion_timing_report_t,
                         diagnostic_invalid_count) == 1168U,
                "invalid ABI offset changed");
-_Static_assert(sizeof(motion_timing_report_t) == 1172U,
+_Static_assert(offsetof(motion_timing_report_t, run_state) == 1172U,
+               "run state ABI offset changed");
+_Static_assert(offsetof(motion_timing_report_t,
+                        termination_reason) == 1176U,
+               "termination ABI offset changed");
+_Static_assert(offsetof(motion_timing_report_t,
+                        worst_gap_context) == 1180U,
+               "worst-gap context ABI offset changed");
+_Static_assert(sizeof(motion_timing_report_t) == 1300U,
                "report ABI size changed");
 
 static void test_wrap_delta(void)
@@ -88,6 +98,23 @@ static void test_distribution_accumulation(void)
            "distribution worst interval must accumulate");
     expect(motion_timing_distribution_histogram_total(&stats) == 3U,
            "distribution histogram must count every sample");
+}
+
+static void test_cycle_distribution_has_no_millisecond_histogram(void)
+{
+    motion_timing_distribution_t stats = {0};
+
+    motion_timing_distribution_record_cycles(&stats, 1680000U);
+    motion_timing_distribution_record_cycles(&stats, 3360000U);
+
+    expect(stats.count == 2U &&
+               stats.min_value == 1680000U &&
+               stats.max_value == 3360000U &&
+               stats.total_value.lo == 5040000U &&
+               stats.total_value.hi == 0U,
+           "cycle distribution must retain count/min/max/total");
+    expect(motion_timing_distribution_histogram_total(&stats) == 0U,
+           "cycle distribution must not use millisecond histogram buckets");
 }
 
 static void test_motion_gap_buckets_are_strict(void)
@@ -225,6 +252,7 @@ int main(void)
 {
     test_wrap_delta();
     test_distribution_accumulation();
+    test_cycle_distribution_has_no_millisecond_histogram();
     test_motion_gap_buckets_are_strict();
     test_tx_class_accounting();
     test_zero_clock_does_not_invent_gap_evidence();

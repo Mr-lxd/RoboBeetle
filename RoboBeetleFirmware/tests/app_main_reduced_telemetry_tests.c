@@ -227,6 +227,8 @@ int main(void)
         &tim4,
         NULL,
         0U);
+    motion_timing_diagnostics_begin_run(
+        MOTION_GAIT_BACKEND_CPG_VALUE);
     inject_heartbeat(&uart1, 1U);
 
     expect(MOTION_TIMING_REDUCED_TELEMETRY_ACTIVE == 1,
@@ -264,11 +266,12 @@ int main(void)
                RBP2_MSG_SET_GAIT_BACKEND,
                RBP2_RESULT_OK),
            "reduced diagnostics must preserve runtime Protocol selector");
-    expect(motion_timing_report.runtime_backend ==
-               MOTION_GAIT_BACKEND_SIMPLE_GAIT_VALUE,
-           "reduced diagnostics selector must update STM32 backend state");
-    expect(motion_timing_report.tx[MOTION_TIMING_TX_ACK].call_count == 4U,
-           "reduced diagnostics must classify all preserved ACKs");
+    expect(motion_timing_report.run_state == MOTION_TIMING_RUN_STATE_FROZEN &&
+               motion_timing_report.runtime_backend ==
+                   MOTION_GAIT_BACKEND_CPG_VALUE,
+           "reduced diagnostics must preserve the frozen pre-fail-safe report");
+    expect(motion_timing_report.tx[MOTION_TIMING_TX_ACK].call_count == 2U,
+           "frozen diagnostics must not classify post-stop ACKs");
     expect(motion_timing_report.tx[MOTION_TIMING_TX_LEAK].call_count == 0U &&
                motion_timing_report.tx[MOTION_TIMING_TX_IMU].call_count == 0U &&
                motion_timing_report.tx[MOTION_TIMING_TX_DEPTH].call_count == 0U,

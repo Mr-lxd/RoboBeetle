@@ -95,6 +95,10 @@ static bool protocol_send_depth_snapshot(void);
 
 static void app_main_apply_safety_stop(void)
 {
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_freeze(
+        MOTION_TIMING_TERMINATION_SAFETY_STOP);
+#endif
     motion_manager_stop_immediate(&motion_manager);
     servo_service_disable_all(&servo_service);
     protocol_dispatcher_invalidate_action_cache(

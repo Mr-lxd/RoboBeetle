@@ -1179,6 +1179,8 @@ static void test_motion_timing_hooks_follow_accepted_tick_gate(void)
                &fixture.manager,
                MOTION_FORWARD) == MOTION_MANAGER_RESULT_OK,
            "timing hook setup should start Motion");
+    expect(motion_timing_report.run_state == MOTION_TIMING_RUN_STATE_RUNNING,
+           "a successful Motion START must begin a diagnostic trial");
 
     (void)motion_manager_process(&fixture.manager, 0U);
     expect(motion_timing_report.motion.accepted_tick_count == 0U,
@@ -1215,6 +1217,47 @@ static void test_motion_timing_hooks_follow_accepted_tick_gate(void)
            "Safety liveness abort must not count a Motion tick");
     expect(generator.advanced_ms == 22U,
            "Safety liveness abort must not advance the generator");
+    expect(motion_timing_report.run_state == MOTION_TIMING_RUN_STATE_FROZEN &&
+               motion_timing_report.termination_reason ==
+                   MOTION_TIMING_TERMINATION_SAFETY_STOP,
+           "Safety liveness abort must freeze the diagnostic trial");
+}
+
+static void test_motion_timing_freezes_on_normal_stop_acceptance(void)
+{
+    fixture_t fixture;
+    motion_timing_report_t frozen_report;
+    motion_timing_report_t after_later_hooks;
+
+    motion_timing_diagnostics_init(
+        MOTION_GAIT_BACKEND_SIMPLE_GAIT_VALUE);
+    fixture_init(&fixture, 0x001BU);
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_FORWARD) == MOTION_MANAGER_RESULT_OK,
+           "normal-stop timing setup should start Motion");
+    motion_timing_diagnostics_motion_tick_begin(10U);
+    motion_timing_diagnostics_motion_tick_end(
+        MOTION_TIMING_STATUS_OK);
+
+    expect(motion_manager_request_stop_at(&fixture.manager, 10U) ==
+               MOTION_MANAGER_RESULT_OK,
+           "normal Motion STOP should be accepted for timing freeze");
+    expect(motion_timing_report.run_state == MOTION_TIMING_RUN_STATE_FROZEN &&
+               motion_timing_report.termination_reason ==
+                   MOTION_TIMING_TERMINATION_NORMAL_STOP,
+           "normal Motion STOP acceptance must freeze diagnostics");
+    frozen_report = motion_timing_report;
+
+    motion_timing_diagnostics_motion_tick_begin(30U);
+    motion_timing_diagnostics_motion_tick_end(
+        MOTION_TIMING_STATUS_ERROR);
+    motion_timing_diagnostics_set_runtime_backend(
+        MOTION_GAIT_BACKEND_CPG_VALUE);
+    after_later_hooks = motion_timing_report;
+    expect(memcmp(&frozen_report, &after_later_hooks,
+                  sizeof frozen_report) == 0,
+           "normal-stop frozen evidence must ignore later hooks");
 }
 
 int main(void)
@@ -1233,6 +1276,7 @@ int main(void)
     test_motion_start_rejects_rear_pose_outside_operational_envelope();
     test_motion_process_uses_actual_elapsed_wall_time();
     test_motion_process_elapsed_time_is_wrap_safe();
+    test_motion_timing_freezes_on_normal_stop_acceptance();
     test_graceful_stop_uses_actual_750_ms_duration();
     test_stop_elapsed_time_starts_at_acceptance();
     test_common_motion_guard_clamps_alternate_generator_output();

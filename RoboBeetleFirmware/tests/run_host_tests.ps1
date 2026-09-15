@@ -57,6 +57,7 @@ $cases = @(
     @{ Name = 'simple_gait_generator_tests'; Sources = @('tests/simple_gait_generator_tests.c', 'Core/Motion/simple_gait_generator.c'); Link = @('-lm') },
     @{ Name = 'motion_timing_diagnostics_tests'; Sources = @('tests/motion_timing_diagnostics_tests.c', 'Core/Diagnostics/motion_timing_diagnostics.c'); Link = @() },
     @{ Name = 'motion_timing_diagnostics_hooks_tests'; Sources = @('tests/motion_timing_diagnostics_hooks_tests.c', 'Core/Diagnostics/motion_timing_diagnostics.c'); Link = @(); Extra = @($halWarningArgs + '-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=1' + '-DROBOBEETLE_MOTION_TIMING_HOST_TEST=1') },
+    @{ Name = 'motion_timing_diagnostics_lifecycle_tests'; Sources = @('tests/motion_timing_diagnostics_lifecycle_tests.c', 'Core/Diagnostics/motion_timing_diagnostics.c'); Link = @(); Extra = @($halWarningArgs + '-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=1' + '-DROBOBEETLE_MOTION_TIMING_HOST_TEST=1') },
     @{ Name = 'app_main_timing_diagnostics_tests'; Sources = @(
         'tests/app_main_timing_diagnostics_tests.c',
         'Core/App/app_main.c',

@@ -23,8 +23,12 @@ int main(void)
     motion_timing_diagnostics_loop_end(mark);
     motion_timing_diagnostics_init(
         MOTION_GAIT_BACKEND_CPG_VALUE);
+    motion_timing_diagnostics_begin_run(
+        MOTION_GAIT_BACKEND_CPG_VALUE);
     motion_timing_diagnostics_motion_tick_begin(10U);
     motion_timing_diagnostics_motion_tick_end(
         MOTION_TIMING_STATUS_OK);
+    motion_timing_diagnostics_freeze(
+        MOTION_TIMING_TERMINATION_NORMAL_STOP);
     return 0;
 }

@@ -4,14 +4,15 @@
 
 **Goal:** Add compile-gated, RAM-only timing diagnostics and a reproducible target measurement procedure that can distinguish foreground communication delay, generator cost, logical Motion cadence, and physical servo/PWM behavior without changing production scheduling or actuator semantics.
 
-**Architecture:** Keep app_main as the only cooperative scheduler. Add a disabled-by-default STM32F407 DWT counter module under the neutral Core/Diagnostics layer, place no-op hooks around existing app-loop, queue-drain, host-TX, and accepted Motion-tick boundaries, and expose one debugger-readable volatile report with a versioned fixed ABI. Use host tests for counter arithmetic, ABI contracts, and compile contracts, then run identical-ELF runtime-selector CPG/SimpleGait target trials under normal and reduced optional-telemetry diagnostic conditions. Treat scope and electrical measurements as separate evidence.
+**Architecture:** Keep app_main as the only cooperative scheduler. Add a disabled-by-default STM32F407 DWT counter module under the neutral Core/Diagnostics layer, place no-op hooks around existing app-loop, queue-drain, host-TX, and accepted Motion-tick boundaries, and expose one debugger-readable volatile report with a versioned fixed ABI. Begin and freeze one report per accepted Motion trial, retain interval-local causal context, and use host tests for counter arithmetic, ABI contracts, lifecycle, and compile contracts. Then run identical-ELF runtime-selector CPG/SimpleGait target trials under normal and reduced optional-telemetry diagnostic conditions. Treat scope and electrical measurements as separate evidence.
 
 **Tech Stack:** C11, host GCC, existing Firmware host PowerShell runner, STM32F407 CMSIS DWT/CYCCNT, CMake/Ninja, arm-none-eabi toolchain, debugger/OpenOCD symbol readout, Markdown.
 
 **Implementation status (2026-09-15):** Tasks 1-5 are implemented on this
-branch: the neutral diagnostics module, fixed ABI report, compile-gated reduced
-telemetry condition, observational app/Motion hooks, host regressions, and
-fixed-offset readout helper are present. The Firmware host gate passes with 33
+branch: the neutral diagnostics module, ABI v3 fixed report, compile-gated
+reduced-telemetry condition, per-trial begin/freeze lifecycle, interval-local
+worst-gap context, observational app/Motion hooks, host regressions, and
+fixed-offset readout helper are present. The Firmware host gate passes with 34
 executables and 13 diagnostics/app/backend/benchmark compile contracts. The
 ARM/OpenOCD toolchain is unavailable in this environment, so Task 6 target
 images and A/B measurements remain NOT RUN; physical waveform, HAL tick,
@@ -126,19 +127,25 @@ uint32_t reset_marker;
   `{ uint32_t lo; uint32_t hi; }` totals. Do not use pointers, `size_t`,
   `bool`, bit-fields, variable-length members, or compiler-dependent padding
   as part of the ABI. Include loop, three RX-drain, four TX-class, requested
-  elapsed, accepted Motion-tick interval, Motion span, histogram, saturation,
-  and diagnostic-wrap fields. Define the histogram bucket order in the header.
+  elapsed, accepted Motion-tick interval, Motion span, optional meaningful
+  millisecond histogram, saturation, and diagnostic-wrap fields. Define the
+  histogram bucket order and cycle-distribution no-histogram rule in the
+  header.
 - [ ] Add C11 `_Static_assert` checks for the expected `sizeof` and critical
   `offsetof` values: every header word, the first counter group, Motion gap
   counters, and the final report size. Increment the ABI version whenever the
   layout changes.
-  ABI v2 is currently 1172 bytes with top-level offsets
+  ABI v3 is 1300 bytes with top-level offsets
   `app_loop_body=32`, `app_loop_interval=92`, `rx_drain=152`, `tx=368`,
-  `motion=704`, saturation=1160, counter-wrap=1164, and invalid=1168. Distribution
-  histograms use the fixed inclusive buckets `<=10`, `11..20`, `21..50`,
-  `51..100`, `101..500`, `501..1000`, `1001..5000`, `>5000` in recorded value
-  units. A zero `SystemCoreClock` increments the invalid counter, retains the
-  raw cycle interval, and does not classify millisecond gap thresholds.
+  `motion=704`, saturation=1160, counter-wrap=1164, and invalid=1168;
+  `run_state=1172`, `termination_reason=1176`, and
+  `worst_gap_context=1180`. Millisecond-valued distributions use the fixed
+  inclusive buckets `<=10`, `11..20`, `21..50`, `51..100`, `101..500`,
+  `501..1000`, `1001..5000`, `>5000` in milliseconds. Cycle-valued
+  distributions retain count/min/max/total/worst only; their histogram entries
+  remain zero and no cycle median/percentile is claimed. A zero
+  `SystemCoreClock` increments the invalid counter, retains the raw cycle
+  interval, and does not classify millisecond gap thresholds.
 - [ ] Implement initialization only in the ON path. Enable
   CoreDebug->DEMCR.TRCENA, clear DWT->CYCCNT, enable
   DWT_CTRL_CYCCNTENA_Msk, and use barriers matching the existing
@@ -146,11 +153,13 @@ uint32_t reset_marker;
 - [ ] Use 32-bit unsigned subtraction for each short span and explicit
   lo/hi accumulators for totals. Do not keep a span open for 25.56 seconds at
   168 MHz, and expose any saturating/invalid condition in the report.
-- [ ] Implement fixed distributions as count/min/max/total plus a fixed
-  histogram and, for interval measurements, a worst-interval field. Do not
-  calculate or store an exact streaming median. Record Motion actual interval
-  evidence as max gap and strict `>10`, `>12`, `>15`, `>20`, and `>30` ms
-  counters; threshold equality does not increment the bucket.
+- [ ] Implement fixed distributions as count/min/max/total plus a meaningful
+  fixed histogram only for millisecond-valued fields and, for interval
+  measurements, a worst-interval field. Cycle-valued fields retain no
+  histogram and expose an average derived from total/count. Do not calculate
+  or store an exact streaming median. Record Motion actual interval evidence
+  as max gap and strict `>10`, `>12`, `>15`, `>20`, and `>30` ms counters;
+  threshold equality does not increment the bucket.
 - [ ] Keep all report updates in foreground code. Do not allocate, print,
   transmit, enqueue, dequeue, disable Safety, or inspect a queue from the
   diagnostic module.
@@ -214,6 +223,17 @@ uint32_t reset_marker;
 - [ ] If nested spans are added, place them only around the existing generator
   advance, sample, and target-application calls. Do not add a second advance,
   sample, Servo write, or scheduler pass.
+- [ ] Add the diagnostic-only trial lifecycle: initialize an IDLE report at app
+  startup; call `begin_run(current_backend)` only after a successful Motion
+  START accepted from STOPPED; clear counters and marks, increment run/reset
+  markers, and begin recording without resetting DWT or starting Motion. Freeze
+  at accepted normal STOP or immediate Safety/fault termination, retain the
+  termination reason, and make all later hooks no-ops until the next trial.
+- [ ] Add a fixed RAM-only accumulator between accepted Motion ticks for the
+  three RX byte/cycle classes and four TX call/byte/cycle classes. Snapshot it
+  only when a new worst gap is observed, together with interval cycles/ms,
+  requested elapsed_ms, backend, and previous tick duration, then reset it for
+  the next interval. Do not allocate, print, transmit, or alter scheduling.
 - [ ] Confirm the OFF compile path removes all hook work and that the original
   host tests still pass unchanged. The new integration test must pass in both
   OFF and ON host compile-contract configurations.
@@ -235,7 +255,7 @@ Safety action, UART status, or telemetry policy.
   arm-none-eabi-nm and fail if the symbol or tool is absent.
 - [ ] Keep target connection/read commands explicit and visible. Read the
   fixed report memory, validate `magic`, `abi_version`, and `report_size`
-  before decoding any other field, then decode the fixed offsets from the
+  before decoding any other field, require `run_state=FROZEN`, then decode the fixed offsets from the
   public ABI and write raw counters to a local file with branch SHA and trial
   metadata. The helper accepts caller-supplied trial id, workload, diagnostic
   condition, toolchain, CMake generator, build type, linker script, and
@@ -245,6 +265,12 @@ Safety action, UART status, or telemetry policy.
 - [ ] Refuse to fall back to UART, Protocol V2, printf, or a host executable
   when target tools are missing. A debugger Watch/Expressions read of the
   same volatile symbol is the documented fallback.
+- [ ] Require the live helper caller to finish the exercise, send normal Motion
+  STOP (or use an already-recorded Safety/fault termination), and allow the
+  actuator-safe stop path before halting for readout. After dumping, issue
+  `reset run` so the target returns to the normal stopped startup state. The
+  helper must not send a diagnostic UART command or use active-motion halt as
+  the measurement-ending mechanism.
 - [ ] Add a dry-run or argument-validation check that proves missing
   arm-none-eabi-nm, OpenOCD, ELF, and symbol conditions fail loudly.
 
@@ -306,8 +332,9 @@ arm-none-eabi-size $diagBuild\RoboBeetleFirmware.elf
 - [ ] For each runnable cell, perform three fixed-duration trials of 60
   seconds unless a target constraint is recorded. Use the same board,
   actuator power, sensor streams, host command pattern, and normal
-  Heartbeat cadence. Halt/read the report after each trial and preserve raw
-  values.
+  Heartbeat cadence. Complete each trial with normal Motion STOP, wait for the
+  safe stop path, then halt/read the frozen report and reset/run the target;
+  preserve raw values.
 - [ ] Never disable the Heartbeat or Safety path to reduce load. Do not change
   MOTION_GAIT_TICK_MS, UART baud, queue behavior, foreground order, or
   optional telemetry policy in the production image.
@@ -346,11 +373,10 @@ logical target cadence and from water behavior.
 
 - [ ] Compare A against B under normal load, then C against D under the same
   reduced-telemetry condition. Report raw count/min/max/total/worst interval
-  and fixed-histogram values for loop intervals, each drain, TX class, Motion
-  tick intervals, requested elapsed_ms, and Motion spans. Any median or
-  percentile shown by host tooling must be explicitly labeled approximate and
-  derived from the fixed histogram, never exact unless raw samples were
-  deliberately stored.
+  and millisecond histograms for requested elapsed and Motion interval values.
+  Report cycle distributions using count/min/max/total/worst and an average
+  derived from total/count; do not claim a cycle median/percentile from the
+  millisecond histogram. Include the fixed worst-gap context when available.
 - [ ] Use the approved interpretation rules: both backends jitter implies a
   communication/foreground candidate; normal-load gaps that disappear under
   reduced optional telemetry implicate TX/telemetry; stable logical cadence
@@ -388,5 +414,8 @@ or stutter/jitter fix is present.
   this investigation.
 - [ ] Confirm no safety heartbeat is disabled or bypassed in any runnable
   diagnostic cell.
+- [ ] Confirm every report is a single frozen trial: run 2 counters do not
+  include run 1, frozen reports are unchanged by later loops/ACKs/reconnects,
+  and the worst-gap context contains only the immediately preceding interval.
 - [ ] Confirm the branch remains independent from the merged selector branch
   and that no pull request is merged as part of this investigation plan.

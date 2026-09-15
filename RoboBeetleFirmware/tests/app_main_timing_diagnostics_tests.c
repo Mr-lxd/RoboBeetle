@@ -136,6 +136,8 @@ int main(void)
         0U);
     expect(motion_timing_report_is_valid(&motion_timing_report),
            "app_main init must initialize timing diagnostics");
+    motion_timing_diagnostics_begin_run(
+        MOTION_GAIT_BACKEND_CPG_VALUE);
 
     app_main_process();
     app_main_process();

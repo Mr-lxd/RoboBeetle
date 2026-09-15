@@ -34,6 +34,11 @@ int main(void)
     expect((motion_timing_report.diagnostic_flags &
             MOTION_TIMING_DIAGNOSTIC_FLAG_ENABLED) != 0U,
            "diagnostic init must publish enabled flag");
+    motion_timing_diagnostics_begin_run(
+        MOTION_GAIT_BACKEND_SIMPLE_GAIT_VALUE);
+    expect(motion_timing_report.run_state ==
+               MOTION_TIMING_RUN_STATE_RUNNING,
+           "begin_run must enable diagnostic hooks");
 
     mark = motion_timing_diagnostics_loop_begin();
     motion_timing_diagnostics_record_rx(

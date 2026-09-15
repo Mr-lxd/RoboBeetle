@@ -667,6 +667,10 @@ motion_manager_result_t motion_manager_start(
     joint_targets_t start_targets;
     uint16_t required_mask;
     motion_manager_result_t result;
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    const bool start_from_stopped =
+        (manager != NULL) && (manager->state == MOTION_STATE_STOPPED);
+#endif
 
     if ((manager == NULL) || !motion_mode_is_valid(mode) ||
         (mode == MOTION_STOP))
@@ -777,6 +781,13 @@ motion_manager_result_t motion_manager_start(
     manager->start_from_targets = start_targets;
     manager->stop_start_targets = start_targets;
     manager->scheduler_started = 0U;
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    if (start_from_stopped)
+    {
+        motion_timing_diagnostics_begin_run(
+            (uint32_t)manager->gait_backend);
+    }
+#endif
     return MOTION_MANAGER_RESULT_OK;
 }
 
@@ -819,6 +830,10 @@ motion_manager_result_t motion_manager_request_stop_at(
     manager->last_tick_ms = now_ms;
     manager->scheduler_started = 1U;
     manager->state = MOTION_STATE_STOPPING;
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_freeze(
+        MOTION_TIMING_TERMINATION_NORMAL_STOP);
+#endif
     return MOTION_MANAGER_RESULT_OK;
 }
 
@@ -839,6 +854,10 @@ motion_manager_result_t motion_manager_process(
     if ((manager->safety_supervisor != NULL) &&
         !safety_supervisor_is_host_alive(manager->safety_supervisor))
     {
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+        motion_timing_diagnostics_freeze(
+            MOTION_TIMING_TERMINATION_SAFETY_STOP);
+#endif
         motion_manager_stop_immediate(manager);
         return MOTION_MANAGER_RESULT_HOST_NOT_ALIVE;
     }
@@ -885,6 +904,14 @@ void motion_manager_stop_immediate(
     {
         return;
     }
+
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    if (was_active)
+    {
+        motion_timing_diagnostics_freeze(
+            MOTION_TIMING_TERMINATION_FAULT);
+    }
+#endif
 
     if (manager->servo_service != NULL)
     {

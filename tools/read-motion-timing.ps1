@@ -32,7 +32,9 @@ param(
 
     [string]$LinkerScript = '',
 
-    [string]$ImageSize = ''
+    [string]$ImageSize = '',
+
+    [switch]$StopConfirmed
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,12 +59,17 @@ function Read-U32 {
 function Read-Dist {
     param(
         [byte[]]$Bytes,
-        [int]$Offset
+        [int]$Offset,
+        [string]$ValueUnit = 'cycles'
     )
 
     $histogram = @()
     for ($index = 0; $index -lt 8; ++$index) {
         $histogram += Read-U32 $Bytes ($Offset + 24 + (4 * $index))
+    }
+    $histogramUnit = 'reserved'
+    if ($ValueUnit -eq 'milliseconds') {
+        $histogramUnit = 'milliseconds'
     }
 
     return [ordered]@{
@@ -72,8 +79,22 @@ function Read-Dist {
         total_lo = Read-U32 $Bytes ($Offset + 12)
         total_hi = Read-U32 $Bytes ($Offset + 16)
         worst_interval_value = Read-U32 $Bytes ($Offset + 20)
+        value_unit = $ValueUnit
+        histogram_unit = $histogramUnit
         histogram = $histogram
         saturated_count = Read-U32 $Bytes ($Offset + 56)
+    }
+}
+
+function Read-U64Pair {
+    param(
+        [byte[]]$Bytes,
+        [int]$Offset
+    )
+
+    return [ordered]@{
+        lo = Read-U32 $Bytes $Offset
+        hi = Read-U32 $Bytes ($Offset + 4)
     }
 }
 
@@ -109,12 +130,15 @@ if ($symbolMatches.Count -ne 1) {
 $reportAddress = [Convert]::ToUInt32(
     $symbolMatches[0].Groups[1].Value,
     16)
-$reportSize = 1172
+$reportSize = 1300
 $temporaryDump = $false
 
 if ([string]::IsNullOrWhiteSpace($RawReportPath)) {
+    if (-not $StopConfirmed) {
+        Stop-WithError 'a live read requires a completed exercise and an accepted normal Motion STOP; pass -StopConfirmed only after the actuator-safe stop path has completed'
+    }
     if ($OpenOcdArgs.Count -eq 0) {
-        Stop-WithError 'OpenOCD arguments are required for a live read; use -RawReportPath for an existing debugger dump'
+        Stop-WithError 'OpenOCD arguments are required for a live read; use -RawReportPath for an existing frozen debugger dump'
     }
 
     $openOcd = Get-Command $OpenOcdPath -ErrorAction SilentlyContinue
@@ -124,7 +148,7 @@ if ([string]::IsNullOrWhiteSpace($RawReportPath)) {
 
     $RawReportPath = [IO.Path]::GetTempFileName()
     $temporaryDump = $true
-    $dumpCommand = 'init; halt; dump_image "{0}" 0x{1:X8} {2}; shutdown' -f `
+    $dumpCommand = 'init; halt; dump_image "{0}" 0x{1:X8} {2}; reset run; shutdown' -f `
         $RawReportPath,
         $reportAddress,
         $reportSize
@@ -151,7 +175,7 @@ try {
     }
 
     $abiVersion = Read-U32 $bytes 4
-    if ($abiVersion -ne 2) {
+    if ($abiVersion -ne 3) {
         Stop-WithError "report ABI version mismatch: $abiVersion"
     }
 
@@ -159,6 +183,12 @@ try {
     if ($declaredSize -ne $reportSize) {
         Stop-WithError "report size mismatch: declared $declaredSize, expected $reportSize"
     }
+
+    $runState = Read-U32 $bytes 1172
+    if ($runState -ne 2) {
+        Stop-WithError "report is not frozen (run_state=$runState); finish the exercise and accept Motion STOP or a safety termination before readout"
+    }
+    $terminationReason = Read-U32 $bytes 1176
 
     $rxNames = @('host', 'jy901s', 'depth')
     $rxReports = [ordered]@{}
@@ -191,9 +221,9 @@ try {
     $motion = [ordered]@{
         accepted_tick_count = Read-U32 $bytes $motionBase
         last_elapsed_ms = Read-U32 $bytes ($motionBase + 4)
-        requested_elapsed_ms = Read-Dist $bytes ($motionBase + 8)
+        requested_elapsed_ms = Read-Dist $bytes ($motionBase + 8) 'milliseconds'
         actual_interval_cycles = Read-Dist $bytes ($motionBase + 68)
-        actual_interval_ms = Read-Dist $bytes ($motionBase + 128)
+        actual_interval_ms = Read-Dist $bytes ($motionBase + 128) 'milliseconds'
         gap_gt_10_ms_count = Read-U32 $bytes ($motionBase + 188)
         gap_gt_12_ms_count = Read-U32 $bytes ($motionBase + 192)
         gap_gt_15_ms_count = Read-U32 $bytes ($motionBase + 196)
@@ -205,6 +235,34 @@ try {
         apply_cycles = Read-Dist $bytes ($motionBase + 388)
         result_ok_count = Read-U32 $bytes ($motionBase + 448)
         result_error_count = Read-U32 $bytes ($motionBase + 452)
+    }
+
+    $contextBase = 1180
+    $rxContextBytes = @()
+    $rxContextCycles = @()
+    for ($index = 0; $index -lt 3; ++$index) {
+        $rxContextBytes += Read-U32 $bytes ($contextBase + 20 + (4 * $index))
+        $rxContextCycles += Read-U64Pair $bytes ($contextBase + 32 + (8 * $index))
+    }
+    $txContextCalls = @()
+    $txContextBytes = @()
+    $txContextCycles = @()
+    for ($index = 0; $index -lt 4; ++$index) {
+        $txContextCalls += Read-U32 $bytes ($contextBase + 56 + (4 * $index))
+        $txContextBytes += Read-U32 $bytes ($contextBase + 72 + (4 * $index))
+        $txContextCycles += Read-U64Pair $bytes ($contextBase + 88 + (8 * $index))
+    }
+    $worstGapContext = [ordered]@{
+        interval_cycles = Read-U32 $bytes $contextBase
+        interval_ms = Read-U32 $bytes ($contextBase + 4)
+        requested_elapsed_ms = Read-U32 $bytes ($contextBase + 8)
+        runtime_backend = Read-U32 $bytes ($contextBase + 12)
+        previous_tick_duration_cycles = Read-U32 $bytes ($contextBase + 16)
+        rx_byte_count = $rxContextBytes
+        rx_cycles = $rxContextCycles
+        tx_call_count = $txContextCalls
+        tx_byte_count = $txContextBytes
+        tx_cycles = $txContextCycles
     }
 
     $branch = $BranchSha
@@ -240,6 +298,8 @@ try {
         runtime_backend = Read-U32 $bytes 20
         run_marker = Read-U32 $bytes 24
         reset_marker = Read-U32 $bytes 28
+        run_state = $runState
+        termination_reason = $terminationReason
         app_loop_body = Read-Dist $bytes 32
         app_loop_interval = Read-Dist $bytes 92
         rx_drain = $rxReports
@@ -248,6 +308,7 @@ try {
         diagnostic_saturation_count = Read-U32 $bytes 1160
         diagnostic_counter_wrap_count = Read-U32 $bytes 1164
         diagnostic_invalid_count = Read-U32 $bytes 1168
+        worst_gap_context = $worstGapContext
         raw_report_path = (Resolve-Path -LiteralPath $RawReportPath).Path
     }
 

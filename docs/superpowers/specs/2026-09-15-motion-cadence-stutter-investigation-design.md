@@ -276,7 +276,8 @@ and not inferred from a host clock.
 
 Diagnostics are updated in the cooperative foreground context. The design
 does not add a diagnostic ISR, lock, printf, or transport. The volatile report
-is halted/read by a debugger after a defined exercise window.
+is frozen by normal STOP or Safety/fault termination, then halted/read by a
+debugger only after the actuator-safe stop path.
 
 ### Counter definitions
 
@@ -285,14 +286,15 @@ work, Motion work, and physical follow-up:
 
 | Counter group | Required fields and definition |
 | --- | --- |
-| App loop | pass count; body duration count/min/max/total cycles; interval count/min/max/total cycles; worst interval; fixed histogram |
-| Host USART1 RX drain | drain-call count; bytes popped; nonempty-drain count; duration count/min/max/total cycles; fixed histogram |
-| JY901S USART3 drain | same fields, plus parser event/error counters copied only if already available without a new telemetry surface |
-| Depth USART6 drain | same fields, plus existing parser/error counters copied only if already available without a new telemetry surface |
-| Host TX | call count, bytes, status, duration count/min/max/total cycles by ACK, LEAK, IMU, and DEPTH; timeout/error count |
-| Motion tick | tick count at the exact motion_manager_tick() invocation; requested elapsed_ms distribution; actual tick-to-tick interval count/min/max/total cycles; worst interval; fixed histogram; strict gap buckets above 10, 12, 15, 20, and 30 ms |
-| Motion span | duration count/min/max/total cycles for motion_manager_tick(); generator advance span where separable; target sample/apply span where separable; returned result count |
-| Run identity | diagnostics version, SystemCoreClock, backend label, build/configuration flags, and explicit run/reset markers |
+| App loop | pass count; body duration count/min/max/total cycles; interval count/min/max/total cycles; worst interval |
+| Host USART1 RX drain | drain-call count; bytes popped; nonempty-drain count; duration count/min/max/total cycles; no cycle histogram |
+| JY901S USART3 drain | same fields, plus parser event/error counters copied only if already available without a new telemetry surface; duration is cycle-only with no histogram |
+| Depth USART6 drain | same fields, plus existing parser/error counters copied only if already available without a new telemetry surface; duration is cycle-only with no histogram |
+| Host TX | call count, bytes, status, duration count/min/max/total cycles by ACK, LEAK, IMU, and DEPTH; timeout/error count; no cycle histogram |
+| Motion tick | tick count at the exact motion_manager_tick() invocation; requested elapsed_ms distribution; actual tick-to-tick interval count/min/max/total cycles and milliseconds; worst interval; meaningful millisecond histogram only; strict gap buckets above 10, 12, 15, 20, and 30 ms |
+| Motion span | duration count/min/max/total cycles for motion_manager_tick(); generator advance span where separable; target sample/apply span where separable; returned result count; no cycle histogram |
+| Run identity | diagnostics version, SystemCoreClock, backend label, build/configuration flags, explicit run/reset markers, run state, and termination reason |
+| Worst-gap context | fixed-size snapshot of the communication work accumulated since the immediately preceding accepted Motion tick, captured only when a new worst gap is observed |
 
 The TX classification is attached at the existing protocol_send_ack,
 protocol_send_leak_status, protocol_send_imu_snapshot, and
@@ -304,11 +306,17 @@ a tick, not on every motion_manager_process() call. The report retains both
 the actual tick interval and the elapsed_ms argument so a delayed call is not
 confused with a normal 10 ms check that returned early.
 
-Every distribution uses fixed-width fields: count, minimum, maximum, total,
-and a fixed histogram. Interval distributions additionally expose their worst
-interval. There is no exact streaming median requirement and no dynamic
-allocation. Host tooling may derive an approximate median or percentile from
-the fixed histogram, but raw samples are not implied by that estimate.
+Every distribution uses fixed-width fields: count, minimum, maximum, total, and
+an optional meaningful histogram. There is no exact streaming median
+requirement and no dynamic allocation. Millisecond-valued distributions use
+the fixed inclusive buckets `<=10`, `11..20`, `21..50`, `51..100`, `101..500`,
+`501..1000`, `1001..5000`, and `>5000`, with bucket units explicitly being
+milliseconds. Cycle-valued distributions retain count/min/max/total and worst
+interval, but their histogram entries are reserved and remain zero; an average
+is derived from total/count. Host tooling must not claim a meaningful cycle
+median or percentile from the millisecond histogram. A millisecond median or
+percentile derived from those fixed buckets is approximate only, because raw
+samples are not stored.
 
 For Motion cadence, the required directly reportable evidence is the maximum
 gap and counts for intervals strictly greater than 10 ms, 12 ms, 15 ms,
@@ -318,6 +326,45 @@ rather than silently wrapping a statistic.
 
 The fixed histogram bucket definitions and report field order are part of the
 report ABI below; they are not implementation-private choices.
+
+### Per-trial lifecycle and causal context
+
+`motion_timing_diagnostics_init()` runs once during application startup. It
+initializes an IDLE report and enables the target DWT counter for the
+diagnostic image; it does not define a measurement trial. The DWT counter is
+not reset between trials.
+
+Each trial follows the existing Motion safety contract:
+
+~~~text
+backend selected while STOPPED
+    -> successful Motion START accepted from STOPPED
+    -> diagnostics begin_run(current_backend)
+    -> clear report, interval marks, and context accumulator
+    -> increment run/reset markers and record
+    -> Motion remains under the existing scheduler
+~~~
+
+`begin_run()` resets only diagnostic report state and bookkeeping. It does not
+write Servos, start Motion, advance a generator, or make a scheduler decision.
+The successful START path owns the call so a failed or idempotent START cannot
+create a trial.
+
+A normal STOP freezes the report when the stop request is accepted. An
+immediate Safety or fault stop freezes it with the corresponding termination
+reason before the actuator-safe stop path completes. Once frozen, diagnostic
+hooks, later application loops, ACKs, and reconnect traffic cannot modify the
+report. The next successful START from STOPPED explicitly begins a fresh trial,
+so a later SimpleGait run cannot contain counters from a prior CPG run.
+
+Between accepted Motion ticks, a fixed RAM-only context accumulator collects
+Host/JY901S/Depth RX bytes and cycles plus ACK/Leak/IMU/Depth TX calls, bytes,
+and cycles. At the next accepted tick, the accumulator is reset for the new
+interval after any new-worst snapshot is copied to `worst_gap_context`. The
+snapshot also records interval cycles/milliseconds, requested `elapsed_ms`,
+the runtime backend, and the previous tick duration. This is observational
+causal context only: it allocates no heap memory, emits no UART traffic, and
+does not alter cadence, scheduling, Safety, or actuator output.
 
 ### Fixed debugger/OpenOCD report ABI
 
@@ -345,21 +392,24 @@ bit-fields, or variable-length members. The implementation must include C11
 the header fields, the first counter group, the Motion gap counters, and the
 end of the report. A change to the layout requires a new ABI version.
 
-The report initialization writes `magic`, `abi_version`, `report_size`,
-`SystemCoreClock`, diagnostic flags, runtime backend, and a new reset/run
-marker before counters are collected. The report is `volatile` for debugger
-readout, but its contents are otherwise RAM-only.
+Report initialization writes `magic`, `abi_version`, `report_size`,
+`SystemCoreClock`, diagnostic flags, runtime backend, and the reset marker. The
+subsequent `begin_run()` writes the fresh run marker and changes the explicit
+run state from IDLE to RUNNING before counters are collected. The report is
+`volatile` for debugger readout, but its contents are otherwise RAM-only.
 
-ABI v2 currently fixes `report_size` at 1172 bytes. The fixed top-level
-offsets are: `app_loop_body` 32, `app_loop_interval` 92, `rx_drain` 152,
-`tx` 368, `motion` 704, `diagnostic_saturation_count` 1160, and
+ABI v3 fixes `report_size` at 1300 bytes. The existing top-level offsets are:
+`app_loop_body` 32, `app_loop_interval` 92, `rx_drain` 152, `tx` 368,
+`motion` 704, `diagnostic_saturation_count` 1160,
 `diagnostic_counter_wrap_count` 1164, and `diagnostic_invalid_count` 1168.
-Each distribution is 60 bytes and its
-histogram buckets are, in order, `<=10`, `11..20`, `21..50`, `51..100`,
-`101..500`, `501..1000`, `1001..5000`, and `>5000` in the distribution's
-recorded value units. These values are duplicated in the public header's
-static ABI contract and in the readout decoder; changing them requires a new
-ABI version.
+The appended fixed fields are `run_state` at 1172,
+`termination_reason` at 1176, and `worst_gap_context` at 1180. The context is
+120 bytes with `interval_cycles` 0, `interval_ms` 4,
+`requested_elapsed_ms` 8, `runtime_backend` 12,
+`previous_tick_duration_cycles` 16, RX byte counts 20, RX cycle pairs 32,
+TX call counts 56, TX byte counts 72, and TX cycle pairs 88. Each distribution
+is 60 bytes. The header's static assertions and the readout decoder duplicate
+these fixed values; changing them requires a new ABI version.
 
 `diagnostic_invalid_count` records diagnostic inputs that cannot be converted
 reliably, such as a zero `SystemCoreClock` while converting a cycle interval.
@@ -368,11 +418,12 @@ classified from that sample; the invalid condition remains visible in the
 report.
 
 The readout helper must read and validate `magic`, `abi_version`, and
-`report_size` before decoding any remaining field. A mismatch fails loudly
-and produces no interpreted timing result. The helper uses the public ABI
-field offsets or a fixed byte decoder generated from the same documented
-layout; it never infers offsets from `nm`, host compiler packing, or a guessed
-struct definition.
+`report_size` before decoding any remaining field. It must then require
+`run_state == FROZEN`; an IDLE or RUNNING report is not a completed timing
+result. A mismatch or non-frozen report fails loudly. The helper uses the
+public ABI field offsets or a fixed byte decoder generated from the same
+documented layout; it never infers offsets from `nm`, host compiler packing,
+or a guessed struct definition.
 
 ### Instrumentation placement
 
@@ -402,18 +453,25 @@ The preferred command-line path, if the target tools are available, is:
 1. build an ON diagnostic ELF with the exact branch SHA and configuration;
 2. use arm-none-eabi-nm to resolve the report symbol and
    arm-none-eabi-size to record image sizes;
-3. halt the STM32F407 after the fixed exercise window;
-4. read the report through an OpenOCD/debugger memory command or inspect the
-   symbol in the debugger;
+3. finish the fixed exercise and send a normal Motion STOP; wait for the
+   existing actuator-safe stop path, or use an already-recorded immediate
+   Safety/fault termination;
+4. halt the STM32F407 only after the report is frozen, then read the report
+   through an OpenOCD/debugger memory command or inspect the symbol in the
+   debugger;
 5. save raw counter values together with clock, backend, workload, trial, and
-   board metadata.
+   board metadata;
+6. reset and run the target to return it to the normal stopped startup state.
 
-A future tools/read-motion-timing.ps1 may automate symbol lookup and
-debugger/OpenOCD readout, but it must fail loudly when
+`tools/read-motion-timing.ps1` automates symbol lookup and debugger/OpenOCD
+readout. A live read requires an explicit `-StopConfirmed` acknowledgement of
+the preceding safe-stop procedure, and the helper must fail loudly when
 arm-none-eabi-nm, OpenOCD, the ELF symbol, or the target connection is missing.
-It must never fall back to UART printing or claim a target result from a host
-executable. If OpenOCD is unavailable, a debugger Watch/Expressions read of
-the same volatile symbol is the approved fallback.
+The helper's halt is therefore a readout step, not the normal measurement
+ending mechanism. It must never send diagnostic UART traffic, fall back to
+UART printing, or claim a target result from a host executable. If OpenOCD is
+unavailable, a debugger Watch/Expressions read of the same frozen volatile
+symbol is the approved fallback.
 
 At this design baseline, arm-none-eabi-gcc.exe, arm-none-eabi-size.exe, and
 openocd.exe are not available in the current Codex environment. No target
@@ -436,8 +494,9 @@ the experimental backend. The compile-time default remains the production
 CPG contract; it is not the A/B experimental variable.
 
 Each cell must include at least three fixed-duration trials and preserve raw
-reports; the implementation runbook will use 60 seconds per trial unless a
-reviewed target constraint requires a shorter, explicitly recorded window.
+reports. Every trial must use the begin-run/normal-STOP freeze lifecycle; the
+implementation runbook will use 60 seconds per trial unless a reviewed target
+constraint requires a shorter, explicitly recorded window.
 
 | Cell | Backend | Communication condition | Purpose |
 | --- | --- | --- | --- |
