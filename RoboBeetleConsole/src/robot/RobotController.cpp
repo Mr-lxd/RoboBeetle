@@ -1160,7 +1160,7 @@ void RobotController::handleAck(const Packet &packet)
         clearDisablePending();
         setEnabledMask(static_cast<quint16>(enabledMask_ & ~request->servoMask));
     } else if (isGaitBackendRequest) {
-        clearGaitBackendPending();
+        pendingGaitBackend_.reset();
         confirmedGaitBackend_ = *request->gaitBackendRequest;
         emit gaitBackendStateChanged();
     } else if (request->type == MessageType::SetMotionMode
