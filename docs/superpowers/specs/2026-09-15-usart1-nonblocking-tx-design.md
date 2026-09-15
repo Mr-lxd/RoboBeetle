@@ -132,6 +132,16 @@ logical frame and at most 68 wire bytes, about 70.83 ms. A four-byte ACK is at
 most 16 wire bytes, about 16.67 ms. These are physical serialization bounds,
 not foreground time after the migration.
 
+The current Qt APC220 source profile is also explicit: `heartbeatIntervalMs`
+is 250 ms, `ackTimeoutMs` is 250 ms, and `heartbeatSafetyBudgetMs` is 490 ms.
+At 9600 8-N-1, one maximum 76-byte active frame followed by one maximum
+16-byte ACK has a serializer bound of about `79.17 + 16.67 = 95.84 ms`.
+Therefore the current 250 ms ACK timeout has arithmetic margin for that one
+non-preemptible frame followed by its ACK. This is a UART serialization bound,
+not a measured APC220 RF turnaround or end-to-end latency result; module/RF
+turnaround remains outside this calculation. This design does not change the
+baud rate or any Qt timeout/budget value.
+
 An ACK arriving immediately after a telemetry frame begins cannot preempt
 that frame. It waits for one active frame to finish, then is selected ahead of
 waiting telemetry. Optional telemetry coalescing reduces future backlog but
@@ -282,9 +292,20 @@ Exact handling:
   continue; its ORE path ends RX but does not own/release TX. Thus
   `HAL_UART_ErrorCallback()` records the USART1 error and leaves active TX
   ownership intact. It does not encode, parse, drain, or call blocking abort.
+* USART1 RX ownership is explicit. The transport keeps `rx_armed` and
+  `rx_needs_rearm`; only a successful `HAL_UART_Receive_IT()` sets
+  `rx_armed`. PE/FE/NE while HAL keeps RX active are recorded without
+  unnecessarily tearing down/rearming the working transfer. ORE, or any HAL
+  error callback observed after HAL has ended the RX transfer, clears
+  `rx_armed` and sets `rx_needs_rearm`. The error callback does not rearm from
+  ISR context. One bounded foreground `uart_transport_stm32_process()` pass
+  attempts at most one `HAL_UART_Receive_IT()` rearm: `HAL_BUSY` leaves the
+  request pending for a later pass, while `HAL_ERROR` leaves it pending and
+  increments a rearm-error diagnostic. TX active ownership is unchanged.
 * `HAL_UART_AbortTransmitCpltCallback()` is used only by explicit foreground
-  reinitialization. It releases the aborted active slot, drops all pending
-  slots with per-kind counts, resets to IDLE, and never replays old bytes.
+  reinitialization. It releases the aborted active or `START_DEFERRED`
+  promoted slot, drops all ordinary pending slots with per-kind counts, resets
+  to IDLE, and never replays old bytes.
 
 The transport never calls blocking `HAL_UART_AbortTransmit()` from an ISR.
 `HAL_UART_AbortTransmit_IT()` is only a foreground reinitialization action.
@@ -297,14 +318,44 @@ reset:
 
 1. Foreground enters `REINITIALIZING`; new enqueue calls return
    `UART_TX_TRANSPORT_ERROR` without changing protocol, Motion, or safety
-   state.
-2. If active, foreground calls `HAL_UART_AbortTransmit_IT()` outside the
-   critical section and keeps active bytes owned until abort completion.
-3. If no active frame exists, pending frames are dropped immediately. An
-   immediate abort failure leaves all ownership intact for retry.
-4. Abort completion drops active/pending frames once, preserves cumulative
-   diagnostics, re-enters IDLE, and does not replay. USART3/USART6 and the
-   existing USART1 RX ring policy are untouched.
+   state. A `START_DEFERRED` promoted slot is transport-owned but not
+   physically active; it is not an ordinary pending frame and is included in
+   the reinitialization cleanup.
+2. Before calling `HAL_UART_AbortTransmit_IT()`, the transport prepares the
+   complete `REINITIALIZING` ownership state under the critical section:
+   `reinit_completion_handled` is false, the reinitialization epoch is
+   advanced, and all active/promoted and pending ownership is still visible to
+   the one cleanup path. The HAL call is made outside the critical section.
+3. In the current IT-only HAL path, `HAL_UART_AbortTransmit_IT()` may invoke
+   `HAL_UART_AbortTransmitCpltCallback()` synchronously before it returns
+   `HAL_OK`. The callback therefore calls an idempotent
+   `finish_reinitialize_once()` path. It marks completion handled before
+   releasing the active/`START_DEFERRED` slot and pending slots, increments
+   each drop diagnostic once, preserves cumulative counters, clears the
+   reinitialization markers, and enters `IDLE` with no replay. If the callback
+   has already run inline, code after the HAL call performs no second cleanup.
+4. A later or duplicate abort callback sees that the transport is no longer
+   awaiting this reinitialization (or that completion is already handled), is
+   counted as unexpected, and cannot release or mutate a newly enqueued frame.
+   This remains true if a test double invokes the callback twice inline before
+   returning and invokes it again after a fresh enqueue.
+5. If there is no active/promoted ownership, pending frames are finalized by
+   the same once-only cleanup path without a HAL abort. If an abort call
+   returns an error before a callback, the path finalizes local ownership once;
+   a `HAL_BUSY` abort is retried from bounded foreground processing no more
+   than `UART_TX_MAX_REINITIALIZE_ABORT_BUSY_RETRIES` times, then performs the
+   same no-replay local cleanup and records recovery failure. No callback or
+   return path may release a slot twice.
+6. Persistent `HAL_BUSY` while starting a `START_DEFERRED` frame cannot wedge
+   it forever. After exactly
+   `UART_TX_MAX_CONSECUTIVE_START_BUSY` one-at-a-time start attempts (the v1
+   policy value is 8), the transport increments `busy_recovery_count`, enters
+   the same explicit reinitialization path, drops/releases the deferred and
+   pending ownership exactly once, and returns to `IDLE`. A later fresh
+   enqueue may start normally; the old frame is never replayed.
+7. USART3/USART6 and the existing USART1 RX ring policy are untouched by TX
+   reinitialization. RX rearm state is independent and is serviced by the
+   bounded foreground process path.
 
 The foreground is the sole producer; the USART1 TX callback is the consumer.
 `volatile` does not replace synchronization. Compound operations use
@@ -316,11 +367,13 @@ save/disable/restore-PRIMASK critical sections:
 * Restore the saved mask; never unconditionally enable IRQs.
 * Fixed scans are limited to four control or two telemetry slots.
 * TX completion does only fixed state/counter work and at most one nonblocking
-  HAL start. It never generates telemetry or parses RBP2.
+  HAL start. RX recovery does at most one nonblocking receive-arm attempt per
+  foreground process call; neither path generates telemetry or parses RBP2.
 
 The current HAL has independent `gState` (TX) and `RxState` (RX). Tests must
 prove the existing one-byte USART1 RX can rearm and deliver bytes while IT TX
-is active.
+is active, including ORE recovery. A PE/FE/NE callback while HAL still
+reports an active RX transfer must not cause an unnecessary rearm.
 
 ## 7. Callback routing and safety boundary
 
@@ -352,7 +405,7 @@ local. Only explicit UART reinitialization flushes with the no-replay rule.
 
 The merged timing report is ABI version 3 and 1300 bytes. The async change
 must distinguish foreground enqueue time from physical TX. V1 will append a
-fixed transport block, bump ABI to 4, and set report size to 1412:
+fixed transport block, bump ABI to 4, and set report size to 1432:
 
 ```c
 typedef struct {
@@ -369,13 +422,23 @@ typedef struct {
     uint32_t unexpected_callback_count;
     uint32_t high_water_mark;
     uint32_t reinitialization_count;
-} motion_timing_uart_tx_report_t;
+    uint32_t busy_recovery_count;
+    uint32_t rx_error_count;
+    uint32_t rx_rearm_attempt_count;
+    uint32_t rx_rearm_busy_count;
+    uint32_t rx_rearm_error_count;
+} motion_timing_uart_transport_report_t;
 ```
 
-This block is 112 bytes at offset 1300. C11 static assertions must cover its
-size, offset, and new total size, while retaining all old critical offsets.
-`tools/read-motion-timing.ps1` must validate magic, version, and declared size
-before decoding it and fail loudly on mismatch.
+This block is 132 bytes at offset 1300. C11 static assertions must cover its
+size, the critical offset 1300, and the new total size 1432, while retaining
+all old critical offsets. The fixed-width fields are ordered exactly as shown;
+there is no packing pragma or decoder offset guessing. `uart_error_count`
+counts all USART1 error callbacks, `rx_error_count` counts those that require
+RX rearm, and the three `rx_rearm_*` fields count the bounded recovery
+attempts/results. `busy_recovery_count` counts finite persistent-start-BUSY
+escalations. `tools/read-motion-timing.ps1` must validate magic, version, and
+declared size before decoding it and fail loudly on mismatch.
 
 The existing per-kind `tx[]` timing is explicitly labelled as the foreground
 enqueue/copy span and no longer claims physical serialization. The appended
@@ -405,6 +468,14 @@ finish exercise -> accepted Motion STOP or safety/fault termination
 No diagnostic UART traffic is added, and active-motion halt is not the normal
 measurement-ending action.
 
+The diagnostic readout helper must be used only after the fixed exercise has
+ended and a normal Motion STOP has been accepted, or after a safety/fault stop
+has frozen the report. The target is then allowed to complete its actuator-safe
+stop path before halt/read. After the frozen report is dumped, the helper
+resets/runs the target into the normal stopped startup state rather than
+silently leaving the MCU halted. It never uses an active-motion halt as the
+exercise-ending mechanism and never emits diagnostic UART traffic.
+
 ## 9. Tests and post-fix acceptance
 
 Host tests must cover:
@@ -422,10 +493,32 @@ HAL_BUSY -> preserve ownership and retry once per process call
 HAL_ERROR -> explicit drop; remaining frames progress
 UART error -> active IT TX remains valid and can complete
 RX remains operational while TX is active
+USART1 ORE -> RX rearm is deferred to bounded foreground processing
+PE/FE/NE with active HAL RX -> no unnecessary RX rearm
+persistent start HAL_BUSY -> finite recovery, no deferred-frame replay
+inline/double/later abort completion -> exactly-once cleanup
 no byte interleaving or partial-frame handoff
 reinitialize -> no replay; fresh later enqueue works
 Safety liveness and Protocol ACK correlation remain passing
 ```
+
+The adapter regression must use a HAL abort double that calls
+`HAL_UART_AbortTransmitCpltCallback()` twice inline before returning
+`HAL_OK`, then calls a later duplicate after a fresh frame has been enqueued.
+It must prove that the active/deferred frame, pending frames, and drop
+diagnostics are each released/countable exactly once, that the fresh frame is
+not corrupted, and that no stale frame is replayed. The same regression must
+cover a `START_DEFERRED` promoted frame.
+
+The RX regression must keep an IT TX frame active, inject USART1 ORE with the
+fake HAL RX state ended, invoke the error callback, and verify that one
+bounded foreground process call re-arms RX; a later byte must reach the host
+RX ring and the TX frame must complete intact. Separate PE/FE/NE cases must
+leave an active HAL RX transfer armed. The finite-BUSY regression must return
+`HAL_BUSY` for exactly `UART_TX_MAX_CONSECUTIVE_START_BUSY` start attempts,
+verify one recovery escalation and one drop/no-replay cleanup, then enqueue a
+fresh frame and verify it can start after HAL recovers. Every process call
+must make no retry loop beyond the one TX attempt and one RX-rearm attempt.
 
 After implementation review, target evidence uses one NORMAL and one REDUCED
 diagnostic image, with runtime CPG/SimpleGait selection on identical ELFs.

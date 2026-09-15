@@ -11,7 +11,9 @@ scheduling, SafetySupervisor semantics, Servo output, or gait mathematics.
 handle, IRQ callbacks, and `HAL_UART_Transmit_IT` adapter in
 `RoboBeetleFirmware/Core/Communication/uart_transport_stm32.[ch]`. Use a
 four-slot control FIFO, two-slot same-kind-coalescing telemetry queue, and one
-active owned frame. Append fixed transport counters to the motion-timing
+active owned frame. Add explicit USART1 RX arm/rearm state, a finite
+`HAL_BUSY` start-recovery policy, and an exactly-once nonblocking abort cleanup
+path. Append fixed transport and RX-recovery counters to the motion-timing
 diagnostic report as ABI version 4.
 
 **Tech Stack:** C11, STM32F407 HAL, existing USART1 RX interrupt, GCC host
@@ -49,6 +51,19 @@ tests, PowerShell host runner, and the existing Qt6/C++20 host test suite.
    telemetry selection.
 7. Complete an active frame twice; assert the second completion cannot release
    or mutate the next active frame.
+
+The queue/transport contract uses no dynamic allocation and declares the
+finite recovery constants in the adapter seam:
+
+```c
+UART_TX_MAX_CONSECUTIVE_START_BUSY       8
+UART_TX_MAX_REINITIALIZE_ABORT_BUSY_RETRIES 2
+```
+
+The first bounds repeated `HAL_UART_Transmit_IT()` `HAL_BUSY` results while a
+promoted `START_DEFERRED` frame has no known physical transfer. The second
+bounds foreground retries of a nonblocking abort that itself returns
+`HAL_BUSY`; both values are fixed and host-testable.
 
 Run only the new case and capture the expected failure. Do not add production
 code before these ownership and priority assertions exist.
@@ -134,6 +149,21 @@ Use distinct fake USART1/USART3/USART6 instances.
 11. Reinitialization aborts nonblocking, drops active/pending frames once,
     never replays stale frames, preserves cumulative counters, and permits a
     fresh later enqueue.
+12. A HAL abort double invokes
+    `HAL_UART_AbortTransmitCpltCallback()` twice inline before returning
+    `HAL_OK`; cleanup releases active ownership, including a `START_DEFERRED`
+    promoted frame, and drops pending ownership exactly once. A later duplicate
+    callback after a fresh enqueue cannot corrupt or release the new frame.
+13. USART1 ORE with the fake HAL RX state ended marks `rx_needs_rearm`; one
+    bounded foreground process call re-arms RX while active IT TX remains
+    intact, and a later host byte reaches the RX ring. PE/FE/NE with HAL RX
+    still active records the error without an unnecessary rearm.
+14. Persistent `HAL_BUSY` for exactly
+    `UART_TX_MAX_CONSECUTIVE_START_BUSY` start attempts increments one visible
+    recovery escalation, drops the deferred/pending ownership once, performs
+    no replay, and allows a fresh frame to start after HAL recovery. A
+    reinitialization abort that returns `HAL_BUSY` is retried no more than
+    `UART_TX_MAX_REINITIALIZE_ABORT_BUSY_RETRIES` times.
 
 Run this case and retain the expected red result until the adapter is
 implemented.
@@ -161,11 +191,30 @@ implemented.
   interrupt cannot see a partially established active state.
 * Resolve HAL `OK`, `BUSY`, and `ERROR` exactly as the design specifies.
 * Add `uart_transport_stm32_process()` with at most one deferred-start attempt
-  per foreground call.
+  and at most one RX-rearm attempt per foreground call; there are no wait or
+  retry loops.
 * Add instance-checked TX-complete, error, abort-complete, and explicit
   reinitialization entry points. Do not call blocking abort from an ISR.
+* Track `rx_armed` and `rx_needs_rearm`. On RX completion, copy the byte and
+  rearm immediately when possible; defer `HAL_BUSY`/`HAL_ERROR` outcomes to
+  foreground processing. On USART1 error, keep RX armed for PE/FE/NE while
+  HAL still reports `BUSY_RX`; mark ORE or HAL-ended RX for foreground rearm.
+  A rearm `HAL_ERROR` remains pending and increments its diagnostic.
 * Keep callback work fixed and bounded: state/counter updates, a scan of four
   control or two telemetry slots, and at most one nonblocking HAL start.
+* Implement finite `HAL_BUSY` recovery. Count consecutive deferred-start
+  attempts; at the fixed limit of 8, increment the escalation diagnostic and
+  enter explicit reinitialization. A `START_DEFERRED` frame is transport-owned
+  but not physically active, so reinitialization drops/releases it exactly once
+  with all ordinary pending frames and never replays it.
+* Prepare the full `REINITIALIZING` state, including an epoch and
+  `reinit_completion_handled` guard, before calling
+  `HAL_UART_AbortTransmit_IT()` outside the critical section. The abort
+  completion handler marks the guard before cleanup, so the current HAL's
+  synchronous inline callback, an inline duplicate, a later duplicate, and a
+  fresh enqueue after recovery are all safe. Abort `HAL_BUSY` is retried from
+  bounded foreground processing no more than twice; an abort error or exhausted
+  policy finalizes local ownership once without replay.
 
 Run adapter tests to green, then rerun the pure queue tests.
 
@@ -244,12 +293,16 @@ the full Firmware host gate.
 **Implementation steps:**
 
 * Bump ABI version from 3 to 4.
-* Append the 112-byte `motion_timing_uart_tx_report_t` block at offset 1300
-  and set total report size to 1412.
+* Append the 132-byte `motion_timing_uart_transport_report_t` block at offset
+  1300 and set total report size to 1432. Keep the exact field order from the
+  design: existing enqueue/completion counters, finite-BUSY recovery, all
+  USART1 error callbacks, errors requiring RX rearm, and RX rearm
+  attempt/BUSY/ERROR counters.
 * Add static assertions for the new block size, offset, and total size while
   retaining every existing critical offset assertion.
 * Add fixed-cost hooks for enqueue, coalesce, reject, drop, start-busy,
-  start-error, UART error, unexpected callback, high-water,
+  start-error, finite-BUSY recovery, UART error, RX-rearm-required error,
+  RX-rearm attempt/BUSY/ERROR, unexpected callback, high-water,
   reinitialization, and physical completion.
 * Make every hook a no-op when diagnostics are compiled OFF.
 * Clear the new block on `begin_run`, advance the run marker, and block all
@@ -275,7 +328,7 @@ compile-contract coverage.
 
 **Implementation steps:**
 
-* Validate ABI version 4 and report size 1412 after validating magic.
+* Validate ABI version 4 and report size 1432 after validating magic.
 * Decode the appended block from fixed offset 1300 only after the header
   checks succeed; fail loudly on mismatch.
 * Preserve frozen-state checking and the safe lifecycle: fixed exercise,
