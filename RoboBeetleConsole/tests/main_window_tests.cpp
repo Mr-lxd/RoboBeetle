@@ -85,6 +85,16 @@ QGroupBox *motionPanel(rb::MainWindow &window)
     return nullptr;
 }
 
+QComboBox *gaitBackendCombo(const QWidget *root)
+{
+    for (QComboBox *combo : root->findChildren<QComboBox *>()) {
+        if (combo->objectName() == QStringLiteral("gaitBackendCombo")) {
+            return combo;
+        }
+    }
+    return nullptr;
+}
+
 bool hasLabelText(const QWidget *root, const QString &text)
 {
     for (QLabel *label : root->findChildren<QLabel *>()) {
@@ -119,6 +129,18 @@ void acknowledgeLast(rb::FakeTransport &transport)
     payload.append(static_cast<char>((request.sequence >> 8U) & 0xffU));
     payload.append(static_cast<char>(request.type));
     payload.append(static_cast<char>(rb::AckResult::Ok));
+    transport.injectBytes(rb::PacketCodec::encodeWire(
+        {rb::MessageType::Ack, 0x8000, payload}));
+}
+
+void acknowledgeLastWithResult(rb::FakeTransport &transport, rb::AckResult result)
+{
+    const rb::Packet request = lastPacket(transport);
+    QByteArray payload;
+    payload.append(static_cast<char>(request.sequence & 0xffU));
+    payload.append(static_cast<char>((request.sequence >> 8U) & 0xffU));
+    payload.append(static_cast<char>(request.type));
+    payload.append(static_cast<char>(result));
     transport.injectBytes(rb::PacketCodec::encodeWire(
         {rb::MessageType::Ack, 0x8000, payload}));
 }
@@ -231,8 +253,8 @@ void testMotionPanelLifecycleAndManualArbitration()
         return;
     }
 
-    expect(panel->findChild<QComboBox *>() == nullptr,
-           "Motion panel must use direct mode buttons instead of a combo");
+    expect(gaitBackendCombo(panel) != nullptr,
+           "Motion panel must expose a dedicated gait backend combo");
     QPushButton *forwardButton = buttonWithText(panel, QStringLiteral("Forward"));
     QPushButton *backwardButton = buttonWithText(panel, QStringLiteral("Backward (Pending)"));
     QPushButton *turnLeftButton = buttonWithText(panel, QStringLiteral("Turn Left"));
@@ -332,6 +354,72 @@ void testMotionPanelLifecycleAndManualArbitration()
            "Motion button highlight must clear after graceful STOP completes");
 }
 
+void testGaitBackendPanelLifecycle()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    rb::MainWindow window(&controller);
+
+    QGroupBox *panel = motionPanel(window);
+    expect(panel != nullptr, "gait backend test must find the Motion / Gait panel");
+    if (panel == nullptr) {
+        return;
+    }
+    QComboBox *combo = gaitBackendCombo(panel);
+    expect(combo != nullptr, "Motion panel must expose the gait backend combo");
+    if (combo == nullptr) {
+        return;
+    }
+
+    expect(combo->findText(QStringLiteral("Unknown")) >= 0,
+           "gait backend combo must expose an explicit Unknown state");
+    expect(combo->findText(QStringLiteral("SimpleGait")) >= 0,
+           "gait backend combo must expose SimpleGait");
+    expect(combo->findText(QStringLiteral("CPG")) >= 0,
+           "gait backend combo must expose CPG");
+    expect(!combo->isEnabled(),
+           "gait backend selection must be disabled while disconnected");
+
+    controller.connectTransport({QStringLiteral("COM_TEST"), 9600});
+    transport.simulateConnected();
+    expect(combo->isEnabled(),
+           "gait backend selection must enable after connection");
+
+    const int simpleIndex = combo->findData(
+        static_cast<int>(rb::GaitBackend::SimpleGait));
+    expect(simpleIndex >= 0, "SimpleGait combo item must carry its backend value");
+    if (simpleIndex < 0) {
+        return;
+    }
+    combo->setCurrentIndex(simpleIndex);
+    expect(!transport.writes().isEmpty()
+               && lastPacket(transport).type == rb::MessageType::SetGaitBackend,
+           "selecting a backend must send SetGaitBackend");
+    expect(lastPacket(transport).payload == QByteArray(1, '\0'),
+           "SimpleGait UI selection must send the one-byte zero payload");
+    expect(!controller.confirmedGaitBackend().has_value(),
+           "backend UI selection must not confirm before ACK");
+    expect(!combo->isEnabled(),
+           "gait backend combo must reject a second selection while pending");
+
+    acknowledgeLastWithResult(transport, rb::AckResult::Busy);
+    expect(!controller.confirmedGaitBackend().has_value(),
+           "BUSY must preserve the previous confirmed backend in the UI path");
+    expect(combo->isEnabled(),
+           "gait backend combo must re-enable after BUSY");
+
+    combo->setCurrentIndex(simpleIndex);
+    acknowledgeLast(transport);
+    expect(controller.confirmedGaitBackend().has_value()
+               && *controller.confirmedGaitBackend() == rb::GaitBackend::SimpleGait,
+           "matching UI selector ACK must confirm SimpleGait");
+    expect(combo->currentData().toInt()
+               == static_cast<int>(rb::GaitBackend::SimpleGait),
+           "UI combo must reflect the ACK-confirmed backend");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -340,6 +428,7 @@ int main(int argc, char **argv)
     testImuPanelLifecycle();
     testDepthPanelLifecycle();
     testMotionPanelLifecycleAndManualArbitration();
+    testGaitBackendPanelLifecycle();
     if (failures == 0) {
         std::fprintf(stdout, "All MainWindow tests passed\n");
     }

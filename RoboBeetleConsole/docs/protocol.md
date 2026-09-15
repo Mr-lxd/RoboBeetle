@@ -355,6 +355,46 @@ does not auto-resume an interrupted Motion. The current PA11 leak path remains
 monitoring-only and has no leak-to-Safety trip; any future leak trip must use
 the same immediate fail-safe path.
 
+### Set Gait Backend — `0x16`
+
+```text
+backend  uint8
+  0 = SIMPLE_GAIT
+  1 = CPG
+```
+
+The payload is exactly one byte. The STM32 MotionManager owns the active
+backend and accepts a selector only while Motion is `STOPPED`. It checks the
+Motion state before validating the requested value, so `RUNNING` or
+`STOPPING` returns `Busy=7` even for an invalid byte such as `0xff`; while
+`STOPPED`, an invalid byte returns `InvalidPayload=1`. A valid stopped switch
+resets the newly selected generator into its deterministic initial state,
+updates the active backend, leaves Motion `STOPPED`, and performs no Servo
+write, trajectory output, scheduler advance, automatic STOP, or automatic
+START. Selecting the current backend while stopped is a deterministic
+`OK=0` no-op. A missing registered generator/reset interface returns the
+existing `HardwareFailure=6` without mutating the active backend or Motion
+state.
+
+The production initial backend remains the compile-time
+`MOTION_DEFAULT_GAIT_BACKEND_CPG` choice (`CPG` by default). The legacy
+single-generator MotionManager initializer remains source-compatible but has
+an unspecified backend identity and does not expose runtime selection; the
+dispatcher never guesses identity from function pointers or context.
+
+The Qt Controller sends only this selector command and allows at most one
+selector request to be queued, deferred, in flight, or retrying. Its confirmed
+backend is local ACK-confirmed command state, not independent Firmware
+telemetry. It starts `UNKNOWN`, retains the requested value only while an ACK
+is pending, confirms only a matching `SetGaitBackend` ACK with `OK`, and
+preserves the previous confirmed value for `BUSY`, other errors, timeout,
+transport error, or write failure. ACK correlation first locates a request by
+sequence: an unrelated sequence is unmatched and leaves selector pending;
+the same sequence with a wrong request type clears the selector pending state
+but never confirms the request. A disconnect/reconnect returns the local
+backend state to `UNKNOWN`. No backend query/telemetry frame or Qt Servo
+trajectory stream is added.
+
 ### Historical Servo1 Set Angle hardware acceptance — [Hardware Verified] (2026-09-06)
 
 This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware verification of the new five-servo wiring.
@@ -377,6 +417,7 @@ This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware v
 | Set Servo Angle | `0x13` | Controller and Qt UI send count 1, angle-capable semantic ID, signed cdeg LE; UI is gated by connection, Enable ACK, and no pending Disable | Maps each accepted descriptor angle with `int32_t` arithmetic, including FrontAxis −90…+90° | `uint8,uint8,int16` | Yes | **Implemented; PR #13 feature-image Hardware Verification: PASS** |
 | Neutral | `0x14` | Sends the selected semantic mask after local enable | Requires live host, valid mask, and enabled selected channels; writes descriptor neutral pulses without disabling | `uint16 mask` | Yes | **Implemented; final five-servo neutral values recorded above; PR #13 feature-image Hardware Verification: PASS** |
 | SetMotionMode | `0x15` | Sends `schema=1, mode, action`; successful STOP ACK displays `Stopping` and starts the provisional local transition timer; STOP supersedes unresolved Motion work | Validates exact three-byte payload, HostAlive for START, mode/action relation, ownership, and returns acceptance-level ACK; ordinary STOP enters `MOTION_STOPPING` and ramps targets to neutral over actual elapsed 750 ms while retaining Motion ownership; common Motion output guard enforces front `-4500…+2800 cdeg` and rear `-3000…+4500 cdeg` | `uint8,uint8,uint8` | Yes | **Implemented / Host Test: PASS; SimpleGait Front/Rear anti-phase [Hardware Verified] in the diagnostic baseline; recorded CPG-default desktop physical gait [Hardware Verified] within desktop mechanical scope; normal backend CPG (`=1`), explicit SimpleGait override (`=0`); supplied PR #15 evidence: ARM Build [PASS] and isolated target performance measured; Program Verify [Not supplied]; water verification [Pending]** |
+| SetGaitBackend | `0x16` | Sends exactly one backend byte; keeps one selector request outstanding; only matching `OK` confirms the local backend, while unmatched sequence, wrong type, BUSY, error, timeout, or write failure cannot falsely confirm | MotionManager checks `STOPPED` before value validation; valid stopped selection resets the selected generator and remains stopped; invalid stopped value maps to InvalidPayload; moving/stopping maps to Busy; dispatcher only decodes, calls MotionManager, and maps the existing result | `uint8 backend` | Yes | **Implemented / Host Test: PASS; active backend is STM32-owned; no backend telemetry/query or Qt trajectory stream** |
 | LeakStatus | `0x20` | Receives one-byte monitoring telemetry and updates Unknown/Dry/Wet indicator; never creates an ACK pending entry | Samples PA11 and emits after accepted Heartbeat ACK, first/change/500 ms refresh; no ACK and no Servo/Safety action | `uint8 state` | No | **Implemented; end-to-end monitoring [Hardware Verified]** |
 | ImuSnapshot | `0x21` | Decodes fixed 56-byte monitoring telemetry into `ImuMonitor`; never creates or releases an ACK pending entry; displays Unknown/Receiving/Stale/Error and clears invalid/stale values | Encodes current JY901S state and diagnostics after accepted Heartbeat ACK, at most one optional frame per opportunity, with due LeakStatus priority and fair rotation against a due DepthSnapshot when LeakStatus is not due | 56-byte fixed schema | No | **Implemented / Host Test: PASS; physical JY901S telemetry [Hardware Verified]** |
 | DepthSnapshot | `0x22` | Decodes fixed 38-byte monitoring telemetry into `DepthMonitor`; validates schema/flags/length and never creates or releases an ACK pending entry; sensor-invalid snapshots are Stale with values hidden while diagnostics remain visible | Parses the listen-only ROVMAKER decoder line, applies the provisional 3000 ms sensor freshness bound, and encodes validity-gated fixed-point fields and seven diagnostics counters after accepted Heartbeat ACK, at most one optional frame per opportunity | 38-byte fixed schema | No | **Implemented / Host Test: PASS; physical decoder path [Pending Hardware Verification]** |
@@ -397,6 +438,7 @@ This evidence belongs to the pre-PR #8 Servo1/PA6 layout and is not a hardware v
 - On the first single-flight heartbeat ACK timeout, the Console converges actuator state fail-closed with the Firmware watchdog's impending state: it clears logical enabled/Disable-pending state, drops queued and deferred actuator work, and keeps heartbeat retry bookkeeping independent. Recovery Heartbeats restore link liveness only; they never replay outage-era Enable, PWM, Angle, or Neutral requests. A new user Servo Enable with a matching ACK is required after recovery. A later terminal timeout remains observable as a transport timeout but is not required for local actuator fail-close.
 - This is intentionally a one-entry Phase 1 cache, not a sequence window. A different successful non-Heartbeat request replaces it. With only the last entry retained, 16-bit wrap does not collide with an ancient request after intervening successful commands.
 - Console removes a pending request on a matching ACK even if the result is invalid; an ACK type mismatch or rejection is displayed and not retried. A mismatched Error is not allowed to release a request. In the single-flight mode a released non-Heartbeat request opens the in-flight slot, while a heartbeat type mismatch/rejection keeps liveness false and schedules the next heartbeat without dispatching queued user commands.
+- `SetGaitBackend` follows the same sequence-first lookup with an explicit selector exception: an ACK with an unrelated sequence is unmatched and leaves the selector pending; an ACK with the selector sequence but a wrong request type clears only that selector request and preserves the confirmed backend. A matching selector ACK clears pending, confirms only result `OK`, and preserves the previous confirmed backend for every non-`OK` result. Selector timeout, transport error, and write failure also clear only its pending request without creating a local confirmation.
 - Firmware does not acknowledge frames that fail COBS, size, Magic, Version, or CRC validation because a trustworthy request identity is unavailable.
 - ImuSnapshot is intentionally unacknowledged. Its sequence is telemetry-only; receiving it cannot satisfy, release, retry, reorder, or mutate any command/ACK pending request. The Console additionally ignores it while host-link heartbeat liveness is not ready.
 
