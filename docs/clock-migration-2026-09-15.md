@@ -6,12 +6,12 @@ The approved clock migration is implemented on branch `codex/clock-migration`,
 based on PR #15 reviewed head `b7e2787fe9eb4fdd46de0fd7380a23bbc961cc52`.
 PR #15 remains the first integration dependency; this branch is intentionally
 separate and is not merged here. The source/configuration and host contract
-checks are software-verified. The user has now supplied real-target evidence
-for the 168 MHz ARM Build, Program Verify, SystemCoreClock/RCC/TIM readback,
-the three UART/runtime links, and individual servo safety behavior. CubeMX
-regeneration, HAL tick target verification, physical PWM waveform measurement,
-DWT A/B measurements, and gait/water verification remain separately classified
-below.
+checks are software-verified. The user has now supplied target/tool evidence
+for 168 MHz CubeMX regeneration, ARM Build, Program Verify,
+SystemCoreClock/RCC/TIM readback, the three UART/runtime links, individual
+servo safety behavior, and the direct DWT A/B benchmark. HAL tick target
+verification, physical PWM waveform measurement, and gait/water verification
+remain separately classified below.
 
 The supplied individual servo checks include no unexpected movement after the
 168 MHz migration. Gait behavior and water performance are not inferred from
@@ -33,8 +33,8 @@ clean branch worktree. It does not itself establish CubeMX Generate Code parity,
 an ARM image, Program Verify, target register readback, HAL tick measurement,
 PWM waveform timing, UART/APC physical links, servo/gait behavior, DWT A/B, or
 water performance. The separately supplied target evidence below is authoritative
-for the items it covers; HAL tick, physical waveform, gait, DWT A/B, and Water
-remain **Pending** where explicitly stated.
+for the items it covers; HAL tick, physical waveform, gait, and Water remain
+**Pending** where explicitly stated.
 
 ## 2026-09-15 user-supplied 168 MHz target and actuator evidence
 
@@ -46,6 +46,7 @@ captures were not included.
 
 | Check | Measurement / configuration | Result | Evidence class |
 | --- | --- | --- | --- |
+| CubeMX 6.18.1 regeneration | User-supplied Generate Code parity result | PASS | CubeMX / Tool Evidence |
 | ARM Build 168 MHz | User-supplied target build result | PASS | Target Build Evidence |
 | Program Verify 168 MHz | User-supplied programming and verification result | PASS | Target Program Evidence |
 | CLOCK READBACK | `SystemCoreClock = 168000000`; RCC PLL/APB runtime readback passed | PASS | Target Measured |
@@ -61,13 +62,15 @@ captures were not included.
 | HAL TICK PHYSICAL/TARGET VERIFICATION | One-second target interval measurement not supplied | Pending | Target Timing Evidence |
 | GAIT AFTER CLOCK MIGRATION | No new Forward/Turn/Ascend/Descend/SimpleGait/CPG exercise supplied | Pending | Separate Gait Evidence |
 | Water | No propulsion/hydrodynamic result supplied | Pending | Water Evidence |
+| DWT 16/168 A/B | Direct 168 MHz target benchmark and frozen 16 MHz comparison recorded below | PASS | Target Performance Evidence |
 
 These results close the listed 168 MHz ARM Build, Program Verify, clock
-readback, PWM timebase contract, UART/APC, JY901S/ROVMAKER UART, and
-individual-servo safe bring-up statuses. The ARM Build and Program Verify
-claims are recorded as user-supplied evidence; detailed build/size logs and
-the Program Verify transcript were not included. Physical PWM waveform, HAL
-tick, gait, DWT A/B, and Water remain separate evidence items.
+readback, PWM timebase contract, UART/APC, JY901S/ROVMAKER UART,
+individual-servo safe bring-up, CubeMX regeneration, and DWT A/B statuses. The
+ARM Build, Program Verify, CubeMX, and DWT claims are recorded as user-supplied
+evidence; detailed build/size logs, the Generate Code transcript/diff, and the
+Program Verify transcript were not included. Physical PWM waveform, HAL tick,
+gait, and Water remain separate evidence items.
 
 ## Implemented clock tree
 
@@ -120,12 +123,11 @@ membership in `RCC.IPParameters`, voltage metadata, TIM3/TIM4 prescalers, and
 all three UART baud values. It therefore cannot pass an HSI-direct or
 derived-only `.ioc` beside a PLL-based `main.c`.
 
-CubeMX 6.18.1 was not available in this workspace, so no `.ioc` Generate Code
-run or generated-file comparison was performed. **CubeMX regeneration
-verification = Pending user/tool run.** This document intentionally makes no
-regeneration PASS claim. The pending check is to open this `.ioc` with
-CubeMX 6.18.1 and STM32Cube FW_F4 V1.28.3, Generate Code, then inspect the
-generated `SystemClock_Config()` and rerun the contract test.
+CubeMX 6.18.1 was not available in this agent workspace, so Generate Code
+parity was not independently reproduced here. The user-supplied evidence
+records **CubeMX regeneration verification = PASS** for this 168 MHz image.
+The raw Generate Code transcript/diff was not included; this status is recorded
+as supplied and is not inferred from the host contract test.
 
 The local STM32F407 HAL/device definitions identify Scale 1 and 5 wait states
 as the configuration for the approved 168 MHz candidate. Actual board VDD,
@@ -173,7 +175,7 @@ changed in this branch.
 | --- | --- |
 | Focused clock contract before implementation | RED as expected: legacy `RCC_PLL_NONE` was missing the required PLL contract |
 | Focused clock contract after implementation | PASS `clock_config_contract_tests`: main.c + `.ioc` source inputs + `RCC.IPParameters` + derived values + TIM/UART contracts |
-| CubeMX 6.18.1 regeneration parity | **Pending user/tool run**: CubeMX executable unavailable; no Generate Code comparison and no PASS claim |
+| CubeMX 6.18.1 regeneration parity | **CubeMX / Tool Evidence / PASS**: user supplied; local CubeMX executable unavailable for independent reproduction |
 | Firmware host gate | PASS: 29 executables + 9 app/backend/benchmark compile-contract objects, including the clock contract |
 | Public-header self-sufficiency | PASS: 34 headers with host C11 `-Wall -Wextra -Werror`; CMSIS host pointer-width warnings explicitly suppressed |
 | ARM Build 168 MHz | **Target Build Evidence / PASS**: user supplied; detailed compiler/size log not included |
@@ -186,37 +188,81 @@ changed in this branch.
 | USART runtime settings and host/APC/JY901S/ROVMAKER links | **Target Measured + Hardware Verified / PASS** for supplied runtime/link results; raw BRR not included |
 | Individual Servo Neutral/small-angle/Release/Disable | **Hardware Verified / PASS**: no unexpected movement reported |
 | GAIT AFTER CLOCK MIGRATION | **Pending**: no new Forward/Turn/Ascend/Descend/SimpleGait/CPG exercise supplied |
-| 16 MHz versus 168 MHz DWT A/B | Pending target benchmark run; no 16/168 scaling estimate used |
+| 16 MHz versus 168 MHz DWT A/B | **Target Performance Evidence / PASS**: user supplied direct benchmark and comparison; no ideal scaling estimate used |
 | Program Verify 168 MHz | **Target Program Evidence / PASS**: user supplied; transcript not included |
 | Water | **Pending Water Verification** |
 
-The available isolated 16 MHz baseline is preserved exactly for the later A/B
-run: repetitions 32; nominal 10 ms min/median/max `3071 / 3072 / 3076 us`,
+The isolated 16 MHz baseline is preserved exactly as the comparison source for
+the completed A/B record below: repetitions 32; nominal 10 ms min/median/max
+`3071 / 3072 / 3076 us`,
 cycles `49149 / 49153 / 49217`; 20 ms `6127 / 6127 / 6131 us`; 70 ms
 `25504 / 25508 / 25510 us`; 100 ms `39436 / 39440 / 39442 us`; and bounded
 1000 ms / 100 substeps `478438 / 478446 / 478453 us`. The same baseline image
 recorded FLASH `55060 B / 512 KB = 10.50%` and RAM
-`5440 B / 128 KB = 4.15%`. The 168 MHz values must be measured directly with
-the unchanged DWT path and reported with SystemCoreClock, cycles, microseconds,
-FLASH/RAM, and same-configuration deltas.
+`5440 B / 128 KB = 4.15%`. The 168 MHz values below were measured directly with
+the unchanged DWT path and are reported with SystemCoreClock, cycles,
+microseconds, FLASH/RAM, and same-configuration deltas.
 
 ## Hardware-safe bring-up order
 
-The supplied run closes the 168 MHz ARM Build, Program Verify, debugger
-clock/RCC readback, PWM timebase contract, UART/runtime-link, and
-individual-servo checks. HAL millisecond timing and the physical PWM waveform
-still require their own evidence. The previously required safe order remains:
+The supplied run closes the 168 MHz CubeMX regeneration, ARM Build, Program
+Verify, debugger clock/RCC readback, PWM timebase contract, UART/runtime-link,
+individual-servo, and DWT A/B checks. HAL millisecond timing and the physical
+PWM waveform still require their own evidence. The previously required safe
+order remains:
 ARM build and Program Verify, servo power OFF for clock/
 timer/UART checks, then only after those checks pass the individual servo and
 gait exercises. The supplied result does not include SimpleGait or CPG runtime
 exercise. Water propulsion and hydrodynamic performance remain Pending Water
 Verification.
 
-## Remaining 168 MHz DWT A/B closeout
+## 2026-09-15 user-supplied 168 MHz DWT A/B benchmark
 
-The next target-only item is the unchanged `ROBOBEETLE_CPG_TARGET_BENCHMARK=ON`
-image. Record the exact commit, compiler/linker configuration, `SystemCoreClock`,
-repetitions, cycles and microseconds for nominal/20/70/100/1000 ms cases, and
-FLASH/RAM. Compare directly with the preserved 16 MHz baseline; do not estimate
-the 168 MHz values by scaling. Until the direct target report is supplied,
-`DWT A/B` remains **Pending** and the branch is ready for that measurement.
+The user supplied a direct STM32F407 target benchmark from the temporary
+`ROBOBEETLE_CPG_TARGET_BENCHMARK=ON` image. The target reported
+`SystemCoreClock = 168000000 Hz` and `repetitions = 32`. Values are recorded
+exactly; no ideal 10.5x scaling is substituted.
+
+| Case | Cycles min / median / max | Microseconds min / median / max |
+| --- | ---: | ---: |
+| CPG nominal 10 ms | `51371 / 51371 / 51455` | `305 / 305 / 306 us` |
+| 20 ms catch-up | `102373 / 102447 / 102466` | `609 / 609 / 609 us` |
+| 70 ms catch-up | `426627 / 426704 / 426790` | `2539 / 2539 / 2540 us` |
+| 100 ms catch-up | `661035 / 661069 / 661175` | `3934 / 3934 / 3935 us` |
+| 1000 ms bounded / 100 substeps | `8080787 / 8081297 / 8081955` | `48099 / 48102 / 48106 us` |
+
+The benchmark image usage was supplied as FLASH `55084 B / 512 KB = 10.51%`
+and RAM `5440 B / 128 KB = 4.15%`. The supplied `arm-none-eabi-size` output
+was `text=54988`, `data=92`, `bss=5344`, `dec=60424`.
+
+### Frozen 16 MHz versus measured 168 MHz
+
+The comparison uses the frozen 16 MHz median values recorded above. It is a
+direct measured comparison, not an ideal clock-ratio estimate.
+
+| Case | 16 MHz median | 168 MHz median | Measured speedup |
+| --- | ---: | ---: | ---: |
+| Nominal 10 ms | `3072 us` | `305 us` | approximately `10.07x` |
+| 20 ms catch-up | `6127 us` | `609 us` | approximately `10.06x` |
+| 70 ms catch-up | `25508 us` | `2539 us` | approximately `10.05x` |
+| 100 ms catch-up | `39440 us` | `3934 us` | approximately `10.03x` |
+| 1000 ms bounded / 100 substeps | `478446 us` | `48102 us` | approximately `9.95x` |
+
+Nominal isolated compute utilization improved from `30.72%` to `3.05%`
+(`305 us < 10000 us`). The measured nominal median cycle count increased
+slightly from `49153` at 16 MHz to `51371` at 168 MHz while wall time improved
+by approximately 10x. The frozen baseline did not include catch-up cycle
+fields, so no catch-up cycle delta is reconstructed.
+
+The isolated 168 MHz CPG compute deadline is **[PASS]**. This substantially
+increases foreground compute margin, but it does not prove zero Motion jitter
+or solve blocking UART behavior. Servo stutter investigation remains separate.
+
+### Temporary benchmark image provenance
+
+The `ROBOBEETLE_CPG_TARGET_BENCHMARK=ON` image is a temporary measurement image,
+not the production image. After the DWT measurement, normal operation must be
+rebuilt with `ROBOBEETLE_CPG_TARGET_BENCHMARK=OFF`. This documentation update
+does not change production source, CPG mathematics, Servo calibration, or the
+normal build configuration; the benchmark image must not be classified as the
+production firmware.
