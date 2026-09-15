@@ -32,6 +32,14 @@ option(ROBOBEETLE_CPG_TARGET_BENCHMARK
        "Enable the STM32F407 CPG DWT benchmark"
        OFF)
 
+option(ROBOBEETLE_MOTION_TIMING_DIAGNOSTICS
+       "Enable RAM-only STM32F407 motion timing diagnostics"
+       OFF)
+
+option(ROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY
+       "Suppress optional telemetry in a diagnostics image"
+       OFF)
+
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
 
@@ -82,6 +90,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/App
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Diagnostics
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Communication
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Sensors
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Servo
@@ -101,6 +110,21 @@ if(ROBOBEETLE_CPG_TARGET_BENCHMARK)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
         ROBOBEETLE_CPG_TARGET_BENCHMARK=1
     )
+endif()
+
+if(ROBOBEETLE_MOTION_TIMING_DIAGNOSTICS)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        Core/Diagnostics/motion_timing_diagnostics.c
+    )
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+        ROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=1
+    )
+
+    if(ROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY)
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+            ROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY=1
+        )
+    endif()
 endif()
 
 # Remove wrong libob.a library dependency when using cpp files

@@ -20,6 +20,7 @@
 #include "motion_manager.h"
 #include "cpg_gait_generator.h"
 #include "simple_gait_generator.h"
+#include "motion_timing_diagnostics.h"
 #if defined(ROBOBEETLE_CPG_TARGET_BENCHMARK) && \
     ROBOBEETLE_CPG_TARGET_BENCHMARK
 #include "cpg_target_benchmark.h"
@@ -45,7 +46,9 @@ static uint16_t protocol_tx_sequence = 0U;
 
 /* Telemetry has its own sequence space so existing ACK sequence behavior
  * remains unchanged for every command. */
+#if !MOTION_TIMING_REDUCED_TELEMETRY_ACTIVE
 static uint16_t protocol_telemetry_sequence = 0U;
+#endif
 
 #define LEAK_TELEMETRY_REFRESH_INTERVAL_MS 500U
 
@@ -81,12 +84,14 @@ static bool protocol_send_ack(
     uint8_t request_type,
     rbp2_result_t result);
 
+#if !MOTION_TIMING_REDUCED_TELEMETRY_ACTIVE
 static bool protocol_send_leak_status(
     leak_sensor_state_t state);
 
 static bool protocol_send_imu_snapshot(void);
 
 static bool protocol_send_depth_snapshot(void);
+#endif
 
 static void app_main_apply_safety_stop(void)
 {
@@ -169,6 +174,9 @@ static void protocol_feed_byte(
                     frame.type,
                     outcome.result);
 
+#if MOTION_TIMING_REDUCED_TELEMETRY_ACTIVE
+                (void)ack_sent;
+#else
                 if (ack_sent && outcome.heartbeat_accepted)
                 {
                     const leak_sensor_state_t state =
@@ -238,6 +246,7 @@ static void protocol_feed_byte(
                             break;
                     }
                 }
+#endif
             }
             else
             {
@@ -289,6 +298,7 @@ static bool protocol_send_ack(
 {
     uint8_t payload[4];
     uint8_t wire[RBP2_MAX_WIRE_SIZE];
+    HAL_StatusTypeDef transmit_status;
 
     payload[0] =
         (uint8_t)(request_sequence & 0xFFU);
@@ -311,19 +321,34 @@ static bool protocol_send_ack(
 
     if (wire_length > 0U)
     {
-        return uart_transport_stm32_transmit(
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+        const motion_timing_mark_t timing_start =
+            motion_timing_diagnostics_mark();
+#endif
+
+        transmit_status = uart_transport_stm32_transmit(
             wire,
-            (uint16_t)wire_length) == HAL_OK;
+            (uint16_t)wire_length);
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+        motion_timing_diagnostics_record_tx(
+            MOTION_TIMING_TX_ACK,
+            (uint32_t)wire_length,
+            (uint32_t)transmit_status,
+            timing_start);
+#endif
+        return transmit_status == HAL_OK;
     }
 
     return false;
 }
 
+#if !MOTION_TIMING_REDUCED_TELEMETRY_ACTIVE
 static bool protocol_send_leak_status(
     leak_sensor_state_t state)
 {
     uint8_t payload[1];
     uint8_t wire[RBP2_MAX_WIRE_SIZE];
+    HAL_StatusTypeDef transmit_status;
 
     if (!leak_sensor_state_is_valid(state))
     {
@@ -346,9 +371,22 @@ static bool protocol_send_leak_status(
         return false;
     }
 
-    return uart_transport_stm32_transmit(
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    const motion_timing_mark_t timing_start =
+        motion_timing_diagnostics_mark();
+#endif
+
+    transmit_status = uart_transport_stm32_transmit(
                wire,
-               (uint16_t)wire_length) == HAL_OK;
+               (uint16_t)wire_length);
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_record_tx(
+        MOTION_TIMING_TX_LEAK,
+        (uint32_t)wire_length,
+        (uint32_t)transmit_status,
+        timing_start);
+#endif
+    return transmit_status == HAL_OK;
 }
 
 static bool protocol_send_imu_snapshot(void)
@@ -359,6 +397,7 @@ static bool protocol_send_imu_snapshot(void)
     jy901s_imu_telemetry_diagnostics_t transport_diagnostics;
     uint8_t payload[JY901S_IMU_TELEMETRY_PAYLOAD_LENGTH];
     uint8_t wire[RBP2_MAX_WIRE_SIZE];
+    HAL_StatusTypeDef transmit_status;
 
     jy901s_parser_get_state(&jy901s_parser, &state);
     jy901s_parser_get_stats(&jy901s_parser, &parser_stats);
@@ -397,9 +436,22 @@ static bool protocol_send_imu_snapshot(void)
         return false;
     }
 
-    return uart_transport_stm32_transmit(
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    const motion_timing_mark_t timing_start =
+        motion_timing_diagnostics_mark();
+#endif
+
+    transmit_status = uart_transport_stm32_transmit(
                wire,
-               (uint16_t)wire_length) == HAL_OK;
+               (uint16_t)wire_length);
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_record_tx(
+        MOTION_TIMING_TX_IMU,
+        (uint32_t)wire_length,
+        (uint32_t)transmit_status,
+        timing_start);
+#endif
+    return transmit_status == HAL_OK;
 }
 
 static bool protocol_send_depth_snapshot(void)
@@ -411,6 +463,7 @@ static bool protocol_send_depth_snapshot(void)
     depth_telemetry_diagnostics_t diagnostics;
     uint8_t payload[DEPTH_TELEMETRY_PAYLOAD_LENGTH];
     uint8_t wire[RBP2_MAX_WIRE_SIZE];
+    HAL_StatusTypeDef transmit_status;
     const uint32_t now_ms = HAL_GetTick();
 
     depth_parser_get_state(&depth_parser, &state);
@@ -465,10 +518,24 @@ static bool protocol_send_depth_snapshot(void)
         return false;
     }
 
-    return uart_transport_stm32_transmit(
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    const motion_timing_mark_t timing_start =
+        motion_timing_diagnostics_mark();
+#endif
+
+    transmit_status = uart_transport_stm32_transmit(
                wire,
-               (uint16_t)wire_length) == HAL_OK;
+               (uint16_t)wire_length);
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_record_tx(
+        MOTION_TIMING_TX_DEPTH,
+        (uint32_t)wire_length,
+        (uint32_t)transmit_status,
+        timing_start);
+#endif
+    return transmit_status == HAL_OK;
 }
+#endif
 
 void app_main_init(
     UART_HandleTypeDef *uart,
@@ -513,6 +580,10 @@ void app_main_init(
         simple_gait_generator_interface(&simple_gait_generator),
         cpg_gait_generator_interface(&cpg_gait_generator),
         initial_backend);
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_init(
+        (uint32_t)initial_backend);
+#endif
     protocol_dispatcher_init(
         &protocol_dispatcher,
         &servo_service,
@@ -532,6 +603,10 @@ void app_main_init(
 void app_main_process(void)
 {
     uint8_t byte;
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    const motion_timing_mark_t app_loop_start =
+        motion_timing_diagnostics_loop_begin();
+#endif
 
     jy901s_transport_stm32_poll();
     depth_transport_stm32_poll();
@@ -541,28 +616,82 @@ void app_main_process(void)
         leak_sensor_stm32_read_level(
             &leak_sensor_reader));
 
-    while (uart_transport_stm32_pop(&byte))
     {
-        protocol_feed_byte(byte);
-    }
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+        const motion_timing_mark_t drain_start =
+            motion_timing_diagnostics_mark();
+        uint32_t byte_count = 0U;
+#endif
 
-    while (jy901s_transport_stm32_pop(&byte))
-    {
-        jy901s_parser_event_t event =
-            jy901s_parser_feed_byte(&jy901s_parser, byte);
-
-        if (event != JY901S_PARSER_EVENT_NONE)
+        while (uart_transport_stm32_pop(&byte))
         {
-            jy901s_last_valid_frame_ms = HAL_GetTick();
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+            ++byte_count;
+#endif
+            protocol_feed_byte(byte);
         }
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+        motion_timing_diagnostics_record_rx(
+            MOTION_TIMING_RX_HOST,
+            byte_count,
+            byte_count != 0U ? 1U : 0U,
+            drain_start);
+#endif
     }
 
-    while (depth_transport_stm32_pop(&byte))
     {
-        (void)depth_parser_feed_byte(
-            &depth_parser,
-            byte,
-            HAL_GetTick());
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+        const motion_timing_mark_t drain_start =
+            motion_timing_diagnostics_mark();
+        uint32_t byte_count = 0U;
+#endif
+
+        while (jy901s_transport_stm32_pop(&byte))
+        {
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+            ++byte_count;
+#endif
+            jy901s_parser_event_t event =
+                jy901s_parser_feed_byte(&jy901s_parser, byte);
+
+            if (event != JY901S_PARSER_EVENT_NONE)
+            {
+                jy901s_last_valid_frame_ms = HAL_GetTick();
+            }
+        }
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+        motion_timing_diagnostics_record_rx(
+            MOTION_TIMING_RX_JY901S,
+            byte_count,
+            byte_count != 0U ? 1U : 0U,
+            drain_start);
+#endif
+    }
+
+    {
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+        const motion_timing_mark_t drain_start =
+            motion_timing_diagnostics_mark();
+        uint32_t byte_count = 0U;
+#endif
+
+        while (depth_transport_stm32_pop(&byte))
+        {
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+            ++byte_count;
+#endif
+            (void)depth_parser_feed_byte(
+                &depth_parser,
+                byte,
+                HAL_GetTick());
+        }
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+        motion_timing_diagnostics_record_rx(
+            MOTION_TIMING_RX_DEPTH,
+            byte_count,
+            byte_count != 0U ? 1U : 0U,
+            drain_start);
+#endif
     }
 
     /* Sample safety and Motion time after this pass's input dispatch. */
@@ -585,6 +714,9 @@ void app_main_process(void)
             app_main_apply_safety_stop();
         }
     }
+#if MOTION_TIMING_DIAGNOSTICS_ACTIVE
+    motion_timing_diagnostics_loop_end(app_loop_start);
+#endif
 }
 
 void app_main_jy901s_get_state(jy901s_imu_state_t *state)

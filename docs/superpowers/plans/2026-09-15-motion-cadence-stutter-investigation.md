@@ -8,6 +8,15 @@
 
 **Tech Stack:** C11, host GCC, existing Firmware host PowerShell runner, STM32F407 CMSIS DWT/CYCCNT, CMake/Ninja, arm-none-eabi toolchain, debugger/OpenOCD symbol readout, Markdown.
 
+**Implementation status (2026-09-15):** Tasks 1-5 are implemented on this
+branch: the neutral diagnostics module, fixed ABI report, compile-gated reduced
+telemetry condition, observational app/Motion hooks, host regressions, and
+fixed-offset readout helper are present. The Firmware host gate passes with 33
+executables and 13 diagnostics/app/backend/benchmark compile contracts. The
+ARM/OpenOCD toolchain is unavailable in this environment, so Task 6 target
+images and A/B measurements remain NOT RUN; physical waveform, HAL tick,
+post-clock gait, and Water evidence remain Pending.
+
 ---
 
 ## Task 1: Freeze the investigation baseline and source contract
@@ -354,10 +363,12 @@ git diff --stat
 git diff --name-only
 ~~~
 
-Expected result for this design-only commit: only the investigation spec and
-plan are changed, Firmware host gate is PASS, and no production source,
-Clock/RCC, PWM, Servo calibration, CPG math, UART architecture, foreground
-scheduling, queue budget, or stutter/jitter fix is present.
+Expected result for this diagnostics implementation commit: the diagnostic
+module, observational hooks, host regressions, and readout helper are present;
+the Firmware host gate is PASS; target A/B measurements remain NOT RUN when
+the ARM/OpenOCD tools are unavailable; and no production Clock/RCC, PWM, Servo
+calibration, CPG math, UART architecture, foreground scheduling, queue budget,
+or stutter/jitter fix is present.
 
 ## Final review gate
 
