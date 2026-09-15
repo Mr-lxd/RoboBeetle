@@ -264,11 +264,14 @@ The transport states are:
 
 ```text
 UNINITIALIZED -> IDLE -> STARTING -> ACTIVE
-                         |             |
-                         v             v
+                        |             |
+                        v             v
                    START_DEFERRED   STARTING for one next frame
 
 Any operational state -> REINITIALIZING -> IDLE, with no replay
+                                      \
+                                       -> RECOVERY_FAILED
+RECOVERY_FAILED -> IDLE only after HAL ownership is proven released
 ```
 
 `IDLE` may retain pending frames after a failed start. `START_DEFERRED`
@@ -284,10 +287,15 @@ Exact handling:
 * `HAL_ERROR` releases only the failed promoted frame, increments start/drop
   diagnostics, and preserves remaining pending frames for a later attempt. An
   enqueue that immediately fails to start returns `UART_TX_TRANSPORT_ERROR`.
-* A matching USART1 `HAL_UART_TxCpltCallback()` releases the active frame once,
-  records physical completion, and starts at most one next owned frame. A
-  duplicate/state-mismatched callback increments `unexpected_callback_count`
-  and cannot free another frame.
+* A matching USART1 `HAL_UART_TxCpltCallback()` in the normal operational
+  state releases the active frame once, records physical completion, and
+  starts at most one next owned frame. Once `REINITIALIZING` is visible, the
+  same callback releases the physically completed active frame exactly once
+  and increments physical completion exactly once, but does not classify it as
+  dropped and does not promote or start any pending frame. Pending ownership
+  remains for the reinitialization cleanup. The callback also never promotes
+  from `RECOVERY_FAILED`. A duplicate/state-mismatched callback increments
+  `unexpected_callback_count` and cannot free another frame.
 * The current HAL treats non-ORE IT errors as non-blocking and lets TX
   continue; its ORE path ends RX but does not own/release TX. Thus
   `HAL_UART_ErrorCallback()` records the USART1 error and leaves active TX
@@ -303,9 +311,10 @@ Exact handling:
   request pending for a later pass, while `HAL_ERROR` leaves it pending and
   increments a rearm-error diagnostic. TX active ownership is unchanged.
 * `HAL_UART_AbortTransmitCpltCallback()` is used only by explicit foreground
-  reinitialization. It releases the aborted active or `START_DEFERRED`
-  promoted slot, drops all ordinary pending slots with per-kind counts, resets
-  to IDLE, and never replays old bytes.
+  reinitialization. When it matches the outstanding reinitialization, it
+  releases the aborted active or `START_DEFERRED` promoted slot, drops all
+  ordinary pending slots with per-kind counts, resets to IDLE, and never
+  replays old bytes. It is idempotent with respect to duplicate callbacks.
 
 The transport never calls blocking `HAL_UART_AbortTransmit()` from an ISR.
 `HAL_UART_AbortTransmit_IT()` is only a foreground reinitialization action.
@@ -326,34 +335,52 @@ reset:
    `reinit_completion_handled` is false, the reinitialization epoch is
    advanced, and all active/promoted and pending ownership is still visible to
    the one cleanup path. The HAL call is made outside the critical section.
-3. In the current IT-only HAL path, `HAL_UART_AbortTransmit_IT()` may invoke
+3. IRQs are restored while the transport is already `REINITIALIZING`, before
+   the foreground makes the HAL abort call. If a matching TX-complete IRQ
+   arrives in this window, it releases the physically completed active slot
+   exactly once, records completion rather than a drop, and leaves every
+   pending slot untouched. It must not promote or start a next frame. The
+   later reinitialization cleanup sees no active slot and drops only the
+   remaining pending ownership.
+4. In the current IT-only HAL path, `HAL_UART_AbortTransmit_IT()` may invoke
    `HAL_UART_AbortTransmitCpltCallback()` synchronously before it returns
    `HAL_OK`. The callback therefore calls an idempotent
    `finish_reinitialize_once()` path. It marks completion handled before
-   releasing the active/`START_DEFERRED` slot and pending slots, increments
-   each drop diagnostic once, preserves cumulative counters, clears the
-   reinitialization markers, and enters `IDLE` with no replay. If the callback
-   has already run inline, code after the HAL call performs no second cleanup.
-4. A later or duplicate abort callback sees that the transport is no longer
+   releasing any still-owned active/`START_DEFERRED` slot and pending slots,
+   increments each drop diagnostic once, preserves cumulative counters, clears
+   the reinitialization markers, and enters `IDLE` with no replay. If the
+   callback has already run inline, code after the HAL call performs no second
+   cleanup.
+5. A later or duplicate abort callback sees that the transport is no longer
    awaiting this reinitialization (or that completion is already handled), is
    counted as unexpected, and cannot release or mutate a newly enqueued frame.
    This remains true if a test double invokes the callback twice inline before
    returning and invokes it again after a fresh enqueue.
-5. If there is no active/promoted ownership, pending frames are finalized by
+6. If there is no active/promoted ownership, pending frames are finalized by
    the same once-only cleanup path without a HAL abort. If an abort call
-   returns an error before a callback, the path finalizes local ownership once;
-   a `HAL_BUSY` abort is retried from bounded foreground processing no more
-   than `UART_TX_MAX_REINITIALIZE_ABORT_BUSY_RETRIES` times, then performs the
-   same no-replay local cleanup and records recovery failure. No callback or
-   return path may release a slot twice.
-6. Persistent `HAL_BUSY` while starting a `START_DEFERRED` frame cannot wedge
+   returns non-`HAL_OK` without a matching abort-complete callback, a known
+   physically active slot is never locally released, reused, or reported as
+   normally recovered. Ordinary pending slots are dropped once; a
+   `START_DEFERRED` slot has no accepted HAL ownership and may be locally
+   released once, but the transport enters `RECOVERY_FAILED`, rejects new TX,
+   and does not claim recovery until a matching TX-complete,
+   abort-complete, or explicitly proven peripheral/hardware reset establishes
+   that HAL ownership is gone. A known active slot is released only after a
+   matching TX-complete, matching abort-complete, or that proven reset.
+7. A `HAL_BUSY` abort result may be retried from bounded foreground processing
+   no more than `UART_TX_MAX_REINITIALIZE_ABORT_BUSY_RETRIES` times. Exhaustion
+   follows the same fail-closed rule above; it never performs
+   `ACTIVE -> local cleanup -> IDLE`. No callback or return path may release a
+   slot twice.
+8. Persistent `HAL_BUSY` while starting a `START_DEFERRED` frame cannot wedge
    it forever. After exactly
    `UART_TX_MAX_CONSECUTIVE_START_BUSY` one-at-a-time start attempts (the v1
    policy value is 8), the transport increments `busy_recovery_count`, enters
    the same explicit reinitialization path, drops/releases the deferred and
-   pending ownership exactly once, and returns to `IDLE`. A later fresh
-   enqueue may start normally; the old frame is never replayed.
-7. USART3/USART6 and the existing USART1 RX ring policy are untouched by TX
+   pending ownership exactly once when ownership is proven safe, and otherwise
+   enters `RECOVERY_FAILED`. A later fresh enqueue may start only after the
+   transport returns to `IDLE`; the old frame is never replayed.
+9. USART3/USART6 and the existing USART1 RX ring policy are untouched by TX
    reinitialization. RX rearm state is independent and is serviced by the
    bounded foreground process path.
 
@@ -449,6 +476,34 @@ to it. Diagnostics hooks are fixed-cost RAM-only and are no-ops when
 diagnostics are compiled off. A frozen report cannot be modified by later
 loops, callbacks, ACKs, or reconnect traffic.
 
+Because asynchronous TX hooks can run from a USART1 IRQ, the report lifecycle
+uses a volatile single-core recording gate with short save/disable/restore-
+`PRIMASK` transitions. The gate has at least `RESETTING`, `RUNNING`, and
+`FROZEN` meanings:
+
+* `begin_run()` first changes the gate from any prior state to `RESETTING` in
+  a short critical section, then resets and initializes the complete report
+  while the gate is not `RUNNING`. UART diagnostic hooks may run during this
+  work but only observe the non-running gate and return without mutating any
+  report byte. After initialization is complete, a second short critical
+  section changes the gate to `RUNNING` and recording begins. The report is
+  never partially observable as a recording trial.
+* `freeze()` changes the gate to `FROZEN` as its first lifecycle transition
+  in a short critical section, then returns. Every UART diagnostic hook reads
+  the volatile gate before mutation and returns unless it is `RUNNING`; once
+  the gate is `FROZEN`, no later TX-complete, UART-error, abort, ACK, loop, or
+  reconnect event may modify report bytes.
+* A hook's gate read and fixed-width state updates are bounded and RAM-only.
+  Aligned 32-bit updates use the Cortex-M single-core atomicity available to
+  this report; any multi-field lifecycle transition uses only the short
+  PRIMASK critical section. Report reset, encoding, or other arbitrary work is
+  never performed with interrupts disabled.
+
+Events before `begin_run()` are ignored, events after `freeze()` are ignored,
+and events during the reset-to-running window cannot contaminate the new
+report. Lifecycle tests must compare the entire frozen report byte-for-byte
+after later TX-complete, error, and abort callbacks.
+
 For the fixed `tx[]` block, the v4 decoder labels the existing fields with
 these exact meanings: `call_count` is enqueue attempts, `byte_count` is bytes
 offered by those attempts, `last_status` is the latest enqueue result,
@@ -497,8 +552,12 @@ USART1 ORE -> RX rearm is deferred to bounded foreground processing
 PE/FE/NE with active HAL RX -> no unnecessary RX rearm
 persistent start HAL_BUSY -> finite recovery, no deferred-frame replay
 inline/double/later abort completion -> exactly-once cleanup
+REINITIALIZING + TxCplt -> completion once, no pending promotion
+abort failure -> ACTIVE retained and recovery-failed, no unsafe reuse
 no byte interleaving or partial-frame handoff
 reinitialize -> no replay; fresh later enqueue works
+diagnostic events before begin_run -> ignored
+diagnostic events around freeze -> frozen bytes unchanged
 Safety liveness and Protocol ACK correlation remain passing
 ```
 

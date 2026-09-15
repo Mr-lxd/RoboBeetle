@@ -63,7 +63,8 @@ UART_TX_MAX_REINITIALIZE_ABORT_BUSY_RETRIES 2
 The first bounds repeated `HAL_UART_Transmit_IT()` `HAL_BUSY` results while a
 promoted `START_DEFERRED` frame has no known physical transfer. The second
 bounds foreground retries of a nonblocking abort that itself returns
-`HAL_BUSY`; both values are fixed and host-testable.
+`HAL_BUSY`; both values are fixed and host-testable. Exhaustion never releases
+or reuses a known HAL-owned `ACTIVE` buffer and never returns normal `IDLE`.
 
 Run only the new case and capture the expected failure. Do not add production
 code before these ownership and priority assertions exist.
@@ -126,7 +127,10 @@ Run the queue tests to green, then run
 Provide host doubles for `HAL_UART_Receive_IT`,
 `HAL_UART_Transmit_IT`, and `HAL_UART_AbortTransmit_IT`. The transmit double
 records the pointer, length, start count, and bytes observed at each start.
-Use distinct fake USART1/USART3/USART6 instances.
+Use distinct fake USART1/USART3/USART6 instances. The reinitialization seam
+must expose the interval after `REINITIALIZING` is armed and interrupts are
+restored but before the abort call, and the abort double must support inline,
+duplicate-inline, delayed, non-`HAL_OK`, and `HAL_BUSY` outcomes.
 
 **Required red cases:**
 
@@ -146,9 +150,10 @@ Use distinct fake USART1/USART3/USART6 instances.
 9. USART1 UART error while TX is active records the error but leaves the frame
    intact; later completion and next-frame start succeed.
 10. Unexpected TX and abort-completion callbacks cannot release another frame.
-11. Reinitialization aborts nonblocking, drops active/pending frames once,
-    never replays stale frames, preserves cumulative counters, and permits a
-    fresh later enqueue.
+11. A successful matching reinitialization abort completion releases/drops
+    active/pending ownership once, never replays stale frames, preserves
+    cumulative counters, and permits a fresh later enqueue. A failed abort
+    never locally releases a known HAL-owned active frame.
 12. A HAL abort double invokes
     `HAL_UART_AbortTransmitCpltCallback()` twice inline before returning
     `HAL_OK`; cleanup releases active ownership, including a `START_DEFERRED`
@@ -164,6 +169,18 @@ Use distinct fake USART1/USART3/USART6 instances.
     no replay, and allows a fresh frame to start after HAL recovery. A
     reinitialization abort that returns `HAL_BUSY` is retried no more than
     `UART_TX_MAX_REINITIALIZE_ABORT_BUSY_RETRIES` times.
+15. Enter `REINITIALIZING`, restore interrupts, inject a matching
+    `HAL_UART_TxCpltCallback()` before the abort call, and assert that the
+    active frame completes once, no next `HAL_UART_Transmit_IT()` is attempted,
+    pending frames are dropped exactly once by recovery, no frame is replayed,
+    and the final recovery state is correct.
+16. Make the abort double return non-`HAL_OK` without a completion callback
+    while a physical `ACTIVE` frame is known. Assert that its buffer remains
+    retained and unavailable for reuse, new enqueue is rejected, the state is
+    `RECOVERY_FAILED` rather than normal `IDLE`, and only a later matching
+    completion or proven peripheral reset can resolve ownership. Separately
+    assert that a `START_DEFERRED` frame may be locally released but unresolved
+    HAL ownership still leaves recovery failed.
 
 Run this case and retain the expected red result until the adapter is
 implemented.
@@ -206,15 +223,30 @@ implemented.
   attempts; at the fixed limit of 8, increment the escalation diagnostic and
   enter explicit reinitialization. A `START_DEFERRED` frame is transport-owned
   but not physically active, so reinitialization drops/releases it exactly once
-  with all ordinary pending frames and never replays it.
+  with all ordinary pending frames when ownership is resolved and never
+  replays it. If abort ownership remains unresolved, leave the transport
+  `RECOVERY_FAILED` and reject new TX.
 * Prepare the full `REINITIALIZING` state, including an epoch and
   `reinit_completion_handled` guard, before calling
   `HAL_UART_AbortTransmit_IT()` outside the critical section. The abort
   completion handler marks the guard before cleanup, so the current HAL's
   synchronous inline callback, an inline duplicate, a later duplicate, and a
-  fresh enqueue after recovery are all safe. Abort `HAL_BUSY` is retried from
-  bounded foreground processing no more than twice; an abort error or exhausted
-  policy finalizes local ownership once without replay.
+  fresh enqueue after proven recovery are all safe.
+* Gate TX-complete handling on the transport state. A matching completion
+  after `REINITIALIZING` is armed releases the completed active slot and
+  records completion, but never promotes or starts pending work; pending work
+  remains for the abort cleanup. This explicitly covers the IRQ window between
+  restoring interrupts and invoking the abort API.
+* Treat abort non-`HAL_OK` without a matching abort-complete callback as a
+  fail-closed condition. Never locally release or reuse a known physical
+  `ACTIVE` buffer that HAL may still reference. Retain it in
+  `RECOVERY_FAILED`, reject new TX, and resolve only through matching
+  TX-complete, matching abort-complete, or a proven peripheral/hardware reset.
+  A `START_DEFERRED` buffer has no accepted HAL ownership and may be released
+  once, but unresolved HAL state still cannot be reported as normal `IDLE`.
+  Abort `HAL_BUSY` is retried from bounded foreground processing no more than
+  twice; exhaustion follows the same fail-closed rule and never performs
+  `ACTIVE -> local cleanup -> IDLE`.
 
 Run adapter tests to green, then rerun the pure queue tests.
 
@@ -305,8 +337,17 @@ the full Firmware host gate.
   RX-rearm attempt/BUSY/ERROR, unexpected callback, high-water,
   reinitialization, and physical completion.
 * Make every hook a no-op when diagnostics are compiled OFF.
-* Clear the new block on `begin_run`, advance the run marker, and block all
-  later event mutation after `freeze`.
+* Add a volatile lifecycle recording gate with `RESETTING`, `RUNNING`, and
+  `FROZEN` states. In `begin_run`, use a short save/disable/restore-PRIMASK
+  transition to publish `RESETTING`, reset and initialize the complete report
+  while hooks are disabled, then use another short transition to publish
+  `RUNNING` only after initialization is complete. Hooks from UART IRQ context
+  must read the gate and return without mutation unless it is `RUNNING`.
+* In `freeze`, publish `FROZEN` as the first lifecycle transition inside a
+  short save/disable/restore-PRIMASK section. Do not hold interrupts disabled
+  while resetting, encoding, or doing other arbitrary work. After the gate is
+  frozen, later TX-complete/error/abort callbacks and foreground events cannot
+  mutate report bytes.
 * Label existing per-kind TX timing as foreground enqueue/copy timing: call
   count is attempts, byte count is offered bytes, `last_status` is the
   enqueue result, `ok_count` includes ENQUEUED/COALESCED, `error_count` is
@@ -314,8 +355,11 @@ the full Firmware host gate.
   enqueue span. Do not attribute physical serializer time to a foreground
   span.
 
-Add a lifecycle test that records events, freezes, attempts later events, and
-asserts frozen bytes are unchanged. Add diagnostics-off and reduced-telemetry
+Add lifecycle tests that record events before `begin_run`, during the reset
+window, after `begin_run`, immediately before/after `freeze`, and after
+`freeze`; assert that only events observed while `RUNNING` are recorded and
+that the entire frozen report remains byte-identical after later
+TX-complete/error/abort callbacks. Add diagnostics-off and reduced-telemetry
 compile-contract coverage.
 
 ## Phase 8: Update fixed debugger readout
