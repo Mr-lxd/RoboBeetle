@@ -183,6 +183,7 @@ private:
     void refreshLeakTelemetryStaleness(qint64 now);
     void updateMonitor();
     void resetSchedulerState();
+    void dropQueuedCommand(const QueuedCommand &command);
     void clearQueuedCommandsForDisable(quint16 affectedMask);
     void cancelQueuedMotionRequests();
     void cancelPendingMotionRequests();

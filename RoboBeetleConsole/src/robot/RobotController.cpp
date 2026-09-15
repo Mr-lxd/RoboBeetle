@@ -604,13 +604,15 @@ bool RobotController::sendCommand(MessageType type,
             // bounded-queue check; a full priority queue is still rejected.
             while (isSafetyDisable && queuedCommandCount() >= kApc220CommandQueueCapacity
                    && !commandQueue_.isEmpty()) {
-                commandQueue_.dequeue();
+                const QueuedCommand dropped = commandQueue_.dequeue();
+                dropQueuedCommand(dropped);
             }
             while (isMotionStop && queuedCommandCount() >= kApc220CommandQueueCapacity
                    && !commandQueue_.isEmpty()) {
                 // A graceful STOP supersedes ordinary queued work.  Preserve
                 // the bounded scheduler while reserving room for the STOP.
-                commandQueue_.dequeue();
+                const QueuedCommand dropped = commandQueue_.dequeue();
+                dropQueuedCommand(dropped);
             }
             if (queuedCommandCount() >= kApc220CommandQueueCapacity) {
                 emit logMessage(QStringLiteral(
@@ -1408,6 +1410,13 @@ void RobotController::resetSchedulerState()
     }
 }
 
+void RobotController::dropQueuedCommand(const QueuedCommand &command)
+{
+    if (command.gaitBackendRequest.has_value()) {
+        clearGaitBackendPending();
+    }
+}
+
 void RobotController::clearQueuedCommandsForDisable(quint16 affectedMask)
 {
     const auto shouldDrop = [affectedMask](const QueuedCommand &command) {
@@ -1604,6 +1613,9 @@ void RobotController::failClosedApc220Actuators()
 {
     const bool firstFailClosed = !actuatorFailClosed_;
     actuatorFailClosed_ = true;
+    // Liveness fail-close destructively removes queued/deferred work; clear
+    // the selector lifecycle first so a dropped request cannot remain pending.
+    clearGaitBackendOutstanding();
     priorityCommandQueue_.clear();
     commandQueue_.clear();
     deferredRetry_.reset();
