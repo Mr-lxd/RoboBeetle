@@ -16,6 +16,7 @@ enum class MessageType : quint8 {
     SetServoAngle = 0x13,
     Neutral = 0x14,
     SetMotionMode = 0x15,
+    SetGaitBackend = 0x16,
     LeakStatus = 0x20,
     ImuSnapshot = 0x21,
     DepthSnapshot = 0x22,
@@ -44,6 +45,7 @@ constexpr bool isKnownMessageType(quint8 value)
     case MessageType::SetServoAngle:
     case MessageType::Neutral:
     case MessageType::SetMotionMode:
+    case MessageType::SetGaitBackend:
     case MessageType::LeakStatus:
     case MessageType::ImuSnapshot:
     case MessageType::DepthSnapshot:

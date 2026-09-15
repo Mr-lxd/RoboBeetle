@@ -190,6 +190,18 @@ static void test_phase_step(void)
            "10 ms should advance the deterministic 0.5 Hz phase exactly");
 }
 
+static void test_reset_returns_to_deterministic_initial_phase(void)
+{
+    simple_gait_generator_t generator;
+
+    simple_gait_generator_init(&generator);
+    simple_gait_generator_advance(&generator, 250U);
+    simple_gait_generator_reset(&generator);
+
+    expect(simple_gait_generator_phase(&generator) == 0.0F,
+           "SimpleGait reset must restore phase zero");
+}
+
 static void test_sample_preserves_logical_targets_for_common_guard(void)
 {
     simple_gait_generator_t generator;
@@ -216,6 +228,7 @@ int main(void)
     test_backward_is_reserved_pending();
     test_turn_scales_and_axis_bias();
     test_phase_step();
+    test_reset_returns_to_deterministic_initial_phase();
     test_sample_preserves_logical_targets_for_common_guard();
 
     if (failures == 0)

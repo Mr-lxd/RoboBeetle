@@ -1,5 +1,6 @@
 #include "motion_config.h"
 #include "motion_manager.h"
+#include "cpg_gait_generator.h"
 #include "simple_gait_generator.h"
 
 #include "safety_supervisor.h"
@@ -151,6 +152,16 @@ typedef struct
     motion_manager_t manager;
 } fixture_t;
 
+typedef struct
+{
+    fake_driver_t driver;
+    servo_service_t servo_service;
+    safety_supervisor_t safety_supervisor;
+    simple_gait_generator_t simple_generator;
+    cpg_gait_generator_t cpg_generator;
+    motion_manager_t manager;
+} backend_fixture_t;
+
 static void fixture_init(
     fixture_t *fixture,
     uint16_t enabled_mask)
@@ -199,6 +210,34 @@ static void fixture_init_with_generator(
         &fixture->servo_service,
         &fixture->safety_supervisor,
         generator);
+}
+
+static void backend_fixture_init(
+    backend_fixture_t *fixture,
+    motion_gait_backend_t initial_backend)
+{
+    (void)memset(fixture, 0, sizeof(*fixture));
+    fixture->driver.start_result = true;
+
+    servo_service_init(
+        &fixture->servo_service,
+        &fake_ops,
+        &fixture->driver);
+    expect(servo_service_enable(
+               &fixture->servo_service,
+               0x001BU) == SERVO_SERVICE_RESULT_OK,
+           "dual-backend fixture servos should enable successfully");
+    safety_supervisor_init(&fixture->safety_supervisor);
+    safety_supervisor_on_heartbeat(&fixture->safety_supervisor, 0U);
+    simple_gait_generator_init(&fixture->simple_generator);
+    cpg_gait_generator_init(&fixture->cpg_generator);
+    motion_manager_init_with_backends(
+        &fixture->manager,
+        &fixture->servo_service,
+        &fixture->safety_supervisor,
+        simple_gait_generator_interface(&fixture->simple_generator),
+        cpg_gait_generator_interface(&fixture->cpg_generator),
+        initial_backend);
 }
 
 static void keep_host_alive(
@@ -932,7 +971,193 @@ static void test_stop_transition_reapplies_operational_sanitizer(void)
                MOTION_FRONT_MAX_CDEG,
            "STOPPING must clamp retained front targets to the operational maximum");
     expect(motion_manager_operational_clamp_count(&fixture.manager) == 2U,
-           "STOPPING sanitizer should count front and rear operational clamps");
+               "STOPPING sanitizer should count front and rear operational clamps");
+}
+
+static void test_gait_backend_switch_is_stopped_only_and_has_no_output_side_effect(void)
+{
+    backend_fixture_t fixture;
+    cpg_gait_generator_t fresh_cpg;
+    joint_targets_t targets;
+    unsigned int writes_before;
+    cpg_gait_generator_t cpg_before_same_backend;
+
+    backend_fixture_init(&fixture, MOTION_GAIT_BACKEND_CPG);
+    writes_before = fixture.driver.write_calls;
+    cpg_gait_generator_advance(&fixture.cpg_generator, 37U);
+    expect(cpg_gait_generator_sample(
+               &fixture.cpg_generator,
+               MOTION_TURN_LEFT,
+               1.0F,
+               1.0F,
+               &targets),
+           "selector reset setup TURN sample should succeed");
+
+    expect(motion_manager_gait_backend(&fixture.manager) ==
+               MOTION_GAIT_BACKEND_CPG,
+           "explicit production-style fixture should start in CPG");
+    expect(motion_manager_set_gait_backend(
+               &fixture.manager,
+               MOTION_GAIT_BACKEND_SIMPLE_GAIT) ==
+               MOTION_MANAGER_RESULT_OK,
+           "STOPPED CPG to SimpleGait should succeed");
+    expect(motion_manager_state(&fixture.manager) == MOTION_STATE_STOPPED,
+           "successful selector must remain STOPPED");
+    expect(!servo_service_motion_is_active(&fixture.servo_service),
+           "successful selector must not start Motion");
+    expect(fixture.driver.write_calls == writes_before,
+           "successful selector must not write Servo output");
+    expect(motion_manager_gait_backend(&fixture.manager) ==
+               MOTION_GAIT_BACKEND_SIMPLE_GAIT,
+           "successful selector must update the active backend");
+
+    expect(motion_manager_set_gait_backend(
+               &fixture.manager,
+               MOTION_GAIT_BACKEND_SIMPLE_GAIT) ==
+               MOTION_MANAGER_RESULT_OK,
+           "STOPPED same-backend selection should be a deterministic no-op");
+    expect(fixture.driver.write_calls == writes_before,
+           "same-backend no-op must not write Servo output");
+
+    expect(motion_manager_set_gait_backend(
+               &fixture.manager,
+               MOTION_GAIT_BACKEND_CPG) ==
+               MOTION_MANAGER_RESULT_OK,
+           "STOPPED SimpleGait to CPG should succeed");
+    cpg_gait_generator_init(&fresh_cpg);
+    expect(memcmp(&fixture.cpg_generator.core, &fresh_cpg.core,
+                  sizeof(fresh_cpg.core)) == 0,
+           "switching back to CPG must reset the runtime core");
+    cpg_before_same_backend = fixture.cpg_generator;
+    expect(motion_manager_set_gait_backend(
+               &fixture.manager,
+               MOTION_GAIT_BACKEND_CPG) ==
+               MOTION_MANAGER_RESULT_OK,
+           "reselecting CPG while STOPPED should be a no-op");
+    expect(memcmp(&fixture.cpg_generator.core,
+                  &cpg_before_same_backend.core,
+                  sizeof(fixture.cpg_generator.core)) == 0,
+           "same-backend CPG no-op must not reset or advance state");
+    expect(fixture.driver.write_calls == writes_before,
+           "all successful selector operations must preserve Servo output");
+}
+
+static void test_gait_backend_selector_busy_precedes_value_validation(void)
+{
+    backend_fixture_t fixture;
+    const motion_state_t running_state = MOTION_STATE_RUNNING;
+    const motion_gait_backend_t current_backend =
+        MOTION_GAIT_BACKEND_CPG;
+    unsigned int writes_before;
+    joint_targets_t targets_before;
+    cpg_core_t core_before;
+
+    backend_fixture_init(&fixture, current_backend);
+    expect(motion_manager_start(
+               &fixture.manager,
+               MOTION_FORWARD) == MOTION_MANAGER_RESULT_OK,
+           "selector BUSY setup should start Motion");
+    (void)motion_manager_process(&fixture.manager, 0U);
+    safety_supervisor_on_heartbeat(&fixture.safety_supervisor, 10U);
+    (void)motion_manager_process(&fixture.manager, 10U);
+
+    writes_before = fixture.driver.write_calls;
+    targets_before = *motion_manager_last_targets(&fixture.manager);
+    core_before = fixture.cpg_generator.core;
+    expect(motion_manager_set_gait_backend(
+               &fixture.manager,
+               current_backend) == MOTION_MANAGER_RESULT_BUSY,
+           "RUNNING same-backend selection must return BUSY");
+    expect(motion_manager_set_gait_backend(
+               &fixture.manager,
+               (motion_gait_backend_t)0xffU) ==
+               MOTION_MANAGER_RESULT_BUSY,
+           "RUNNING invalid backend must return BUSY before validation");
+    expect(motion_manager_state(&fixture.manager) == running_state &&
+               motion_manager_gait_backend(&fixture.manager) == current_backend &&
+               memcmp(motion_manager_last_targets(&fixture.manager),
+                      &targets_before,
+                      sizeof(targets_before)) == 0 &&
+               memcmp(&fixture.cpg_generator.core,
+                      &core_before,
+                      sizeof(core_before)) == 0 &&
+               fixture.driver.write_calls == writes_before,
+           "RUNNING selector rejection must preserve Motion, generator, and output state");
+
+    expect(motion_manager_request_stop_at(&fixture.manager, 10U) ==
+               MOTION_MANAGER_RESULT_OK,
+           "selector STOPPING setup should accept STOP");
+    expect(motion_manager_state(&fixture.manager) == MOTION_STATE_STOPPING,
+           "selector STOPPING setup should enter STOPPING");
+    expect(motion_manager_set_gait_backend(
+               &fixture.manager,
+               MOTION_GAIT_BACKEND_SIMPLE_GAIT) ==
+               MOTION_MANAGER_RESULT_BUSY,
+           "STOPPING selector must return BUSY");
+    expect(fixture.driver.write_calls == writes_before,
+           "STOPPING selector rejection must not write Servo output");
+
+    safety_supervisor_on_heartbeat(&fixture.safety_supervisor, 760U);
+    (void)motion_manager_process(&fixture.manager, 760U);
+    expect(motion_manager_state(&fixture.manager) == MOTION_STATE_STOPPED,
+           "selector should become available after STOP completes");
+    expect(motion_manager_set_gait_backend(
+               &fixture.manager,
+               MOTION_GAIT_BACKEND_SIMPLE_GAIT) ==
+               MOTION_MANAGER_RESULT_OK,
+           "selector should be allowed after STOPPED is restored");
+}
+
+static void test_legacy_and_missing_backend_registration_never_guess_or_mutate(void)
+{
+    fixture_t legacy;
+    fake_gait_generator_t fake = {0};
+    gait_generator_t active_before;
+    joint_targets_t targets_before;
+    unsigned int writes_before;
+
+    fixture_init(&legacy, 0x001BU);
+    active_before = legacy.manager.generator;
+    targets_before = *motion_manager_last_targets(&legacy.manager);
+    writes_before = legacy.driver.write_calls;
+    expect(motion_manager_gait_backend(&legacy.manager) ==
+               MOTION_GAIT_BACKEND_UNSPECIFIED,
+           "legacy single-generator initialization must not infer backend identity");
+    expect(motion_manager_set_gait_backend(
+               &legacy.manager,
+               MOTION_GAIT_BACKEND_CPG) ==
+               MOTION_MANAGER_RESULT_HARDWARE_FAILURE,
+           "legacy selector must reject an unregistered backend");
+    expect(memcmp(&legacy.manager.generator, &active_before,
+                  sizeof(active_before)) == 0 &&
+               memcmp(motion_manager_last_targets(&legacy.manager),
+                      &targets_before,
+                      sizeof(targets_before)) == 0 &&
+               legacy.driver.write_calls == writes_before,
+           "legacy unavailable selector must not mutate active state or output");
+
+    motion_manager_init_with_backends(
+        &legacy.manager,
+        &legacy.servo_service,
+        &legacy.safety_supervisor,
+        fake_gait_interface(&fake),
+        fake_gait_interface(&fake),
+        MOTION_GAIT_BACKEND_SIMPLE_GAIT);
+    active_before = legacy.manager.generator;
+    targets_before = *motion_manager_last_targets(&legacy.manager);
+    writes_before = legacy.driver.write_calls;
+    expect(motion_manager_set_gait_backend(
+               &legacy.manager,
+               MOTION_GAIT_BACKEND_CPG) ==
+               MOTION_MANAGER_RESULT_HARDWARE_FAILURE,
+           "missing registered reset infrastructure must return HardwareFailure");
+    expect(memcmp(&legacy.manager.generator, &active_before,
+                  sizeof(active_before)) == 0 &&
+               memcmp(motion_manager_last_targets(&legacy.manager),
+                      &targets_before,
+                      sizeof(targets_before)) == 0 &&
+               legacy.driver.write_calls == writes_before,
+           "missing reset infrastructure must not mutate manager or output");
 }
 
 int main(void)
@@ -956,6 +1181,9 @@ int main(void)
     test_common_motion_guard_clamps_alternate_generator_output();
     test_simple_gait_production_pipeline_preserves_physical_directions();
     test_stop_transition_reapplies_operational_sanitizer();
+    test_gait_backend_switch_is_stopped_only_and_has_no_output_side_effect();
+    test_gait_backend_selector_busy_precedes_value_validation();
+    test_legacy_and_missing_backend_registration_never_guess_or_mutate();
 
     if (failures == 0)
     {

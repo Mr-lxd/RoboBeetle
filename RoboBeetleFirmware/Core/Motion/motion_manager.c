@@ -8,6 +8,17 @@
 
 static const joint_targets_t zero_targets = {0};
 
+static bool motion_manager_generator_is_usable(
+    const gait_generator_t *generator)
+{
+    return (generator != NULL) &&
+           (generator->ops != NULL) &&
+           (generator->ops->advance != NULL) &&
+           (generator->ops->reset != NULL) &&
+           (generator->ops->sample != NULL) &&
+           (generator->ops->is_mode_valid != NULL);
+}
+
 static bool motion_manager_is_running_state(
     const motion_manager_t *manager)
 {
@@ -524,10 +535,98 @@ void motion_manager_init(
     manager->servo_service = servo_service;
     manager->safety_supervisor = safety_supervisor;
     manager->generator = generator;
+    manager->gait_backend = MOTION_GAIT_BACKEND_UNSPECIFIED;
+    manager->backend_selector_available = false;
     manager->state = MOTION_STATE_STOPPED;
     manager->active_mode = MOTION_STOP;
     manager->transition_mode = MOTION_STOP;
     manager->transition_from_mode = MOTION_STOP;
+}
+
+void motion_manager_init_with_backends(
+    motion_manager_t *manager,
+    servo_service_t *servo_service,
+    safety_supervisor_t *safety_supervisor,
+    gait_generator_t simple_gait,
+    gait_generator_t cpg,
+    motion_gait_backend_t initial_backend)
+{
+    if (manager == NULL)
+    {
+        return;
+    }
+
+    *manager = (motion_manager_t){0};
+    manager->servo_service = servo_service;
+    manager->safety_supervisor = safety_supervisor;
+    manager->registered_generators[MOTION_GAIT_BACKEND_SIMPLE_GAIT] = simple_gait;
+    manager->registered_generators[MOTION_GAIT_BACKEND_CPG] = cpg;
+    manager->gait_backend = MOTION_GAIT_BACKEND_UNSPECIFIED;
+    manager->backend_selector_available = false;
+    manager->state = MOTION_STATE_STOPPED;
+    manager->active_mode = MOTION_STOP;
+    manager->transition_mode = MOTION_STOP;
+    manager->transition_from_mode = MOTION_STOP;
+
+    if (motion_gait_backend_is_valid(initial_backend) &&
+        motion_manager_generator_is_usable(
+            &manager->registered_generators[initial_backend]))
+    {
+        manager->generator = manager->registered_generators[initial_backend];
+        manager->gait_backend = initial_backend;
+        manager->backend_selector_available = true;
+    }
+}
+
+motion_manager_result_t motion_manager_set_gait_backend(
+    motion_manager_t *manager,
+    motion_gait_backend_t backend)
+{
+    gait_generator_t *selected;
+
+    if (manager == NULL)
+    {
+        return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
+    }
+
+    if (manager->state != MOTION_STATE_STOPPED)
+    {
+        return MOTION_MANAGER_RESULT_BUSY;
+    }
+
+    if (!motion_gait_backend_is_valid(backend))
+    {
+        return MOTION_MANAGER_RESULT_INVALID_BACKEND;
+    }
+
+    if (!manager->backend_selector_available)
+    {
+        return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
+    }
+
+    selected = &manager->registered_generators[backend];
+    if (!motion_manager_generator_is_usable(selected))
+    {
+        return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
+    }
+
+    if (manager->gait_backend == backend)
+    {
+        return MOTION_MANAGER_RESULT_OK;
+    }
+
+    selected->ops->reset(selected->context);
+    manager->generator = *selected;
+    manager->gait_backend = backend;
+    return MOTION_MANAGER_RESULT_OK;
+}
+
+motion_gait_backend_t motion_manager_gait_backend(
+    const motion_manager_t *manager)
+{
+    return (manager == NULL) ?
+        MOTION_GAIT_BACKEND_UNSPECIFIED :
+        manager->gait_backend;
 }
 
 motion_manager_result_t motion_manager_start(

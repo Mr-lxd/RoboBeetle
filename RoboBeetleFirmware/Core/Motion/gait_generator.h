@@ -19,6 +19,7 @@ typedef struct
         joint_targets_t *targets);
     bool (*is_mode_valid)(void *context, motion_mode_t mode);
     uint32_t (*diagnostic_count)(void *context);
+    void (*reset)(void *context);
 } gait_generator_ops_t;
 
 typedef struct

@@ -56,8 +56,8 @@ $cases = @(
     @{ Name = 'simple_gait_generator_tests'; Sources = @('tests/simple_gait_generator_tests.c', 'Core/Motion/simple_gait_generator.c'); Link = @('-lm') },
     @{ Name = 'gait_trace_compare_tests'; Sources = @('tests/gait_trace_compare_tests.c', 'tests/tools/gait_trace_compare.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c'); Link = @('-lm'); Arguments = @($traceTestOutputPathA, $traceTestOutputPathB) },
     @{ Name = 'gait_trace_compare_tool'; Sources = @('tests/tools/gait_trace_compare_main.c', 'tests/tools/gait_trace_compare.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c'); Link = @('-lm'); Arguments = @($traceToolOutputPath) },
-    @{ Name = 'motion_manager_tests'; Sources = @('tests/motion_manager_tests.c', 'Core/Motion/motion_manager.c', 'Core/Motion/simple_gait_generator.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c'); Link = @('-lm') },
-    @{ Name = 'protocol_dispatcher_tests'; Sources = @('tests/protocol_dispatcher_tests.c', 'Core/Communication/protocol_dispatcher.c', 'Core/Motion/motion_manager.c', 'Core/Motion/simple_gait_generator.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c'); Link = @('-lm') },
+    @{ Name = 'motion_manager_tests'; Sources = @('tests/motion_manager_tests.c', 'Core/Motion/motion_manager.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c'); Link = @('-lm') },
+    @{ Name = 'protocol_dispatcher_tests'; Sources = @('tests/protocol_dispatcher_tests.c', 'Core/Communication/protocol_dispatcher.c', 'Core/Motion/motion_manager.c', 'Core/Motion/simple_gait_generator.c', 'Core/Motion/cpg_gait_generator.c', 'Core/Motion/cpg_core.c', 'Core/Servo/servo_service.c', 'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c'); Link = @('-lm') },
     @{ Name = 'jy901s_parser_tests'; Sources = @('tests/jy901s_parser_tests.c', 'Core/Sensors/jy901s_parser.c'); Link = @() },
     @{ Name = 'jy901s_telemetry_tests'; Sources = @('tests/jy901s_telemetry_tests.c', 'Core/Sensors/jy901s_telemetry.c', 'Core/Src/rb_protocol_v2.c'); Link = @() },
     @{ Name = 'telemetry_scheduler_tests'; Sources = @('tests/telemetry_scheduler_tests.c', 'Core/Communication/imu_telemetry_policy.c', 'Core/Communication/telemetry_scheduler.c'); Link = @() },
@@ -123,7 +123,7 @@ $cases = @(
         'Core/Servo/servo_driver_stm32.c',
         'Core/Servo/servo_pwm_stop_policy.c',
         'Core/Safety/safety_supervisor.c'
-    ); Link = @('-lm', '-Wl,--wrap=motion_manager_init'); Extra = $halWarningArgs }
+    ); Link = @('-lm', '-Wl,--wrap=motion_manager_init_with_backends'); Extra = $halWarningArgs }
 )
 
 $backendTemplate = $cases | Where-Object {

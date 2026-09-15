@@ -189,6 +189,31 @@ void testMotionModeWireContract()
            "Motion mode payload should be exactly schema/mode/action");
 }
 
+void testGaitBackendWireContract()
+{
+    static_assert(static_cast<quint8>(rb::GaitBackend::SimpleGait) == 0);
+    static_assert(static_cast<quint8>(rb::GaitBackend::CPG) == 1);
+    static_assert(static_cast<quint8>(rb::MessageType::SetGaitBackend) == 0x16);
+
+    expect(rb::isKnownMessageType(0x16),
+           "SetGaitBackend must be a known message type");
+
+    QByteArray payload;
+    payload.append(static_cast<char>(rb::GaitBackend::SimpleGait));
+    const rb::Packet packet{
+        rb::MessageType::SetGaitBackend,
+        0x1235,
+        payload,
+    };
+    const QByteArray wire = rb::PacketCodec::encodeWire(packet);
+    const rb::DecodeResult decoded = rb::PacketCodec::decodeWire(
+        wire.first(wire.size() - 1));
+
+    expect(decoded.ok(), "SetGaitBackend should encode and decode");
+    expect(decoded.packet == packet && decoded.packet.payload.size() == 1,
+           "SetGaitBackend payload must be exactly one byte");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -200,6 +225,7 @@ int main(int argc, char **argv)
     testValidationErrorsAndRecovery();
     testInterruptedFrameReset();
     testMotionModeWireContract();
+    testGaitBackendWireContract();
     if (failures == 0) {
         std::cout << "All protocol tests passed\n";
     }

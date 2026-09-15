@@ -18,7 +18,8 @@ typedef enum
     MOTION_MANAGER_RESULT_HOST_NOT_ALIVE,
     MOTION_MANAGER_RESULT_SERVO_NOT_ENABLED,
     MOTION_MANAGER_RESULT_BUSY,
-    MOTION_MANAGER_RESULT_HARDWARE_FAILURE
+    MOTION_MANAGER_RESULT_HARDWARE_FAILURE,
+    MOTION_MANAGER_RESULT_INVALID_BACKEND
 } motion_manager_result_t;
 
 typedef enum
@@ -33,6 +34,9 @@ typedef struct
     servo_service_t *servo_service;
     safety_supervisor_t *safety_supervisor;
     gait_generator_t generator;
+    gait_generator_t registered_generators[MOTION_GAIT_BACKEND_COUNT];
+    motion_gait_backend_t gait_backend;
+    bool backend_selector_available;
     motion_state_t state;
     motion_mode_t active_mode;
     motion_mode_t transition_mode;
@@ -54,6 +58,21 @@ void motion_manager_init(
     servo_service_t *servo_service,
     safety_supervisor_t *safety_supervisor,
     gait_generator_t generator);
+
+void motion_manager_init_with_backends(
+    motion_manager_t *manager,
+    servo_service_t *servo_service,
+    safety_supervisor_t *safety_supervisor,
+    gait_generator_t simple_gait,
+    gait_generator_t cpg,
+    motion_gait_backend_t initial_backend);
+
+motion_manager_result_t motion_manager_set_gait_backend(
+    motion_manager_t *manager,
+    motion_gait_backend_t backend);
+
+motion_gait_backend_t motion_manager_gait_backend(
+    const motion_manager_t *manager);
 
 motion_manager_result_t motion_manager_start(
     motion_manager_t *manager,

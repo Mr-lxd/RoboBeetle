@@ -86,6 +86,7 @@ public:
     bool neutralServo(ServoId id);
     bool startMotion(MotionMode mode);
     bool stopMotion();
+    bool setGaitBackend(GaitBackend backend);
 
     [[nodiscard]] bool isConnected() const { return state_ == TransportState::Connected; }
     [[nodiscard]] bool isServoSupported(ServoId id) const;
@@ -102,6 +103,18 @@ public:
     [[nodiscard]] ProtocolMonitor monitor() const { return monitor_; }
     [[nodiscard]] MotionState motionState() const { return motionState_; }
     [[nodiscard]] MotionMode motionMode() const { return motionMode_; }
+    [[nodiscard]] std::optional<GaitBackend> confirmedGaitBackend() const
+    {
+        return confirmedGaitBackend_;
+    }
+    [[nodiscard]] std::optional<GaitBackend> requestedGaitBackend() const
+    {
+        return pendingGaitBackend_;
+    }
+    [[nodiscard]] bool isGaitBackendChangePending() const
+    {
+        return pendingGaitBackend_.has_value();
+    }
     [[nodiscard]] bool isMotionActive() const;
     [[nodiscard]] bool isMotionReady(MotionMode mode) const;
     [[nodiscard]] bool isMotionTransitioning() const
@@ -121,6 +134,7 @@ signals:
     void servoDisablePendingChanged(int servoIndex, bool pending);
     void leakStateChanged(rb::LeakState state);
     void motionStateChanged(rb::MotionState state, rb::MotionMode mode);
+    void gaitBackendStateChanged();
     void protocolMonitorChanged(const rb::ProtocolMonitor &monitor);
     void txHexChanged(const QString &hex);
     void rxHexChanged(const QString &hex);
@@ -137,6 +151,7 @@ private:
         std::optional<MotionRequest> motionRequest;
         bool motionCancelled{false};
         bool cancelled{false};
+        std::optional<GaitBackend> gaitBackendRequest;
     };
 
     struct QueuedCommand {
@@ -144,11 +159,13 @@ private:
         QByteArray payload;
         quint16 affectedMask{0};
         std::optional<MotionRequest> motionRequest;
+        std::optional<GaitBackend> gaitBackendRequest;
     };
 
     bool sendCommand(MessageType type, const QByteArray &payload, quint16 affectedMask = 0,
                      bool expectAck = true,
-                     std::optional<MotionRequest> motionRequest = std::nullopt);
+                     std::optional<MotionRequest> motionRequest = std::nullopt,
+                     std::optional<GaitBackend> gaitBackendRequest = std::nullopt);
     void sendHeartbeat();
     bool dispatchApc220Command(const QueuedCommand &command);
     bool dispatchApc220Retry(quint16 sequence);
@@ -166,6 +183,7 @@ private:
     void refreshLeakTelemetryStaleness(qint64 now);
     void updateMonitor();
     void resetSchedulerState();
+    void dropQueuedCommand(const QueuedCommand &command);
     void clearQueuedCommandsForDisable(quint16 affectedMask);
     void cancelQueuedMotionRequests();
     void cancelPendingMotionRequests();
@@ -180,6 +198,8 @@ private:
     void setEnabledMask(quint16 mask);
     void setDisablePendingMask(quint16 mask);
     void setLeakState(LeakState state);
+    void clearGaitBackendPending();
+    void clearGaitBackendOutstanding();
     void markApc220LivenessLost();
     void noteWriteFailure(const QString &context);
     bool rejectUnsupportedServo(ServoId id, const QString &command);
@@ -223,6 +243,8 @@ private:
     DepthMonitor depthMonitor_;
     MotionState motionState_{MotionState::Stopped};
     MotionMode motionMode_{MotionMode::Stop};
+    std::optional<GaitBackend> confirmedGaitBackend_;
+    std::optional<GaitBackend> pendingGaitBackend_;
 };
 
 } // namespace rb
@@ -230,3 +252,4 @@ private:
 Q_DECLARE_METATYPE(rb::ProtocolMonitor)
 Q_DECLARE_METATYPE(rb::MotionState)
 Q_DECLARE_METATYPE(rb::MotionMode)
+Q_DECLARE_METATYPE(rb::GaitBackend)

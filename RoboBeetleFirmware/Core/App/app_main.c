@@ -501,18 +501,18 @@ void app_main_init(
     cpg_target_benchmark_run(&cpg_gait_generator);
 #endif
 #if MOTION_DEFAULT_GAIT_BACKEND_CPG
-    motion_manager_init(
-        &motion_manager,
-        &servo_service,
-        &safety_supervisor,
-        cpg_gait_generator_interface(&cpg_gait_generator));
+    const motion_gait_backend_t initial_backend = MOTION_GAIT_BACKEND_CPG;
 #else
-    motion_manager_init(
+    const motion_gait_backend_t initial_backend =
+        MOTION_GAIT_BACKEND_SIMPLE_GAIT;
+#endif
+    motion_manager_init_with_backends(
         &motion_manager,
         &servo_service,
         &safety_supervisor,
-        simple_gait_generator_interface(&simple_gait_generator));
-#endif
+        simple_gait_generator_interface(&simple_gait_generator),
+        cpg_gait_generator_interface(&cpg_gait_generator),
+        initial_backend);
     protocol_dispatcher_init(
         &protocol_dispatcher,
         &servo_service,

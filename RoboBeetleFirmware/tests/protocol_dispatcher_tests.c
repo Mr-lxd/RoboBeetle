@@ -2,6 +2,7 @@
 
 #include "motion_config.h"
 #include "motion_manager.h"
+#include "cpg_gait_generator.h"
 #include "simple_gait_generator.h"
 
 #include <stdbool.h>
@@ -75,6 +76,7 @@ typedef struct
     servo_service_t servo_service;
     safety_supervisor_t safety_supervisor;
     simple_gait_generator_t generator;
+    cpg_gait_generator_t cpg_generator;
     motion_manager_t motion_manager;
     protocol_dispatcher_t dispatcher;
 } fixture_t;
@@ -90,11 +92,14 @@ static void fixture_init(fixture_t *fixture)
         &fixture->driver);
     safety_supervisor_init(&fixture->safety_supervisor);
     simple_gait_generator_init(&fixture->generator);
-    motion_manager_init(
+    cpg_gait_generator_init(&fixture->cpg_generator);
+    motion_manager_init_with_backends(
         &fixture->motion_manager,
         &fixture->servo_service,
         &fixture->safety_supervisor,
-        simple_gait_generator_interface(&fixture->generator));
+        simple_gait_generator_interface(&fixture->generator),
+        cpg_gait_generator_interface(&fixture->cpg_generator),
+        MOTION_GAIT_BACKEND_CPG);
     protocol_dispatcher_init(
         &fixture->dispatcher,
         &fixture->servo_service,
@@ -1150,7 +1155,149 @@ static void test_stop_when_already_stopped_is_idempotent(void)
            "STOP while already STOPPED should be idempotent");
     expect(motion_manager_state(&fixture.motion_manager) ==
                MOTION_STATE_STOPPED,
-           "idempotent STOP should remain STOPPED");
+               "idempotent STOP should remain STOPPED");
+}
+
+static void test_gait_backend_payload_precedence_and_side_effects(void)
+{
+    fixture_t fixture;
+    const uint8_t simple_payload[1] = {
+        MOTION_GAIT_BACKEND_SIMPLE_GAIT,
+    };
+    const uint8_t cpg_payload[1] = {
+        MOTION_GAIT_BACKEND_CPG,
+    };
+    const uint8_t invalid_payload[1] = {0xffU};
+    const uint8_t start_payload[3] = {
+        1U,
+        MOTION_FORWARD,
+        MOTION_ACTION_START,
+    };
+    const uint8_t stop_payload[3] = {
+        1U,
+        MOTION_STOP,
+        MOTION_ACTION_STOP,
+    };
+    rbp2_frame_t frame;
+    protocol_dispatcher_outcome_t outcome;
+    unsigned int writes_before;
+
+    fixture_init(&fixture);
+    accept_heartbeat(&fixture, 180U, 0U, 0U);
+    writes_before = fixture.driver.write_calls;
+
+    frame = make_frame(
+        RBP2_MSG_SET_GAIT_BACKEND,
+        181U,
+        simple_payload,
+        sizeof(simple_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "valid STOPPED SimpleGait selector should ACK OK");
+    expect(motion_manager_gait_backend(&fixture.motion_manager) ==
+               MOTION_GAIT_BACKEND_SIMPLE_GAIT,
+           "successful selector should update the Firmware backend");
+    expect(motion_manager_state(&fixture.motion_manager) ==
+               MOTION_STATE_STOPPED &&
+               !servo_service_motion_is_active(&fixture.servo_service),
+           "successful selector must remain STOPPED without starting Motion");
+    expect(fixture.driver.write_calls == writes_before,
+           "successful selector must not write Servo output");
+
+    frame = make_frame(
+        RBP2_MSG_SET_GAIT_BACKEND,
+        182U,
+        simple_payload,
+        sizeof(simple_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "same-backend STOPPED selector should be deterministic OK");
+    expect(fixture.driver.write_calls == writes_before,
+           "same-backend selector no-op must not write Servo output");
+
+    frame = make_frame(
+        RBP2_MSG_SET_GAIT_BACKEND,
+        183U,
+        NULL,
+        0U);
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_INVALID_PAYLOAD,
+           "selector payload length other than one must be invalid");
+
+    frame = make_frame(
+        RBP2_MSG_SET_GAIT_BACKEND,
+        184U,
+        invalid_payload,
+        sizeof(invalid_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_INVALID_PAYLOAD,
+           "STOPPED invalid selector value must map to InvalidPayload");
+
+    enable_paddles(&fixture);
+    frame = make_frame(
+        RBP2_MSG_SET_MOTION_MODE,
+        185U,
+        start_payload,
+        sizeof(start_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "selector moving-state setup should start Motion");
+    writes_before = fixture.driver.write_calls;
+
+    frame = make_frame(
+        RBP2_MSG_SET_GAIT_BACKEND,
+        186U,
+        invalid_payload,
+        sizeof(invalid_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_BUSY,
+           "RUNNING invalid selector value must return BUSY first");
+    expect(motion_manager_gait_backend(&fixture.motion_manager) ==
+               MOTION_GAIT_BACKEND_SIMPLE_GAIT &&
+               motion_manager_state(&fixture.motion_manager) ==
+                   MOTION_STATE_RUNNING &&
+               fixture.driver.write_calls == writes_before,
+           "RUNNING selector rejection must preserve backend and output");
+
+    frame = make_frame(
+        RBP2_MSG_SET_MOTION_MODE,
+        187U,
+        stop_payload,
+        sizeof(stop_payload));
+    outcome = handle(&fixture, &frame, 10U);
+    expect(outcome.result == RBP2_RESULT_OK &&
+               motion_manager_state(&fixture.motion_manager) ==
+                   MOTION_STATE_STOPPING,
+           "selector STOPPING setup should accept Motion STOP");
+
+    frame = make_frame(
+        RBP2_MSG_SET_GAIT_BACKEND,
+        188U,
+        cpg_payload,
+        sizeof(cpg_payload));
+    outcome = handle(&fixture, &frame, 10U);
+    expect(outcome.result == RBP2_RESULT_BUSY,
+           "STOPPING selector must return BUSY");
+
+    accept_heartbeat(&fixture, 189U, 0U, 760U);
+    (void)motion_manager_process(&fixture.motion_manager, 760U);
+    expect(motion_manager_state(&fixture.motion_manager) ==
+               MOTION_STATE_STOPPED,
+           "selector should become available once STOP completes");
+
+    writes_before = fixture.driver.write_calls;
+    frame = make_frame(
+        RBP2_MSG_SET_GAIT_BACKEND,
+        190U,
+        cpg_payload,
+        sizeof(cpg_payload));
+    outcome = handle(&fixture, &frame, 760U);
+    expect(outcome.result == RBP2_RESULT_OK &&
+               motion_manager_gait_backend(&fixture.motion_manager) ==
+                   MOTION_GAIT_BACKEND_CPG,
+           "STOPPED selector should switch back to CPG");
+    expect(fixture.driver.write_calls == writes_before,
+           "post-STOP selector must not write Servo output");
 }
 
 int main(void)
@@ -1174,6 +1321,7 @@ int main(void)
     test_servo_disable_validates_before_motion_preemption();
     test_servo_disable_intersects_mode_transition_ownership();
     test_stop_when_already_stopped_is_idempotent();
+    test_gait_backend_payload_precedence_and_side_effects();
 
     if (failures == 0)
     {

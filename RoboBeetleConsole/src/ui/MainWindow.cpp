@@ -15,6 +15,7 @@
 #include <QSpinBox>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QSignalBlocker>
 
 #include <array>
 
@@ -135,6 +136,8 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
                     refreshServoUi(index);
                 }
             });
+    connect(controller_, &RobotController::gaitBackendStateChanged,
+            this, &MainWindow::refreshGaitBackendUi);
     connect(controller_, &RobotController::leakStateChanged,
             this, &MainWindow::setLeakUiState);
     connect(controller_->imuMonitor(), &ImuMonitor::changed, this, [this] {
@@ -162,6 +165,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     setImuUiState(controller_->imuState());
     setDepthUiState(controller_->depthState());
     refreshMotionUi();
+    refreshGaitBackendUi();
     controller_->refreshSerialPorts();
 }
 
@@ -380,21 +384,51 @@ QWidget *MainWindow::createMotionPanel()
     }
     motionStopButton_ = new QPushButton(QStringLiteral("Stop"), box);
     motionStatus_ = new QLabel(QStringLiteral("Stopped"), box);
+    gaitBackendCombo_ = new QComboBox(box);
+    gaitBackendCombo_->setObjectName(QStringLiteral("gaitBackendCombo"));
+    gaitBackendCombo_->addItem(QStringLiteral("Unknown"), -1);
+    gaitBackendCombo_->addItem(
+        QStringLiteral("SimpleGait"), static_cast<int>(GaitBackend::SimpleGait));
+    gaitBackendCombo_->addItem(
+        QStringLiteral("CPG"), static_cast<int>(GaitBackend::CPG));
+    gaitBackendStatus_ = new QLabel(QStringLiteral("Unknown"), box);
     auto *provisional = new QLabel(
         QStringLiteral("Bench Provisional / Pending Water Verification"),
         box);
     provisional->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
 
-    layout->addWidget(motionStopButton_, 2, 0);
-    layout->addWidget(new QLabel(QStringLiteral("Status"), box), 2, 1);
-    layout->addWidget(motionStatus_, 2, 2);
-    layout->addWidget(provisional, 3, 0, 1, 3);
+    layout->addWidget(new QLabel(QStringLiteral("Gait Backend:"), box), 2, 0);
+    layout->addWidget(gaitBackendCombo_, 2, 1);
+    layout->addWidget(gaitBackendStatus_, 2, 2);
+    layout->addWidget(motionStopButton_, 3, 0);
+    layout->addWidget(new QLabel(QStringLiteral("Status"), box), 3, 1);
+    layout->addWidget(motionStatus_, 3, 2);
+    layout->addWidget(provisional, 4, 0, 1, 3);
+
+    connect(gaitBackendCombo_, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
+                if (index < 0 || gaitBackendCombo_ == nullptr
+                    || !gaitBackendCombo_->isEnabled()) {
+                    refreshGaitBackendUi();
+                    return;
+                }
+                const QVariant value = gaitBackendCombo_->itemData(index);
+                if (!value.isValid()
+                    || !isValidGaitBackend(static_cast<quint8>(value.toInt()))) {
+                    refreshGaitBackendUi();
+                    return;
+                }
+                controller_->setGaitBackend(
+                    static_cast<GaitBackend>(value.toInt()));
+                refreshGaitBackendUi();
+            });
 
     connect(motionStopButton_, &QPushButton::clicked, this, [this] {
         controller_->stopMotion();
         refreshMotionUi();
     });
     refreshMotionUi();
+    refreshGaitBackendUi();
     return box;
 }
 
@@ -627,6 +661,7 @@ void MainWindow::setConnectedUi(bool connected)
         refreshServoUi(index);
     }
     refreshMotionUi();
+    refreshGaitBackendUi();
 }
 
 void MainWindow::refreshServoUi(int index)
@@ -732,6 +767,34 @@ void MainWindow::refreshMotionUi()
             && !transitioning && controller_->isMotionReady(mode));
     }
     motionStopButton_->setEnabled(connected && controller_->isMotionActive());
+}
+
+void MainWindow::refreshGaitBackendUi()
+{
+    if (gaitBackendCombo_ == nullptr || gaitBackendStatus_ == nullptr) {
+        return;
+    }
+
+    const bool connected = controller_->isConnected();
+    const bool pending = controller_->isGaitBackendChangePending();
+    const std::optional<GaitBackend> displayBackend = pending
+        ? controller_->requestedGaitBackend()
+        : controller_->confirmedGaitBackend();
+    int displayIndex = gaitBackendCombo_->findData(-1);
+    QString status = QStringLiteral("Unknown");
+    if (displayBackend.has_value()) {
+        displayIndex = gaitBackendCombo_->findData(
+            static_cast<int>(*displayBackend));
+        const QString name = gaitBackendCombo_->itemText(displayIndex);
+        status = pending
+            ? QStringLiteral("Requested — %1 (awaiting ACK)").arg(name)
+            : QStringLiteral("Confirmed — %1").arg(name);
+    }
+
+    const QSignalBlocker blocker(gaitBackendCombo_);
+    gaitBackendCombo_->setCurrentIndex(displayIndex);
+    gaitBackendCombo_->setEnabled(connected && !pending);
+    gaitBackendStatus_->setText(connected ? status : QStringLiteral("Unknown"));
 }
 
 void MainWindow::appendLog(const QString &message)

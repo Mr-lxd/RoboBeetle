@@ -13,6 +13,9 @@ typedef struct
 void simple_gait_generator_init(
     simple_gait_generator_t *generator);
 
+void simple_gait_generator_reset(
+    simple_gait_generator_t *generator);
+
 gait_generator_t simple_gait_generator_interface(
     simple_gait_generator_t *generator);
 
