@@ -54,6 +54,8 @@ The required decision order is:
 if state != STOPPED:
     return BUSY
 validate requested backend
+if requested backend is not registered with a usable generator/reset:
+    return HARDWARE_FAILURE
 if requested == current:
     return OK / deterministic no-op
 reset newly selected generator
@@ -64,6 +66,15 @@ remain STOPPED
 This ordering is intentional: `RUNNING` and `STOPPING` return `BUSY` even
 when the requested backend is already current. `FAULTED` is also not an
 accepted switching state because the contract is STOPPED-only.
+
+The state check is performed before backend-value validation. Therefore a
+moving/stopping request with byte `0xff` still returns `BUSY`; the invalid
+backend result is reachable only after the manager is already `STOPPED`.
+After a valid backend value is established, a missing target interface,
+missing context, or missing reset callback returns `HARDWARE_FAILURE` without
+changing the current backend, active generator, Motion state, targets, or
+Servo state. This infrastructure check also prevents a same-backend no-op
+from masking an unusable registration.
 
 A successful switch must not:
 
@@ -92,17 +103,59 @@ The existing generator interface remains the boundary through which
 Reset behavior is deterministic and backend-local:
 
 - SimpleGait resets `phase_rad` to its initialized value (`0.0F`).
-- CPG uses the existing `cpg_core_reset()`, preserving the existing
-  profile/model parameters while clearing oscillator runtime state,
-  elapsed remainder, executed-step count, and discarded catch-up count.
+- CPG exposes a backend-level
+  `cpg_gait_generator_reset(cpg_gait_generator_t *generator)` API. It copies
+  the configured `cpg_gait_profile_t`, then reconstructs the core through the
+  same initialization path as `cpg_gait_generator_init_with_profile()`. A
+  bare `cpg_core_reset()` is insufficient because
+  `cpg_gait_generator_sample()` mutates `core.params.target_amplitude` for the
+  selected Motion mode and `cpg_core_reset()` preserves that mutable field.
+  The backend reset therefore restores the canonical profile-derived initial
+  parameters instead of retaining a previous TURN target-amplitude vector.
+
+The CPG reset preserves both custom and production profiles while clearing
+all oscillator/runtime state, including phase, derivative/memory state,
+output memory, elapsed remainder, executed-step count, and discarded
+catch-up count. Its resulting core is the same deterministic initial state
+that a fresh `cpg_gait_generator_init_with_profile()` would produce for the
+same profile. It does not change beta, `dt`, `theta_dot` semantics, phase
+coupling, or the production `double` representation. `cpg_core_reset()` may
+remain available for core-level callers, but it is not the backend selector's
+sole CPG reset operation.
+
+The required regression constructs a fresh CPG with a selected profile,
+advances/samples a TURN mode, stops the Motion lifecycle, switches to
+SimpleGait, switches back to CPG, and resets before the next Motion START.
+The reset CPG state must equal the fresh profile-matched CPG state, including
+the profile-derived mutable target amplitudes. The regression runs for the
+production profile and at least one custom profile.
 
 No CPG equations or model parameters are changed by this feature.
 
 The production application registers both initialized generators with
-`MotionManager`. An additive multi-backend initialization API is preferred so
-the existing single-generator initializer remains source-compatible for
-legacy/custom host fixtures. The production call still selects its initial
-backend from `MOTION_DEFAULT_GAIT_BACKEND_CPG`.
+`MotionManager` using an explicit multi-backend initializer:
+
+```c
+void motion_manager_init_with_backends(
+    motion_manager_t *manager,
+    servo_service_t *servo_service,
+    safety_supervisor_t *safety_supervisor,
+    gait_generator_t simple,
+    gait_generator_t cpg,
+    motion_gait_backend_t initial_backend);
+```
+
+`initial_backend` is selected explicitly from the existing
+`MOTION_DEFAULT_GAIT_BACKEND_CPG` compile-time default/fallback. No function
+pointer or context identity is inspected to infer a backend.
+
+The existing single-generator initializer remains source-compatible for
+legacy/custom host fixtures, but its backend identity is
+`MOTION_GAIT_BACKEND_UNSPECIFIED` and its runtime selector is unavailable.
+It retains the supplied generator as the active legacy generator for those
+fixtures; it never guesses whether that generator is SimpleGait or CPG. A
+valid selector request made against such an unregistered backend returns
+`MOTION_MANAGER_RESULT_HARDWARE_FAILURE` with no mutation.
 
 ## MotionManager API and result mapping
 
@@ -118,6 +171,13 @@ The internal result set adds `MOTION_MANAGER_RESULT_INVALID_BACKEND`.
 Existing results, including `BUSY`, remain unchanged. The new result maps to
 the existing wire-level `RBP2_RESULT_INVALID_PAYLOAD`; no new wire result
 code is introduced.
+
+The valid backend enum values are exactly `SIMPLE_GAIT=0` and `CPG=1` for
+wire use. `MOTION_GAIT_BACKEND_UNSPECIFIED` is an internal-only legacy state;
+it is never encoded and is not a valid selector payload. A current backend
+getter may report `UNSPECIFIED` for a legacy single-generator manager, while
+the multi-backend production manager always starts with the explicit initial
+backend.
 
 The manager also exposes its current backend for host assertions and local
 diagnostics. It is not emitted as a new telemetry frame.
@@ -138,13 +198,22 @@ backend uint8
   1 = CPG
 ```
 
-Dispatcher behavior:
+Dispatcher precedence and behavior:
 
 ```text
-decode exact one-byte payload
+if payload length != 1:
+    return RBP2_RESULT_INVALID_PAYLOAD
+decode the exact one-byte payload as a backend value
 → call motion_manager_set_gait_backend()
 → map result to existing ACK result
 ```
+
+The dispatcher does not pre-validate the byte value or inspect Motion state.
+For an exact one-byte payload, MotionManager receives the request and applies
+the state-first precedence: non-`STOPPED` returns `BUSY` even for an invalid
+byte such as `0xff`; `STOPPED` plus an invalid byte returns
+`MOTION_MANAGER_RESULT_INVALID_BACKEND`, mapped to
+`RBP2_RESULT_INVALID_PAYLOAD`.
 
 The mappings are:
 
@@ -154,6 +223,10 @@ The mappings are:
 | RUNNING, STOPPING, or other non-STOPPED state | `RBP2_RESULT_BUSY` |
 | invalid payload length/value | `RBP2_RESULT_INVALID_PAYLOAD` |
 | manager/backend infrastructure failure | existing `RBP2_RESULT_HARDWARE_FAILURE` |
+
+The explicit regression `RUNNING + backend=0xff` must produce
+`RBP2_RESULT_BUSY`, while `STOPPED + backend=0xff` produces
+`RBP2_RESULT_INVALID_PAYLOAD`.
 
 The dispatcher does not hold backend state, select generators, reset
 generators, write Servo output, or alter Motion state directly. The existing
@@ -178,10 +251,17 @@ Firmware telemetry. No backend query is added in this feature.
 Behavior:
 
 - a user selection sends only `SetGaitBackend`;
+- at most one selector request may be outstanding at a time, including an
+  APC220 queued/deferred selector or an in-flight/retrying selector;
+- while one selector request is outstanding, the Controller rejects or the UI
+  disables further selector changes; it never queues a second selector;
 - the requested value is retained separately while its ACK is pending;
 - matching ACK `OK` updates the confirmed backend;
-- `BUSY`, invalid/error ACK, timeout, transport error, or write failure clears
-  the request but preserves the previous confirmed value;
+- only an ACK matching the original request sequence and
+  `SetGaitBackend` type can confirm the request;
+- `BUSY`, invalid/error ACK (including a sequence/type mismatch), timeout,
+  transport error, or write failure clears the pending request but preserves
+  the previous confirmed value;
 - disconnect and reconnect reset the controller's backend state to `UNKNOWN`;
 - the controller never starts/stops Motion as part of backend selection;
 - the controller never sends Servo targets for a backend selection.
@@ -208,13 +288,21 @@ Add failing tests before implementation for:
 - STOPPED same-backend selection returns deterministic `OK/no-op`;
 - RUNNING same-backend selection returns `BUSY`;
 - STOPPING selection returns `BUSY`;
+- RUNNING selection with backend byte `0xff` returns `BUSY` before invalid
+  backend validation;
 - invalid backend returns `MOTION_MANAGER_RESULT_INVALID_BACKEND`;
+- legacy single-generator initialization does not infer backend identity and
+  a missing registered generator/reset infrastructure returns
+  `MOTION_MANAGER_RESULT_HARDWARE_FAILURE` without mutation;
 - moving rejection leaves backend, Motion state, generator state, and Servo
   output unchanged;
 - successful switching does not start Motion or write Servo output;
 - SimpleGait reset is deterministic;
-- CPG reset preserves profile/model parameters and clears runtime oscillator,
-  elapsed, executed-step, and discarded-catch-up state;
+- CPG reset preserves production and custom profile/model parameters, restores
+  profile-derived target amplitudes, and clears runtime oscillator,
+  elapsed/remainder, executed, and discarded-catch-up state;
+- fresh CPG initialization equals TURN → STOP → switch away → switch back/reset
+  before the next Motion START;
 - Protocol `0x16` exact payload encode/decode, invalid length/value, ACK `OK`,
   and ACK `BUSY` mappings.
 
@@ -229,6 +317,10 @@ Add tests for:
 - ACK `OK` confirmation;
 - `BUSY` handling without changing confirmed state;
 - timeout/error without falsely confirming a request;
+- selector serialization rejects or disables a second request while the first
+  is queued/in flight/retrying;
+- ACK sequence/type mismatch cannot confirm a selector and clears its pending
+  state;
 - disconnect/reconnect returning selector state to `UNKNOWN`;
 - MainWindow combo presence and command dispatch;
 - no Qt trajectory or Servo-frame path is used by selector handling.
