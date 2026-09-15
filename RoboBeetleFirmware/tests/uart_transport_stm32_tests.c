@@ -22,8 +22,17 @@ static uint32_t abort_call_count;
 static uint32_t blocking_transmit_call_count;
 static uint8_t last_transmit_bytes[RBP2_MAX_WIRE_SIZE];
 static uint16_t last_transmit_length;
-static bool abort_inject_tx_complete;
 static uint32_t abort_inline_callback_count;
+#define TEST_MAX_TRANSMIT_OBSERVATIONS 32U
+static const uint8_t *transmit_pointers[
+    TEST_MAX_TRANSMIT_OBSERVATIONS];
+static uint16_t transmit_lengths[
+    TEST_MAX_TRANSMIT_OBSERVATIONS];
+static uint8_t transmit_observed_bytes[
+    TEST_MAX_TRANSMIT_OBSERVATIONS][RBP2_MAX_WIRE_SIZE];
+
+static void inject_pre_abort_tx_complete(void);
+static void inject_stale_abort_complete(void);
 
 HAL_StatusTypeDef HAL_UART_Receive_IT(
     UART_HandleTypeDef *huart,
@@ -57,6 +66,20 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(
     if ((data != NULL) && (size <= sizeof last_transmit_bytes))
     {
         (void)memcpy(last_transmit_bytes, data, size);
+    }
+    if ((transmit_call_count - 1U) < TEST_MAX_TRANSMIT_OBSERVATIONS)
+    {
+        const uint32_t observation = transmit_call_count - 1U;
+
+        transmit_pointers[observation] = data;
+        transmit_lengths[observation] = size;
+        if ((data != NULL) && (size <= RBP2_MAX_WIRE_SIZE))
+        {
+            (void)memcpy(
+                transmit_observed_bytes[observation],
+                data,
+                size);
+        }
     }
 
     if ((huart == NULL) || (huart->Instance != USART1))
@@ -92,12 +115,6 @@ HAL_StatusTypeDef HAL_UART_AbortTransmit_IT(
     if (huart != NULL)
     {
         huart->gState = HAL_UART_STATE_READY;
-    }
-
-    if (abort_inject_tx_complete)
-    {
-        abort_inject_tx_complete = false;
-        uart_transport_stm32_on_tx_complete(huart);
     }
 
     while (abort_inline_callback_count > 0U)
@@ -151,8 +168,14 @@ static void reset_mock(void)
     blocking_transmit_call_count = 0U;
     last_transmit_length = 0U;
     (void)memset(last_transmit_bytes, 0, sizeof last_transmit_bytes);
-    abort_inject_tx_complete = false;
+    (void)memset(transmit_pointers, 0, sizeof transmit_pointers);
+    (void)memset(transmit_lengths, 0, sizeof transmit_lengths);
+    (void)memset(
+        transmit_observed_bytes,
+        0,
+        sizeof transmit_observed_bytes);
     abort_inline_callback_count = 0U;
+    uart_transport_stm32_host_set_before_abort_hook(NULL);
 }
 
 static void init_transport(void)
@@ -186,9 +209,21 @@ static void complete_tx(void)
     uart_transport_stm32_on_tx_complete(&uart1);
 }
 
+static void inject_pre_abort_tx_complete(void)
+{
+    /* Model the physical completion IRQ in the restored-IRQ window. */
+    uart1.gState = HAL_UART_STATE_READY;
+    uart_transport_stm32_on_tx_complete(&uart1);
+}
+
+static void inject_stale_abort_complete(void)
+{
+    uart_transport_stm32_on_abort_transmit_complete(&uart1);
+}
+
 static void test_init_and_idle_it_start(void)
 {
-    const uint8_t frame[] = {0xA1U, 0xA2U};
+    uint8_t frame[] = {0xA1U, 0xA2U};
     uart_transport_stm32_diagnostics_t value;
 
     init_transport();
@@ -209,6 +244,60 @@ static void test_init_and_idle_it_start(void)
            "transport must not call blocking HAL TX");
     expect(last_transmit_length == sizeof frame,
            "IT TX length should match owned frame");
+    expect(transmit_pointers[0] != frame,
+           "HAL must receive transport-owned storage, not caller storage");
+    frame[0] = 0xFFU;
+    expect(transmit_observed_bytes[0][0] == 0xA1U,
+           "transport-owned frame must preserve caller bytes");
+}
+
+static void test_full_queues_record_rejected_drops(void)
+{
+    const uint8_t control_frames[6] = {
+        0x01U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U
+    };
+    const uint8_t telemetry_frames[3] = {0x11U, 0x12U, 0x13U};
+    uart_transport_stm32_diagnostics_t value;
+
+    init_transport();
+    (void)uart_transport_stm32_enqueue(
+        &control_frames[0], 1U, UART_TX_MESSAGE_ACK);
+    (void)uart_transport_stm32_enqueue(
+        &control_frames[1], 1U, UART_TX_MESSAGE_ACK);
+    (void)uart_transport_stm32_enqueue(
+        &control_frames[2], 1U, UART_TX_MESSAGE_ACK);
+    (void)uart_transport_stm32_enqueue(
+        &control_frames[3], 1U, UART_TX_MESSAGE_ACK);
+    (void)uart_transport_stm32_enqueue(
+        &control_frames[4], 1U, UART_TX_MESSAGE_ACK);
+    expect(
+        uart_transport_stm32_enqueue(
+            &control_frames[5], 1U, UART_TX_MESSAGE_ACK) ==
+            UART_TX_CONTROL_FULL,
+        "full control queue should reject without overwrite");
+    value = diagnostics();
+    expect(value.control_queue_full_count == 1U,
+           "full control queue should be counted");
+    expect(value.dropped_count[UART_TX_MESSAGE_ACK] == 1U,
+           "full control queue should record one rejected drop");
+
+    init_transport();
+    (void)uart_transport_stm32_enqueue(
+        &telemetry_frames[0], 1U, UART_TX_MESSAGE_IMU);
+    (void)uart_transport_stm32_enqueue(
+        &telemetry_frames[1], 1U, UART_TX_MESSAGE_LEAK);
+    (void)uart_transport_stm32_enqueue(
+        &telemetry_frames[2], 1U, UART_TX_MESSAGE_DEPTH);
+    expect(
+        uart_transport_stm32_enqueue(
+            &telemetry_frames[0], 1U, UART_TX_MESSAGE_IMU) ==
+            UART_TX_TELEMETRY_FULL,
+        "full telemetry queue should reject without overwrite");
+    value = diagnostics();
+    expect(value.telemetry_queue_full_count == 1U,
+           "full telemetry queue should be counted");
+    expect(value.dropped_count[UART_TX_MESSAGE_IMU] == 1U,
+           "full telemetry queue should record one rejected drop");
 }
 
 static void test_active_telemetry_keeps_ack_waiting_and_completion_is_safe(void)
@@ -492,7 +581,8 @@ static void test_tx_completion_race_does_not_promote_pending(void)
         pending,
         (uint16_t)sizeof pending,
         UART_TX_MESSAGE_ACK);
-    abort_inject_tx_complete = true;
+    uart_transport_stm32_host_set_before_abort_hook(
+        inject_pre_abort_tx_complete);
     abort_inline_callback_count = 1U;
     expect(
         uart_transport_stm32_reinitialize() == HAL_OK,
@@ -506,6 +596,61 @@ static void test_tx_completion_race_does_not_promote_pending(void)
            "race should drop only the remaining pending frame");
     expect(uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_IDLE,
            "race cleanup should finish in IDLE");
+}
+
+static void test_stale_abort_callback_cannot_cross_reinitialization_epoch(void)
+{
+    const uint8_t first[] = {0xD3U};
+    const uint8_t current[] = {0xD4U};
+    const uint8_t pending[] = {0xD5U};
+    uart_transport_stm32_diagnostics_t before;
+    uart_transport_stm32_diagnostics_t after;
+
+    init_transport();
+    (void)uart_transport_stm32_enqueue(
+        first,
+        (uint16_t)sizeof first,
+        UART_TX_MESSAGE_ACK);
+    abort_inline_callback_count = 1U;
+    expect(
+        uart_transport_stm32_reinitialize() == HAL_OK,
+        "first reinitialization should complete");
+
+    (void)uart_transport_stm32_enqueue(
+        current,
+        (uint16_t)sizeof current,
+        UART_TX_MESSAGE_ACK);
+    (void)uart_transport_stm32_enqueue(
+        pending,
+        (uint16_t)sizeof pending,
+        UART_TX_MESSAGE_ACK);
+    before = diagnostics();
+    uart_transport_stm32_host_set_before_abort_hook(
+        inject_stale_abort_complete);
+    abort_status = HAL_BUSY;
+    expect(
+        uart_transport_stm32_reinitialize() == HAL_BUSY,
+        "current reinitialization should remain pending after abort BUSY");
+    uart_transport_stm32_host_set_before_abort_hook(NULL);
+    expect(
+        uart_transport_stm32_get_state() ==
+            UART_TRANSPORT_STATE_REINITIALIZING,
+        "stale abort callback must not finish a later reinitialization");
+    expect(
+        transmit_call_count == 2U,
+        "stale abort callback must not promote pending TX");
+    after = diagnostics();
+    expect(
+        after.unexpected_callback_count ==
+            before.unexpected_callback_count + 1U,
+        "stale abort callback should be classified as unexpected");
+
+    abort_status = HAL_OK;
+    abort_inline_callback_count = 1U;
+    uart_transport_stm32_process();
+    expect(
+        uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_IDLE,
+        "current abort completion should finish the later epoch");
 }
 
 static void test_abort_failure_retains_hal_owned_active(void)
@@ -646,6 +791,7 @@ static void test_abort_busy_retries_are_bounded_and_fail_closed(void)
 int main(void)
 {
     test_init_and_idle_it_start();
+    test_full_queues_record_rejected_drops();
     test_active_telemetry_keeps_ack_waiting_and_completion_is_safe();
     test_other_uart_callbacks_are_ignored();
     test_rx_completion_rearms_while_tx_is_active();
@@ -656,6 +802,7 @@ int main(void)
     test_pe_fe_ne_keep_active_rx_armed();
     test_inline_double_abort_cleanup_and_later_duplicate();
     test_tx_completion_race_does_not_promote_pending();
+    test_stale_abort_callback_cannot_cross_reinitialization_epoch();
     test_abort_failure_retains_hal_owned_active();
     test_deferred_abort_failure_is_not_false_recovery();
     test_persistent_start_busy_has_finite_recovery();

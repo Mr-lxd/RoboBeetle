@@ -67,4 +67,9 @@ uart_transport_stm32_state_t uart_transport_stm32_get_state(void);
 void uart_transport_stm32_get_diagnostics(
     uart_transport_stm32_diagnostics_t *diagnostics);
 
+#if defined(ROBOBEETLE_UART_TRANSPORT_HOST_TEST)
+void uart_transport_stm32_host_set_before_abort_hook(
+    void (*hook)(void));
+#endif
+
 #endif /* ROBOBEETLE_UART_TRANSPORT_STM32_H */

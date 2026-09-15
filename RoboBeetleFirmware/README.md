@@ -318,7 +318,7 @@ The frame uses the existing independent telemetry sequence and is never sent
 as an ACK-requiring request.
 
 Firmware evaluates the one-second IMU publication policy only after a normal
-Heartbeat ACK has completed. At most one optional telemetry frame is selected
+Heartbeat ACK has been accepted into the owned TX queue. At most one optional telemetry frame is selected
 per accepted Heartbeat opportunity. A due LeakStatus `0x20` always preempts
 IMU/Depth; when LeakStatus is not due, the scheduler fairly rotates due IMU and
 Depth slots. Failed optional transmits are not marked published, so the pending
@@ -463,7 +463,7 @@ payload length 38, schema version `1`. The frozen payload is:
 | 34 | 4 | `uart_error_count` `uint32` LE |
 
 Firmware evaluates the provisional one-second DepthSnapshot policy only after
-an accepted Heartbeat ACK has completed and selects at most one optional
+an accepted Heartbeat ACK has been enqueued and selects at most one optional
 telemetry frame per opportunity. A due LeakStatus always preempts IMU/Depth;
 when LeakStatus is not due, the scheduler fairly rotates the due IMU and Depth
 slots. Failed optional sends do not mark a policy successful. The frame never
@@ -538,12 +538,12 @@ JY901S TX → PB11 / USART3_RX → one-byte interrupt receive
   → ImuSnapshot telemetry policy → existing USART1 host link
 ```
 
-The interrupt handler delegates to the HAL. The HAL completion and error callbacks perform only the byte/error accounting and mark the USART3 receive as needing re-arm; foreground transport maintenance makes at most one non-blocking re-arm attempt per poll. Protocol parsing, command dispatch, ACK encoding, blocking UART transmit, and PWM control occur in the main-loop context, not in the UART ISR.
+The interrupt handler delegates to the HAL. The HAL completion and error callbacks perform only the byte/error accounting and mark the USART3 receive as needing re-arm; foreground transport maintenance makes at most one non-blocking re-arm attempt per poll. Protocol parsing, command dispatch, ACK encoding, bounded TX enqueue, and PWM control occur in the main-loop context, not in the UART ISR; USART1 physical serialization is completed by the HAL IT callbacks.
 
 The current communication split is:
 
 - **[Implemented]** `Core/Communication/ring_buffer.c/.h` owns the fixed 128-byte single-producer/single-consumer ring. It reserves one slot (127-byte effective capacity) and silently rejects a push while full, preserving the original behavior.
-- **[Implemented]** `Core/Communication/uart_transport_stm32.c/.h` owns the one-byte RX staging byte, USART1 receive interrupt arm/re-arm, ring interaction, main-loop byte retrieval, and the blocking `HAL_UART_Transmit(..., 100U)` wrapper.
+- **[Implemented]** `Core/Communication/uart_transport_stm32.c/.h` owns the one-byte RX staging byte, USART1 receive interrupt arm/re-arm, ring interaction, main-loop byte retrieval, fixed owned TX queue, and the `HAL_UART_Transmit_IT()`/completion-callback adapter.
 - **[Hardware Verified]** `Core/Communication/jy901s_transport_stm32.c/.h` owns the independent USART3/PB11 receive staging/ring path and diagnostics; `Core/Sensors/jy901s_parser.c/.h` owns the pure-C 11-byte decode and Acc/Gyro/Angle state. PR #11 adds the low-rate ImuSnapshot producer without changing the listen-only sensor input.
 - **[Hardware Verified]** `Core/App/app_main.c/.h` owns the application orchestration: Protocol V2 wire accumulation and decode integration, ACK/result transmission, diagnostics, module instances, initialization order, RX draining, and post-drain Safety timeout action. It calls existing Protocol, UART, Safety, Servo, and dispatcher modules without implementing their policies or touching TIM registers directly.
 - **[Implemented]** `Core/Servo/servo_descriptor.c/.h` owns the pure-C semantic ID, capability, calibration-envelope, and abstract timer/channel table.
@@ -553,7 +553,7 @@ The current communication split is:
 - **[Implemented / Software Verified]** `Core/Motion/motion_manager.c/.h` and `simple_gait_generator.c/.h` own the bench-provisional Motion state machine, logical target generation, cooperative foreground scheduling with wrap-safe wall-time deltas from a 10 ms minimum cadence, Motion Servo ownership, acceptance-time graceful STOP, centralized 750 ms neutral ramp, generator-independent operational limiting, and immediate abort hooks. The modules have no interrupt-driven gait path and no autonomous restart behavior.
 - **[Implemented]** `Core/Sensors/leak_sensor.c/.h` owns the HAL-independent UNKNOWN/DRY/WET mapping; `leak_sensor_stm32.c/.h` only reads the configured PA11 GPIO.
 - **[Implemented]** `Core/Sensors/leak_telemetry_policy.c/.h` limits LeakStatus publication to first sample/state changes/500 ms refreshes. `Core/App/app_main.c` sends one-byte `0x20` telemetry only after a successful Heartbeat ACK; it does not connect leak state to Safety or Servo behavior.
-- **[Implemented / Software Verified]** `Core/Sensors/jy901s_telemetry.c/.h` encodes the fixed 56-byte `ImuSnapshot` payload with explicit little-endian fixed-point fields and bring-up diagnostics. `Core/Communication/imu_telemetry_policy.c/.h` and `telemetry_scheduler.c/.h` keep IMU publication at one second, after completed Heartbeat ACK, with immediate priority for due LeakStatus, fair rotation against a due DepthSnapshot when LeakStatus is not due, and at most one optional frame per opportunity. The IMU path does not enter command/ACK matching or alter USART1 behavior.
+- **[Implemented / Software Verified]** `Core/Sensors/jy901s_telemetry.c/.h` encodes the fixed 56-byte `ImuSnapshot` payload with explicit little-endian fixed-point fields and bring-up diagnostics. `Core/Communication/imu_telemetry_policy.c/.h` and `telemetry_scheduler.c/.h` keep IMU publication at one second, after an accepted Heartbeat ACK enqueue, with immediate priority for due LeakStatus, fair rotation against a due DepthSnapshot when LeakStatus is not due, and at most one optional frame per opportunity. The IMU path does not enter command/ACK matching or alter USART1 behavior.
 - **[Hardware Verified]** `Core/Safety/safety_supervisor.c/.h` owns host liveness, the last valid Heartbeat timestamp, strict timeout evaluation, and one-shot timeout transition reporting. It has no HAL, Protocol, UART, or Servo dependency.
 - **[Hardware Verified]** `Core/Communication/protocol_dispatcher.c/.h` owns decoded command payload validation, HostAlive gating, Servo service invocation/result mapping, Heartbeat semantics, and the one-entry successful-command cache. It has no HAL, UART, TIM3, or Console dependency.
 - **[Hardware Verified]** `main.c` keeps the CubeMX entry/configuration, `app_main_init`/`app_main_process` calls, and a small UART callback transport delegate. Protocol, Safety, Servo, ACK, diagnostics, and RX-drain orchestration live in `Core/App/app_main.c`.
@@ -570,7 +570,7 @@ The App/Main extraction was **[Historical Hardware Verified]** for the PR #6 old
 - Head and tail remain volatile, with the same one-byte ISR producer / main-loop consumer model as the original implementation.
 - The current USART1 `uart_transport_stm32` calls `HAL_UART_Receive_IT()` at startup and re-arms it in the callback; no blocking receive remains. The recent host hardware for this path is DAP UART/COM13; the APC220 profile is historical.
 - Return values from the existing USART1 initial and callback receive-arm calls are ignored. USART3/JY901S separates deferred `HAL_BUSY` from hard re-arm failures and recovers from foreground maintenance.
-- The transport calls `HAL_UART_Transmit(..., 100U)` only while main-loop dispatch sends an ACK. It is blocking but not ISR-blocking. At 9600 8-N-1 a short ACK frame normally takes milliseconds, yet a stalled transmit can block the loop for up to 100 ms.
+- The transport copies complete ACK/telemetry frames into a fixed owned queue and starts them with `HAL_UART_Transmit_IT()`. Enqueue acceptance is separate from physical completion; TX-complete/error callbacks only advance bounded transport state, so main-loop dispatch does not wait for 9600-baud serialization.
 
 ## Protocol V2
 
@@ -589,8 +589,8 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 - Error is declared but never sent by Firmware.
 - Neutral validates liveness/mask/enabled state, writes each descriptor's neutral pulse, and leaves the selected channels enabled.
 - Set Angle is available for all five angle-supported descriptors, including the four final logical paddle ranges `-45 to +45 degrees` and FrontAxis/Depth range `-90 to +90 degrees`; each angle is range-checked and mapped with `int32_t` intermediates. FrontRight, FrontAxis, and RearLeft logical inversion comes from signed calibration deltas, not Servo ID special cases.
-- LeakStatus `0x20` is a one-byte, unacknowledged monitoring frame (`UNKNOWN=0`, `DRY=1`, `WET=2`). Firmware sends it only after an accepted Heartbeat and completed ACK transmission, on first sample/state change or a 500 ms refresh; it has an independent telemetry sequence and does not trigger Safety or Servo actions.
-- ImuSnapshot `0x21` is a fixed 56-byte, unacknowledged monitoring frame. Firmware sends it only after an accepted Heartbeat ACK has completed, at most once per one-second policy interval, with due LeakStatus priority and fair rotation against a due DepthSnapshot when LeakStatus is not due. It uses the independent telemetry sequence and carries explicit little-endian fixed-point Acc/Gyro/Angle values plus JY901S diagnostics; it does not trigger Safety, Servo, or JY901S configuration actions.
+- LeakStatus `0x20` is a one-byte, unacknowledged monitoring frame (`UNKNOWN=0`, `DRY=1`, `WET=2`). Firmware sends it only after an accepted Heartbeat and accepted ACK enqueue, on first sample/state change or a 500 ms refresh; it has an independent telemetry sequence and does not trigger Safety or Servo actions.
+- ImuSnapshot `0x21` is a fixed 56-byte, unacknowledged monitoring frame. Firmware sends it only after an accepted Heartbeat ACK enqueue, at most once per one-second policy interval, with due LeakStatus priority and fair rotation against a due DepthSnapshot when LeakStatus is not due. It uses the independent telemetry sequence and carries explicit little-endian fixed-point Acc/Gyro/Angle values plus JY901S diagnostics; it does not trigger Safety, Servo, or JY901S configuration actions.
 - SetMotionMode `0x15` uses `schema=1, mode, action`; successful STOP ACK means request acceptance and `MOTION_STOPPING`, not completed neutral. Ordinary STOP ramps logical targets to zero over `MOTION_TRANSITION_DURATION_MS=750U` while retaining Motion ownership; Safety/Disable All abort immediately.
 - ACK result values are frozen as `OK=0`, `InvalidPayload=1`, `HostNotAlive=2`, `UnsupportedServo=3`, `ServoNotEnabled=4`, `OutOfRange=5`, `HardwareFailure=6`, and `Busy=7`.
 - Supported mask is exactly `0x001F`. Zero mask is invalid; any unknown bit fails with `UnsupportedServo`. Multi-bit Enable is all-or-nothing with rollback on a channel-start failure.
@@ -611,7 +611,7 @@ See `../RoboBeetleConsole/docs/protocol.md` for the detailed Console ↔ Firmwar
 
 ### Limitations
 
-- Watchdog processing shares the main loop with blocking ACK transmission and all frame dispatch.
+- Watchdog processing shares the main loop with frame dispatch and bounded TX queue maintenance; physical TX completion remains interrupt-driven.
 - There is no independent hardware watchdog, fault state, persisted reset reason, leak safety response, battery/current input, or emergency-stop message in this Phase 1 source. Leak D0 is polled into an internal state and exposed through monitoring-only LeakStatus telemetry; it does not change Servo behavior.
 - Duplicate suppression intentionally retains one successful non-Heartbeat request rather than a multi-entry replay window. A later distinct successful actuator request replaces it.
 - Disconnect safety relies on the host's best-effort Disable All plus the 500 ms Firmware heartbeat timeout.
@@ -705,7 +705,7 @@ Core/
 Recommended boundaries:
 
 - Keep `main.c` limited to `HAL_Init`, clock/MX initialization, `app_main_init`, `app_main_process`, and CubeMX-safe callbacks that immediately delegate.
-- `uart_transport_stm32` remains HAL-aware and owns `UART_HandleTypeDef`, RX re-arm, and eventually a nonblocking TX queue.
+- `uart_transport_stm32` remains HAL-aware and owns `UART_HandleTypeDef`, RX re-arm, and the fixed owned nonblocking TX queue.
 - `ring_buffer` is pure C and reusable; its silent full-buffer drop is preserved until a separately reviewed overflow policy is introduced.
 - `rb_protocol_v2` remains pure C and HAL-independent.
 - `protocol_dispatcher` parses command payloads, enforces the existing validation order, and calls service interfaces; it must not write TIM registers directly.
@@ -731,7 +731,7 @@ Do not split the already isolated Protocol V2 codec further during Phase 1, add 
 - P1: the HAL-coupled App/Main layer has no dedicated host integration test; target build and physical regression are the verification gate.
 - P1: the one-entry duplicate cache is deliberately minimal and is not a general replay window.
 - P1: JY901S overflow, RX re-arm, and UART error diagnostics are volatile/debug-visible only; the corrected hard/deferred re-arm semantics are verified, while USART3 physical-link quality remains pending; these diagnostics are not exposed through Protocol V2 telemetry.
-- P1: blocking UART ACK transmit shares the watchdog/parser loop.
+- P1: USART1 nonblocking TX remains HAL-IT-only v1; DMA/IT transport variants and target-level jitter evidence remain separate follow-ups.
 - P2: Error `0x03` remains reserved; command failures currently use the frozen ACK result enum.
 - P2: diagnostics are volatile counters only and are not exposed as telemetry.
 - P2: debug LED is configured but unused.

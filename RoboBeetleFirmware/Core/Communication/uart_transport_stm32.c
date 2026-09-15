@@ -20,8 +20,14 @@ static bool active_hal_owned;
 static uint32_t consecutive_start_busy;
 static uint32_t abort_busy_retries;
 static uint32_t reinitialization_epoch;
+static uint32_t active_reinitialization_epoch;
+static bool abort_callback_pending;
 static bool reinit_completion_handled;
 static bool recovery_waiting_for_proof;
+
+#if defined(ROBOBEETLE_UART_TRANSPORT_HOST_TEST)
+static void (*host_before_abort_hook)(void);
+#endif
 
 static motion_timing_tx_kind_t uart_transport_diagnostic_kind(
     uart_tx_message_kind_t kind)
@@ -59,6 +65,22 @@ static uint32_t uart_transport_irq_save(void)
 static void uart_transport_irq_restore(uint32_t primask)
 {
     __set_PRIMASK(primask);
+}
+#endif
+
+#if defined(ROBOBEETLE_UART_TRANSPORT_HOST_TEST)
+static void uart_transport_invoke_before_abort_hook(void)
+{
+    if (host_before_abort_hook != NULL)
+    {
+        host_before_abort_hook();
+    }
+}
+
+void uart_transport_stm32_host_set_before_abort_hook(
+    void (*hook)(void))
+{
+    host_before_abort_hook = hook;
 }
 #endif
 
@@ -329,6 +351,8 @@ static void uart_transport_finish_reinitialize_locked(void)
     uart_transport_record_dropped_pending();
     transport_state = UART_TRANSPORT_STATE_IDLE;
     active_hal_owned = false;
+    abort_callback_pending = false;
+    active_reinitialization_epoch = 0U;
     consecutive_start_busy = 0U;
     abort_busy_retries = 0U;
     recovery_waiting_for_proof = false;
@@ -348,6 +372,8 @@ static void uart_transport_finish_recovery_proof_locked(void)
     }
     transport_state = UART_TRANSPORT_STATE_IDLE;
     active_hal_owned = false;
+    abort_callback_pending = false;
+    active_reinitialization_epoch = 0U;
     recovery_waiting_for_proof = false;
     abort_busy_retries = 0U;
     consecutive_start_busy = 0U;
@@ -415,6 +441,18 @@ static HAL_StatusTypeDef uart_transport_handle_abort_result(
     return result;
 }
 
+static bool uart_transport_abort_callback_is_current_locked(
+    const UART_HandleTypeDef *huart)
+{
+    /* The HAL callback has no generation argument.  Bind it to the one
+     * outstanding abort epoch and require the HAL TX state to have crossed
+     * the ready edge.  A late callback from an older epoch therefore cannot
+     * complete a newer abort while its active frame is still HAL-owned. */
+    return abort_callback_pending &&
+           (active_reinitialization_epoch == reinitialization_epoch) &&
+           !uart_transport_state_has_busy_tx(HAL_UART_GetState(huart));
+}
+
 static HAL_StatusTypeDef uart_transport_rearm_rx_locked(void)
 {
     HAL_StatusTypeDef status;
@@ -479,6 +517,11 @@ void uart_transport_stm32_init(UART_HandleTypeDef *huart)
     abort_busy_retries = 0U;
     reinit_completion_handled = false;
     recovery_waiting_for_proof = false;
+    abort_callback_pending = false;
+    active_reinitialization_epoch = 0U;
+#if defined(ROBOBEETLE_UART_TRANSPORT_HOST_TEST)
+    host_before_abort_hook = NULL;
+#endif
 
     if (huart == NULL)
     {
@@ -552,6 +595,7 @@ uart_tx_enqueue_result_t uart_transport_stm32_enqueue(
     {
         ++transport_diagnostics.control_queue_full_count;
         ++transport_diagnostics.rejected_count[kind];
+        uart_transport_record_dropped_kind(kind);
         motion_timing_diagnostics_record_uart_enqueue(
             uart_transport_diagnostic_kind(kind),
             MOTION_TIMING_UART_EVENT_REJECTED);
@@ -561,6 +605,7 @@ uart_tx_enqueue_result_t uart_transport_stm32_enqueue(
     {
         ++transport_diagnostics.telemetry_queue_full_count;
         ++transport_diagnostics.rejected_count[kind];
+        uart_transport_record_dropped_kind(kind);
         motion_timing_diagnostics_record_uart_enqueue(
             uart_transport_diagnostic_kind(kind),
             MOTION_TIMING_UART_EVENT_REJECTED);
@@ -683,7 +728,8 @@ void uart_transport_stm32_on_abort_transmit_complete(
     primask = uart_transport_irq_save();
     if (transport_state == UART_TRANSPORT_STATE_REINITIALIZING)
     {
-        if (reinit_completion_handled)
+        if (reinit_completion_handled ||
+            !uart_transport_abort_callback_is_current_locked(huart))
         {
             ++transport_diagnostics.unexpected_callback_count;
             motion_timing_diagnostics_record_uart_unexpected_callback();
@@ -694,7 +740,8 @@ void uart_transport_stm32_on_abort_transmit_complete(
         }
     }
     else if ((transport_state == UART_TRANSPORT_STATE_RECOVERY_FAILED) &&
-             recovery_waiting_for_proof)
+             recovery_waiting_for_proof &&
+             uart_transport_abort_callback_is_current_locked(huart))
     {
         uart_transport_finish_recovery_proof_locked();
     }
@@ -776,6 +823,9 @@ void uart_transport_stm32_process(void)
 
     if (retry_abort)
     {
+#if defined(ROBOBEETLE_UART_TRANSPORT_HOST_TEST)
+        uart_transport_invoke_before_abort_hook();
+#endif
         abort_status = HAL_UART_AbortTransmit_IT(uart_handle);
         (void)uart_transport_handle_abort_result(
             abort_status,
@@ -819,6 +869,12 @@ HAL_StatusTypeDef uart_transport_stm32_reinitialize(void)
     recovery_waiting_for_proof = false;
     abort_busy_retries = 0U;
     ++reinitialization_epoch;
+    if (reinitialization_epoch == 0U)
+    {
+        ++reinitialization_epoch;
+    }
+    active_reinitialization_epoch = reinitialization_epoch;
+    abort_callback_pending = true;
     ++transport_diagnostics.reinitialization_count;
     motion_timing_diagnostics_record_uart_reinitialization();
     {
@@ -836,6 +892,9 @@ HAL_StatusTypeDef uart_transport_stm32_reinitialize(void)
     }
     uart_transport_irq_restore(primask);
 
+#if defined(ROBOBEETLE_UART_TRANSPORT_HOST_TEST)
+    uart_transport_invoke_before_abort_hook();
+#endif
     status = HAL_UART_AbortTransmit_IT(uart_handle);
     return uart_transport_handle_abort_result(status, true);
 }

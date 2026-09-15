@@ -694,7 +694,7 @@ USART1_IRQHandler
 - 环形数组 128 字节，保留一个空槽区分满/空，实际可用 127 字节。
 - 满时静默丢弃新字节，无 overflow 计数；RX 重挂返回值也未检查。
 - ISR 只推入字节并重挂接收；解析、ACK、PWM 均在 main loop。
-- ACK 使用 `HAL_UART_Transmit(..., 100 ms)`，是 main-loop 阻塞发送，不在 ISR 中。
+- ACK/telemetry frame 先复制到固定 owned TX queue，再由 USART1 `HAL_UART_Transmit_IT()` 与 HAL completion callback 非阻塞发送；enqueue acceptance 与 physical completion 分开，不在 main loop 等待 9600 baud 串行化。
 - 有效 Heartbeat 更新本地 `last_heartbeat_rx_ms` 并设置 `host_alive`。
 - 超过 500 ms 未收到有效 Heartbeat 时停止 Servo1 PWM、清空 enable mask；恢复后必须重新 Heartbeat + Enable。
 - 没有独立硬件看门狗、Emergency Stop、漏水安全响应、电池/过流输入或持久故障记录；Leak D0 按轮询方式更新内部状态，并通过 PR #9 的 `LeakStatus (0x20)` 做 monitoring-only 遥测。该遥测不触发 Servo/Safety 动作；PA11 → LeakStatus → Qt 端到端路径已 Hardware Verified。
@@ -1550,8 +1550,9 @@ because `305 us < 10000 us`. The measured nominal median cycle count rose
 slightly from `49153` at 16 MHz to `51371` at 168 MHz while wall time improved
 by approximately 10x. The frozen baseline has no catch-up cycle fields, so no
 catch-up cycle delta is reconstructed. The isolated 168 MHz CPG compute
-deadline is **[PASS]**, but this does not prove zero Motion jitter or solve
-blocking UART behavior. Servo stutter investigation remains separate.
+deadline is **[PASS]**, but this does not prove zero Motion jitter, zero Servo
+stutter, or physical PWM/HAL target behavior. Servo stutter investigation
+remains separate.
 
 The `ROBOBEETLE_CPG_TARGET_BENCHMARK=ON` image is temporary and is not the
 production image. Normal operation must be rebuilt with
