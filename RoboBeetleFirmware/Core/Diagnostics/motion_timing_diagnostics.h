@@ -36,8 +36,8 @@
 #define MOTION_TIMING_HISTOGRAM_BUCKET_6_MAX 5000U
 /* Bucket 7 is strictly greater than BUCKET_6_MAX. */
 #define MOTION_TIMING_REPORT_MAGIC 0x4D54494DU
-#define MOTION_TIMING_REPORT_ABI_VERSION 1U
-#define MOTION_TIMING_REPORT_SIZE 1168U
+#define MOTION_TIMING_REPORT_ABI_VERSION 2U
+#define MOTION_TIMING_REPORT_SIZE 1172U
 
 #define MOTION_TIMING_DIAGNOSTIC_FLAG_ENABLED (1U << 0U)
 #define MOTION_TIMING_DIAGNOSTIC_FLAG_REDUCED_TELEMETRY (1U << 1U)
@@ -142,6 +142,7 @@ typedef struct
     motion_timing_motion_report_t motion;
     uint32_t diagnostic_saturation_count;
     uint32_t diagnostic_counter_wrap_count;
+    uint32_t diagnostic_invalid_count;
 } motion_timing_report_t;
 
 _Static_assert(sizeof(motion_timing_u64_t) == 8U,
@@ -187,6 +188,9 @@ _Static_assert(offsetof(motion_timing_report_t,
 _Static_assert(offsetof(motion_timing_report_t,
                         diagnostic_counter_wrap_count) == 1164U,
                "motion timing counter-wrap ABI offset changed");
+_Static_assert(offsetof(motion_timing_report_t,
+                        diagnostic_invalid_count) == 1168U,
+               "motion timing invalid ABI offset changed");
 _Static_assert(sizeof(motion_timing_report_t) == MOTION_TIMING_REPORT_SIZE,
                "motion timing report ABI size changed");
 

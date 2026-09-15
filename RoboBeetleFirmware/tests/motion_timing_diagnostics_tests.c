@@ -59,7 +59,10 @@ _Static_assert(offsetof(motion_timing_report_t,
 _Static_assert(offsetof(motion_timing_report_t,
                         diagnostic_counter_wrap_count) == 1164U,
                "counter-wrap ABI offset changed");
-_Static_assert(sizeof(motion_timing_report_t) == 1168U,
+_Static_assert(offsetof(motion_timing_report_t,
+                        diagnostic_invalid_count) == 1168U,
+               "invalid ABI offset changed");
+_Static_assert(sizeof(motion_timing_report_t) == 1172U,
                "report ABI size changed");
 
 static void test_wrap_delta(void)
@@ -167,6 +170,31 @@ static void test_tx_class_accounting(void)
            "Depth TX duration must be counted");
 }
 
+static void test_zero_clock_does_not_invent_gap_evidence(void)
+{
+    motion_timing_report_t report = {0};
+
+    motion_timing_report_initialize(
+        &report,
+        0U,
+        MOTION_TIMING_DIAGNOSTIC_FLAG_ENABLED,
+        MOTION_GAIT_BACKEND_CPG_VALUE,
+        4U);
+    motion_timing_record_motion_interval_cycles(
+        &report,
+        100U,
+        0U);
+
+    expect(report.diagnostic_invalid_count == 1U,
+           "zero SystemCoreClock must be visible as an invalid diagnostic");
+    expect(report.motion.gap_gt_10_ms_count == 0U &&
+               report.motion.gap_gt_12_ms_count == 0U &&
+               report.motion.gap_gt_15_ms_count == 0U &&
+               report.motion.gap_gt_20_ms_count == 0U &&
+               report.motion.gap_gt_30_ms_count == 0U,
+           "zero SystemCoreClock must not invent Motion gap evidence");
+}
+
 static void test_report_validation(void)
 {
     motion_timing_report_t report = {0};
@@ -199,6 +227,7 @@ int main(void)
     test_distribution_accumulation();
     test_motion_gap_buckets_are_strict();
     test_tx_class_accounting();
+    test_zero_clock_does_not_invent_gap_evidence();
     test_report_validation();
 
     if (failures == 0)

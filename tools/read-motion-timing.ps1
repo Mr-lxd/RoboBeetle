@@ -16,7 +16,23 @@ param(
 
     [string[]]$OpenOcdArgs = @(),
 
-    [string]$BranchSha = ''
+    [string]$BranchSha = '',
+
+    [string]$TrialId = '',
+
+    [string]$Workload = '',
+
+    [string]$DiagnosticCondition = '',
+
+    [string]$ToolchainVersion = '',
+
+    [string]$CMakeGenerator = '',
+
+    [string]$BuildType = '',
+
+    [string]$LinkerScript = '',
+
+    [string]$ImageSize = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -93,7 +109,7 @@ if ($symbolMatches.Count -ne 1) {
 $reportAddress = [Convert]::ToUInt32(
     $symbolMatches[0].Groups[1].Value,
     16)
-$reportSize = 1168
+$reportSize = 1172
 $temporaryDump = $false
 
 if ([string]::IsNullOrWhiteSpace($RawReportPath)) {
@@ -135,7 +151,7 @@ try {
     }
 
     $abiVersion = Read-U32 $bytes 4
-    if ($abiVersion -ne 1) {
+    if ($abiVersion -ne 2) {
         Stop-WithError "report ABI version mismatch: $abiVersion"
     }
 
@@ -206,6 +222,16 @@ try {
         report_address = ('0x{0:X8}' -f $reportAddress)
         elf_path = $resolvedElfPath
         branch_sha = $branch
+        trial_metadata = [ordered]@{
+            trial_id = $TrialId
+            workload = $Workload
+            diagnostic_condition = $DiagnosticCondition
+            toolchain_version = $ToolchainVersion
+            cmake_generator = $CMakeGenerator
+            build_type = $BuildType
+            linker_script = $LinkerScript
+            image_size = $ImageSize
+        }
         magic = ('0x{0:X8}' -f $magic)
         abi_version = $abiVersion
         report_size = $declaredSize
@@ -221,6 +247,7 @@ try {
         motion = $motion
         diagnostic_saturation_count = Read-U32 $bytes 1160
         diagnostic_counter_wrap_count = Read-U32 $bytes 1164
+        diagnostic_invalid_count = Read-U32 $bytes 1168
         raw_report_path = (Resolve-Path -LiteralPath $RawReportPath).Path
     }
 

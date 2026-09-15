@@ -350,15 +350,22 @@ The report initialization writes `magic`, `abi_version`, `report_size`,
 marker before counters are collected. The report is `volatile` for debugger
 readout, but its contents are otherwise RAM-only.
 
-ABI v1 currently fixes `report_size` at 1168 bytes. The fixed top-level
+ABI v2 currently fixes `report_size` at 1172 bytes. The fixed top-level
 offsets are: `app_loop_body` 32, `app_loop_interval` 92, `rx_drain` 152,
 `tx` 368, `motion` 704, `diagnostic_saturation_count` 1160, and
-`diagnostic_counter_wrap_count` 1164. Each distribution is 60 bytes and its
+`diagnostic_counter_wrap_count` 1164, and `diagnostic_invalid_count` 1168.
+Each distribution is 60 bytes and its
 histogram buckets are, in order, `<=10`, `11..20`, `21..50`, `51..100`,
 `101..500`, `501..1000`, `1001..5000`, and `>5000` in the distribution's
 recorded value units. These values are duplicated in the public header's
 static ABI contract and in the readout decoder; changing them requires a new
 ABI version.
+
+`diagnostic_invalid_count` records diagnostic inputs that cannot be converted
+reliably, such as a zero `SystemCoreClock` while converting a cycle interval.
+The raw cycle interval is retained, but no millisecond gap threshold is
+classified from that sample; the invalid condition remains visible in the
+report.
 
 The readout helper must read and validate `magic`, `abi_version`, and
 `report_size` before decoding any remaining field. A mismatch fails loudly

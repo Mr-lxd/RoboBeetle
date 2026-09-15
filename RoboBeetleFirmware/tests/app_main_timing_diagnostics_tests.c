@@ -1,12 +1,16 @@
 #include "app_main.h"
 #include "motion_timing_diagnostics.h"
+#include "rb_protocol_v2.h"
 #include "stm32f4xx_hal.h"
+#include "uart_transport_stm32.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 
 static int failures;
+static uint8_t *host_rx_destination;
+static unsigned int tx_call_count;
 
 static void expect(bool condition, const char *message)
 {
@@ -22,11 +26,15 @@ HAL_StatusTypeDef HAL_UART_Receive_IT(
     uint8_t *data,
     uint16_t size)
 {
-    (void)data;
     if ((huart == NULL) || (size != 1U))
     {
         return HAL_ERROR;
     }
+    if (huart->Instance == USART1)
+    {
+        host_rx_destination = data;
+    }
+    (void)data;
     huart->RxState = HAL_UART_STATE_BUSY_RX;
     return HAL_OK;
 }
@@ -41,6 +49,7 @@ HAL_StatusTypeDef HAL_UART_Transmit(
     (void)data;
     (void)size;
     (void)timeout;
+    ++tx_call_count;
     return HAL_OK;
 }
 
@@ -65,6 +74,35 @@ HAL_StatusTypeDef HAL_TIM_PWM_Start(
     (void)htim;
     (void)Channel;
     return HAL_OK;
+}
+
+static void send_heartbeat(
+    UART_HandleTypeDef *host_uart,
+    uint16_t sequence)
+{
+    const uint8_t payload[4] = {0U, 0U, 0U, 0U};
+    uint8_t wire[RBP2_MAX_WIRE_SIZE];
+    const size_t wire_length = rbp2_encode_wire(
+        RBP2_MSG_HEARTBEAT,
+        sequence,
+        payload,
+        sizeof payload,
+        wire,
+        sizeof wire);
+
+    expect(wire_length > 0U, "diagnostic Heartbeat must encode");
+    for (size_t index = 0U; index < wire_length; ++index)
+    {
+        expect(host_rx_destination != NULL,
+               "diagnostic host RX destination must exist");
+        if (host_rx_destination != NULL)
+        {
+            *host_rx_destination = wire[index];
+            host_uart->RxState = HAL_UART_STATE_READY;
+            uart_transport_stm32_on_rx_complete(host_uart);
+        }
+    }
+    app_main_process();
 }
 
 HAL_StatusTypeDef HAL_TIM_PWM_Stop(
@@ -114,6 +152,20 @@ int main(void)
            "Depth drain hook must observe each pass");
     expect(motion_timing_report.motion.accepted_tick_count == 0U,
            "stopped app must not record a Motion tick");
+
+    send_heartbeat(&uart1, 1U);
+    send_heartbeat(&uart1, 2U);
+    send_heartbeat(&uart1, 3U);
+    expect(tx_call_count == 6U,
+           "normal diagnostic Heartbeats must preserve ACK and optional TX");
+    expect(motion_timing_report.tx[MOTION_TIMING_TX_ACK].call_count == 3U,
+           "diagnostics must classify all ACK transmissions");
+    expect(motion_timing_report.tx[MOTION_TIMING_TX_LEAK].call_count == 1U,
+           "diagnostics must classify Leak transmissions");
+    expect(motion_timing_report.tx[MOTION_TIMING_TX_IMU].call_count == 1U,
+           "diagnostics must classify IMU transmissions");
+    expect(motion_timing_report.tx[MOTION_TIMING_TX_DEPTH].call_count == 1U,
+           "diagnostics must classify Depth transmissions");
 
     if (failures == 0)
     {

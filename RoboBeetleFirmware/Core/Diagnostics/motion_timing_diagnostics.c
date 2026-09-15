@@ -367,10 +367,20 @@ void motion_timing_record_motion_interval_cycles(
         return;
     }
 
-    if (system_core_clock_hz != 0U)
+    if (system_core_clock_hz == 0U)
     {
-        interval_ms = (uint32_t)((cycles * 1000ULL) / clock);
+        motion_timing_increment_saturated(
+            &report->diagnostic_invalid_count);
+        motion_timing_distribution_record(
+            &report->motion.actual_interval_cycles,
+            interval_cycles);
+        motion_timing_distribution_record(
+            &report->motion.actual_interval_ms,
+            0U);
+        return;
     }
+
+    interval_ms = (uint32_t)((cycles * 1000ULL) / clock);
     motion_timing_distribution_record(
         &report->motion.actual_interval_cycles,
         interval_cycles);
