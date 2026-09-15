@@ -4,7 +4,7 @@
 
 **Goal:** Add compile-gated, RAM-only timing diagnostics and a reproducible target measurement procedure that can distinguish foreground communication delay, generator cost, logical Motion cadence, and physical servo/PWM behavior without changing production scheduling or actuator semantics.
 
-**Architecture:** Keep app_main as the only cooperative scheduler. Add a disabled-by-default STM32F407 DWT counter module under Core/App, place no-op hooks around existing app-loop, queue-drain, host-TX, and accepted Motion-tick boundaries, and expose one debugger-readable volatile report. Use host tests for counter arithmetic and compile contracts, then run identical CPG/SimpleGait target trials under normal and reduced optional-telemetry diagnostic conditions. Treat scope and electrical measurements as separate evidence.
+**Architecture:** Keep app_main as the only cooperative scheduler. Add a disabled-by-default STM32F407 DWT counter module under the neutral Core/Diagnostics layer, place no-op hooks around existing app-loop, queue-drain, host-TX, and accepted Motion-tick boundaries, and expose one debugger-readable volatile report with a versioned fixed ABI. Use host tests for counter arithmetic, ABI contracts, and compile contracts, then run identical-ELF runtime-selector CPG/SimpleGait target trials under normal and reduced optional-telemetry diagnostic conditions. Treat scope and electrical measurements as separate evidence.
 
 **Tech Stack:** C11, host GCC, existing Firmware host PowerShell runner, STM32F407 CMSIS DWT/CYCCNT, CMake/Ninja, arm-none-eabi toolchain, debugger/OpenOCD symbol readout, Markdown.
 
@@ -43,7 +43,7 @@ Expected result: 29 executable tests and 9 app/backend/benchmark
 compile-contract objects pass. This is a software baseline only; it is not
 target timing evidence.
 
-## Task 2: Write counter arithmetic tests before the diagnostic module
+## Task 2: Write counter arithmetic and ABI tests before the diagnostic module
 
 **Files:**
 
@@ -62,8 +62,17 @@ target timing evidence.
   enter that strict greater-than bucket.
 - [ ] Add a red host test for TX class accounting for ACK, LEAK, IMU, and
   DEPTH, including bytes, result/status, and duration accumulation.
-- [ ] Add a red host test that the diagnostic-disabled API is a compile-time
-  no-op and does not require a DWT or UART symbol.
+- [ ] Add a red host test that the report has the documented fixed ABI:
+  `magic`, `abi_version`, `report_size`, `system_core_clock_hz`, flags,
+  runtime backend, run marker, reset marker, and fixed-width counters occur at
+  the documented offsets and `sizeof` value. Use C11 `_Static_assert` in the
+  module/header and assert the same values from the host test.
+- [ ] Add a red host test that the report readout validation rejects wrong
+  magic, ABI version, or report size before decoding counters.
+- [ ] Add a red compile-contract test that the diagnostic-disabled API is a
+  compile-time no-op and does not require a DWT or UART symbol. Add a second
+  compile-contract test proving reduced telemetry is OFF by default and
+  cannot become effective unless diagnostics is ON.
 - [ ] Add the test case to the existing C11, Wall, Wextra, Werror host runner
   with an explicit expected executable name:
 
@@ -75,47 +84,73 @@ Expected result while the implementation is absent: the new test is RED. Do
 not weaken the test or call the baseline green until Task 3 implements the
 specified API.
 
-## Task 3: Implement the disabled-by-default RAM-only DWT report
+## Task 3: Implement the disabled-by-default RAM-only DWT report with a fixed ABI
 
 **Files:**
 
-- Create: RoboBeetleFirmware/Core/App/motion_timing_diagnostics.h
-- Create: RoboBeetleFirmware/Core/App/motion_timing_diagnostics.c
+- Create: RoboBeetleFirmware/Core/Diagnostics/motion_timing_diagnostics.h
+- Create: RoboBeetleFirmware/Core/Diagnostics/motion_timing_diagnostics.c
 - Modify: RoboBeetleFirmware/CMakeLists.txt
 - Modify: RoboBeetleFirmware/tests/run_host_tests.ps1
 
 - [ ] Add the CMake option
   ROBOBEETLE_MOTION_TIMING_DIAGNOSTICS with default OFF. Add the diagnostic
-  source and compile definition only when it is ON. Keep
+  source and compile definition only when it is ON. Add
+  ROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY with default OFF; make it
+  effective only inside the diagnostics-ON branch. Keep
   ROBOBEETLE_CPG_TARGET_BENCHMARK independent and OFF by default.
-- [ ] Define a fixed-size report containing:
-  - report/version/reset marker and SystemCoreClock;
-  - loop body and loop-interval statistics;
-  - per-transport drain calls, nonempty calls, bytes, and duration totals;
-  - per-TX-class calls, bytes, statuses, durations, and timeout/error counts;
-  - accepted Motion-tick count, requested elapsed_ms statistics, actual
-    tick-to-tick interval statistics, and the five strict gap buckets;
-  - Motion tick total duration and nested generator/sample/apply durations when
-    their boundaries can be measured without changing control flow;
-  - saturation and diagnostic counter-wrap indicators.
+- [ ] Define the public fixed ABI in the neutral header. Start the report with
+  these 32-bit words in this exact order:
+
+~~~c
+uint32_t magic;
+uint32_t abi_version;
+uint32_t report_size;
+uint32_t system_core_clock_hz;
+uint32_t diagnostic_flags;
+uint32_t runtime_backend;
+uint32_t run_marker;
+uint32_t reset_marker;
+~~~
+
+  Follow them with fixed-width counter groups using 32-bit words and explicit
+  `{ uint32_t lo; uint32_t hi; }` totals. Do not use pointers, `size_t`,
+  `bool`, bit-fields, variable-length members, or compiler-dependent padding
+  as part of the ABI. Include loop, three RX-drain, four TX-class, requested
+  elapsed, accepted Motion-tick interval, Motion span, histogram, saturation,
+  and diagnostic-wrap fields. Define the histogram bucket order in the header.
+- [ ] Add C11 `_Static_assert` checks for the expected `sizeof` and critical
+  `offsetof` values: every header word, the first counter group, Motion gap
+  counters, and the final report size. Increment the ABI version whenever the
+  layout changes.
 - [ ] Implement initialization only in the ON path. Enable
   CoreDebug->DEMCR.TRCENA, clear DWT->CYCCNT, enable
   DWT_CTRL_CYCCNTENA_Msk, and use barriers matching the existing
   cpg_target_benchmark.c implementation.
-- [ ] Use 32-bit unsigned subtraction for each short span and wider
-  accumulators for totals. Do not keep a span open for 25.56 seconds at
+- [ ] Use 32-bit unsigned subtraction for each short span and explicit
+  lo/hi accumulators for totals. Do not keep a span open for 25.56 seconds at
   168 MHz, and expose any saturating/invalid condition in the report.
+- [ ] Implement fixed distributions as count/min/max/total plus a fixed
+  histogram and, for interval measurements, a worst-interval field. Do not
+  calculate or store an exact streaming median. Record Motion actual interval
+  evidence as max gap and strict `>10`, `>12`, `>15`, `>20`, and `>30` ms
+  counters; threshold equality does not increment the bucket.
 - [ ] Keep all report updates in foreground code. Do not allocate, print,
   transmit, enqueue, dequeue, disable Safety, or inspect a queue from the
   diagnostic module.
 - [ ] Implement compile-time no-op macros or inline functions for OFF so that
   normal firmware has no DWT setup, no report traffic, and no extra UART
   traffic.
+- [ ] Add compile contracts for all four option combinations. The default
+  `ROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=OFF` and
+  `ROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY=OFF` build must not reference
+  DWT or diagnostic symbols. A reduced-telemetry-only definition without
+  diagnostics must compile as normal telemetry behavior, not as reduced mode.
 - [ ] Turn the Task 2 tests GREEN and run the complete host gate. Expected
   result: the new arithmetic test and all existing tests pass, with the final
   runner summary still reporting all expected cases.
 
-## Task 4: Add hooks at existing boundaries without changing behavior
+## Task 4: Add hooks and the diagnostic-only reduced-telemetry condition
 
 **Files:**
 
@@ -137,6 +172,13 @@ specified API.
   - a Motion tick is counted only when the existing elapsed gate accepts it;
   - a below-10 ms process call is not counted as a Motion tick;
   - a Safety/liveness abort does not invoke generator or Servo timing hooks.
+- [ ] Write a RED compile/runtime regression for
+  ROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY: when diagnostics and reduced
+  mode are ON, only optional Leak/IMU/Depth telemetry is suppressed; Heartbeat
+  receive, Heartbeat ACK, SafetySupervisor, host-liveness timeout, actuator
+  fail-safe behavior, and Protocol command dispatch remain active. When either
+  diagnostics or reduced mode is OFF, the existing normal telemetry path is
+  unchanged.
 - [ ] Add ON-only app_main entry/exit span around the current
   app_main_process() body. Preserve the current order:
   JY901S poll, Depth poll, leak sample, USART1 drain, USART3 drain, USART6
@@ -164,7 +206,7 @@ Expected result: instrumentation observes the existing path. It cannot alter
 Motion state, last_tick_ms, generator state, Servo output, queue contents,
 Safety action, UART status, or telemetry policy.
 
-## Task 5: Add target symbol readout without a telemetry surface
+## Task 5: Add fixed-ABI target symbol readout without a telemetry surface
 
 **Files:**
 
@@ -176,8 +218,11 @@ Safety action, UART status, or telemetry policy.
   debugger/OpenOCD command configuration. Resolve the report with
   arm-none-eabi-nm and fail if the symbol or tool is absent.
 - [ ] Keep target connection/read commands explicit and visible. Read the
-  fixed report memory, decode the version/clock/backend/workload fields, and
-  write raw counters to a local file with branch SHA and trial metadata.
+  fixed report memory, validate `magic`, `abi_version`, and `report_size`
+  before decoding any other field, then decode the fixed offsets from the
+  public ABI and write raw counters to a local file with branch SHA and trial
+  metadata. ABI mismatch must fail loudly; PowerShell must never infer C
+  offsets from the symbol address.
 - [ ] Refuse to fall back to UART, Protocol V2, printf, or a host executable
   when target tools are missing. A debugger Watch/Expressions read of the
   same volatile symbol is the documented fallback.
@@ -187,7 +232,7 @@ Safety action, UART status, or telemetry policy.
 Expected result: the script is a readout helper only. It does not change
 firmware scheduling or add a new command/telemetry message.
 
-## Task 6: Build four diagnostic images and run the A/B matrix
+## Task 6: Build two diagnostic images and run the four-cell runtime-selector matrix
 
 **Files/configuration:**
 
@@ -206,15 +251,22 @@ Get-Command openocd.exe -ErrorAction SilentlyContinue | Select-Object Source
 If any required tool is unavailable, record the exact NOT_FOUND result and
 leave target measurements NOT RUN. Do not substitute host timing.
 
-- [ ] Build A and B with
+- [ ] Build one NORMAL diagnostic ELF with
   ROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=ON,
-  ROBOBEETLE_CPG_TARGET_BENCHMARK=OFF, and identical normal communication
-  load. Use MOTION_DEFAULT_GAIT_BACKEND_CPG=1 for A and =0 for B.
-- [ ] Build C and D with the same two backend settings and the reviewed
-  reduced-optional-telemetry diagnostic condition. Keep Heartbeat receive/ACK,
-  Safety checks, host-liveness timeout, and fail-safe actuator behavior active.
-  If the scope restriction forbids diagnostic telemetry suppression, leave C/D
-  NOT RUN and use an externally reviewed load fixture instead.
+  ROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY=OFF, and
+  ROBOBEETLE_CPG_TARGET_BENCHMARK=OFF. Program this one ELF once, then use
+  the existing runtime `SetGaitBackend` selector while STOPPED for A (CPG)
+  and B (SimpleGait). Do not define
+  MOTION_DEFAULT_GAIT_BACKEND_CPG=0/1 for the experiment and do not override
+  CMAKE_C_FLAGS.
+- [ ] Build one REDUCED_OPTIONAL_TELEMETRY diagnostic ELF with the same
+  optimization/linker/toolchain settings and
+  ROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY=ON. Program this one ELF once,
+  then use the same runtime selector while STOPPED for C (CPG) and D
+  (SimpleGait). Keep Heartbeat receive/ACK, Safety checks, host-liveness
+  timeout, fail-safe actuator behavior, and Protocol command behavior active.
+  If the external fixture cannot safely exercise reduced optional telemetry,
+  leave C/D NOT RUN rather than changing production policy.
 - [ ] Use separate build directories and record commit SHA, toolchain version,
   CMake generator, build type/optimization, linker script, image size,
   SystemCoreClock, diagnostic option values, and backend.
@@ -223,10 +275,14 @@ Example configuration shape:
 
 ~~~powershell
 $toolchain = (Resolve-Path 'RoboBeetleFirmware\cmake\gcc-arm-none-eabi.cmake').Path
-cmake -S RoboBeetleFirmware -B $diagBuild -G Ninja "-DCMAKE_BUILD_TYPE=Debug" "-DCMAKE_TOOLCHAIN_FILE=$toolchain" "-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=ON" "-DROBOBEETLE_CPG_TARGET_BENCHMARK=OFF" "-DCMAKE_C_FLAGS=-DMOTION_DEFAULT_GAIT_BACKEND_CPG=$backend"
+cmake -S RoboBeetleFirmware -B $diagBuild -G Ninja "-DCMAKE_BUILD_TYPE=Debug" "-DCMAKE_TOOLCHAIN_FILE=$toolchain" "-DROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=ON" "-DROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY=$reduced" "-DROBOBEETLE_CPG_TARGET_BENCHMARK=OFF"
 cmake --build $diagBuild
 arm-none-eabi-size $diagBuild\RoboBeetleFirmware.elf
 ~~~
+
+  `$reduced` is `OFF` for the single NORMAL ELF and `ON` for the single
+  REDUCED_OPTIONAL_TELEMETRY ELF. Backend selection is sent at runtime after
+  the image is programmed; no backend-specific rebuild is permitted.
 
 - [ ] For each runnable cell, perform three fixed-duration trials of 60
   seconds unless a target constraint is recorded. Use the same board,
@@ -270,9 +326,12 @@ logical target cadence and from water behavior.
 - No production source changes are authorized by this documentation phase
 
 - [ ] Compare A against B under normal load, then C against D under the same
-  reduced-telemetry condition. Report raw min/median/max or fixed-window
-  percentile values for loop intervals, each drain, TX class, Motion tick
-  intervals, requested elapsed_ms, and Motion spans.
+  reduced-telemetry condition. Report raw count/min/max/total/worst interval
+  and fixed-histogram values for loop intervals, each drain, TX class, Motion
+  tick intervals, requested elapsed_ms, and Motion spans. Any median or
+  percentile shown by host tooling must be explicitly labeled approximate and
+  derived from the fixed histogram, never exact unless raw samples were
+  deliberately stored.
 - [ ] Use the approved interpretation rules: both backends jitter implies a
   communication/foreground candidate; normal-load gaps that disappear under
   reduced optional telemetry implicate TX/telemetry; stable logical cadence
@@ -298,7 +357,11 @@ scheduling, queue budget, or stutter/jitter fix is present.
 
 - [ ] Confirm the normal production configuration retains
   ROBOBEETLE_CPG_TARGET_BENCHMARK=OFF and
-  ROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=OFF.
+  ROBOBEETLE_MOTION_TIMING_DIAGNOSTICS=OFF and
+  ROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY=OFF.
+- [ ] Confirm the two target images use the same ELF within A/B and C/D, and
+  every backend transition was made by the existing runtime selector while
+  STOPPED with ACK confirmation.
 - [ ] Confirm no diagnostic report is sent over UART and no Protocol V2
   message, Qt surface, telemetry query, or runtime gait behavior is added by
   this investigation.

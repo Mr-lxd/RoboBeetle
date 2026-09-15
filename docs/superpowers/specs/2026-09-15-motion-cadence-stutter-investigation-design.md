@@ -230,13 +230,31 @@ identified as such; it is not a production image.
 The planned implementation module is:
 
 ~~~
-RoboBeetleFirmware/Core/App/motion_timing_diagnostics.h
-RoboBeetleFirmware/Core/App/motion_timing_diagnostics.c
+RoboBeetleFirmware/Core/Diagnostics/motion_timing_diagnostics.h
+RoboBeetleFirmware/Core/Diagnostics/motion_timing_diagnostics.c
 ~~~
 
-The module owns only counters and readout data. It does not own scheduler
-decisions, Motion state, generator state, Servo output, Safety state, or
-Protocol state.
+The module is deliberately in a neutral layer because both Motion and
+Communication call its observation hooks. It owns only counters and readout
+data. It does not own scheduler decisions, Motion state, generator state,
+Servo output, Safety state, or Protocol state, and it creates no dependency
+from Motion to App.
+
+A second compile-time option is:
+
+~~~
+ROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY
+~~~
+
+It defaults to OFF and is effective only when
+ROBOBEETLE_MOTION_TIMING_DIAGNOSTICS is ON. In that diagnostic-only
+condition, app_main may suppress optional Leak, IMU, and Depth telemetry so
+the A/B result can be compared with a lower optional-TX load. It must still
+receive Heartbeat, send Heartbeat ACK, run SafetySupervisor, enforce the
+existing host-liveness timeout, preserve actuator fail-safe behavior, and
+dispatch Protocol commands. The normal production image and its telemetry
+policy are unchanged. The report records both option flags so a reduced-load
+run cannot be mistaken for normal operation.
 
 ### DWT source and wrap handling
 
@@ -267,14 +285,14 @@ work, Motion work, and physical follow-up:
 
 | Counter group | Required fields and definition |
 | --- | --- |
-| App loop | pass count; body duration min/median/max/total cycles; interval from one loop entry to the next; largest observed interval |
-| Host USART1 RX drain | drain-call count; bytes popped; nonempty-drain count; duration min/median/max/total cycles |
+| App loop | pass count; body duration count/min/max/total cycles; interval count/min/max/total cycles; worst interval; fixed histogram |
+| Host USART1 RX drain | drain-call count; bytes popped; nonempty-drain count; duration count/min/max/total cycles; fixed histogram |
 | JY901S USART3 drain | same fields, plus parser event/error counters copied only if already available without a new telemetry surface |
 | Depth USART6 drain | same fields, plus existing parser/error counters copied only if already available without a new telemetry surface |
-| Host TX | call count, bytes, status, min/median/max/total duration by ACK, LEAK, IMU, and DEPTH; timeout/error count |
-| Motion tick | tick count at the exact motion_manager_tick() invocation; requested elapsed_ms; actual tick-to-tick interval in cycles; min/median/max/total and gap buckets above 10, 12, 15, 20, and 30 ms |
-| Motion span | total motion_manager_tick() duration; generator advance span where separable; target sample/apply span where separable; returned result count |
-| Run identity | diagnostics version, SystemCoreClock, backend label, build SHA/configuration, and an explicit reset/run marker |
+| Host TX | call count, bytes, status, duration count/min/max/total cycles by ACK, LEAK, IMU, and DEPTH; timeout/error count |
+| Motion tick | tick count at the exact motion_manager_tick() invocation; requested elapsed_ms distribution; actual tick-to-tick interval count/min/max/total cycles; worst interval; fixed histogram; strict gap buckets above 10, 12, 15, 20, and 30 ms |
+| Motion span | duration count/min/max/total cycles for motion_manager_tick(); generator advance span where separable; target sample/apply span where separable; returned result count |
+| Run identity | diagnostics version, SystemCoreClock, backend label, build/configuration flags, and explicit run/reset markers |
 
 The TX classification is attached at the existing protocol_send_ack,
 protocol_send_leak_status, protocol_send_imu_snapshot, and
@@ -286,10 +304,58 @@ a tick, not on every motion_manager_process() call. The report retains both
 the actual tick interval and the elapsed_ms argument so a delayed call is not
 confused with a normal 10 ms check that returned early.
 
-The report may use a fixed histogram or fixed percentile-friendly sample
-window, but it must not allocate from the heap or stream samples over UART.
-The exact finite window and saturation counters are part of the TDD task; an
-overflow must be visible rather than silently wrapping a diagnostic statistic.
+Every distribution uses fixed-width fields: count, minimum, maximum, total,
+and a fixed histogram. Interval distributions additionally expose their worst
+interval. There is no exact streaming median requirement and no dynamic
+allocation. Host tooling may derive an approximate median or percentile from
+the fixed histogram, but raw samples are not implied by that estimate.
+
+For Motion cadence, the required directly reportable evidence is the maximum
+gap and counts for intervals strictly greater than 10 ms, 12 ms, 15 ms,
+20 ms, and 30 ms. Values equal to a threshold remain outside that threshold's
+bucket. Saturation and invalid/wrapped diagnostic conditions must be visible
+rather than silently wrapping a statistic.
+
+The fixed histogram bucket definitions and report field order are part of the
+report ABI below; they are not implementation-private choices.
+
+### Fixed debugger/OpenOCD report ABI
+
+The diagnostic report is a versioned, fixed-layout object. `nm` resolves only
+the address; no PowerShell tool may guess C struct offsets. The header is
+encoded as fixed-width 32-bit words in this order:
+
+~~~c
+uint32_t magic;
+uint32_t abi_version;
+uint32_t report_size;
+uint32_t system_core_clock_hz;
+uint32_t diagnostic_flags;
+uint32_t runtime_backend;
+uint32_t run_marker;
+uint32_t reset_marker;
+~~~
+
+All following fields use fixed-width `uint32_t` words or an explicitly
+defined pair `{ uint32_t lo; uint32_t hi; }` for 64-bit totals. The ABI
+defines the exact field order, histogram bucket order, and report size in the
+public header. It does not use compiler-dependent pointers, `size_t`, `bool`,
+bit-fields, or variable-length members. The implementation must include C11
+`_Static_assert` checks for `sizeof` and critical `offsetof` values, including
+the header fields, the first counter group, the Motion gap counters, and the
+end of the report. A change to the layout requires a new ABI version.
+
+The report initialization writes `magic`, `abi_version`, `report_size`,
+`SystemCoreClock`, diagnostic flags, runtime backend, and a new reset/run
+marker before counters are collected. The report is `volatile` for debugger
+readout, but its contents are otherwise RAM-only.
+
+The readout helper must read and validate `magic`, `abi_version`, and
+`report_size` before decoding any remaining field. A mismatch fails loudly
+and produces no interpreted timing result. The helper uses the public ABI
+field offsets or a fixed byte decoder generated from the same documented
+layout; it never infers offsets from `nm`, host compiler packing, or a guessed
+struct definition.
 
 ### Instrumentation placement
 
@@ -340,16 +406,32 @@ readout is claimed.
 
 Every cell uses the same board, power setup, firmware optimization/linker
 configuration, exercise duration, host command pattern, and sensor stream.
+The backend is selected through the already merged runtime selector while the
+Motion state is STOPPED. A selector request must therefore obey the existing
+STOPPED-only contract and be ACK-confirmed before the exercise starts.
+
+There are exactly two diagnostic ELFs for this matrix: one NORMAL image and
+one REDUCED_OPTIONAL_TELEMETRY image. A and B use the identical NORMAL ELF;
+C and D use the identical REDUCED_OPTIONAL_TELEMETRY ELF. Do not build a
+separate CPG or SimpleGait binary, pass
+`MOTION_DEFAULT_GAIT_BACKEND_CPG=0/1`, or override `CMAKE_C_FLAGS` to choose
+the experimental backend. The compile-time default remains the production
+CPG contract; it is not the A/B experimental variable.
+
 Each cell must include at least three fixed-duration trials and preserve raw
 reports; the implementation runbook will use 60 seconds per trial unless a
 reviewed target constraint requires a shorter, explicitly recorded window.
 
 | Cell | Backend | Communication condition | Purpose |
 | --- | --- | --- | --- |
-| A | CPG | Normal communication load and current optional telemetry behavior | Baseline current production behavior with timing counters |
-| B | SimpleGait | The identical normal load as A | Determine whether gaps are backend-independent |
-| C | CPG | Reduced-telemetry diagnostic condition; Heartbeat receive/ACK and Safety remain active | Isolate optional TX/telemetry contribution |
-| D | SimpleGait | The identical reduced-telemetry diagnostic condition as C | Separate backend cost from optional communication cost |
+| A | Runtime select CPG | NORMAL ELF and normal communication load/current optional telemetry behavior | Baseline current production behavior with timing counters |
+| B | Runtime select SimpleGait | The same NORMAL ELF and identical load as A | Determine whether gaps are backend-independent |
+| C | Runtime select CPG | REDUCED_OPTIONAL_TELEMETRY ELF; Heartbeat receive/ACK and Safety remain active | Isolate optional TX/telemetry contribution |
+| D | Runtime select SimpleGait | The same REDUCED_OPTIONAL_TELEMETRY ELF and identical load as C | Separate backend cost from optional communication cost |
+
+The runtime selector is used only between stopped exercises. No selector
+request is sent during a trial, and no selector path may start motion, emit a
+trajectory, add a Servo write, or bypass Safety.
 
 The C/D reduced-telemetry condition is diagnostic-only and must never become
 the production default. It may suppress only optional telemetry for the
@@ -412,7 +494,8 @@ The phase is complete only when:
 2. diagnostics compile out of the normal image and add no UART traffic when
    disabled;
 3. host tests cover counter arithmetic, saturation/wrap handling, backend
-   labels, and disabled/enabled compile contracts;
+   labels, fixed ABI size/offset contracts, strict gap buckets, and
+   diagnostic/reduced-telemetry compile contracts;
 4. target trials produce raw reports for the documented A/B matrix, or
    unavailable target tools are recorded as not run;
 5. any claimed software correlation is supported by raw counters;
