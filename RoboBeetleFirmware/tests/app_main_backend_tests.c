@@ -15,7 +15,9 @@
 
 static int failures = 0;
 static unsigned int motion_manager_init_calls = 0U;
-static gait_generator_t captured_generator;
+static gait_generator_t captured_simple_generator;
+static gait_generator_t captured_cpg_generator;
+static motion_gait_backend_t captured_initial_backend;
 
 static void expect(bool condition, const char *message)
 {
@@ -26,16 +28,20 @@ static void expect(bool condition, const char *message)
     }
 }
 
-void __wrap_motion_manager_init(
+void __wrap_motion_manager_init_with_backends(
     motion_manager_t *manager,
     servo_service_t *servo_service,
     safety_supervisor_t *safety_supervisor,
-    gait_generator_t generator)
+    gait_generator_t simple,
+    gait_generator_t cpg,
+    motion_gait_backend_t initial_backend)
 {
     (void)manager;
     (void)servo_service;
     (void)safety_supervisor;
-    captured_generator = generator;
+    captured_simple_generator = simple;
+    captured_cpg_generator = cpg;
+    captured_initial_backend = initial_backend;
     ++motion_manager_init_calls;
 }
 
@@ -108,6 +114,7 @@ int main(void)
     simple_gait_generator_t expected_simple;
     cpg_gait_generator_t expected_cpg;
     joint_targets_t targets = {0};
+    gait_generator_t selected_generator;
 
     app_main_init(
         &uart1,
@@ -126,41 +133,43 @@ int main(void)
         cpg_gait_generator_interface(&expected_cpg);
 
     expect(motion_manager_init_calls == 1U,
-           "app_main must initialize exactly one MotionManager generator");
+           "app_main must initialize MotionManager exactly once");
+    expect(captured_simple_generator.ops == simple_interface.ops &&
+               captured_simple_generator.context != NULL,
+           "app_main must register the SimpleGait generator");
+    expect(captured_cpg_generator.ops == cpg_interface.ops &&
+               captured_cpg_generator.context != NULL,
+           "app_main must register the CPG generator");
 #if MOTION_DEFAULT_GAIT_BACKEND_CPG
-    expect(captured_generator.ops == cpg_interface.ops,
-           "selected app_main backend must be CPG");
-    expect(captured_generator.ops != simple_interface.ops,
-           "selected app_main backend must not be SimpleGait");
+    expect(captured_initial_backend == MOTION_GAIT_BACKEND_CPG,
+           "selected app_main initial backend must be CPG");
+    selected_generator = captured_cpg_generator;
 #else
-    expect(captured_generator.ops == simple_interface.ops,
-           "selected app_main backend must be SimpleGait");
-    expect(captured_generator.ops != cpg_interface.ops,
-           "selected app_main backend must not be CPG");
+    expect(captured_initial_backend == MOTION_GAIT_BACKEND_SIMPLE_GAIT,
+           "selected app_main initial backend must be SimpleGait");
+    selected_generator = captured_simple_generator;
 #endif
-    expect(captured_generator.context != NULL,
-           "selected backend context must be non-null");
 
-    if ((captured_generator.ops != NULL) &&
-        (captured_generator.context != NULL))
+    if ((selected_generator.ops != NULL) &&
+        (selected_generator.context != NULL))
     {
 #if MOTION_DEFAULT_GAIT_BACKEND_CPG
-        captured_generator.ops->advance(
-            captured_generator.context,
+        selected_generator.ops->advance(
+            selected_generator.context,
             10U);
-        expect(captured_generator.ops->sample(
-                   captured_generator.context,
+        expect(selected_generator.ops->sample(
+                   selected_generator.context,
                    MOTION_FORWARD,
                    1.0F,
                    1.0F,
                    &targets),
                "selected CPG backend must sample Forward");
 #else
-        captured_generator.ops->advance(
-            captured_generator.context,
+        selected_generator.ops->advance(
+            selected_generator.context,
             500U);
-        expect(captured_generator.ops->sample(
-                   captured_generator.context,
+        expect(selected_generator.ops->sample(
+                   selected_generator.context,
                    MOTION_FORWARD,
                    1.0F,
                    1.0F,

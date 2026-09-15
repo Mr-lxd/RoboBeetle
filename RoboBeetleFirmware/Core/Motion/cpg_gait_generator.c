@@ -112,6 +112,20 @@ void cpg_gait_generator_init(
     cpg_gait_generator_init_with_profile(generator, &profile);
 }
 
+void cpg_gait_generator_reset(
+    cpg_gait_generator_t *generator)
+{
+    cpg_gait_profile_t profile;
+
+    if (generator == NULL)
+    {
+        return;
+    }
+
+    profile = generator->profile;
+    cpg_gait_generator_init_with_profile(generator, &profile);
+}
+
 void cpg_gait_generator_advance(
     cpg_gait_generator_t *generator,
     uint32_t dt_ms)
@@ -194,6 +208,12 @@ static void cpg_gait_generator_advance_interface(
         dt_ms);
 }
 
+static void cpg_gait_generator_reset_interface(
+    void *context)
+{
+    cpg_gait_generator_reset((cpg_gait_generator_t *)context);
+}
+
 static bool cpg_gait_generator_sample_interface(
     void *context,
     motion_mode_t mode,
@@ -226,6 +246,7 @@ static uint32_t cpg_gait_generator_diagnostic_interface(
 
 static const gait_generator_ops_t cpg_gait_generator_ops = {
     .advance = cpg_gait_generator_advance_interface,
+    .reset = cpg_gait_generator_reset_interface,
     .sample = cpg_gait_generator_sample_interface,
     .is_mode_valid = cpg_gait_generator_valid_interface,
     .diagnostic_count = cpg_gait_generator_diagnostic_interface,

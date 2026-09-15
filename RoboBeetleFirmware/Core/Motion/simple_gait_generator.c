@@ -86,6 +86,12 @@ static void simple_gait_generator_advance_interface(
         dt_ms);
 }
 
+static void simple_gait_generator_reset_interface(
+    void *context)
+{
+    simple_gait_generator_reset((simple_gait_generator_t *)context);
+}
+
 static bool simple_gait_generator_sample_interface(
     void *context,
     motion_mode_t mode,
@@ -111,6 +117,7 @@ static bool simple_gait_generator_valid_interface(
 
 static const gait_generator_ops_t simple_gait_generator_ops = {
     .advance = simple_gait_generator_advance_interface,
+    .reset = simple_gait_generator_reset_interface,
     .sample = simple_gait_generator_sample_interface,
     .is_mode_valid = simple_gait_generator_valid_interface,
     .diagnostic_count = NULL,
@@ -125,6 +132,12 @@ void simple_gait_generator_init(
     }
 
     generator->phase_rad = 0.0F;
+}
+
+void simple_gait_generator_reset(
+    simple_gait_generator_t *generator)
+{
+    simple_gait_generator_init(generator);
 }
 
 gait_generator_t simple_gait_generator_interface(

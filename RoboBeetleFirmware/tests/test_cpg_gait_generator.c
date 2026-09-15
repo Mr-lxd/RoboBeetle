@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static void set_raw_output(
     cpg_gait_generator_t *generator,
@@ -313,6 +314,36 @@ static void test_double_rounding_and_advance(void)
     assert(cpg_core_executed_step_count(&generator.core) == 2U);
 }
 
+static void test_reset_matches_fresh_profile_after_turn(void)
+{
+    cpg_gait_profile_t profile;
+    cpg_gait_generator_t fresh;
+    cpg_gait_generator_t exercised;
+    joint_targets_t targets;
+
+    cpg_gait_profile_production_default(&profile);
+    profile.nominal_period_s = 1.25;
+    profile.turn_reduced_side_scale = 0.35;
+    profile.front_axis_bias_cdeg[MOTION_TURN_LEFT] = 321.0;
+
+    cpg_gait_generator_init_with_profile(&fresh, &profile);
+    cpg_gait_generator_init_with_profile(&exercised, &profile);
+    cpg_gait_generator_advance(&exercised, 37U);
+    assert(cpg_gait_generator_sample(
+        &exercised,
+        MOTION_TURN_LEFT,
+        1.0F,
+        1.0F,
+        &targets));
+    cpg_gait_generator_advance(&exercised, 113U);
+
+    cpg_gait_generator_reset(&exercised);
+
+    assert(memcmp(&exercised.profile, &fresh.profile, sizeof(profile)) == 0);
+    assert(memcmp(&exercised.core, &fresh.core,
+                  sizeof(exercised.core)) == 0);
+}
+
 int main(void)
 {
     test_production_profile_and_initialization();
@@ -323,5 +354,6 @@ int main(void)
     test_backward_is_disabled_and_stop_is_safe();
     test_adapter_does_not_apply_rear_clamp();
     test_double_rounding_and_advance();
+    test_reset_matches_fresh_profile_after_turn();
     return 0;
 }
