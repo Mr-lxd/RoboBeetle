@@ -2,11 +2,13 @@
 
 ## Status and dependency
 
-The approved clock migration is implemented on branch `codex/clock-migration`,
-based on PR #15 reviewed head `b7e2787fe9eb4fdd46de0fd7380a23bbc961cc52`.
-PR #15 remains the first integration dependency; this branch is intentionally
-separate and is not merged here. The source/configuration and host contract
-checks are software-verified. The user has now supplied target/tool evidence
+The approved clock migration is implemented on the reconstructed branch
+`feature/clock-migration-168mhz`, replayed from the preserved Clock-only history
+of `codex/clock-migration` after PR #15 reviewed head
+`b7e2787fe9eb4fdd46de0fd7380a23bbc961cc52`. PR #15 was merged into `main` as
+`d7cdea5d03e642aa07079af4cb1170496afad533`; this Clock branch remains separate
+and is not merged here. The source/configuration and host contract checks are
+software-verified. The user has now supplied target/tool evidence
 for 168 MHz CubeMX regeneration, ARM Build, Program Verify,
 SystemCoreClock/RCC/TIM readback, the three UART/runtime links, individual
 servo safety behavior, and the direct DWT A/B benchmark. HAL tick target
@@ -19,9 +21,10 @@ those checks; no Water Verified claim is made by this document.
 
 ## 2026-09-15 independent software re-verification
 
-Against commit `24bd2a409c8298a8950a1ad4b3ae5174a0ebcd75` on the clean
-`codex/clock-migration` worktree, the clock contract test and the full Firmware
-host gate were rerun. The result was **Software Verified / PASS**:
+Against commit `24bd2a409c8298a8950a1ad4b3ae5174a0ebcd75` from the preserved
+Clock history, the clock contract test and the full Firmware host gate were
+rerun on the clean reconstructed `feature/clock-migration-168mhz` worktree.
+The result was **Software Verified / PASS**:
 `clock_config_contract_tests.ps1` passed, `run_host_tests.ps1` passed with 29
 executables plus 9 app/backend/benchmark compile-contract objects, and
 `git diff --check` passed. The checked configuration was the HSI 16 MHz to

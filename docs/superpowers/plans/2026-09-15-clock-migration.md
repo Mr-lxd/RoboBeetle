@@ -12,7 +12,12 @@
 
 ## Scope and dependency boundary
 
-This branch is codex/clock-migration, based on PR #15 reviewed head b7e2787. PR #15 remains the first integration dependency; the final clock PR must target the appropriate post-PR-15 base so CPG evidence and clock changes remain separately reviewable. This plan does not modify the CPG equations, double types, semantic adapter, ServoCalibration, installed limits, gait semantics, UART protocol settings, or the PR #15 evidence commit.
+The original implementation branch was codex/clock-migration, based on PR #15
+reviewed head b7e2787. PR #15 has since been merged into main as
+`d7cdea5d03e642aa07079af4cb1170496afad533`; the clean post-PR-15 Clock branch
+is `feature/clock-migration-168mhz`. This plan does not modify the CPG
+equations, double types, semantic adapter, ServoCalibration, installed limits,
+gait semantics, UART protocol settings, or the PR #15 evidence commit.
 
 ### Task 1: Add a failing clock and peripheral contract test
 
@@ -147,10 +152,11 @@ pass.
 
 - [x] Step 3: Record the CubeMX regeneration parity status.
 
-The workspace has no STM32CubeMX 6.18.1 executable, so do not claim a
-regeneration PASS. Record `CubeMX regeneration verification = Pending user/tool
-run` and leave the manual Generate Code comparison for a user/tool run with
-CubeMX 6.18.1 and STM32Cube FW_F4 V1.28.3.
+The workspace has no STM32CubeMX 6.18.1 executable, so Generate Code parity was
+not independently reproduced in this environment. The user-supplied target
+evidence records `CubeMX regeneration verification = PASS`; the raw Generate
+Code transcript/diff is not included. Do not infer this PASS from the host
+contract test.
 
 - [ ] Step 4: Confirm device limits before target programming.
 
@@ -214,7 +220,7 @@ Run:
 
 Expected: all existing 29 executables, 9 app/backend/benchmark compile contracts, and PASS clock_config_contract_tests pass. CPG output, period, theta-dot, SimpleGait, calibration, and safety-before-catch-up tests must be unchanged and passing.
 
-- [x] Step 2: Check target-tool availability; ARM build remains Pending because `arm-none-eabi-gcc` and `arm-none-eabi-size` are `NOT_FOUND`.
+- [x] Step 2: Check target-tool availability; local `arm-none-eabi-gcc` and `arm-none-eabi-size` are `NOT_FOUND`, while user-supplied 168 MHz ARM Build, Program Verify, and size evidence is recorded as PASS/available.
 
 The following is the deferred target command; it was not run because the
 required executables are unavailable in this environment:
@@ -227,7 +233,11 @@ required executables are unavailable in this environment:
     if ($LASTEXITCODE -ne 0) { throw 'ARM build failed' }
     arm-none-eabi-size (Join-Path $normalBuild 'RoboBeetleFirmware.elf')
 
-Record compiler/toolchain version, linker script, build type, optimization, text/data/bss, and FLASH/RAM deltas against the same-configuration PR #15 baseline. If arm-none-eabi-gcc is unavailable, record the exact not-run result and do not claim ARM or target performance.
+Record compiler/toolchain version, linker script, build type, optimization,
+text/data/bss, and FLASH/RAM deltas against the same-configuration PR #15
+baseline when the target log provides them. If arm-none-eabi-gcc is unavailable
+locally, preserve the exact user-supplied ARM/target evidence and do not replace
+it with a host timing claim.
 
 - [x] Step 3: Perform the host safety-order regression; target/physical execution remains Pending.
 
@@ -280,11 +290,14 @@ Files:
 - Read-only benchmark: RoboBeetleFirmware/Core/App/cpg_target_benchmark.c
 - Read-only CPG: RoboBeetleFirmware/Core/Motion/cpg_core.c
 
-- [ ] Step 1: Build the benchmark image with the same toolchain settings.
+- [x] Step 1: Build the benchmark image with the same toolchain settings.
 
-Use a clean external build directory and -DROBOBEETLE_CPG_TARGET_BENCHMARK=ON. Program only after the normal image has passed the hardware-safe checks. Do not add UART logging or alter the measured CPG path.
+The user supplied the clean target run from the temporary
+`ROBOBEETLE_CPG_TARGET_BENCHMARK=ON` image. Program only after the normal image
+has passed the hardware-safe checks. Do not add UART logging or alter the
+measured CPG path.
 
-- [ ] Step 2: Record both clock runs without scaling estimates.
+- [x] Step 2: Record both clock runs without scaling estimates.
 
 Record SystemCoreClock, repetitions, min/median/max cycles and min/median/max microseconds for nominal 10 ms, 20 ms, 70 ms, 100 ms, and 1000 ms bounded catch-up. Record FLASH and RAM for both images and compute deltas from the same baseline. Preserve the current 16 MHz evidence exactly:
 
@@ -297,7 +310,12 @@ Record SystemCoreClock, repetitions, min/median/max cycles and min/median/max mi
     benchmark FLASH=55060 B / 512 KB = 10.50%
     benchmark RAM=5440 B / 128 KB = 4.15%
 
-The new 168 MHz values must be directly measured. Do not estimate them from 16/168 scaling. The production core remains double; if the measured double implementation fails the approved budget, stop and create a separate double-reference/float-production-parity design.
+The user-supplied 168 MHz values and direct A/B comparison are recorded in
+`docs/clock-migration-2026-09-15.md`: nominal median `305 us`, approximately
+`10.07x` measured speedup, and `3.05%` isolated utilization. Do not estimate
+them from 16/168 scaling. The production core remains double; if a future
+target result fails the approved budget, stop and create a separate
+double-reference/float-production-parity design.
 
 - [ ] Step 3: Measure target-representative long-run oscillator period.
 
@@ -313,28 +331,34 @@ Files:
 
 The report must include exact RCC/APB/TIM/UART/SysTick configuration, the
 regeneration-safe `.ioc` input keys and `RCC.IPParameters` membership, target
-register readback when available (otherwise an explicit Pending marker), ARM
-size delta when available, ordered bring-up results, 16/168 DWT table, long-run
-period result, and explicit unavailable evidence. If CubeMX is not available,
-it must say `CubeMX regeneration verification = Pending user/tool run` and must
-not claim a Generate Code parity PASS. It must not upgrade water evidence,
+register readback when available, ARM size delta when available, ordered
+bring-up results, 16/168 DWT table, long-run period result, and explicit
+unavailable evidence. When CubeMX is unavailable locally but user evidence
+exists, record the supplied `CubeMX regeneration verification = PASS` together
+with the local non-reproduction boundary. It must not upgrade water evidence,
 alter PR #15 CPG evidence, or claim system-level real-time margin from isolated
 CPG timing.
 
 - [x] Step 2: Run final verification before any completion claim.
 
-Run git diff --check, the full Firmware host gate, the ARM build/size command,
-and the exact target/physical checks that are actually available. Record ARM,
-CubeMX, and target checks as Pending when their tools are unavailable. Confirm
+Run git diff --check, the full Firmware host gate, the ARM build/size command
+when available, and the exact target/physical checks that are actually
+available. If local tools are unavailable, preserve the separately supplied
+ARM, CubeMX, and target PASS evidence without substituting host claims. Confirm
 the only intended production changes are RCC configuration and TIM3/TIM4 PSC,
 and confirm no CPG, calibration, gait, UART, or safety semantic diff exists.
 
-- [x] Step 3: Push the reviewed clock branch for external re-review.
+- [x] Step 3: Reconstruct and push the clean post-PR-15 clock branch for external review.
 
-Push the clock branch only after the plan is approved and implementation
-verification is complete. Do not merge PR #15 or the future clock PR in this
-task; preserve the dependency order CPG PR first, clock PR second.
+PR #15 was merged first using the repository's normal merge-commit convention.
+The reconstructed `feature/clock-migration-168mhz` branch is pushed only after
+the clean diff and regression gates pass. The Clock PR is a separate review
+unit and must not be merged in this task.
 
 ## Approval gate
 
-This plan was approved for implementation. Software/configuration verification is complete to the extent available in the workspace; target programming, register readback, DWT A/B, and physical bring-up remain explicitly Pending until the user performs the hardware-safe sequence.
+This plan was approved for implementation. Software/configuration verification
+and the supplied 168 MHz target evidence are complete for the recorded Clock
+Migration gate. PWM physical waveform scope measurement, independent HAL tick
+target measurement, full gait after migration, and Water remain explicitly
+Pending. PR #15 is merged; the Clock PR remains separate for external review.
