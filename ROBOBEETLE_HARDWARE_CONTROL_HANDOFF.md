@@ -5,6 +5,10 @@
 （9600 8-N-1）。APC220 仅保留为早期/legacy transport 记录，未参与近期
 验证，也不是当前启用的硬件链路。
 
+本文件中 2026-09-05 及更早的历史章节可能保留 HSI 16 MHz、PLL off、TIM
+PSC=15 等旧 image 快照；它们不覆盖当前 Clock Migration image。最新的
+168 MHz target bring-up 记录见本文档末尾的 2026-09-15 章节。
+
 ## 2026-09-10 Leak detection sensor bring-up（PR #9，end-to-end Hardware Verified）
 
 本阶段在 PR #8 五舵机分支之后采用 stacked branch，实现第一条最小数字漏水检测路径及其 monitoring-only Protocol V2/Qt 显示，不改变 Servo 行为或 Safety 行为。漏水模块由 3.3 V 供电，与 STM32 共地；数字输出 `D0` 接 STM32 `PA11`，模拟输出 `A0` 暂不使用。PA11 → Firmware → Protocol V2 → Qt 的完整路径已经完成实机验收。
@@ -1474,3 +1478,36 @@ work were not included. The `1000 ms` bounded case is not normal operating
 load. Safety-before-catch-up remains mandatory: SafetySupervisor/liveness must
 abort before MotionManager can perform catch-up or emit a post-gap actuator
 command, and recovery must not auto-resume motion。
+
+## 2026-09-15 Clock Migration 168 MHz target bring-up (user-supplied)
+
+This section supplements, and does not rewrite, the historical 16 MHz PR #15
+performance evidence above. The supplied report is associated with clock branch
+commit `24bd2a409c8298a8950a1ad4b3ae5174a0ebcd75`. It supplies ARM Build 168 MHz
+= PASS and Program Verify = PASS; raw debugger dumps, BRR values, detailed
+build/size logs, and the Program Verify transcript were not included.
+
+| Check | Measurement / result | Evidence class |
+| --- | --- | --- |
+| ARM Build 168 MHz | User-supplied target build result | Target Build Evidence / PASS |
+| Program Verify 168 MHz | User-supplied programming and verification result | Target Program Evidence / PASS |
+| CLOCK READBACK | `SystemCoreClock = 168000000`; RCC PLL/APB runtime readback passed | Target Measured / PASS |
+| RCC clock tree | PLL/APB runtime register readback passed; raw values not supplied | Target Measured / PASS |
+| TIM3/TIM4 registers | Runtime readback `PSC=83`, `ARR=3002` | Target Measured / PASS |
+| PWM TIMEBASE CONTRACT | SystemCoreClock/RCC/TIM readback plus `84 MHz / (83 + 1) = 1 MHz = 1 us/count` | Target Measured / calculated contract / PASS |
+| USART1 / APC | USART1 `9600`; APC link operational | Target Measured + Hardware Verified / PASS |
+| USART3 / JY901S | USART3 `9600`; JY901S `Receiving` | Target Measured + Hardware Verified / PASS |
+| USART6 / ROVMAKER | USART6 `115200`; Depth `Receiving` | Target Measured + Hardware Verified / PASS |
+| INDIVIDUAL SERVO SAFE BRING-UP | Neutral, small-angle, Release, and Disable behavior | Hardware Verified / PASS |
+| Unexpected movement | None observed after the 168 MHz migration | Hardware Verified / PASS |
+| PWM PHYSICAL WAVEFORM SCOPE MEASUREMENT | No oscilloscope/logic-analyzer pulse-width capture supplied | Pending |
+| HAL TICK PHYSICAL/TARGET VERIFICATION | One-second target interval measurement not supplied | Pending |
+| GAIT AFTER CLOCK MIGRATION | No new Forward/Turn/Ascend/Descend/SimpleGait/CPG exercise supplied | Pending |
+| DWT 16/168 A/B | Not supplied; direct target benchmark remains next | Pending |
+| Water | Not supplied | Pending Water Verification |
+
+The target/runtime, ARM Build, Program Verify, and individual-servo claims above
+are real-target evidence supplied by the user. They do not upgrade the
+historical 16 MHz image, do not establish SimpleGait or CPG runtime behavior,
+and do not establish water verification. The physical PWM waveform, HAL tick
+interval, and direct 16/168 MHz DWT comparison remain separate evidence items.

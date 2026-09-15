@@ -6,13 +6,68 @@ The approved clock migration is implemented on branch `codex/clock-migration`,
 based on PR #15 reviewed head `b7e2787fe9eb4fdd46de0fd7380a23bbc961cc52`.
 PR #15 remains the first integration dependency; this branch is intentionally
 separate and is not merged here. The source/configuration and host contract
-checks are software-verified. CubeMX regeneration, ARM build, debugger
-readback, DWT measurements, and physical bring-up remain **Pending** because
-the CubeMX/target tools and hardware evidence are not available in this
-workspace.
+checks are software-verified. The user has now supplied real-target evidence
+for the 168 MHz ARM Build, Program Verify, SystemCoreClock/RCC/TIM readback,
+the three UART/runtime links, and individual servo safety behavior. CubeMX
+regeneration, HAL tick target verification, physical PWM waveform measurement,
+DWT A/B measurements, and gait/water verification remain separately classified
+below.
 
-No servo actuator power was enabled, and no claim of Hardware Verified or Water
-Verified is made by this document.
+The supplied individual servo checks include no unexpected movement after the
+168 MHz migration. Gait behavior and water performance are not inferred from
+those checks; no Water Verified claim is made by this document.
+
+## 2026-09-15 independent software re-verification
+
+Against commit `24bd2a409c8298a8950a1ad4b3ae5174a0ebcd75` on the clean
+`codex/clock-migration` worktree, the clock contract test and the full Firmware
+host gate were rerun. The result was **Software Verified / PASS**:
+`clock_config_contract_tests.ps1` passed, `run_host_tests.ps1` passed with 29
+executables plus 9 app/backend/benchmark compile-contract objects, and
+`git diff --check` passed. The checked configuration was the HSI 16 MHz to
+PLL 168 MHz clock tree with TIM3/TIM4 PSC `83`, ARR `3002`, and USART1/3/6
+baud values `9600/9600/115200`.
+
+Evidence boundary: this is source/configuration and host-only evidence from a
+clean branch worktree. It does not itself establish CubeMX Generate Code parity,
+an ARM image, Program Verify, target register readback, HAL tick measurement,
+PWM waveform timing, UART/APC physical links, servo/gait behavior, DWT A/B, or
+water performance. The separately supplied target evidence below is authoritative
+for the items it covers; HAL tick, physical waveform, gait, DWT A/B, and Water
+remain **Pending** where explicitly stated.
+
+## 2026-09-15 user-supplied 168 MHz target and actuator evidence
+
+The user supplied the following results for the 168 MHz image associated with
+clock branch commit `24bd2a409c8298a8950a1ad4b3ae5174a0ebcd75`. The report is
+recorded as supplied. It includes ARM Build 168 MHz = PASS and Program Verify =
+PASS; raw debugger dumps, BRR values, detailed build/size logs, and waveform
+captures were not included.
+
+| Check | Measurement / configuration | Result | Evidence class |
+| --- | --- | --- | --- |
+| ARM Build 168 MHz | User-supplied target build result | PASS | Target Build Evidence |
+| Program Verify 168 MHz | User-supplied programming and verification result | PASS | Target Program Evidence |
+| CLOCK READBACK | `SystemCoreClock = 168000000`; RCC PLL/APB runtime readback passed | PASS | Target Measured |
+| RCC clock tree | PLL/APB runtime register readback PASS; raw register values not supplied | PASS | Target Measured |
+| TIM3/TIM4 registers | `PSC=83`, `ARR=3002` runtime readback | PASS | Target Measured |
+| PWM TIMEBASE CONTRACT | SystemCoreClock/RCC/TIM readback plus `84 MHz / (83 + 1) = 1 MHz = 1 us/count` | PASS | Target Measured / calculated contract |
+| USART1 / APC | USART1 `9600`; APC link operational | PASS | Target Measured + Hardware Verified |
+| USART3 / JY901S | USART3 `9600`; JY901S state `Receiving` | PASS | Target Measured + Hardware Verified |
+| USART6 / ROVMAKER | USART6 `115200`; Depth state `Receiving` | PASS | Target Measured + Hardware Verified |
+| INDIVIDUAL SERVO SAFE BRING-UP | Neutral, small-angle, Release, and Disable behavior | PASS | Hardware Verified |
+| Unexpected movement | No unexpected servo movement after migration | PASS | Hardware Verified observation |
+| PWM PHYSICAL WAVEFORM SCOPE MEASUREMENT | No oscilloscope/logic-analyzer pulse-width capture supplied | Pending | Physical Scope Evidence |
+| HAL TICK PHYSICAL/TARGET VERIFICATION | One-second target interval measurement not supplied | Pending | Target Timing Evidence |
+| GAIT AFTER CLOCK MIGRATION | No new Forward/Turn/Ascend/Descend/SimpleGait/CPG exercise supplied | Pending | Separate Gait Evidence |
+| Water | No propulsion/hydrodynamic result supplied | Pending | Water Evidence |
+
+These results close the listed 168 MHz ARM Build, Program Verify, clock
+readback, PWM timebase contract, UART/APC, JY901S/ROVMAKER UART, and
+individual-servo safe bring-up statuses. The ARM Build and Program Verify
+claims are recorded as user-supplied evidence; detailed build/size logs and
+the Program Verify transcript were not included. Physical PWM waveform, HAL
+tick, gait, DWT A/B, and Water remain separate evidence items.
 
 ## Implemented clock tree
 
@@ -87,23 +142,25 @@ unchanged. Because APB1 is prescaled, the F4 timer kernel is `2 × PCLK1 =
 `84,000,000 / (83 + 1) = 1,000,000 Hz = 1 us/count`.
 
 The configured PWM frame therefore remains `(3002 + 1) us = 3003 us` in the
-source contract, approximately 333.0003 Hz. The counter and waveform still
-need target readback and measurement with actuator power OFF.
+source contract, approximately 333.0003 Hz. The user-supplied target readback
+proves the configured counter contract. No physical period/pulse capture was
+supplied, so the physical PWM waveform remains Pending.
 
 UART application settings remain unchanged: USART1 9600 8-N-1, USART3 9600
 8-N-1, and USART6 115200 8-N-1. HAL initialization still runs after
 `SystemClock_Config()`, so BRR calculation uses the new PCLK2 for USART1/6 and
 PCLK1 for USART3. APC Series remains 9600, APC RF TRx remains 19200, and the RF
-frequency is unchanged. The SYSCLK migration does not change those radio
-settings; an incorrect HAL BRR would still break the host/APC link and must be
-read back on target.
+frequency is unchanged. The supplied target run reports the runtime settings
+and APC/JY901S/ROVMAKER links as passing. Raw BRR values and baud-error
+calculations were not supplied and remain a separate follow-up if required.
 
 `HAL_GetTick()` remains the HAL millisecond timebase. Motion10ms,
 STOP750ms, heartbeat/liveness, depth stale, telemetry, and all safety
 deadlines remain unchanged. `app_main_process()` continues to evaluate
 SafetySupervisor/liveness before MotionManager elapsed-time catch-up. A stale
 foreground gap must abort before any catch-up or Servo write and must not
-auto-resume from heartbeat recovery alone.
+auto-resume from heartbeat recovery alone. A measured one-second HAL tick
+interval was not included in the supplied result and remains Pending.
 
 The production CPG remains the source-compatible `double` implementation. No
 CPG equation, theta-dot state, gait semantics, semantic adapter,
@@ -119,14 +176,19 @@ changed in this branch.
 | CubeMX 6.18.1 regeneration parity | **Pending user/tool run**: CubeMX executable unavailable; no Generate Code comparison and no PASS claim |
 | Firmware host gate | PASS: 29 executables + 9 app/backend/benchmark compile-contract objects, including the clock contract |
 | Public-header self-sufficiency | PASS: 34 headers with host C11 `-Wall -Wextra -Werror`; CMSIS host pointer-width warnings explicitly suppressed |
-| ARM compiler / `arm-none-eabi-size` | **Pending / NOT_FOUND** in this environment; no ARM image or size claim made |
-| SystemCoreClock 168 MHz debugger readback | Pending hardware access |
-| TIM3/TIM4 PSC/ARR and 3003 us waveform | Pending hardware access |
-| HAL_GetTick one-second measurement | Pending hardware access |
-| USART BRR and host/APC/JY901S/ROVMAKER links | Pending hardware access |
+| ARM Build 168 MHz | **Target Build Evidence / PASS**: user supplied; detailed compiler/size log not included |
+| ARM toolchain / size record | **Pending / NOT_FOUND** in this environment; no independent size claim made |
+| SystemCoreClock 168 MHz debugger readback | **Target Measured / PASS**: user supplied `168000000` |
+| RCC PLL/APB runtime register readback | **Target Measured / PASS**: user supplied runtime readback; raw values not included |
+| PWM TIMEBASE CONTRACT | **Target Measured / PASS**: SystemCoreClock/RCC/TIM readback, `PSC=83`, `ARR=3002`, and `1 us/count` result |
+| PWM PHYSICAL WAVEFORM SCOPE MEASUREMENT | **Pending**: no oscilloscope/logic-analyzer capture supplied |
+| HAL TICK PHYSICAL/TARGET VERIFICATION | **Pending**: no one-second target interval measurement supplied |
+| USART runtime settings and host/APC/JY901S/ROVMAKER links | **Target Measured + Hardware Verified / PASS** for supplied runtime/link results; raw BRR not included |
+| Individual Servo Neutral/small-angle/Release/Disable | **Hardware Verified / PASS**: no unexpected movement reported |
+| GAIT AFTER CLOCK MIGRATION | **Pending**: no new Forward/Turn/Ascend/Descend/SimpleGait/CPG exercise supplied |
 | 16 MHz versus 168 MHz DWT A/B | Pending target benchmark run; no 16/168 scaling estimate used |
-| Program Verify | Pending |
-| Water evidence | Pending Water Verification |
+| Program Verify 168 MHz | **Target Program Evidence / PASS**: user supplied; transcript not included |
+| Water | **Pending Water Verification** |
 
 The available isolated 16 MHz baseline is preserved exactly for the later A/B
 run: repetitions 32; nominal 10 ms min/median/max `3071 / 3072 / 3076 us`,
@@ -140,13 +202,21 @@ FLASH/RAM, and same-configuration deltas.
 
 ## Hardware-safe bring-up order
 
-After an ARM build and Program Verify are available, keep servo actuator power
-OFF and complete, in order: debugger clock/readback; HAL millisecond timing;
-TIM3/TIM4 counter frequency and PWM period; USART register/actual baud;
-DAP/direct UART; APC unchanged-radio link; JY901S USART3; and ROVMAKER USART6.
-Stop on any unproven or incorrect PWM timing. Only after those checks pass may
-the user proceed to Servo power ON, Neutral, individual low-amplitude commands,
-SimpleGait, CPG, and the long-run oscillator-period measurement. The long-run
-test must report the actual steady-state period/frequency relative to the
-nominal period parameter `T=2.0 s`; it must not label the result exactly 0.5 Hz
-without evidence.
+The supplied run closes the 168 MHz ARM Build, Program Verify, debugger
+clock/RCC readback, PWM timebase contract, UART/runtime-link, and
+individual-servo checks. HAL millisecond timing and the physical PWM waveform
+still require their own evidence. The previously required safe order remains:
+ARM build and Program Verify, servo power OFF for clock/
+timer/UART checks, then only after those checks pass the individual servo and
+gait exercises. The supplied result does not include SimpleGait or CPG runtime
+exercise. Water propulsion and hydrodynamic performance remain Pending Water
+Verification.
+
+## Remaining 168 MHz DWT A/B closeout
+
+The next target-only item is the unchanged `ROBOBEETLE_CPG_TARGET_BENCHMARK=ON`
+image. Record the exact commit, compiler/linker configuration, `SystemCoreClock`,
+repetitions, cycles and microseconds for nominal/20/70/100/1000 ms cases, and
+FLASH/RAM. Compare directly with the preserved 16 MHz baseline; do not estimate
+the 168 MHz values by scaling. Until the direct target report is supplied,
+`DWT A/B` remains **Pending** and the branch is ready for that measurement.
