@@ -148,8 +148,9 @@ if ([string]::IsNullOrWhiteSpace($RawReportPath)) {
 
     $RawReportPath = [IO.Path]::GetTempFileName()
     $temporaryDump = $true
+    $openOcdDumpPath = $RawReportPath -replace '\\', '/'
     $dumpCommand = 'init; halt; dump_image "{0}" 0x{1:X8} {2}; reset run; shutdown' -f `
-        $RawReportPath,
+        $openOcdDumpPath,
         $reportAddress,
         $reportSize
     & $openOcd.Source @OpenOcdArgs '-c' $dumpCommand
