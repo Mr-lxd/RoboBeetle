@@ -123,6 +123,12 @@ uint32_t reset_marker;
   `offsetof` values: every header word, the first counter group, Motion gap
   counters, and the final report size. Increment the ABI version whenever the
   layout changes.
+  ABI v1 is currently 1168 bytes with top-level offsets
+  `app_loop_body=32`, `app_loop_interval=92`, `rx_drain=152`, `tx=368`,
+  `motion=704`, saturation=1160, and counter-wrap=1164. Distribution
+  histograms use the fixed inclusive buckets `<=10`, `11..20`, `21..50`,
+  `51..100`, `101..500`, `501..1000`, `1001..5000`, `>5000` in recorded value
+  units.
 - [ ] Implement initialization only in the ON path. Enable
   CoreDebug->DEMCR.TRCENA, clear DWT->CYCCNT, enable
   DWT_CTRL_CYCCNTENA_Msk, and use barriers matching the existing
