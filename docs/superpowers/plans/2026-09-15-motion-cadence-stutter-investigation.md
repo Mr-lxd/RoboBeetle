@@ -1,6 +1,6 @@
 # Motion Cadence / Servo Stutter Investigation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (\`- [ ]\`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add compile-gated, RAM-only timing diagnostics and a reproducible target measurement procedure that can distinguish foreground communication delay, generator cost, logical Motion cadence, and physical servo/PWM behavior without changing production scheduling or actuator semantics.
 
