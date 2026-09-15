@@ -44,8 +44,8 @@ for the items it covers; HAL tick, physical waveform, gait, and Water remain
 The user supplied the following results for the 168 MHz image associated with
 clock branch commit `24bd2a409c8298a8950a1ad4b3ae5174a0ebcd75`. The report is
 recorded as supplied. It includes ARM Build 168 MHz = PASS and Program Verify =
-PASS; raw debugger dumps, BRR values, detailed build/size logs, and waveform
-captures were not included.
+PASS; the runtime RCC register values and USART BRR values are recorded below.
+Detailed build/size logs and waveform captures were not included.
 
 | Check | Measurement / configuration | Result | Evidence class |
 | --- | --- | --- | --- |
@@ -53,7 +53,7 @@ captures were not included.
 | ARM Build 168 MHz | User-supplied target build result | PASS | Target Build Evidence |
 | Program Verify 168 MHz | User-supplied programming and verification result | PASS | Target Program Evidence |
 | CLOCK READBACK | `SystemCoreClock = 168000000`; RCC PLL/APB runtime readback passed | PASS | Target Measured |
-| RCC clock tree | PLL/APB runtime register readback PASS; raw register values not supplied | PASS | Target Measured |
+| RCC clock tree | `RCC_CFGR = 0x0000940A`; `RCC_PLLCFGR = 0x07005410`; PLL/APB runtime register readback | PASS | Target Measured |
 | TIM3/TIM4 registers | `PSC=83`, `ARR=3002` runtime readback | PASS | Target Measured |
 | PWM TIMEBASE CONTRACT | SystemCoreClock/RCC/TIM readback plus `84 MHz / (83 + 1) = 1 MHz = 1 us/count` | PASS | Target Measured / calculated contract |
 | USART1 / APC | USART1 `9600`; APC link operational | PASS | Target Measured + Hardware Verified |
@@ -156,8 +156,9 @@ UART application settings remain unchanged: USART1 9600 8-N-1, USART3 9600
 `SystemClock_Config()`, so BRR calculation uses the new PCLK2 for USART1/6 and
 PCLK1 for USART3. APC Series remains 9600, APC RF TRx remains 19200, and the RF
 frequency is unchanged. The supplied target run reports the runtime settings
-and APC/JY901S/ROVMAKER links as passing. Raw BRR values and baud-error
-calculations were not supplied and remain a separate follow-up if required.
+and APC/JY901S/ROVMAKER links as passing. The supplied runtime BRR values are
+`USART1 = 0x222E`, `USART3 = 0x1117`, and `USART6 = 0x02D9`; no separate
+baud-error calculation is asserted here.
 
 `HAL_GetTick()` remains the HAL millisecond timebase. Motion10ms,
 STOP750ms, heartbeat/liveness, depth stale, telemetry, and all safety
@@ -184,11 +185,11 @@ changed in this branch.
 | ARM Build 168 MHz | **Target Build Evidence / PASS**: user supplied; detailed compiler/size log not included |
 | ARM toolchain / size record | **Pending / NOT_FOUND** in this environment; no independent size claim made |
 | SystemCoreClock 168 MHz debugger readback | **Target Measured / PASS**: user supplied `168000000` |
-| RCC PLL/APB runtime register readback | **Target Measured / PASS**: user supplied runtime readback; raw values not included |
+| RCC PLL/APB runtime register readback | **Target Measured / PASS**: `RCC_CFGR = 0x0000940A`; `RCC_PLLCFGR = 0x07005410` |
 | PWM TIMEBASE CONTRACT | **Target Measured / PASS**: SystemCoreClock/RCC/TIM readback, `PSC=83`, `ARR=3002`, and `1 us/count` result |
 | PWM PHYSICAL WAVEFORM SCOPE MEASUREMENT | **Pending**: no oscilloscope/logic-analyzer capture supplied |
 | HAL TICK PHYSICAL/TARGET VERIFICATION | **Pending**: no one-second target interval measurement supplied |
-| USART runtime settings and host/APC/JY901S/ROVMAKER links | **Target Measured + Hardware Verified / PASS** for supplied runtime/link results; raw BRR not included |
+| USART runtime settings and host/APC/JY901S/ROVMAKER links | **Target Measured + Hardware Verified / PASS**; BRR `USART1 = 0x222E`, `USART3 = 0x1117`, `USART6 = 0x02D9` |
 | Individual Servo Neutral/small-angle/Release/Disable | **Hardware Verified / PASS**: no unexpected movement reported |
 | GAIT AFTER CLOCK MIGRATION | **Pending**: no new Forward/Turn/Ascend/Descend/SimpleGait/CPG exercise supplied |
 | 16 MHz versus 168 MHz DWT A/B | **Target Performance Evidence / PASS**: user supplied direct benchmark and comparison; no ideal scaling estimate used |
