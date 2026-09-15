@@ -179,7 +179,7 @@ static void test_enable_each_servo_and_independent_bits(void)
     servo_service_t service;
     const servo_descriptor_t *table = servo_descriptor_table();
     static const uint16_t expected_neutral_pulse_us[SERVO_DESCRIPTOR_COUNT] = {
-        1450U, 1580U, 1745U, 1570U, 1450U,
+        1580U, 1450U, 1745U, 1570U, 1450U,
     };
 
     init_service(&service, &driver);
@@ -274,8 +274,8 @@ static void test_command_ranges_and_capabilities(void)
         uint16_t min_pulse_us;
         uint16_t max_pulse_us;
     } paddle_cases[] = {
-        {SERVO_ID_FRONT_RIGHT, 1000U, 1900U},
-        {SERVO_ID_FRONT_LEFT, 1140U, 2020U},
+        {SERVO_ID_FRONT_RIGHT, 1140U, 1860U},
+        {SERVO_ID_FRONT_LEFT, 1160U, 1900U},
         {SERVO_ID_REAR_RIGHT, 1110U, 2030U},
         {SERVO_ID_REAR_LEFT, 960U, 1940U},
     };
@@ -383,7 +383,7 @@ static void test_neutral_disable_and_disable_all(void)
     fake_driver_t driver;
     servo_service_t service;
     static const uint16_t expected_neutral_pulse_us[SERVO_DESCRIPTOR_COUNT] = {
-        1450U, 1580U, 1745U, 1570U, 1450U,
+        1580U, 1450U, 1745U, 1570U, 1450U,
     };
 
     init_service(&service, &driver);

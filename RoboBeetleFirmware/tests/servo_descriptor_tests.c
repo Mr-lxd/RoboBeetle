@@ -77,11 +77,11 @@ static void test_descriptor_table(void)
            "FrontRight angle must be supported");
     expect(table[SERVO_ID_FRONT_RIGHT].timer == SERVO_TIMER_TIM3,
            "FrontRight timer differs");
-    expect(table[SERVO_ID_FRONT_RIGHT].channel == SERVO_CHANNEL_1,
+    expect(table[SERVO_ID_FRONT_RIGHT].channel == SERVO_CHANNEL_2,
            "FrontRight channel differs");
     expect_calibration(&table[SERVO_ID_FRONT_RIGHT],
-                       1000U, 1450U, 1900U, -4500, 4500,
-                       1000U, 1900U, -4500, 4500);
+                       1140U, 1580U, 2020U, -4500, 4500,
+                       1140U, 1860U, -4500, 4500);
 
     expect(table[SERVO_ID_FRONT_LEFT].id == SERVO_ID_FRONT_LEFT,
            "FrontLeft row ID differs");
@@ -93,11 +93,11 @@ static void test_descriptor_table(void)
            "FrontLeft angle must be supported");
     expect(table[SERVO_ID_FRONT_LEFT].timer == SERVO_TIMER_TIM3,
            "FrontLeft timer differs");
-    expect(table[SERVO_ID_FRONT_LEFT].channel == SERVO_CHANNEL_2,
+    expect(table[SERVO_ID_FRONT_LEFT].channel == SERVO_CHANNEL_1,
            "FrontLeft channel differs");
     expect_calibration(&table[SERVO_ID_FRONT_LEFT],
-                       2020U, 1580U, 1140U, -4500, 4500,
-                       1140U, 2020U, -4500, 4500);
+                       1900U, 1450U, 1000U, -4500, 4500,
+                       1160U, 1900U, -4500, 4500);
 
     expect(table[SERVO_ID_FRONT_AXIS].id == SERVO_ID_FRONT_AXIS,
            "FrontAxis row ID differs");
@@ -112,7 +112,7 @@ static void test_descriptor_table(void)
     expect(table[SERVO_ID_FRONT_AXIS].channel == SERVO_CHANNEL_3,
            "FrontAxis channel differs");
     expect_calibration(&table[SERVO_ID_FRONT_AXIS],
-                       1060U, 1745U, 2430U, -9000, 9000,
+                       2430U, 1745U, 1060U, -9000, 9000,
                        1060U, 2430U, -9000, 9000);
 
     expect(table[SERVO_ID_REAR_RIGHT].id == SERVO_ID_REAR_RIGHT,

@@ -1,9 +1,50 @@
 # Motion / Gait — Bench-Provisional STOP Contract
 
-This document records the first Motion / Gait control foundation added on
-`feature/motion-simple-gait`. It is a host-test/software contract. The branch
-does not claim an ARM build, programming/verification, or physical actuator
-verification until those steps are independently run.
+This document records the Motion / Gait control foundation carried into
+`feature/cpg-gait-core`. It is a host-test/software contract. The completed
+SimpleGait mechanical baseline has Hardware Verified Front/Rear physical
+anti-phase; the latest CPG desktop physical gait is also Hardware Verified for
+the recorded desktop checks. The supplied PR #15 evidence records ARM Build
+PASS and measured isolated CPG target performance; Program Verify and
+system-level foreground margin remain separate evidence categories. True water
+propulsion and hydrodynamic effectiveness remain pending.
+
+The normal Firmware default is `MOTION_DEFAULT_GAIT_BACKEND_CPG=1`. An
+explicit `MOTION_DEFAULT_GAIT_BACKEND_CPG=0` build retains SimpleGait as the
+mechanical baseline. Each build registers exactly one generator with
+MotionManager.
+
+The host-only comparison tool is
+`RoboBeetleFirmware/tests/tools/gait_trace_compare.c`; it produces deterministic
+SimpleGait/CPG integer-target CSVs and a separate CPG internal-state CSV. The
+trace is offline evidence only and adds no Protocol V2 telemetry or Qt runtime
+backend selector.
+
+### Host-only SimpleGait versus CPG trace
+
+The trace runner samples both production generators at 10 ms on one fixed
+timeline: `[0,5000)` `FORWARD`, `[5000,8000)` `TURN_LEFT`, `[8000,11000)`
+`FORWARD`, `[11000,14000)` `TURN_RIGHT`, `[14000,17000)` `FORWARD`, followed
+by one final `STOP` row at `17000 ms`. It advances each generator by exactly
+10 ms before every row after the initialized `0 ms` sample and uses amplitude
+and bias scales of `1.0F`.
+
+`gait_trace_simple.csv` and `gait_trace_cpg.csv` each contain 1701 rows with
+the canonical integer logical-target fields
+`time_ms,backend,mode,front_right_cdeg,front_left_cdeg,rear_right_cdeg,`
+`rear_left_cdeg,front_axis_cdeg`, followed by the host-only
+`guarded_*_cdeg` projection. The raw fields are the generator requests; the
+projection applies the existing Motion common guards, front `-4500..+2800`
+and rear `-3000..+4500 cdeg`, while leaving `FrontAxis` unchanged. This is an
+algorithm-request versus installed-safe-command comparison aid, not a
+replacement for MotionManager's production sanitizer and not a PWM trace.
+
+`gait_trace_cpg_internal.csv` contains the same timeline with CPG phase,
+amplitude, target amplitude, `theta_dot0..theta_dot3`, and `raw_output0..3`
+written at double precision for host-only research. These states are not
+Protocol V2 telemetry. The deterministic regression compares all three files
+byte-for-byte across two generated directories and validates the timeline,
+mode boundaries, final STOP zeros, headers, row counts, and guard bounds.
 
 ## Wire contract
 
@@ -22,8 +63,9 @@ The stable mode order is:
 4 TURN_RIGHT 5 ASCEND      6 DESCEND     7 COUNT (sentinel)
 ```
 
-`STOP` uses mode 0 and action `STOP`. The current bench SimpleGait implementation
-accepts `FORWARD`, `TURN_LEFT`, `TURN_RIGHT`, `ASCEND`, and `DESCEND` for
+`STOP` uses mode 0 and action `STOP`. The selected CPG generator, and the
+explicit SimpleGait diagnostic generator, accept `FORWARD`, `TURN_LEFT`,
+`TURN_RIGHT`, `ASCEND`, and `DESCEND` for
 `START`. `BACKWARD` remains in the enum and wire schema for compatibility, but
 is reserved pending bench/water verification; the Firmware generator rejects it
 and the Qt Console does not emit it. A successful STOP ACK means that the stop
@@ -72,19 +114,20 @@ channel to logical neutral; SetAngle, Neutral, and Motion angle writes update
 the tracker. Raw SetPWM deliberately marks that channel's logical pose
 unknown because no inverse pulse-to-angle contract is assumed. START rejects
 an unknown required pose with the existing `HARDWARE_FAILURE` result mapping;
-it also rejects a known rear logical pose outside the operational envelope
-`-3000…+4500 cdeg` before acquiring Motion ownership. After a valid known pose
-is available, START cross-fades the recorded logical targets to the selected
+it also rejects a known front logical pose outside `-4500…+2800 cdeg` or a
+known rear logical pose outside `-3000…+4500 cdeg` before acquiring Motion
+ownership. After a valid known pose is available, START cross-fades the recorded logical targets to the selected
 gait target over the same provisional 750 ms window, including the mirrored
 left/right channels. During either the initial START ramp or a mode cross-fade,
 only a repeated START for the current transition target is idempotently
 accepted; a different mode returns `BUSY` without overwriting the transition.
 
 The generator emits logical targets only. The common MotionManager output
-guard enforces the rear operational envelope `-3000…+4500 cdeg` immediately
-before Servo calibration/PWM conversion and owns the clamp diagnostic. STOPPING
-applies the same guard after interpolating its retained targets, so a future
-alternate gait generator or retained transition vector cannot bypass it.
+guard enforces the front operational envelope `-4500…+2800 cdeg` and rear
+operational envelope `-3000…+4500 cdeg` immediately before Servo
+calibration/PWM conversion and owns the clamp diagnostic. STOPPING applies the
+same guard after interpolating its retained targets, so a future alternate gait
+generator or retained transition vector cannot bypass it.
 
 `Disable`/`Disable All`, heartbeat/liveness loss, and the existing
 `SafetySupervisor` fail-safe path bypass the ramp. `app_main` evaluates the
@@ -157,28 +200,39 @@ already in its LOW window when output is disabled. No runt pulse is acceptable.
 FrontRight, FrontLeft, FrontAxis, RearRight, RearLeft
 ```
 
-The current table-driven provisional profile uses 0.5 Hz, 1000 cdeg paddle
+The fallback `SimpleGaitGenerator` table uses 0.5 Hz, 1000 cdeg paddle
 amplitude, a π front/rear phase relation, same-phase front and rear pairs,
 50% amplitude on the reduced side for turning, and ±1000 cdeg FrontAxis bias
 for ASCEND/DESCEND candidates. `FORWARD` keeps the approved front/rear
 approximately 180° phase relation; the larger rear paddle area is a mechanical
 fact only and does not establish a front/rear amplitude ratio. `BACKWARD` has no
 SimpleGait profile and remains Pending. Paddle modes drive the four paddles;
-ASCEND and DESCEND require all five enabled channels. Rear operational output
-is clamped to −3000…+4500 cdeg with a diagnostic counter. These values are
+ASCEND and DESCEND require all five enabled channels. Front operational output
+is clamped to −4500…+2800 cdeg and rear operational output to
+−3000…+4500 cdeg, each through the common diagnostic counter. These values are
 bring-up parameters, not hydrodynamic or water-tested calibration.
 
-The target path is intentionally explicit:
+The production Legacy Source-Compatible CPG profile uses `T=2.0 s` as a nominal
+period parameter. Its measured steady-state period is not assumed to be exactly
+`2.0 s` or `0.5 Hz`; the source-compatible `nu_i` dependence determines the
+observed frequency. See [`cpg-gait-core.md`](cpg-gait-core.md) for the current
+long-run measurement.
+
+The normal target path is intentionally explicit:
 
 ```text
 Motion command
   → MotionManager
-  → SimpleGaitGenerator
+  → CPGGaitGenerator
   → logical joint targets (cdeg)
   → ServoService Motion-owned angle API
   → existing Servo calibration
   → PWM driver
 ```
+
+The explicit `MOTION_DEFAULT_GAIT_BACKEND_CPG=0` diagnostic override replaces
+only the generator node with `SimpleGaitGenerator`; the downstream guard,
+ServoService, calibration, and PWM path are identical.
 
 ## Qt behavior
 
@@ -216,7 +270,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
   -File .\RoboBeetleFirmware\tests\run_host_tests.ps1
 ```
 
-The runner compiles and executes 20 Firmware test programs with C11,
+The runner compiles and executes 29 Firmware test programs with C11,
 `-Wall -Wextra -Werror`, and a separate `app_main_jy901s_api` compile
 contract. Motion-specific assertions cover:
 
@@ -228,14 +282,19 @@ contract. Motion-specific assertions cover:
 - actual 10/20/70/100 ms Motion wall-time gaps and uint32 timestamp wrap;
 - non-neutral manual-pose START cross-fade, mirrored left/right handoff, and
   raw SetPWM unknown-pose rejection through existing `HARDWARE_FAILURE`;
-- START rejection for known rear poses outside the operational envelope;
-- generator-independent rear envelope clamping, including the STOPPING path,
-  and Motion-owned diagnostics;
+- START rejection for known front and rear poses outside their operational
+  envelopes;
+- generator-independent front/rear envelope clamping, including the STOPPING
+  path, and Motion-owned diagnostics;
 - idempotent same-target START and `BUSY` rejection for reentrant different
   modes during START/mode transitions;
 - manual Servo `BUSY` arbitration during STOPPING;
 - old/new ownership union through an acknowledged mode transition;
 - immediate Disable All and heartbeat/liveness takeover;
+- default CPG backend selection plus explicit SimpleGait (`=0`) and CPG (`=1`)
+  backend-selection tests, with exactly one registered generator per build;
+- CPG output beyond the installed front/rear limits is clamped by the common
+  MotionManager sanitizer before ServoService observes it;
 - PWM1 safe-stop conservative active-running policy, including the
   preload/shadow mismatch regression, stale-flag clearing/recheck policy,
   per-channel pending ownership, one-frame latency bound, shared-timer

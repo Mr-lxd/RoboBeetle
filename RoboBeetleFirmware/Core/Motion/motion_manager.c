@@ -113,6 +113,20 @@ static bool motion_manager_pose_within_operational_envelope(
         return false;
     }
 
+    if (((mask & (uint16_t)(1U << SERVO_ID_FRONT_RIGHT)) != 0U) &&
+        ((targets->front_right_cdeg < MOTION_FRONT_MIN_CDEG) ||
+         (targets->front_right_cdeg > MOTION_FRONT_MAX_CDEG)))
+    {
+        return false;
+    }
+
+    if (((mask & (uint16_t)(1U << SERVO_ID_FRONT_LEFT)) != 0U) &&
+        ((targets->front_left_cdeg < MOTION_FRONT_MIN_CDEG) ||
+         (targets->front_left_cdeg > MOTION_FRONT_MAX_CDEG)))
+    {
+        return false;
+    }
+
     if (((mask & (uint16_t)(1U << SERVO_ID_REAR_RIGHT)) != 0U) &&
         ((targets->rear_right_cdeg < MOTION_REAR_MIN_CDEG) ||
          (targets->rear_right_cdeg > MOTION_REAR_MAX_CDEG)))
@@ -226,6 +240,28 @@ static void motion_manager_sanitize_targets(
     if ((targets == NULL) || (clamp_count == NULL))
     {
         return;
+    }
+
+    if (targets->front_right_cdeg < MOTION_FRONT_MIN_CDEG)
+    {
+        targets->front_right_cdeg = MOTION_FRONT_MIN_CDEG;
+        ++(*clamp_count);
+    }
+    else if (targets->front_right_cdeg > MOTION_FRONT_MAX_CDEG)
+    {
+        targets->front_right_cdeg = MOTION_FRONT_MAX_CDEG;
+        ++(*clamp_count);
+    }
+
+    if (targets->front_left_cdeg < MOTION_FRONT_MIN_CDEG)
+    {
+        targets->front_left_cdeg = MOTION_FRONT_MIN_CDEG;
+        ++(*clamp_count);
+    }
+    else if (targets->front_left_cdeg > MOTION_FRONT_MAX_CDEG)
+    {
+        targets->front_left_cdeg = MOTION_FRONT_MAX_CDEG;
+        ++(*clamp_count);
     }
 
     if (targets->rear_right_cdeg < MOTION_REAR_MIN_CDEG)

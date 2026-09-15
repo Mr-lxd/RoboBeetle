@@ -1,0 +1,10 @@
+#ifndef ROBOBEETLE_GAIT_TRACE_COMPARE_H
+#define ROBOBEETLE_GAIT_TRACE_COMPARE_H
+
+#define GAIT_TRACE_SAMPLE_INTERVAL_MS 10U
+#define GAIT_TRACE_FINAL_TIME_MS 17000U
+#define GAIT_TRACE_ROW_COUNT 1701U
+
+int gait_trace_compare_generate(const char *output_dir);
+
+#endif /* ROBOBEETLE_GAIT_TRACE_COMPARE_H */

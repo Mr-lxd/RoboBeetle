@@ -18,11 +18,21 @@
 #include "depth_telemetry.h"
 #include "depth_transport_stm32.h"
 #include "motion_manager.h"
+#include "cpg_gait_generator.h"
 #include "simple_gait_generator.h"
+#if defined(ROBOBEETLE_CPG_TARGET_BENCHMARK) && \
+    ROBOBEETLE_CPG_TARGET_BENCHMARK
+#include "cpg_target_benchmark.h"
+#endif
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#ifndef MOTION_DEFAULT_GAIT_BACKEND_CPG
+/* Normal bench image: validate the source-compatible CPG backend. */
+#define MOTION_DEFAULT_GAIT_BACKEND_CPG 1
+#endif
 
 static uint8_t protocol_wire_buffer[
     RBP2_MAX_WIRE_SIZE];
@@ -54,6 +64,7 @@ static safety_supervisor_t safety_supervisor;
 static servo_driver_stm32_t servo_driver;
 static servo_service_t servo_service;
 static simple_gait_generator_t simple_gait_generator;
+static cpg_gait_generator_t cpg_gait_generator;
 static motion_manager_t motion_manager;
 static leak_sensor_t leak_sensor;
 static leak_sensor_stm32_t leak_sensor_reader;
@@ -484,11 +495,24 @@ void app_main_init(
         servo_driver_stm32_ops(),
         &servo_driver);
     simple_gait_generator_init(&simple_gait_generator);
+    cpg_gait_generator_init(&cpg_gait_generator);
+#if defined(ROBOBEETLE_CPG_TARGET_BENCHMARK) && \
+    ROBOBEETLE_CPG_TARGET_BENCHMARK
+    cpg_target_benchmark_run(&cpg_gait_generator);
+#endif
+#if MOTION_DEFAULT_GAIT_BACKEND_CPG
+    motion_manager_init(
+        &motion_manager,
+        &servo_service,
+        &safety_supervisor,
+        cpg_gait_generator_interface(&cpg_gait_generator));
+#else
     motion_manager_init(
         &motion_manager,
         &servo_service,
         &safety_supervisor,
         simple_gait_generator_interface(&simple_gait_generator));
+#endif
     protocol_dispatcher_init(
         &protocol_dispatcher,
         &servo_service,
