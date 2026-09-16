@@ -84,12 +84,12 @@ void uart_transport_stm32_host_set_before_abort_hook(
 }
 #endif
 
-static bool uart_transport_is_usart1(
+static bool uart_transport_matches_bound_uart(
     const UART_HandleTypeDef *huart)
 {
     return (huart != NULL) &&
-           (huart == uart_handle) &&
-           (huart->Instance == USART1);
+           (uart_handle != NULL) &&
+           (huart == uart_handle);
 }
 
 static bool uart_transport_state_has_busy_tx(
@@ -634,7 +634,7 @@ void uart_transport_stm32_on_rx_complete(UART_HandleTypeDef *huart)
 {
     uint32_t primask;
 
-    if (!uart_transport_is_usart1(huart))
+    if (!uart_transport_matches_bound_uart(huart))
     {
         return;
     }
@@ -655,7 +655,7 @@ void uart_transport_stm32_on_tx_complete(UART_HandleTypeDef *huart)
     uart_transport_start_result_t start_result;
     uint32_t primask;
 
-    if (!uart_transport_is_usart1(huart))
+    if (!uart_transport_matches_bound_uart(huart))
     {
         return;
     }
@@ -720,7 +720,7 @@ void uart_transport_stm32_on_abort_transmit_complete(
 {
     uint32_t primask;
 
-    if (!uart_transport_is_usart1(huart))
+    if (!uart_transport_matches_bound_uart(huart))
     {
         return;
     }
@@ -759,7 +759,7 @@ void uart_transport_stm32_on_error(UART_HandleTypeDef *huart)
     uint32_t primask;
     bool rx_still_busy;
 
-    if (!uart_transport_is_usart1(huart))
+    if (!uart_transport_matches_bound_uart(huart))
     {
         return;
     }
