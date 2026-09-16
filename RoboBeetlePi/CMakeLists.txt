@@ -67,6 +67,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     )
     target_link_libraries(rbp2_link_runtime PUBLIC rbp2_serial_session)
     target_compile_features(rbp2_link_runtime PUBLIC cxx_std_17)
+
+    add_library(rbp2_onboard_application STATIC application/src/onboard_application.cpp)
+    target_link_libraries(rbp2_onboard_application PUBLIC rbp2_link_runtime rbp2_robot_codec)
+    target_compile_features(rbp2_onboard_application PUBLIC cxx_std_17)
 endif()
 
 if(BUILD_TESTING)
@@ -114,5 +118,13 @@ if(BUILD_TESTING)
         target_link_libraries(rbp2_link_runtime_tests PRIVATE rbp2_link_runtime)
         add_test(NAME rbp2_link_runtime_tests COMMAND rbp2_link_runtime_tests)
         set_tests_properties(rbp2_link_runtime_tests PROPERTIES TIMEOUT 15)
+
+        add_executable(rbp2_onboard_application_tests tests/onboard_application_tests.cpp)
+        target_include_directories(rbp2_onboard_application_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/application/include
+        )
+        target_link_libraries(rbp2_onboard_application_tests PRIVATE rbp2_onboard_application)
+        add_test(NAME rbp2_onboard_application_tests COMMAND rbp2_onboard_application_tests)
+        set_tests_properties(rbp2_onboard_application_tests PROPERTIES TIMEOUT 15)
     endif()
 endif()
