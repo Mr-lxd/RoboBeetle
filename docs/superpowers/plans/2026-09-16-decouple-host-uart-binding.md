@@ -15,7 +15,7 @@
 **Files:**
 - Modify: `RoboBeetleFirmware/tests/uart_transport_stm32_tests.c`
 
-- [ ] **Step 1: Relax only the host HAL stub's peripheral assumption.** In the test-local `HAL_UART_Receive_IT()` guard, keep the NULL-handle and one-byte-size checks but remove the `huart->Instance != USART1` condition. In `HAL_UART_Transmit_IT()`, likewise reject only a NULL handle and preserve all existing observation, status, and state behavior. This changes no production code or HAL implementation.
+- [ ] **Step 1: Relax only the host HAL stub's peripheral assumption and retain handle evidence.** In the test-local `HAL_UART_Receive_IT()` guard, keep the NULL-handle and one-byte-size checks but remove the `huart->Instance != USART1` condition. In `HAL_UART_Transmit_IT()`, likewise reject only a NULL handle and preserve all existing observation, status, and state behavior. Record the `UART_HandleTypeDef *` received by `HAL_UART_Receive_IT()`, `HAL_UART_Transmit_IT()`, and `HAL_UART_AbortTransmit_IT()` so the non-USART1 test can assert exact bound-handle identity. This changes no production code or HAL implementation.
 
 - [ ] **Step 2: Add a bound non-USART1 callback test.** Reset the fixture, set `uart1.Instance = USART3`, initialize with `uart_transport_stm32_init(&uart1)`, and assert that the existing RX delivery/re-arm and TX completion paths work. Then drive an ORE error and foreground re-arm, and perform an active-frame reinitialize with an inline abort-complete callback; assert the same IDLE/recovery and diagnostics outcomes as the USART1 path.
 
@@ -120,13 +120,13 @@ static void test_same_instance_non_bound_and_null_callbacks_are_ignored(void)
 
 - [ ] **Step 4: Register both tests in `main()`, run the focused transport test through the existing script, and confirm RED.**
 
-Run:
+Run from the repository worktree:
 
 ```powershell
-$wt = 'C:\Users\laixindong\.config\superpowers\worktrees\RoboBeetle\codex-decouple-host-uart-binding'
-$build = 'C:\Users\laixindong\.config\superpowers\worktrees\RoboBeetle\codex-decouple-host-uart-binding-build-red'
+$worktree = (git rev-parse --show-toplevel)
+$build = Join-Path $worktree 'build\host-uart-binding-red'
 powershell -NoProfile -ExecutionPolicy Bypass -File `
-  "$wt\RoboBeetleFirmware\tests\run_host_tests.ps1" -BuildRoot $build
+  (Join-Path $worktree 'RoboBeetleFirmware\tests\run_host_tests.ps1') -BuildRoot $build
 ```
 
 Expected: the script reaches `uart_transport_stm32_tests`, reports failures for the bound non-USART1 callback behavior under the old `Instance == USART1` predicate, and exits non-zero. Do not change production code before recording this failure.
@@ -168,18 +168,20 @@ static bool uart_transport_matches_bound_uart(
 
 - [ ] **Step 2: Run the required focused regressions and compile-contract checks.** Re-run `uart_transport_stm32_tests`, `uart_tx_queue_tests`, the complete `run_host_tests.ps1` suite (which includes protocol, app, and clock compile contracts), and `git diff --check`.
 
-- [ ] **Step 3: Configure and build the ARM firmware using the existing CMake project.** Use a fresh build directory under the isolated worktree and the repository's ARM toolchain file:
+- [ ] **Step 3: Configure and build the ARM firmware using the existing CMake project.** Use a fresh build directory under the current worktree and the repository's ARM toolchain file:
 
 ```powershell
-$wt = 'C:\Users\laixindong\.config\superpowers\worktrees\RoboBeetle\codex-decouple-host-uart-binding'
-$build = 'C:\Users\laixindong\.config\superpowers\worktrees\RoboBeetle\codex-decouple-host-uart-binding-build-arm'
-cmake -S "$wt\RoboBeetleFirmware" -B $build -G Ninja `
-  -DCMAKE_TOOLCHAIN_FILE="$wt\RoboBeetleFirmware\cmake\gcc-arm-none-eabi.cmake" `
+$worktree = (git rev-parse --show-toplevel)
+$firmware = Join-Path $worktree 'RoboBeetleFirmware'
+$build = Join-Path $worktree 'build\arm-debug'
+$toolchain = Join-Path $firmware 'cmake\gcc-arm-none-eabi.cmake'
+cmake -S $firmware -B $build -G Ninja `
+  "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `
   -DCMAKE_BUILD_TYPE=Debug
 cmake --build $build --parallel
 ```
 
-Expected: configure and build exit 0 and produce the firmware ELF. If the local ARM toolchain or generator is unavailable, record the exact failure as an unverified item rather than changing the build system.
+Expected: configure and build exit 0 and produce the firmware ELF. If the local ARM toolchain or generator is unavailable, record the exact failure as an unverified item rather than changing the build system. Current verification note: the local host lacks `arm-none-eabi-gcc`/`arm-none-eabi-g++`, so ARM build remains unverified solely for that environmental reason.
 
 - [ ] **Step 4: Commit the minimal production change only after green verification.**
 
