@@ -363,5 +363,11 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Clock configuration contract check failed'
 }
 
+$usart2ContractScript = Join-Path $PSScriptRoot 'usart2_host_binding_contract_tests.ps1'
+& powershell -NoProfile -ExecutionPolicy Bypass -File $usart2ContractScript
+if ($LASTEXITCODE -ne 0) {
+    throw 'USART2 host binding contract check failed'
+}
+
 Write-Host ("All Firmware host tests passed: " + $cases.Count +
-    " executables + 13 app/backend/benchmark/diagnostics compile-contract objects")
+    " executables + 13 app/backend/benchmark/diagnostics compile-contract objects + USART2 source/config contract")

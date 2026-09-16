@@ -1,8 +1,8 @@
 # RoboBeetleFirmware
 
-RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for the Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 → Protocol V2 host-link, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, the PR #11 low-rate JY901S telemetry path, and the Motion / CPG foundation with a completed SimpleGait mechanical baseline. This README records the merged hardware-verified modularization baseline, the PR #8 wiring baseline, the PR #9 leak-status hardware acceptance, the PR #10/PR #11 JY901S evidence boundaries, the PR #13 final four-paddle calibration contract, the SimpleGait Front/Rear anti-phase hardware result, the latest CPG desktop gait exercise, and the bench-provisional STOP contract. The JY901S physical receive and end-to-end monitoring path, the SimpleGait mechanical baseline, and the recorded CPG-default desktop physical gait checks are hardware verified within their stated boundaries; the supplied PR #15 target evidence records ARM Build **[PASS]** and isolated CPG target performance, while Program Verify is **[Not supplied]** and system-level foreground timing remains a separate investigation. Separate ROVMAKER depth-sensor calibration, USART3 UART/checksum physical-link quality, body-frame mapping, water propulsion, Turn hydrodynamic effectiveness, Ascend/Descend hydrodynamics, and final magnetic/yaw calibration remain pending.
+RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for the Raspberry Pi primary-host → STM32 USART2 (PA2/PA3, 115200 8-N-1) → Protocol V2 host-link configuration, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, the PR #11 low-rate JY901S telemetry path, and the Motion / CPG foundation with a completed SimpleGait mechanical baseline. This README records the merged hardware-verified modularization baseline, the PR #8 wiring baseline, the PR #9 leak-status hardware acceptance, the PR #10/PR #11 JY901S evidence boundaries, the PR #13 final four-paddle calibration contract, the SimpleGait Front/Rear anti-phase hardware result, the latest CPG desktop gait exercise, and the bench-provisional STOP contract. The JY901S physical receive and end-to-end monitoring path, the SimpleGait mechanical baseline, and the recorded CPG-default desktop physical gait checks are hardware verified within their stated boundaries; the supplied PR #15 target evidence records ARM Build **[PASS]** and isolated CPG target performance, while Program Verify is **[Not supplied]** and system-level foreground timing remains a separate investigation. Separate ROVMAKER depth-sensor calibration, USART3 UART/checksum physical-link quality, body-frame mapping, water propulsion, Turn hydrodynamic effectiveness, Ascend/Descend hydrodynamics, and final magnetic/yaw calibration remain pending. The USART2 target build/flash and Raspberry Pi physical link for this binding are **[Pending User Target Verification]**.
 
-The recent Servo, LeakStatus, and JY901S hardware runs used the wired DAP UART/COM13 host path above. APC220 is an earlier/legacy transport record, was not enabled in those runs, and is not current JY901S or PR #11 hardware evidence.
+The recorded recent Servo, LeakStatus, and JY901S hardware runs used the wired DAP UART/COM13 host path through USART1 before the USART2 primary-host binding. Those records are historical for that image. USART1 remains initialized for the retained APC220/legacy hardware path; it is not the active host transport or an already-available backup control link. USART1 bytes do not enter Protocol V2, produce Heartbeats, affect Safety, or have control authority.
 
 ## Status labels
 
@@ -14,7 +14,7 @@ The recent Servo, LeakStatus, and JY901S hardware runs used the wired DAP UART/C
 - **[Planned]** Recommended future work, not current behavior.
 - **[Historical Reference]** Old F407ZE, STM32, Simulink, CPG, paper, slide, or resource-tree material that is not the current firmware.
 
-The current recent Servo, LeakStatus, and JY901S hardware runs used the wired host path Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 at 9600 8-N-1. APC220 is an earlier/legacy transport profile and was not enabled or used in those runs; it is not current JY901S or PR #10/PR #11 hardware evidence.
+The current primary host-link configuration is Raspberry Pi → STM32 USART2 at 115200 8-N-1 on PA2/PA3. The recent Servo, LeakStatus, and JY901S hardware runs used the wired host path Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1 at 9600 8-N-1 before this binding change; those records remain historical. USART1/APC220 is retained-only and is not a backup control link.
 
 ## Current five-servo semantic descriptor contract (PR #13 values; 2026-09-14 assembly remap)
 
@@ -564,13 +564,13 @@ The App/Main extraction was **[Historical Hardware Verified]** for the PR #6 old
 
 ## UART receive and transmit audit
 
-- **[Implemented]** The current USART1 host-link `ring_buffer` storage is 128 bytes with `uint16_t` head/tail indices. JY901S uses a separate 256-byte storage instance. APC220 is a legacy transport record, not the current host hardware.
+- **[Implemented]** The current USART2 host-link `ring_buffer` storage is 128 bytes with `uint16_t` head/tail indices. JY901S uses a separate 256-byte storage instance. USART1/APC220 is a retained legacy path, not the active host hardware.
 - The empty/full distinction reserves one slot, so usable capacity is **127 bytes**.
-- On the current USART1 host-link full buffer, `ring_buffer_push()` silently drops the new byte. That existing transport has no overflow flag/counter and no host-visible error; the JY901S transport has independent overflow diagnostics.
+- On the current USART2 host-link full buffer, `ring_buffer_push()` silently drops the new byte. That existing transport has no overflow flag/counter and no host-visible error; the JY901S transport has independent overflow diagnostics.
 - Head and tail remain volatile, with the same one-byte ISR producer / main-loop consumer model as the original implementation.
-- The current USART1 `uart_transport_stm32` calls `HAL_UART_Receive_IT()` at startup and re-arms it in the callback; no blocking receive remains. The recent host hardware for this path is DAP UART/COM13; the APC220 profile is historical.
-- Return values from the existing USART1 initial and callback receive-arm calls are ignored. USART3/JY901S separates deferred `HAL_BUSY` from hard re-arm failures and recovers from foreground maintenance.
-- The transport copies complete ACK/telemetry frames into a fixed owned queue and starts them with `HAL_UART_Transmit_IT()`. Enqueue acceptance is separate from physical completion; TX-complete/error callbacks only advance bounded transport state, so main-loop dispatch does not wait for 9600-baud serialization.
+- The current USART2 `uart_transport_stm32` calls `HAL_UART_Receive_IT()` at startup and re-arms it in the callback; no blocking receive remains. USART1 remains initialized but is not bound to this transport and does not arm its host RX. Raspberry Pi target execution for this path is pending user verification.
+- Return values from the existing USART2 initial and callback receive-arm calls are ignored. USART3/JY901S separates deferred `HAL_BUSY` from hard re-arm failures and recovers from foreground maintenance.
+- The transport copies complete ACK/telemetry frames into a fixed owned queue and starts them with `HAL_UART_Transmit_IT()`. Enqueue acceptance is separate from physical completion; TX-complete/error callbacks only advance bounded transport state, so main-loop dispatch does not wait for 115200-baud serialization.
 
 ## Protocol V2
 
