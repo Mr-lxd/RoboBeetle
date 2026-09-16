@@ -19,6 +19,9 @@ static HAL_StatusTypeDef abort_status;
 static uint32_t receive_call_count;
 static uint32_t transmit_call_count;
 static uint32_t abort_call_count;
+static UART_HandleTypeDef *last_receive_uart;
+static UART_HandleTypeDef *last_transmit_uart;
+static UART_HandleTypeDef *last_abort_uart;
 static uint32_t blocking_transmit_call_count;
 static uint8_t last_transmit_bytes[RBP2_MAX_WIRE_SIZE];
 static uint16_t last_transmit_length;
@@ -39,12 +42,11 @@ HAL_StatusTypeDef HAL_UART_Receive_IT(
     uint8_t *data,
     uint16_t size)
 {
+    last_receive_uart = huart;
     receive_destination = data;
     ++receive_call_count;
 
-    if ((huart == NULL) ||
-        (huart->Instance != USART1) ||
-        (size != 1U))
+    if ((huart == NULL) || (size != 1U))
     {
         return HAL_ERROR;
     }
@@ -61,6 +63,7 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(
     const uint8_t *data,
     uint16_t size)
 {
+    last_transmit_uart = huart;
     ++transmit_call_count;
     last_transmit_length = size;
     if ((data != NULL) && (size <= sizeof last_transmit_bytes))
@@ -82,7 +85,7 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(
         }
     }
 
-    if ((huart == NULL) || (huart->Instance != USART1))
+    if (huart == NULL)
     {
         return HAL_ERROR;
     }
@@ -111,6 +114,7 @@ HAL_StatusTypeDef HAL_UART_Transmit(
 HAL_StatusTypeDef HAL_UART_AbortTransmit_IT(
     UART_HandleTypeDef *huart)
 {
+    last_abort_uart = huart;
     ++abort_call_count;
     if (huart != NULL)
     {
@@ -165,6 +169,9 @@ static void reset_mock(void)
     receive_call_count = 0U;
     transmit_call_count = 0U;
     abort_call_count = 0U;
+    last_receive_uart = NULL;
+    last_transmit_uart = NULL;
+    last_abort_uart = NULL;
     blocking_transmit_call_count = 0U;
     last_transmit_length = 0U;
     (void)memset(last_transmit_bytes, 0, sizeof last_transmit_bytes);
@@ -190,6 +197,43 @@ static uart_transport_stm32_diagnostics_t diagnostics(void)
 
     uart_transport_stm32_get_diagnostics(&value);
     return value;
+}
+
+static bool diagnostics_equal(
+    const uart_transport_stm32_diagnostics_t *left,
+    const uart_transport_stm32_diagnostics_t *right)
+{
+    uint32_t index;
+
+    for (index = 0U; index < UART_TX_MESSAGE_KIND_COUNT; ++index)
+    {
+        if ((left->enqueued_count[index] != right->enqueued_count[index]) ||
+            (left->coalesced_count[index] != right->coalesced_count[index]) ||
+            (left->rejected_count[index] != right->rejected_count[index]) ||
+            (left->completed_count[index] != right->completed_count[index]) ||
+            (left->dropped_count[index] != right->dropped_count[index]))
+        {
+            return false;
+        }
+    }
+
+    return (left->control_queue_full_count == right->control_queue_full_count) &&
+           (left->telemetry_queue_full_count ==
+            right->telemetry_queue_full_count) &&
+           (left->start_busy_count == right->start_busy_count) &&
+           (left->start_error_count == right->start_error_count) &&
+           (left->uart_error_count == right->uart_error_count) &&
+           (left->unexpected_callback_count ==
+            right->unexpected_callback_count) &&
+           (left->high_water_mark == right->high_water_mark) &&
+           (left->reinitialization_count == right->reinitialization_count) &&
+           (left->busy_recovery_count == right->busy_recovery_count) &&
+           (left->rx_error_count == right->rx_error_count) &&
+           (left->rx_rearm_attempt_count == right->rx_rearm_attempt_count) &&
+           (left->rx_rearm_busy_count == right->rx_rearm_busy_count) &&
+           (left->rx_rearm_error_count == right->rx_rearm_error_count) &&
+           (left->rx_armed == right->rx_armed) &&
+           (left->rx_needs_rearm == right->rx_needs_rearm);
 }
 
 static void deliver_byte(uint8_t byte)
@@ -339,6 +383,107 @@ static void test_active_telemetry_keeps_ack_waiting_and_completion_is_safe(void)
     expect(value.completed_count[UART_TX_MESSAGE_IMU] == 1U,
            "telemetry completion should be counted once");
     complete_tx();
+}
+
+static void test_bound_non_usart1_instance_is_accepted(void)
+{
+    const uint8_t tx[] = {0xB1U};
+    uint8_t rx = 0U;
+    uart_transport_stm32_diagnostics_t value;
+
+    reset_mock();
+    uart1.Instance = USART3;
+    uart_transport_stm32_init(&uart1);
+    expect(last_receive_uart == &uart1,
+           "init RX should use the bound non-USART1 handle");
+
+    deliver_byte(0xB2U);
+    expect(last_receive_uart == &uart1,
+           "RX rearm should use the bound non-USART1 handle");
+    expect(uart_transport_stm32_pop(&rx),
+           "bound non-USART1 handle should deliver RX bytes");
+    expect(rx == 0xB2U,
+           "bound non-USART1 RX should preserve the received byte");
+
+    (void)uart_transport_stm32_enqueue(
+        tx, (uint16_t)sizeof tx, UART_TX_MESSAGE_ACK);
+    expect(last_transmit_uart == &uart1,
+           "TX start should use the bound non-USART1 handle");
+    complete_tx();
+    value = diagnostics();
+    expect(value.completed_count[UART_TX_MESSAGE_ACK] == 1U,
+           "bound non-USART1 TX completion should release its frame");
+
+    uart1.RxState = HAL_UART_STATE_READY;
+    uart1.ErrorCode = HAL_UART_ERROR_ORE;
+    uart_transport_stm32_on_error(&uart1);
+    expect(diagnostics().rx_needs_rearm,
+           "bound non-USART1 error should request RX rearm");
+    uart_transport_stm32_process();
+    expect(diagnostics().rx_armed && !diagnostics().rx_needs_rearm,
+           "bound non-USART1 error should rearm in foreground");
+
+    (void)uart_transport_stm32_enqueue(
+        tx, (uint16_t)sizeof tx, UART_TX_MESSAGE_ACK);
+    abort_inline_callback_count = 1U;
+    expect(uart_transport_stm32_reinitialize() == HAL_OK,
+           "bound non-USART1 abort completion should finish recovery");
+    expect(last_abort_uart == &uart1,
+           "abort recovery should use the bound non-USART1 handle");
+    expect(uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_IDLE,
+           "bound non-USART1 abort recovery should return IDLE");
+}
+
+static void test_same_instance_non_bound_and_null_callbacks_are_ignored(void)
+{
+    const uint8_t tx[] = {0xB3U};
+    uart_transport_stm32_diagnostics_t before;
+    uart_transport_stm32_diagnostics_t after;
+    uart_transport_stm32_state_t state_before;
+    uint32_t receives_before;
+    uint32_t transmits_before;
+    uint32_t aborts_before;
+
+    init_transport();
+    uart3.Instance = uart1.Instance;
+    (void)uart_transport_stm32_enqueue(
+        tx, (uint16_t)sizeof tx, UART_TX_MESSAGE_ACK);
+    abort_status = HAL_BUSY;
+    expect(uart_transport_stm32_reinitialize() == HAL_BUSY,
+           "bound transport should expose pending abort state");
+
+    before = diagnostics();
+    state_before = uart_transport_stm32_get_state();
+    receives_before = receive_call_count;
+    transmits_before = transmit_call_count;
+    aborts_before = abort_call_count;
+
+    uart_transport_stm32_on_rx_complete(&uart3);
+    uart_transport_stm32_on_tx_complete(&uart3);
+    uart_transport_stm32_on_error(&uart3);
+    uart_transport_stm32_on_abort_transmit_complete(&uart3);
+    uart_transport_stm32_on_rx_complete(NULL);
+    uart_transport_stm32_on_tx_complete(NULL);
+    uart_transport_stm32_on_error(NULL);
+    uart_transport_stm32_on_abort_transmit_complete(NULL);
+
+    after = diagnostics();
+    expect(uart_transport_stm32_get_state() == state_before,
+           "non-bound or NULL callbacks must not change recovery state");
+    expect(receive_call_count == receives_before,
+           "non-bound or NULL callbacks must not touch RX HAL state");
+    expect(transmit_call_count == transmits_before,
+           "non-bound or NULL callbacks must not touch TX ownership");
+    expect(abort_call_count == aborts_before,
+           "non-bound or NULL callbacks must not retry abort");
+    expect(diagnostics_equal(&after, &before),
+           "non-bound or NULL callbacks must not change diagnostics");
+
+    abort_status = HAL_OK;
+    abort_inline_callback_count = 1U;
+    uart_transport_stm32_process();
+    expect(uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_IDLE,
+           "bound callback should still complete the pending recovery");
 }
 
 static void test_other_uart_callbacks_are_ignored(void)
@@ -793,6 +938,8 @@ int main(void)
     test_init_and_idle_it_start();
     test_full_queues_record_rejected_drops();
     test_active_telemetry_keeps_ack_waiting_and_completion_is_safe();
+    test_bound_non_usart1_instance_is_accepted();
+    test_same_instance_non_bound_and_null_callbacks_are_ignored();
     test_other_uart_callbacks_are_ignored();
     test_rx_completion_rearms_while_tx_is_active();
     test_busy_retries_once_per_process_call();
