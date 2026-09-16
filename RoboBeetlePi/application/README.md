@@ -55,8 +55,8 @@ Enter one operator-selected command per line:
 
 | Command | Meaning |
 | --- | --- |
-| `link status` | Read session/link state without servicing the runtime |
-| `telemetry display` | Run one runtime iteration and print received events |
+| `link status` | Read current session/link state |
+| `telemetry display` | Confirm that incoming typed telemetry is displayed |
 | `enable <mask>` | Submit ServoEnable |
 | `disable <mask>` | Submit ServoDisable |
 | `neutral <mask>` | Submit Neutral |
@@ -73,16 +73,22 @@ Masks accept decimal or `0x` hexadecimal, e.g. mask `1` selects servo 0 and
 numeric overflow, extra arguments, and out-of-range IDs are rejected locally.
 Every actuator action requires an explicit command; there is no batch sequence.
 
-This is a manually stepped diagnostic tool: waiting for terminal input pauses
-runtime service. A valid command normally runs one runtime iteration afterward;
-`link status`, help, invalid commands, and Backward do not. Use repeated
-`telemetry display` commands to advance SafetyQuiet/resynchronization and observe
-Active before submitting an actuator request, then to observe its eventual ACK
-or uncertain outcome. One iteration may return before an ACK arrives. Operator
-delays can cause heartbeat or ACK deadlines to expire; inspect the reported
-outcome and do not assume an action succeeded. After loss, this CLI requires an
-explicit process restart to open again. It is not a continuous service, daemon,
-background reconnect worker, or terminal UI.
+The foreground loop continuously calls `OnboardApplication::run_once()` while
+the operator enters commands. A separate readiness check monitors only stdin;
+reads are bounded and never wait for the remainder of a partially entered line.
+The existing runtime owns all serial polling, Heartbeat, ACK deadlines, and
+liveness. No background thread or duplicate scheduler is introduced. Each
+complete input line triggers at most one operator command; EOF discards an
+incomplete final line. Lines longer than 256 bytes are rejected.
+
+Observe Active before submitting an actuator request, then inspect its eventual
+ACK or uncertain outcome. Incoming LinkEvents and typed telemetry are printed
+continuously. `link status` only reads state; normal runtime service continues
+independently of that command, help, rejected arguments, or Backward. Waiting
+for operator input does not pause link service. Input processing may wait for
+the current runtime iteration to return. After loss, this CLI requires an
+explicit process restart to open again; it provides no reconnect policy,
+daemonization, or automatic actuator replay.
 
 Quit/EOF aborts transport ownership and outstanding requests; it does not send
 Motion STOP or prove that an actuator stopped. If a STOP is required, the

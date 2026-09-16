@@ -1,6 +1,7 @@
 #include "robobeetle/application/onboard_application.hpp"
 
 #include <charconv>
+#include <cerrno>
 #include <cstdint>
 #include <iostream>
 #include <sstream>
@@ -8,6 +9,9 @@
 #include <string_view>
 #include <system_error>
 #include <vector>
+
+#include <poll.h>
+#include <unistd.h>
 
 namespace {
 namespace app = robobeetle::application;
@@ -175,16 +179,18 @@ void help()
               << "Masks: decimal or 0x hexadecimal, nonzero subset of 0x001f.\n";
 }
 
-// Returns true only when an explicit valid command calls for one runtime step.
-bool execute(app::OnboardApplication &application, const std::vector<std::string> &tokens)
+void execute(app::OnboardApplication &application, const std::vector<std::string> &tokens)
 {
     if (tokens == std::vector<std::string>{"link", "status"}) {
         std::cout << "session=" << name(application.session_state())
                   << " link=" << name(application.link_state()) << '\n';
-        return false;
+        return;
     }
-    if (tokens == std::vector<std::string>{"telemetry", "display"}) return true;
-    if (tokens == std::vector<std::string>{"help"}) { help(); return false; }
+    if (tokens == std::vector<std::string>{"telemetry", "display"}) {
+        std::cout << "Incoming telemetry is displayed continuously with its validity flags.\n";
+        return;
+    }
+    if (tokens == std::vector<std::string>{"help"}) { help(); return; }
     app::CommandSubmitResult result{app::CommandSubmitStatus::InvalidArgument, std::nullopt};
     if (tokens.size() == 2U &&
         (tokens[0] == "enable" || tokens[0] == "disable" || tokens[0] == "neutral")) {
@@ -212,8 +218,35 @@ bool execute(app::OnboardApplication &application, const std::vector<std::string
         else if (tokens[1] == "backward") result = application.start_motion(app::MotionMode::Backward);
     }
     print_submit(result);
-    return result.status != app::CommandSubmitStatus::InvalidArgument &&
-           result.status != app::CommandSubmitStatus::PendingQualification;
+}
+
+enum class InputStatus { Waiting, Line, End, Error };
+
+// Only stdin is monitored here. LinkRuntime alone owns serial readiness/timers.
+// A readiness check precedes each byte read, so a partial line cannot block
+// runtime service. The per-iteration budget also bounds continuous stdin input.
+InputStatus read_input(std::string &line, bool &overlong, bool disconnected)
+{
+    constexpr std::size_t max_line_size = 256U;
+    for (std::size_t count = 0; count < max_line_size; ++count) {
+        pollfd input{STDIN_FILENO, POLLIN, 0};
+        const int ready = ::poll(&input, 1, disconnected && count == 0U ? 100 : 0);
+        if (ready < 0) return errno == EINTR ? InputStatus::Waiting : InputStatus::Error;
+        if (ready == 0) return InputStatus::Waiting;
+        if (input.revents & (POLLERR | POLLNVAL)) return InputStatus::Error;
+        if (!(input.revents & (POLLIN | POLLHUP))) return InputStatus::Waiting;
+        char byte{};
+        const auto received = ::read(STDIN_FILENO, &byte, 1);
+        if (received == 0) return InputStatus::End;
+        if (received < 0) {
+            return errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK
+                ? InputStatus::Waiting : InputStatus::Error;
+        }
+        if (byte == '\n') return InputStatus::Line;
+        if (line.size() < max_line_size) line.push_back(byte);
+        else overlong = true;
+    }
+    return InputStatus::Waiting;
 }
 } // namespace
 
@@ -231,24 +264,47 @@ int main(int argc, char **argv)
     }
     std::cout << "Hardware Acceptance: PENDING USER VERIFICATION\n"
               << "Submitted is admission only; inspect subsequent ACK/outcome events.\n"
-              << "Manual stepping: stdin waits pause link service and may cause loss.\n"
-              << "Use telemetry display to advance one runtime iteration; link status only reads state.\n"
+              << "Runtime remains serviced while waiting for complete input lines.\n"
+              << "Incoming events are displayed continuously; link status only reads state.\n"
               << "No automatic reopen. Quit aborts the session; it is not a motion-stop ACK.\n";
     help();
     std::string line;
-    while (std::cout << "> " << std::flush, std::getline(std::cin, line)) {
-        std::istringstream input(line);
-        std::vector<std::string> tokens;
-        for (std::string token; input >> token;) tokens.push_back(token);
-        if (tokens.empty()) continue;
-        if (tokens == std::vector<std::string>{"quit"} ||
-            tokens == std::vector<std::string>{"exit"}) break;
-        if (execute(application, tokens)) {
-            const auto result = application.run_once();
-            print_events(result.events);
+    bool overlong = false;
+    std::optional<runtime::RuntimeStatus> previous_status;
+    int exit_status = 0;
+    std::cout << "> " << std::flush;
+    for (;;) {
+        const bool disconnected = application.session_state() == session::SessionState::ReopenRequired;
+        const auto input_status = read_input(line, overlong, disconnected);
+        if (input_status == InputStatus::End) break; // Discard an incomplete final line.
+        if (input_status == InputStatus::Error) {
+            std::cerr << "stdin read/poll failed; aborting session\n";
+            exit_status = 1;
+            break;
+        }
+        if (input_status == InputStatus::Line) {
+            if (overlong) {
+                std::cout << "InvalidArgument: input line exceeds 256 bytes\n";
+            } else {
+                std::istringstream input(line);
+                std::vector<std::string> tokens;
+                for (std::string token; input >> token;) tokens.push_back(token);
+                if (tokens == std::vector<std::string>{"quit"} ||
+                    tokens == std::vector<std::string>{"exit"}) break;
+                if (!tokens.empty()) execute(application, tokens);
+            }
+            line.clear();
+            overlong = false;
+            std::cout << "> " << std::flush;
+        }
+        const auto result = application.run_once();
+        print_events(result.events);
+        if (!previous_status || result.status != *previous_status || !result.events.empty()) {
             std::cout << "Runtime " << name(result.status) << " errno=" << result.error_number << '\n';
         }
+        previous_status = result.status;
+        std::cout << std::flush;
     }
     print_events(application.abort().events);
-    return 0;
+    return exit_status;
 }
