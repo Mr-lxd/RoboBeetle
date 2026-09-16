@@ -1,6 +1,6 @@
 # USART2 Raspberry Pi Primary Host Link
 
-**Status:** Approved design, pending implementation
+**Status:** Implemented on feature branch, pending user target verification
 
 **Baseline:** `016436ea7e04a370de8a51c5679593ef0f272375` (the squash merge of PR #20),
 whose parent is `33ff57067aab6c99a594deced7143b64dffca7a6`.
