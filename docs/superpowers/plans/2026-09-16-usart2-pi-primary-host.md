@@ -33,6 +33,37 @@ Files:
 
 The script reads main.c, stm32f4xx_hal_msp.c, stm32f4xx_it.c, stm32f4xx_it.h, RoboBeetleFirmware.ioc, and uart_transport_stm32.c. Normalize CRLF with a replacement of the regex \r\n? by [char]10. Define Has, NotHas, Ioc, and InOrder helpers. Ioc must use a multiline regex anchored to exactly one key and compare the value ordinally.
 
+Use these helper implementations so a malformed test reports a contract
+failure rather than a PowerShell interpolation error:
+
+    function Has([string]$text, [string]$needle, [string]$label) {
+        if (-not $text.Contains($needle)) {
+            throw ('Missing ' + $label + ': ' + $needle)
+        }
+    }
+    function NotHas([string]$text, [string]$needle, [string]$label) {
+        if ($text.Contains($needle)) {
+            throw ('Unexpected ' + $label + ': ' + $needle)
+        }
+    }
+    function Ioc([string]$key, [string]$value) {
+        $matches = [regex]::Matches($ioc, '(?m)^' + [regex]::Escape($key) + '=([^\n]*)$')
+        if ($matches.Count -ne 1) { throw ('Expected one .ioc key: ' + $key) }
+        if ($matches[0].Groups[1].Value -cne $value) {
+            throw ('.ioc mismatch for ' + $key)
+        }
+    }
+    function InOrder([string]$text, [string[]]$needles, [string]$label) {
+        $last = -1
+        foreach ($needle in $needles) {
+            $at = $text.IndexOf($needle)
+            if ($at -lt 0 -or $at -le $last) {
+                throw ('Order failure (' + $label + '): ' + $needle)
+            }
+            $last = $at
+        }
+    }
+
 Assert these exact .ioc values:
 
     Mcu.IP5=USART1
