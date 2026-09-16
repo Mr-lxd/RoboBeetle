@@ -540,6 +540,69 @@ void test_abort_session_contract()
            "restart after abort must preserve sequence allocation continuity");
 }
 
+void test_abort_session_live_heartbeat_lifecycle()
+{
+    FakeTransport transport;
+    LinkCoreConfig config = quiet_config();
+    config.heartbeat_interval_ms = 1000U;
+    config.ack_timeout_ms = 200U;
+    config.liveness_timeout_ms = 10000U;
+    LinkCore link(transport, config);
+
+    expect(!link.next_wakeup_ms().has_value(),
+           "fresh LinkCore must not expose a wakeup before start");
+    expect(link.start(0U), "fresh LinkCore must accept its first start");
+    const auto initial_due = link.next_wakeup_ms();
+    expect(initial_due.has_value() && initial_due.value() == 0U,
+           "started LinkCore must schedule its initial Heartbeat immediately");
+    const auto h1_events = link.poll(0U);
+    expect(has_event(h1_events, LinkEventType::HeartbeatDispatched) &&
+               transport.writes().size() == 1U,
+           "poll at start must dispatch exactly one Heartbeat");
+    const Frame h1 = decode_write(transport, 0U);
+    const std::uint16_t h2_sequence =
+        static_cast<std::uint16_t>(h1.sequence + 1U);
+
+    const std::size_t writes_before_abort = transport.writes().size();
+    const auto abort_events = link.abort_session(1U);
+    expect(link.state() == LinkState::Lost &&
+               !link.next_wakeup_ms().has_value() &&
+               transport.writes().size() == writes_before_abort,
+           "aborting a live unacknowledged Heartbeat must stop scheduling without I/O");
+
+    const auto old_ack_while_lost = link.receive(
+        ack_wire(h1.sequence, h1.message_type), 2U);
+    expect(has_event(old_ack_while_lost, LinkEventType::AckIgnored) &&
+               link.state() == LinkState::Lost &&
+               !has_event(old_ack_while_lost, LinkEventType::RequestAccepted),
+           "an old Heartbeat ACK must not revive or refresh a Lost session");
+
+    expect(link.abort_session(3U).empty(),
+           "repeated abort must not duplicate terminal events");
+
+    expect(link.start(10U), "Lost session must permit an explicit restart");
+    const auto old_ack_after_restart = link.receive(
+        ack_wire(h1.sequence, h1.message_type), 10U);
+    expect(has_event(old_ack_after_restart, LinkEventType::AckIgnored) &&
+               link.state() == LinkState::Unconfirmed &&
+               !has_event(old_ack_after_restart, LinkEventType::RequestAccepted),
+           "an old Heartbeat ACK must not confirm a restarted session");
+
+    const auto h2_events = link.poll(10U);
+    expect(has_event(h2_events, LinkEventType::HeartbeatDispatched) &&
+               transport.writes().size() == 2U,
+           "restarted poll must dispatch a new Heartbeat");
+    const Frame h2 = decode_write(transport, 1U);
+    expect(h2.sequence == h2_sequence,
+           "restart must preserve Heartbeat sequence allocator continuity");
+    const auto h2_ack_events = link.receive(
+        ack_wire(h2.sequence, h2.message_type), 11U);
+    expect(has_event(h2_ack_events, LinkEventType::RequestAccepted) &&
+               link.state() == LinkState::Active,
+           "matching restarted Heartbeat ACK must activate the session");
+    (void)abort_events;
+}
+
 void test_next_wakeup_contract()
 {
     FakeTransport initial_transport;
@@ -874,6 +937,7 @@ void test_link_core_contract()
     test_degraded_cancels_queued_work();
     test_submit_rejection_statuses();
     test_abort_session_contract();
+    test_abort_session_live_heartbeat_lifecycle();
     test_next_wakeup_contract();
 }
 

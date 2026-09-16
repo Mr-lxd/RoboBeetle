@@ -297,8 +297,11 @@ void LinkCore::dispatch_due_heartbeat(TimeMs now_ms,
     }
 
     if (transport_.write(wire)) {
-        // Transport ownership acceptance is the end-to-end Heartbeat ACK and
-        // liveness scheduling anchor; physical UART completion is not.
+        // Transport ownership acceptance anchors this Heartbeat's ACK deadline and,
+        // until the first successful Heartbeat ACK, the first Heartbeat ownership
+        // acceptance is the initial liveness reference.
+        // Successful Heartbeat ACKs refresh liveness at ACK receive time.
+        // Physical UART completion is never a timeout anchor.
         HeartbeatRecord record;
         record.frame = heartbeat;
         record.deadline = now_ms + config_.ack_timeout_ms;
