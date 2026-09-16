@@ -36,6 +36,28 @@ void test_codec_boundaries_and_unknown_type()
     const Frame maximum{0x7eU, 0xffffU, std::vector<std::uint8_t>(64U, 0xA5U)};
     const auto maximum_wire = Codec::encodeWire(maximum);
     expect(!maximum_wire.empty(), "64-byte payload must be accepted");
+    expect(Codec::MaxLogicalSize == 74U &&
+               Codec::MaxEncodedBodySize == 75U &&
+               Codec::MaxWireSize == 76U,
+           "Protocol V2 maximum-size constants must match the wire contract");
+    expect(Codec::MaxLogicalSize == Codec::HeaderSize +
+                                      Codec::MaxPayloadSize + Codec::CrcSize &&
+               Codec::MaxEncodedBodySize == Codec::MaxLogicalSize + 1U &&
+               Codec::MaxWireSize == Codec::MaxEncodedBodySize + 1U,
+           "maximum-size constants must remain internally consistent");
+    expect(maximum_wire.size() <= Codec::MaxWireSize,
+           "maximum legal payload must fit within MaxWireSize");
+    expect(without_delimiter(maximum_wire).size() <= Codec::MaxEncodedBodySize,
+           "maximum legal payload body must fit within MaxEncodedBodySize");
+    for (std::size_t payload_size = 0U;
+         payload_size <= Codec::MaxPayloadSize;
+         ++payload_size) {
+        const Frame legal{0x7eU, static_cast<std::uint16_t>(payload_size),
+                          std::vector<std::uint8_t>(payload_size, 0xA5U)};
+        const auto legal_wire = Codec::encodeWire(legal);
+        expect(!legal_wire.empty() && legal_wire.size() <= Codec::MaxWireSize,
+               "every legal payload size must fit within MaxWireSize");
+    }
     const auto maximum_decoded = Codec::decodeWire(without_delimiter(maximum_wire));
     expect(maximum_decoded.ok() && maximum_decoded.frame == maximum,
            "64-byte payload must round-trip");

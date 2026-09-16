@@ -120,6 +120,53 @@ std::vector<LinkEvent> LinkCore::receive(const Bytes &bytes, TimeMs now_ms)
     return events;
 }
 
+std::vector<LinkEvent> LinkCore::abort_session(TimeMs now_ms)
+{
+    std::vector<LinkEvent> events;
+    if (state_ == LinkState::Lost) {
+        return events;
+    }
+    enter_lost(now_ms, events);
+    return events;
+}
+
+std::optional<TimeMs> LinkCore::next_wakeup_ms() const
+{
+    if (!started_ || state_ == LinkState::Lost) {
+        return std::nullopt;
+    }
+
+    std::optional<TimeMs> earliest;
+    const auto consider = [&earliest](TimeMs deadline) {
+        if (!earliest.has_value() || deadline < earliest.value()) {
+            earliest = deadline;
+        }
+    };
+
+    consider(next_heartbeat_due_ms_);
+    if (pending_ordinary_.has_value()) {
+        consider(pending_ordinary_->deadline);
+    }
+    for (const auto &heartbeat : heartbeat_history_) {
+        if (!heartbeat.acknowledged && !heartbeat.timed_out) {
+            consider(heartbeat.deadline);
+        }
+    }
+
+    if (first_heartbeat_dispatch_ms_.has_value()) {
+        const TimeMs reference = last_good_heartbeat_ack_ms_.value_or(
+            *first_heartbeat_dispatch_ms_);
+        const TimeMs timeout = config_.liveness_timeout_ms;
+        const TimeMs deadline =
+            reference > std::numeric_limits<TimeMs>::max() - timeout
+                ? std::numeric_limits<TimeMs>::max()
+                : reference + timeout;
+        consider(deadline);
+    }
+
+    return earliest;
+}
+
 SubmitResult LinkCore::submit_request(Byte request_type,
                                       const Bytes &payload,
                                       TimeMs now_ms)
@@ -219,6 +266,8 @@ bool LinkCore::dispatch_ordinary(QueuedOrdinary request,
     PendingOrdinary pending;
     pending.frame = request.frame;
     pending.wire = request.wire;
+    // Transport ownership acceptance is the end-to-end ACK timeout anchor;
+    // physical UART completion is intentionally outside this phase's API.
     pending.deadline = now_ms + config_.ack_timeout_ms;
     pending_ordinary_ = std::move(pending);
 
@@ -248,6 +297,11 @@ void LinkCore::dispatch_due_heartbeat(TimeMs now_ms,
     }
 
     if (transport_.write(wire)) {
+        // Transport ownership acceptance anchors this Heartbeat's ACK deadline and,
+        // until the first successful Heartbeat ACK, the first Heartbeat ownership
+        // acceptance is the initial liveness reference.
+        // Successful Heartbeat ACKs refresh liveness at ACK receive time.
+        // Physical UART completion is never a timeout anchor.
         HeartbeatRecord record;
         record.frame = heartbeat;
         record.deadline = now_ms + config_.ack_timeout_ms;
