@@ -1,6 +1,6 @@
 # USART2 Raspberry Pi Primary Host Link
 
-**Status:** Implemented on feature branch, pending user target verification
+**Status:** Implemented on feature branch; USART2 target acceptance verified
 
 **Baseline:** `016436ea7e04a370de8a51c5679593ef0f272375` (the squash merge of PR #20),
 whose parent is `33ff57067aab6c99a594deced7143b64dffca7a6`.
@@ -89,9 +89,8 @@ The implementation will follow a red-green cycle:
 4. Audit source/configuration parity (including PA2/PA3 AF7, USART2 clock/NVIC,
    IRQ-to-handle dispatch, init order, and the absence of unrelated peripheral
    or protocol changes), run `git diff --check`, and inspect the diff/stat.
-5. ARM firmware build/flash is outside this workstation's responsibility and
-   will be reported as `PENDING USER TARGET VERIFICATION`; no CMake toolchain or
-   machine-specific path is changed.
+5. ARM firmware build/flash is user-supplied target evidence recorded below;
+   no CMake toolchain or machine-specific path is changed.
 
 Acceptance requires all host executables and existing compile-contract checks
 to pass, the new USART2 contract to pass, a clean diff check, and no changes to
@@ -104,6 +103,92 @@ values; `huart2` and `MX_USART2_UART_Init()` fields; an exact
 0/0; the exact `USART2_IRQHandler()` HAL call; unchanged USART3/USART6
 configuration; and the absence of edits to `uart_transport_stm32.c` or the
 unified HAL callback dispatcher.
+
+## Target acceptance evidence (user-supplied, 2026-09-16)
+
+The following evidence applies to the reviewed feature-branch image at
+`0090c2f1e26d26158d9cdff2dd07c8a61df49d38`. It is target/tool and physical
+evidence, not an inference from source or host tests.
+
+### ARM target build
+
+- ARM GNU toolchain build: **PASS**.
+- Linked image: `RoboBeetleFirmware.elf`.
+- The accepted link reported RAM `7,808 B / 128 KB (5.96%)` and FLASH
+  `71,652 B / 512 KB (13.67%)`. These are measurements from this build, not
+  permanent limits.
+
+### Target programming
+
+The reviewed ELF was programmed through CMSIS-DAP/OpenOCD. OpenOCD reported
+`Programming Finished` and `Verified OK`. During verification it also
+reported `timeout waiting for target halted`, `cortex_m crc algorithm error`,
+and `clearing lockup after double fault`; OpenOCD then re-examined the
+Cortex-M4 successfully and still reported `Verified OK`. This is recorded as
+an observed tooling/debug quirk, not a firmware failure.
+
+### Raspberry Pi UART environment
+
+- `/dev/serial0 -> ttyS0`.
+- `serial-getty@ttyS0.service` and `serial-getty@serial0.service` were
+  `inactive (dead)`.
+- `/proc/cmdline` contained no active `ttyS0`/`serial0` console entry.
+- `sudo fuser -v /dev/ttyS0` showed no process owning the UART.
+
+### Raspberry Pi ↔ STM32 USART2 Protocol V2 smoke test
+
+Physical connection and UART settings were:
+
+```text
+Raspberry Pi GPIO14 / TX -> STM32 PA3 / USART2_RX
+Raspberry Pi GPIO15 / RX <- STM32 PA2 / USART2_TX
+Raspberry Pi GND         <-> STM32 GND
+UART: 115200 8N1, no flow control
+```
+
+A temporary Raspberry Pi host test sent Protocol V2 Heartbeat frames and
+decoded STM32 ACK frames. The user manually interrupted the run after
+sequence 89:
+
+| Result | Count |
+| --- | ---: |
+| ACK OK | 89 |
+| ACK timeout | 0 |
+| Decode error | 0 |
+
+Every matching ACK used `request_type = Heartbeat` and `result = 0 / OK`.
+This run is not reported as `100/100`.
+
+The following are **[Hardware Verified]** for this accepted target run:
+
+- Raspberry Pi UART TX → STM32 USART2 RX and STM32 USART2 TX → Raspberry Pi
+  UART RX;
+- Protocol V2 Heartbeat encode/decode, COBS framing, and CRC validation;
+- bidirectional Heartbeat/ACK exchange at 115200; and
+- USART2 production Host binding functioning on target.
+
+### Qualification boundaries
+
+The smoke test printed `Telemetry : 0`. Its receive window terminates as soon
+as the matching ACK is found and its receive buffer is not preserved across
+Heartbeat iterations, so this value is not a telemetry failure or pass. Leak,
+IMU, and Depth telemetry over the new Pi USART2 link remain **[PENDING TARGET
+VERIFICATION]**.
+
+This run did not provide a new Pi-process/link-loss physical Safety test or a
+Motion timing test. Protocol/Safety/Motion semantics are unchanged; the
+following Pi-link target tests remain pending for later integration work:
+
+- Pi process/link loss → 500 ms Safety shutdown physical verification;
+- Servo/Motion command path through the Pi; and
+- CPG/SimpleGait timing under Pi Heartbeat plus telemetry load.
+
+The resulting architecture is therefore:
+
+| Link | Current state |
+| --- | --- |
+| Raspberry Pi / USART2 / PA2-PA3 / 115200 | Active Protocol V2 primary host; target link **[Hardware Verified]** above |
+| USART1 / PA9-PA10 / APC220 | Initialized and physically/configurationally retained; not bound to `uart_transport_stm32`, does not arm Host RX, does not enter Protocol V2, create Heartbeats, affect Safety, or hold control authority |
 
 ## Alternatives considered
 
