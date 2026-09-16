@@ -1,10 +1,12 @@
 # RoboBeetle 硬件控制交接审计
 
-本次收口对应的近期 Servo、LeakStatus、JY901S 与 Depth 实机运行均使用：
+当前 active/default Protocol V2 host transport 是 Raspberry Pi → STM32 USART2
+（PA2/PA3，115200 8-N-1）；2026-09-16 的 target link acceptance 见本文档末尾。
+近期 Servo、LeakStatus、JY901S 与 Depth 实机运行使用过：
 `Qt Console → Windows COM13 → DAP UART/USB serial bridge → STM32 USART1`
-（9600 8-N-1）。APC220 不是当前/默认 host transport，也不是当前启用的
-硬件链路；但已在 2026-09-15 Clock Migration verification 中独立 exercise，
-APC link check 为 PASS。
+（9600 8-N-1），这些记录属于 binding change 前的历史 image。USART1 仍初始化
+并保留 APC220/legacy 硬件配置，但不是 active host transport、备用控制链路或
+当前控制 authority；早期 APC link check 记录继续保留。
 
 本文件中 2026-09-05 及更早的历史章节可能保留 HSI 16 MHz、PLL off、TIM
 PSC=15 等旧 image 快照；它们不覆盖当前 Clock Migration image。最新的
@@ -1619,3 +1621,79 @@ scaling or that Servo stutter is fixed.
 `ARM-BUILT` and the target measurements above are user-supplied target
 acceptance evidence. The pending physical evidence categories remain separate
 and are not upgraded by these short trials.
+
+## 2026-09-16 USART2 Raspberry Pi primary-host target acceptance (user-supplied)
+
+This section records the accepted target evidence for the USART2 feature image
+reviewed at branch head `0090c2f1e26d26158d9cdff2dd07c8a61df49d38`. It supplements
+the historical USART1/APC220 sections and does not rewrite them.
+
+### ARM build and target programming
+
+The feature-branch firmware was built with the real ARM GNU toolchain:
+**ARM Build PASS**. The linked image was `RoboBeetleFirmware.elf`; this build
+reported RAM `7,808 B / 128 KB (5.96%)` and FLASH `71,652 B / 512 KB (13.67%)`.
+These are measurements from this accepted build, not permanent limits.
+
+The ELF was programmed through CMSIS-DAP/OpenOCD. OpenOCD reported
+`Programming Finished` and `Verified OK`. During verification it also reported
+`timeout waiting for target halted`, `cortex_m crc algorithm error`, and
+`clearing lockup after double fault`; it then re-examined the Cortex-M4
+successfully and still reported `Verified OK`. This is an observed
+tooling/debug quirk, not a firmware failure.
+
+### Raspberry Pi UART environment
+
+- `/dev/serial0 -> ttyS0`.
+- `serial-getty@ttyS0.service` and `serial-getty@serial0.service` were
+  `inactive (dead)`.
+- `/proc/cmdline` had no active `ttyS0`/`serial0` console entry.
+- `sudo fuser -v /dev/ttyS0` showed no process owning the UART.
+
+### Raspberry Pi ↔ STM32 USART2 Protocol V2 smoke test
+
+The physical connection was Raspberry Pi GPIO14/TX → STM32 PA3/USART2_RX,
+GPIO15/RX ← STM32 PA2/USART2_TX, with common ground. UART was 115200 8N1 with
+no flow control.
+
+A temporary Raspberry Pi host test sent Protocol V2 Heartbeat frames and
+decoded STM32 ACK frames. The user manually interrupted the test after
+sequence 89; it is not a `100/100` run:
+
+| Result | Count |
+| --- | ---: |
+| ACK OK | 89 |
+| ACK timeout | 0 |
+| Decode error | 0 |
+
+Every matching ACK used `request_type = Heartbeat` and `result = 0 / OK`.
+The following are **[Hardware Verified]** for this run:
+
+- Raspberry Pi UART TX → STM32 USART2 RX and STM32 USART2 TX → Raspberry Pi
+  UART RX;
+- Protocol V2 Heartbeat encode/decode, COBS framing, and CRC validation;
+- bidirectional Heartbeat/ACK exchange at 115200; and
+- USART2 production Host binding functioning on target.
+
+### Qualification boundaries
+
+The temporary test printed `Telemetry : 0`. Each receive window ended as soon
+as the matching ACK was found and its receive buffer was not preserved across
+Heartbeat iterations, so this number is neither a telemetry failure nor a
+verification result. Leak, IMU, and Depth telemetry over the new Pi USART2
+link remain **[PENDING TARGET VERIFICATION]**.
+
+This run did not provide a new Pi-process/link-loss physical Safety test or a
+Motion timing test. Protocol/Safety/Motion semantics are unchanged. The
+following Pi-link target tests remain pending for later integration work:
+
+- Pi process/link loss → 500 ms Safety shutdown physical verification;
+- Servo/Motion command path through the Pi; and
+- CPG/SimpleGait timing under Pi Heartbeat plus telemetry load.
+
+### Current host-link authority
+
+| Link | State |
+| --- | --- |
+| Raspberry Pi / USART2 / PA2-PA3 / 115200 | Current active Protocol V2 primary host; target link **[Hardware Verified]** above |
+| USART1 / PA9-PA10 / APC220 | Initialized and hardware/config retained; not bound to `uart_transport_stm32`, does not arm Host RX, does not enter Protocol V2, create Heartbeats, affect Safety, or hold control authority |
