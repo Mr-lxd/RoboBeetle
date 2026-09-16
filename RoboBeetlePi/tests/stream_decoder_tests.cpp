@@ -2,10 +2,31 @@
 
 #include "robobeetle/protocol/cobs.hpp"
 #include "robobeetle/protocol/codec.hpp"
+#include "robobeetle/protocol/crc16.hpp"
 #include "robobeetle/protocol/protocol_error.hpp"
 #include "robobeetle/protocol/stream_decoder.hpp"
 
 namespace rbp2_test {
+
+namespace {
+
+std::vector<std::uint8_t> wire_from_logical(
+    std::vector<std::uint8_t> logical)
+{
+    auto wire = robobeetle::protocol::cobs_encode(logical);
+    wire.push_back(0U);
+    return wire;
+}
+
+void recompute_crc(std::vector<std::uint8_t> &logical)
+{
+    const auto crc = robobeetle::protocol::crc16_ccitt_false(
+        logical.data(), logical.size() - 2U);
+    logical[logical.size() - 2U] = static_cast<std::uint8_t>(crc & 0xFFU);
+    logical.back() = static_cast<std::uint8_t>((crc >> 8U) & 0xFFU);
+}
+
+} // namespace
 
 void test_stream_decoder_contract()
 {
@@ -70,6 +91,39 @@ void test_stream_decoder_contract()
     const auto after_reset = decoder.feed(first);
     expect(after_reset.size() == 1U && after_reset.front().ok(),
            "reset must discard interrupted frame and resynchronize");
+
+    const robobeetle::protocol::Frame expected_following_frame{
+        0x14U, 8U, bytes({0x03U, 0U})};
+
+    auto invalid_version_logical = Codec::encodeLogical(
+        {0x01U, 12U, bytes({0x02U, 0U, 0U, 0U})});
+    invalid_version_logical[2] = 0x03U;
+    recompute_crc(invalid_version_logical);
+    StreamDecoder version_decoder;
+    const auto version_events = version_decoder.feed(concat(
+        wire_from_logical(invalid_version_logical), second));
+    expect(version_events.size() == 2U,
+           "invalid Version must emit an error and recover at delimiter");
+    expect(version_events[0].error == DecodeError::InvalidVersion,
+           "invalid Version must be reported by StreamDecoder");
+    expect(version_events[1].ok() &&
+               version_events[1].frame == expected_following_frame,
+           "valid frame after invalid Version must decode correctly");
+
+    auto invalid_length_logical = Codec::encodeLogical(
+        {0x01U, 13U, bytes({0x04U, 0U, 0U, 0U})});
+    invalid_length_logical[6] = 0x05U;
+    recompute_crc(invalid_length_logical);
+    StreamDecoder length_decoder;
+    const auto length_events = length_decoder.feed(concat(
+        wire_from_logical(invalid_length_logical), second));
+    expect(length_events.size() == 2U,
+           "invalid payload Length must emit an error and recover at delimiter");
+    expect(length_events[0].error == DecodeError::InvalidLength,
+           "invalid payload Length must be reported by StreamDecoder");
+    expect(length_events[1].ok() &&
+               length_events[1].frame == expected_following_frame,
+           "valid frame after invalid payload Length must decode correctly");
 }
 
 } // namespace rbp2_test
