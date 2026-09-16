@@ -324,13 +324,13 @@ void testMotionPanelLifecycleAndManualArbitration()
     }
     QGroupBox *global = nullptr;
     for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
-        if (box->title() == QStringLiteral("Global")) {
+        if (box->title() == QStringLiteral("Actuator Control")) {
             global = box;
             break;
         }
     }
     expect(global != nullptr,
-           "MainWindow must retain its Global panel");
+           "MainWindow must retain its Actuator Control panel");
     if (global != nullptr) {
         QPushButton *disableAll = buttonWithText(global, QStringLiteral("Disable All"));
         expect(disableAll != nullptr && disableAll->isEnabled(),
