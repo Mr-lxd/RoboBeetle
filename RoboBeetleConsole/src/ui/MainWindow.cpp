@@ -275,22 +275,23 @@ QWidget *MainWindow::createImuCard()
     auto *box = new QGroupBox(QStringLiteral("IMU — JY901S"), this);
     applyCardStyle(box);
     auto *grid = new QGridLayout(box);
+    imuDot_ = new QLabel(box);
+    imuDot_->setFixedSize(10, 10);
+    imuDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     imuStatus_ = new QLabel(QStringLiteral("Unknown"), box);
+    imuStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
     imuAcc_ = new QLabel(QStringLiteral("--"), box);
     imuGyro_ = new QLabel(QStringLiteral("--"), box);
     imuAngle_ = new QLabel(QStringLiteral("--"), box);
-    imuDiagnostics_ = new QLabel(QStringLiteral("--"), box);
-    imuDiagnostics_->setWordWrap(true);
-    grid->addWidget(new QLabel(QStringLiteral("Status"), box), 0, 0);
-    grid->addWidget(imuStatus_, 0, 1);
+    grid->addWidget(imuDot_, 0, 0);
+    grid->addWidget(imuStatus_, 0, 1, 1, 3);
     grid->addWidget(new QLabel(QStringLiteral("Acc"), box), 1, 0);
     grid->addWidget(imuAcc_, 1, 1);
-    grid->addWidget(new QLabel(QStringLiteral("Gyro"), box), 2, 0);
-    grid->addWidget(imuGyro_, 2, 1);
-    grid->addWidget(new QLabel(QStringLiteral("Angle"), box), 3, 0);
-    grid->addWidget(imuAngle_, 3, 1);
-    grid->addWidget(new QLabel(QStringLiteral("Diagnostics"), box), 4, 0);
-    grid->addWidget(imuDiagnostics_, 4, 1);
+    grid->addWidget(new QLabel(QStringLiteral("Gyro"), box), 1, 2);
+    grid->addWidget(imuGyro_, 1, 3);
+    grid->addWidget(new QLabel(QStringLiteral("Angle"), box), 2, 0);
+    grid->addWidget(imuAngle_, 2, 1, 1, 3);
+    grid->setColumnStretch(3, 1);
     return box;
 }
 
@@ -299,22 +300,23 @@ QWidget *MainWindow::createDepthCard()
     auto *box = new QGroupBox(QStringLiteral("Depth Sensor — ROVMAKER"), this);
     applyCardStyle(box);
     auto *grid = new QGridLayout(box);
+    depthDot_ = new QLabel(box);
+    depthDot_->setFixedSize(10, 10);
+    depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     depthStatus_ = new QLabel(QStringLiteral("Unknown"), box);
+    depthStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
     depthValue_ = new QLabel(QStringLiteral("--"), box);
     depthTemperature_ = new QLabel(QStringLiteral("--"), box);
     depthAge_ = new QLabel(QStringLiteral("--"), box);
-    depthDiagnostics_ = new QLabel(QStringLiteral("--"), box);
-    depthDiagnostics_->setWordWrap(true);
-    grid->addWidget(new QLabel(QStringLiteral("Status"), box), 0, 0);
-    grid->addWidget(depthStatus_, 0, 1);
+    grid->addWidget(depthDot_, 0, 0);
+    grid->addWidget(depthStatus_, 0, 1, 1, 3);
     grid->addWidget(new QLabel(QStringLiteral("Depth"), box), 1, 0);
     grid->addWidget(depthValue_, 1, 1);
-    grid->addWidget(new QLabel(QStringLiteral("Temperature"), box), 2, 0);
-    grid->addWidget(depthTemperature_, 2, 1);
-    grid->addWidget(new QLabel(QStringLiteral("Sample age"), box), 3, 0);
-    grid->addWidget(depthAge_, 3, 1);
-    grid->addWidget(new QLabel(QStringLiteral("Diagnostics"), box), 4, 0);
-    grid->addWidget(depthDiagnostics_, 4, 1);
+    grid->addWidget(new QLabel(QStringLiteral("Temp"), box), 1, 2);
+    grid->addWidget(depthTemperature_, 1, 3);
+    grid->addWidget(new QLabel(QStringLiteral("Age"), box), 2, 0);
+    grid->addWidget(depthAge_, 2, 1, 1, 3);
+    grid->setColumnStretch(3, 1);
     return box;
 }
 
@@ -661,6 +663,23 @@ QWidget *MainWindow::createLogTab()
     return tab;
 }
 
+QWidget *MainWindow::createTelemetryDetailsTab()
+{
+    auto *tab = new QWidget(this);
+    auto *layout = new QVBoxLayout(tab);
+    layout->setContentsMargins(4, 4, 4, 4);
+    auto *form = new QFormLayout;
+    imuDiagnostics_ = new QLabel(QStringLiteral("--"), tab);
+    imuDiagnostics_->setWordWrap(true);
+    depthDiagnostics_ = new QLabel(QStringLiteral("--"), tab);
+    depthDiagnostics_->setWordWrap(true);
+    form->addRow(QStringLiteral("IMU Diagnostics"), imuDiagnostics_);
+    form->addRow(QStringLiteral("Depth Diagnostics"), depthDiagnostics_);
+    layout->addLayout(form);
+    layout->addStretch();
+    return tab;
+}
+
 QWidget *MainWindow::createProtocolDetailsTab()
 {
     auto *tab = new QWidget(this);
@@ -685,6 +704,7 @@ QTabWidget *MainWindow::createLogDetailsTabs()
 {
     auto *tabs = new QTabWidget(this);
     tabs->addTab(createLogTab(), QStringLiteral("Log"));
+    tabs->addTab(createTelemetryDetailsTab(), QStringLiteral("Telemetry Details"));
     tabs->addTab(createProtocolDetailsTab(), QStringLiteral("Protocol Details"));
     return tabs;
 }
@@ -734,15 +754,19 @@ void MainWindow::setImuUiState(const ImuMonitorState &state)
     switch (state.status) {
     case ImuStatus::Unknown:
         imuStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+        imuDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
         break;
     case ImuStatus::Receiving:
         imuStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-weight: bold;"));
+        imuDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 5px;"));
         break;
     case ImuStatus::Stale:
         imuStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
+        imuDot_->setStyleSheet(QStringLiteral("background: #FB8C00; border-radius: 5px;"));
         break;
     case ImuStatus::Error:
         imuStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-weight: bold;"));
+        imuDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 5px;"));
         break;
     }
 
@@ -788,15 +812,19 @@ void MainWindow::setDepthUiState(const DepthMonitorState &state)
     switch (state.status) {
     case DepthStatus::Unknown:
         depthStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+        depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
         break;
     case DepthStatus::Receiving:
         depthStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-weight: bold;"));
+        depthDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 5px;"));
         break;
     case DepthStatus::Stale:
         depthStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
+        depthDot_->setStyleSheet(QStringLiteral("background: #FB8C00; border-radius: 5px;"));
         break;
     case DepthStatus::Error:
         depthStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-weight: bold;"));
+        depthDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 5px;"));
         break;
     }
 

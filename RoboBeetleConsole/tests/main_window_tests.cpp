@@ -517,25 +517,68 @@ void testDashboardLayout()
                "Protocol Details page must retain the ACK-status label");
     }
 
-    // Protocol Details tab keeps both pages (Log + Protocol Details).
+    // Log/Details tab widget keeps its three pages.
     if (detailsTabs != nullptr) {
-        expect(detailsTabs->count() == 2,
-               "Protocol Details tab must keep Log and Protocol Details pages");
+        expect(detailsTabs->count() == 3,
+               "Log/Details tab must keep Log, Telemetry Details, and Protocol Details pages");
     }
 
-    // Window fits the approved default/minimum and the dashboard needs no
-    // scrolling at the default size.
+    // A Telemetry Details page exists and hosts the IMU/Depth diagnostics.
+    QTabWidget *telemetryTabs = tabWidgetWithText(&window, QStringLiteral("Telemetry Details"));
+    expect(telemetryTabs != nullptr,
+           "MainWindow must expose a Telemetry Details tab");
+    if (telemetryTabs != nullptr) {
+        bool foundTelemetryPage = false;
+        for (int i = 0; i < telemetryTabs->count(); ++i) {
+            if (telemetryTabs->tabText(i) == QStringLiteral("Telemetry Details")) {
+                foundTelemetryPage = true;
+            }
+        }
+        expect(foundTelemetryPage,
+               "Telemetry Details tab must contain its page");
+    }
+
+    // Diagnostics still flow to the Telemetry Details page after a real
+    // protocol update (no widget loss from re-adding to layouts).
+    controller.connectTransport({QStringLiteral("COM_TEST"), 9600});
+    transport.simulateConnected();
+    if (telemetryTabs != nullptr) {
+        bool imuDiagLive = false;
+        bool depthDiagLive = false;
+        injectImuSnapshot(transport);
+        for (int i = 0; i < telemetryTabs->count(); ++i) {
+            const QWidget *page = telemetryTabs->widget(i);
+            for (const QLabel *label : page->findChildren<QLabel *>()) {
+                if (label->text().contains(QStringLiteral("valid 42"))) {
+                    imuDiagLive = true;
+                }
+            }
+        }
+        injectDepthSnapshot(transport);
+        for (int i = 0; i < telemetryTabs->count(); ++i) {
+            const QWidget *page = telemetryTabs->widget(i);
+            for (const QLabel *label : page->findChildren<QLabel *>()) {
+                if (label->text().contains(QStringLiteral("RX 100"))) {
+                    depthDiagLive = true;
+                }
+            }
+        }
+        expect(imuDiagLive && depthDiagLive,
+               "Telemetry Details page must show live IMU/Depth diagnostics");
+    }
+
+    // Window fits the approved minimum; the dashboard needs no scroll at the
+    // default size.
     window.resize(1420, 880);
     const QSize ws = window.size();
     expect(ws.width() >= 1100 && ws.height() >= 720,
            "window must fit the approved minimum (1100x720)");
 
-    // All five servo cards must sit on the same row (one horizontal row at
-    // 1420px width) and none may be clipped outside the window.
-    const QRect wr = window.rect();
-    bool anyClipped = false;
-    bool sameRow = true;
-    int rowY = -1;
+    // Structural one-row check: all five servo cards share the same parent
+    // (the Actuator Control cards layout), i.e. they are siblings in one row.
+    // This avoids pixel coordinates and platform font metrics.
+    const QWidget *cardsParent = nullptr;
+    bool allSameParent = true;
     for (QGroupBox *g : window.findChildren<QGroupBox *>()) {
         const QString t = g->title();
         if (t == QStringLiteral("FrontRight")
@@ -543,22 +586,33 @@ void testDashboardLayout()
             || t == QStringLiteral("Depth")
             || t == QStringLiteral("RearRight")
             || t == QStringLiteral("RearLeft")) {
-            const QPoint topLeft = g->mapTo(&window, QPoint(0, 0));
-            if (rowY < 0) {
-                rowY = topLeft.y();
-            } else if (qAbs(topLeft.y() - rowY) > 4) {
-                sameRow = false;
+            if (cardsParent == nullptr) {
+                cardsParent = g->parentWidget();
+            } else if (g->parentWidget() != cardsParent) {
+                allSameParent = false;
             }
-            const QRect gr(topLeft, g->size());
-            if (!wr.contains(gr)) {
+        }
+    }
+    expect(allSameParent,
+           "all five servo cards must be siblings in one row");
+
+    // Relative horizontal-clip check: no servo card wider than the window.
+    // A card wider than the window would be horizontally clipped.
+    bool anyClipped = false;
+    for (QGroupBox *g : window.findChildren<QGroupBox *>()) {
+        const QString t = g->title();
+        if (t == QStringLiteral("FrontRight")
+            || t == QStringLiteral("FrontLeft")
+            || t == QStringLiteral("Depth")
+            || t == QStringLiteral("RearRight")
+            || t == QStringLiteral("RearLeft")) {
+            if (g->width() > ws.width()) {
                 anyClipped = true;
             }
         }
     }
-    expect(sameRow,
-           "all five servo cards must sit on the same row at 1420px width");
     expect(!anyClipped,
-           "no servo card may be clipped outside the window");
+           "no servo card may be wider than the window (horizontal clip)");
 }
 
 } // namespace

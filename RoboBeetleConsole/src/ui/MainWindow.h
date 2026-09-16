@@ -45,9 +45,11 @@ private:
     QWidget *createServoPanel(int index, ServoId id);
     QWidget *createActuatorPanel();
     QWidget *createMotionPanel();
-    // Lower dashboard: Data Plots (independent) + Log | Protocol Details tabs.
+    // Lower dashboard: Data Plots (independent) + Log | Telemetry Details |
+// Protocol Details tabs.
     QWidget *createDataPlotsTab();
     QWidget *createLogTab();
+    QWidget *createTelemetryDetailsTab();
     QWidget *createProtocolDetailsTab();
     QTabWidget *createLogDetailsTabs();
     QWidget *createLowerDashboard();
@@ -83,17 +85,21 @@ private:
     QLabel *gaitBackendStatus_{nullptr};
 
     // IMU card.
+    QLabel *imuDot_{nullptr};
     QLabel *imuStatus_{nullptr};
     QLabel *imuAcc_{nullptr};
     QLabel *imuGyro_{nullptr};
     QLabel *imuAngle_{nullptr};
-    QLabel *imuDiagnostics_{nullptr};
 
     // Depth card.
+    QLabel *depthDot_{nullptr};
     QLabel *depthStatus_{nullptr};
     QLabel *depthValue_{nullptr};
     QLabel *depthTemperature_{nullptr};
     QLabel *depthAge_{nullptr};
+
+    // Telemetry details tab (holds the long IMU/Depth diagnostics text).
+    QLabel *imuDiagnostics_{nullptr};
     QLabel *depthDiagnostics_{nullptr};
 
     // Servo cards (one per semantic actuator).
