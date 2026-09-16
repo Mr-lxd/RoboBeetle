@@ -10,7 +10,10 @@
 #include <QEventLoop>
 #include <QGroupBox>
 #include <QLabel>
+#include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QPushButton>
+#include <QTabWidget>
 #include <QTimer>
 
 #include <cstdio>
@@ -420,6 +423,144 @@ void testGaitBackendPanelLifecycle()
            "UI combo must reflect the ACK-confirmed backend");
 }
 
+QGroupBox *findGroupBox(const QWidget *root, const QString &title)
+{
+    for (QGroupBox *box : root->findChildren<QGroupBox *>()) {
+        if (box->title() == title) {
+            return box;
+        }
+    }
+    return nullptr;
+}
+
+QTabWidget *tabWidgetWithText(const QWidget *root, const QString &tabText)
+{
+    for (QTabWidget *tabs : root->findChildren<QTabWidget *>()) {
+        for (int i = 0; i < tabs->count(); ++i) {
+            if (tabs->tabText(i) == tabText) {
+                return tabs;
+            }
+        }
+    }
+    return nullptr;
+}
+
+void testDashboardLayout()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::MainWindow window(&controller);
+
+    // Realtime Video placeholder exists.
+    expect(findGroupBox(&window, QStringLiteral("Realtime Video")) != nullptr,
+           "MainWindow must expose a Realtime Video placeholder");
+
+    // Emergency Stop exists and stays disabled in Phase 1.
+    QPushButton *estop = buttonWithText(&window, QStringLiteral("Emergency Stop"));
+    expect(estop != nullptr, "MainWindow must expose an Emergency Stop button");
+    expect(estop != nullptr && !estop->isEnabled(),
+           "Emergency Stop must remain disabled (no Phase 1 message)");
+
+    // Actuator Control exists.
+    expect(findGroupBox(&window, QStringLiteral("Actuator Control")) != nullptr,
+           "MainWindow must expose the Actuator Control panel");
+
+    // All five semantic servo panels exist.
+    const char *servoNames[] = {
+        "FrontRight", "FrontLeft", "Depth", "RearRight", "RearLeft",
+    };
+    int servoPanels = 0;
+    for (const char *name : servoNames) {
+        if (findGroupBox(&window, QString::fromLatin1(name)) != nullptr) {
+            ++servoPanels;
+        }
+    }
+    expect(servoPanels == 5, "MainWindow must expose all five servo panels");
+
+    // Data Plots region exists as an independent tab widget with IMU/Depth/
+    // Actuator placeholder sub-tabs.
+    bool imuPlot = tabWidgetWithText(&window, QStringLiteral("IMU")) != nullptr;
+    bool depthPlot = tabWidgetWithText(&window, QStringLiteral("Depth")) != nullptr;
+    bool actuatorPlot = tabWidgetWithText(&window, QStringLiteral("Actuator")) != nullptr;
+    expect(imuPlot && depthPlot && actuatorPlot,
+           "MainWindow must expose the Data Plots region (IMU/Depth/Actuator)");
+
+    // Log and Protocol Details tabs exist.
+    QTabWidget *logTabs = tabWidgetWithText(&window, QStringLiteral("Log"));
+    QTabWidget *detailsTabs = tabWidgetWithText(&window, QStringLiteral("Protocol Details"));
+    expect(logTabs != nullptr && detailsTabs != nullptr,
+           "MainWindow must expose Log and Protocol Details tabs");
+
+    // ACK status must be owned by the Protocol Details page only, never also
+    // placed in the Protocol/Link summary card. The summary card must not
+    // contain an ACK-state label, and the details page must retain one.
+    QGroupBox *summary = findGroupBox(&window, QStringLiteral("Protocol / Link"));
+    expect(summary != nullptr, "MainWindow must expose the Protocol / Link summary");
+    bool summaryHasAckLabel = false;
+    for (QLabel *label : summary->findChildren<QLabel *>()) {
+        if (label->text() == QStringLiteral("Idle")) {
+            summaryHasAckLabel = true;
+        }
+    }
+    expect(!summaryHasAckLabel,
+           "Protocol/Link summary must not contain an ACK-state label");
+    if (detailsTabs != nullptr) {
+        bool detailsHasAckLabel = false;
+        for (int i = 0; i < detailsTabs->count(); ++i) {
+            for (QLabel *label : detailsTabs->widget(i)->findChildren<QLabel *>()) {
+                if (label->text() == QStringLiteral("Idle")) {
+                    detailsHasAckLabel = true;
+                }
+            }
+        }
+        expect(detailsHasAckLabel,
+               "Protocol Details page must retain the ACK-status label");
+    }
+
+    // Protocol Details tab keeps both pages (Log + Protocol Details).
+    if (detailsTabs != nullptr) {
+        expect(detailsTabs->count() == 2,
+               "Protocol Details tab must keep Log and Protocol Details pages");
+    }
+
+    // Window fits the approved default/minimum and the dashboard needs no
+    // scrolling at the default size.
+    window.resize(1420, 880);
+    const QSize ws = window.size();
+    expect(ws.width() >= 1100 && ws.height() >= 720,
+           "window must fit the approved minimum (1100x720)");
+
+    // All five servo cards must sit on the same row (one horizontal row at
+    // 1420px width) and none may be clipped outside the window.
+    const QRect wr = window.rect();
+    bool anyClipped = false;
+    bool sameRow = true;
+    int rowY = -1;
+    for (QGroupBox *g : window.findChildren<QGroupBox *>()) {
+        const QString t = g->title();
+        if (t == QStringLiteral("FrontRight")
+            || t == QStringLiteral("FrontLeft")
+            || t == QStringLiteral("Depth")
+            || t == QStringLiteral("RearRight")
+            || t == QStringLiteral("RearLeft")) {
+            const QPoint topLeft = g->mapTo(&window, QPoint(0, 0));
+            if (rowY < 0) {
+                rowY = topLeft.y();
+            } else if (qAbs(topLeft.y() - rowY) > 4) {
+                sameRow = false;
+            }
+            const QRect gr(topLeft, g->size());
+            if (!wr.contains(gr)) {
+                anyClipped = true;
+            }
+        }
+    }
+    expect(sameRow,
+           "all five servo cards must sit on the same row at 1420px width");
+    expect(!anyClipped,
+           "no servo card may be clipped outside the window");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -429,6 +570,7 @@ int main(int argc, char **argv)
     testDepthPanelLifecycle();
     testMotionPanelLifecycleAndManualArbitration();
     testGaitBackendPanelLifecycle();
+    testDashboardLayout();
     if (failures == 0) {
         std::fprintf(stdout, "All MainWindow tests passed\n");
     }

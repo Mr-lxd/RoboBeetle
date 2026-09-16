@@ -41,17 +41,16 @@ private:
     QWidget *createProtocolSummaryCard();
     QWidget *createStatusColumn();
     QWidget *createDashboard();
-    // Actuator + Motion (bottom left).
+    // Actuator (full width) + lower dashboard.
     QWidget *createServoPanel(int index, ServoId id);
     QWidget *createActuatorPanel();
     QWidget *createMotionPanel();
-    QWidget *createBottomLeft();
-    // Right tab stack (bottom right): Data Plots / Log / Protocol Details.
+    // Lower dashboard: Data Plots (independent) + Log | Protocol Details tabs.
     QWidget *createDataPlotsTab();
     QWidget *createLogTab();
     QWidget *createProtocolDetailsTab();
-    QTabWidget *createRightTabs();
-    QWidget *createBottom();
+    QTabWidget *createLogDetailsTabs();
+    QWidget *createLowerDashboard();
     // Refresh helpers.
     void setConnectedUi(bool connected);
     void refreshServoUi(int index);

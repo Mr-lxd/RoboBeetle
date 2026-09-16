@@ -75,7 +75,7 @@ QString motionModeText(MotionMode mode)
 }
 
 // Subtle industrial-console card style: light background, thin border, no
-// gradients or glass effectsholing to keep the surface low-noise.
+// gradients or glassmorphism, to keep the surface low-noise.
 void applyCardStyle(QGroupBox *box)
 {
     box->setStyleSheet(QStringLiteral(
@@ -101,7 +101,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     : QMainWindow(parent), controller_(controller)
 {
     Q_ASSERT(controller_ != nullptr);
-    setWindowTitle(QStringLiteral("RoboBeetle Console — My first Qt"));
+    setWindowTitle(QStringLiteral("RoboBeetle Console"));
     resize(1420, 880);
     setMinimumSize(1100, 720);
 
@@ -112,7 +112,8 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
 
     root->addWidget(createConnectionBar());
     root->addWidget(createDashboard(), 1);
-    root->addWidget(createBottom(), 1);
+    root->addWidget(createActuatorPanel(), 1);
+    root->addWidget(createLowerDashboard(), 1);
 
     setCentralWidget(central);
 
@@ -327,7 +328,6 @@ QWidget *MainWindow::createProtocolSummaryCard()
     crcCount_ = new QLabel(QStringLiteral("0"), box);
     timeoutCount_ = new QLabel(QStringLiteral("0"), box);
     ackRtt_ = new QLabel(QStringLiteral("—"), box);
-    ackStatus_ = new QLabel(QStringLiteral("Idle"), box);
     layout->addWidget(new QLabel(QStringLiteral("TX"), box), 0, 0);
     layout->addWidget(txCount_, 0, 1);
     layout->addWidget(new QLabel(QStringLiteral("RX"), box), 1, 0);
@@ -338,8 +338,6 @@ QWidget *MainWindow::createProtocolSummaryCard()
     layout->addWidget(timeoutCount_, 3, 1);
     layout->addWidget(new QLabel(QStringLiteral("ACK RTT"), box), 4, 0);
     layout->addWidget(ackRtt_, 4, 1);
-    layout->addWidget(new QLabel(QStringLiteral("ACK State"), box), 5, 0);
-    layout->addWidget(ackStatus_, 5, 1);
     layout->setColumnStretch(1, 1);
     return box;
 }
@@ -438,11 +436,12 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     }
     applyButtons_[index] = new QPushButton(QStringLiteral("Apply PWM"), box);
 
-    auto *actionRow = new QGridLayout;
-    actionRow->addWidget(enableButtons_[index], 0, 0);
-    actionRow->addWidget(neutralButtons_[index], 0, 1);
-    actionRow->addWidget(applyButtons_[index], 0, 2);
-    layout->addLayout(actionRow);
+    auto *actionColumn = new QVBoxLayout;
+    actionColumn->setSpacing(2);
+    actionColumn->addWidget(enableButtons_[index]);
+    actionColumn->addWidget(neutralButtons_[index]);
+    actionColumn->addWidget(applyButtons_[index]);
+    layout->addLayout(actionColumn);
 
     auto *angleRow = new QHBoxLayout;
     angleSpins_[index] = new QDoubleSpinBox(box);
@@ -626,37 +625,26 @@ QWidget *MainWindow::createMotionPanel()
     return box;
 }
 
-QWidget *MainWindow::createBottomLeft()
-{
-    auto *column = new QWidget(this);
-    auto *layout = new QVBoxLayout(column);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
-    layout->addWidget(createActuatorPanel(), 1);
-    layout->addWidget(createMotionPanel());
-    return column;
-}
-
 QWidget *MainWindow::createDataPlotsTab()
 {
-    auto *tab = new QWidget(this);
-    auto *layout = new QHBoxLayout(tab);
-    layout->setContentsMargins(4, 4, 4, 4);
-    layout->setSpacing(8);
+    // Independent central Data Plots region. Internally uses placeholder
+    // sub-tabs (IMU | Depth | Actuator). No plotting backend or buffer.
+    auto *tab = new QTabWidget(this);
     const QString titles[] = {
-        QStringLiteral("IMU Plots"),
-        QStringLiteral("Depth Plots"),
-        QStringLiteral("Actuator Plots"),
+        QStringLiteral("IMU"),
+        QStringLiteral("Depth"),
+        QStringLiteral("Actuator"),
     };
     for (const QString &title : titles) {
-        auto *placeholder = new QGroupBox(title, this);
+        auto *placeholder = new QGroupBox(
+            QStringLiteral("%1 Plots").arg(title), this);
         applyCardStyle(placeholder);
         auto *inner = new QVBoxLayout(placeholder);
         auto *label = new QLabel(QStringLiteral("Plot placeholder — no data buffer"), placeholder);
         label->setAlignment(Qt::AlignCenter);
         label->setStyleSheet(QStringLiteral("color: #90a4ae;"));
         inner->addWidget(label);
-        layout->addWidget(placeholder, 1);
+        tab->addTab(placeholder, title);
     }
     return tab;
 }
@@ -686,30 +674,32 @@ QWidget *MainWindow::createProtocolDetailsTab()
     form->addRow(QStringLiteral("TX Hex"), txHex_);
     form->addRow(QStringLiteral("RX Hex"), rxHex_);
     layout->addLayout(form);
+    ackStatus_ = new QLabel(QStringLiteral("Idle"), tab);
     layout->addWidget(new QLabel(QStringLiteral("ACK status"), tab));
     layout->addWidget(ackStatus_);
     layout->addStretch();
     return tab;
 }
 
-QTabWidget *MainWindow::createRightTabs()
+QTabWidget *MainWindow::createLogDetailsTabs()
 {
     auto *tabs = new QTabWidget(this);
-    tabs->addTab(createDataPlotsTab(), QStringLiteral("Data Plots"));
     tabs->addTab(createLogTab(), QStringLiteral("Log"));
     tabs->addTab(createProtocolDetailsTab(), QStringLiteral("Protocol Details"));
     return tabs;
 }
 
-QWidget *MainWindow::createBottom()
+QWidget *MainWindow::createLowerDashboard()
 {
-    auto *bottom = new QWidget(this);
-    auto *layout = new QHBoxLayout(bottom);
+    // Motion + independent Data Plots + Log/Protocol Details side by side.
+    auto *lower = new QWidget(this);
+    auto *layout = new QHBoxLayout(lower);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(8);
-    layout->addWidget(createBottomLeft(), 2);
-    layout->addWidget(createRightTabs(), 3);
-    return bottom;
+    layout->addWidget(createMotionPanel());
+    layout->addWidget(createDataPlotsTab(), 1);
+    layout->addWidget(createLogDetailsTabs(), 1);
+    return lower;
 }
 
 void MainWindow::setLeakUiState(LeakState state)
