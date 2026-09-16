@@ -71,6 +71,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_library(rbp2_onboard_application STATIC application/src/onboard_application.cpp)
     target_link_libraries(rbp2_onboard_application PUBLIC rbp2_link_runtime rbp2_robot_codec)
     target_compile_features(rbp2_onboard_application PUBLIC cxx_std_17)
+
+    add_executable(robobeetle_pi_smoke tools/robobeetle_pi_smoke.cpp)
+    target_link_libraries(robobeetle_pi_smoke PRIVATE rbp2_onboard_application)
 endif()
 
 if(BUILD_TESTING)
