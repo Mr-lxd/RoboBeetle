@@ -46,6 +46,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     )
     target_link_libraries(rbp2_posix_serial_transport PUBLIC rbp2_transport)
     target_compile_features(rbp2_posix_serial_transport PUBLIC cxx_std_17)
+
+    add_library(rbp2_serial_session STATIC session/src/serial_session.cpp)
+    target_include_directories(rbp2_serial_session PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/session/include
+    )
+    target_link_libraries(rbp2_serial_session PUBLIC rbp2_link_core rbp2_posix_serial_transport)
+    target_compile_features(rbp2_serial_session PUBLIC cxx_std_17)
 endif()
 
 if(BUILD_TESTING)
@@ -74,5 +81,9 @@ if(BUILD_TESTING)
         )
         target_link_libraries(rbp2_posix_serial_transport_tests PRIVATE rbp2_posix_serial_transport)
         add_test(NAME rbp2_posix_serial_transport_tests COMMAND rbp2_posix_serial_transport_tests)
+
+        add_executable(rbp2_serial_session_tests tests/serial_session_tests.cpp)
+        target_link_libraries(rbp2_serial_session_tests PRIVATE rbp2_serial_session)
+        add_test(NAME rbp2_serial_session_tests COMMAND rbp2_serial_session_tests)
     endif()
 endif()
