@@ -91,14 +91,74 @@ one actuator-facing target application occurs. That remains a stutter
 hypothesis and is not changed into a scheduler or catch-up-write fix by this
 report.
 
-## Scope and next gate
+## Historical investigation scope and next gate
 
-This closeout changes evidence documentation only. It does not implement the
-USART1 non-blocking TX design or fix the stutter. In particular, it does not
-change UART mode/baud, queue policy, foreground ordering, Motion scheduling,
-CPG mathematics, Servo calibration, PWM/Clock configuration, Safety behavior,
-or sensor behavior.
+The preceding investigation closeout changed evidence documentation only. It
+did not implement the USART1 non-blocking TX design or fix the stutter, and it
+did not change UART mode/baud, queue policy, foreground ordering, Motion
+scheduling, CPG mathematics, Servo calibration, PWM/Clock configuration,
+Safety behavior, or sensor behavior. The dedicated USART1 feature was
+subsequently implemented on its own branch; its supplied target acceptance is
+recorded below.
 
-The next phase is blocked on External Review and merge of the dedicated
-diagnostics/evidence PR. Only after the resulting new `main` SHA is supplied
-may the independent `codex/usart1-nonblocking-tx` design phase begin.
+## USART1 non-blocking TX target short-trial acceptance (user-supplied)
+
+The target results below were supplied from frozen normal STOP reports for the
+USART1 non-blocking TX implementation at head
+`3ffa19f36cd13e49064968a8c8db4b84db27d806`. Both trials used
+`SystemCoreClock = 168 MHz`. They are short-trial evidence for the named
+NORMAL runtime backends, not a claim that every possible workload has zero
+jitter or that the complete physical stutter cause has been proven.
+
+### NORMAL / CPG
+
+| Item | Supplied result |
+| --- | --- |
+| Runtime backend / report state | `CPG` / frozen normal STOP report |
+| Worst Motion interval | `1,710,195 cycles` approximately `10.18 ms` |
+| Gaps strictly `>12 ms`, `>15 ms`, `>20 ms`, `>30 ms` | `0`, `0`, `0`, `0` |
+| UART transport | ACK/Leak/IMU/Depth `enqueued == completed`; rejected `0`; dropped `0`; queue full `0`; start busy/error `0`; UART error `0`; unexpected callback `0` |
+| Foreground enqueue maxima | ACK approximately `17.6 us`; IMU approximately `10.5 us` |
+
+### NORMAL / SimpleGait
+
+| Item | Supplied result |
+| --- | --- |
+| Runtime backend / report state | `SimpleGait` / frozen normal STOP report |
+| Worst Motion interval | `1,686,244 cycles` approximately `10.04 ms` |
+| Gaps strictly `>12 ms`, `>15 ms`, `>20 ms`, `>30 ms` | `0`, `0`, `0`, `0` |
+| ACK | `45 enqueued / 45 completed` |
+| Leak | `22 enqueued / 22 completed` |
+| IMU | `11 enqueued / 11 completed` |
+| Depth | `11 enqueued / 11 completed` |
+| Transport/recovery counters | rejected `0`; dropped `0`; control queue full `0`; telemetry queue full `0`; start busy `0`; start error `0`; UART error `0`; unexpected callback `0`; busy recovery `0`; RX error `0` |
+| Queue high-water mark | `2` |
+| Worst-gap context | Contains no TX calls |
+
+### Approved before/after comparison
+
+| Trial | Before non-blocking TX | After non-blocking TX |
+| --- | --- | --- |
+| NORMAL / CPG | Worst approximately `96 ms`; `>30 ms = 39` | Worst approximately `10.18 ms`; `>30 ms = 0` |
+| NORMAL / SimpleGait | Worst approximately `97 ms`; `>30 ms = 43` | Worst approximately `10.04 ms`; `>30 ms = 0` |
+
+The supplied desktop mechanical observation is recorded narrowly as:
+**visibly/audibly significantly smoother on the desktop bench**. It is not
+water evidence, electrical evidence, PWM waveform evidence, or complete
+physical-root-cause proof. The measured result also does not claim ideal
+10.5x clock scaling or that the actual Servo stutter is fixed.
+
+### Status and preserved evidence boundaries
+
+| Item | Status |
+| --- | --- |
+| USART1 non-blocking TX remediation | **IMPLEMENTED / HOST-TESTED / ARM-BUILT / TARGET SHORT-TRIAL VERIFIED** |
+| Communication-induced `>30 ms` Motion gaps | **Removed in the supplied NORMAL CPG and SimpleGait short trials** |
+| Oscilloscope/logic-analyzer PWM evidence | **Pending** |
+| Independent physical HAL tick verification | **Pending** |
+| Electrical/mechanical exclusion | **Pending** |
+| Water behavior | **Pending** |
+
+`ARM-BUILT` and the target measurements in this section are user-supplied
+target acceptance evidence. The pending physical evidence categories remain
+independent and are not upgraded by the short trials.
