@@ -120,16 +120,18 @@ std::vector<LinkEvent> LinkCore::receive(const Bytes &bytes, TimeMs now_ms)
     return events;
 }
 
-std::optional<std::uint16_t> LinkCore::submit_request(Byte request_type,
-                                                      const Bytes &payload,
-                                                      TimeMs now_ms)
+SubmitResult LinkCore::submit_request(Byte request_type,
+                                      const Bytes &payload,
+                                      TimeMs now_ms)
 {
     if (!started_) {
         start(now_ms);
     }
-    if (state_ != LinkState::Active ||
-        payload.size() > Codec::MaxPayloadSize) {
-        return std::nullopt;
+    if (payload.size() > Codec::MaxPayloadSize) {
+        return {SubmitStatus::PayloadTooLarge, std::nullopt};
+    }
+    if (state_ != LinkState::Active) {
+        return {SubmitStatus::NotActive, std::nullopt};
     }
 
     QueuedOrdinary request;
@@ -138,24 +140,24 @@ std::optional<std::uint16_t> LinkCore::submit_request(Byte request_type,
     request.frame.payload = payload;
     request.wire = Codec::encodeWire(request.frame);
     if (request.wire.empty()) {
-        return std::nullopt;
+        return {SubmitStatus::PayloadTooLarge, std::nullopt};
     }
 
     if (pending_ordinary_.has_value()) {
         if (ordinary_queue_.size() >= config_.ordinary_queue_capacity) {
-            return std::nullopt;
+            return {SubmitStatus::QueueFull, std::nullopt};
         }
         const auto sequence = request.frame.sequence;
         ordinary_queue_.push_back(std::move(request));
-        return sequence;
+        return {SubmitStatus::Accepted, sequence};
     }
 
-    std::vector<LinkEvent> ignored_events;
+    std::vector<LinkEvent> dispatch_events;
     const auto sequence = request.frame.sequence;
-    if (!dispatch_ordinary(std::move(request), now_ms, ignored_events)) {
-        return std::nullopt;
+    if (!dispatch_ordinary(std::move(request), now_ms, dispatch_events)) {
+        return {SubmitStatus::TransportRejected, std::nullopt};
     }
-    return sequence;
+    return {SubmitStatus::Accepted, sequence};
 }
 
 std::uint16_t LinkCore::allocate_sequence()
@@ -449,7 +451,7 @@ void LinkCore::complete_ordinary(const Frame &ack,
     event.outcome.result = result;
     events.push_back(event);
 
-    if (!ordinary_queue_.empty() && state_ != LinkState::Lost) {
+    if (!ordinary_queue_.empty() && state_ == LinkState::Active) {
         QueuedOrdinary next = std::move(ordinary_queue_.front());
         ordinary_queue_.pop_front();
         dispatch_ordinary(std::move(next), now_ms, events);
@@ -532,6 +534,7 @@ void LinkCore::set_state(LinkState state, std::vector<LinkEvent> &events)
     }
     if (state == LinkState::Degraded) {
         recovery_required_ = true;
+        cancel_ordinary_queue(events);
     } else if (state == LinkState::Active) {
         recovery_required_ = false;
     }

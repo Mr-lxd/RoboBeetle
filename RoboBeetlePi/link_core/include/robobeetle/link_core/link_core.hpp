@@ -37,9 +37,10 @@ public:
 
     // Queues an ordinary ACKed request. At most one ordinary request is
     // transmitted at a time; later requests use the bounded FIFO.
-    // Returns the allocated request sequence when the request is accepted
-    // for immediate dispatch or bounded FIFO queueing.
-    std::optional<std::uint16_t> submit_request(
+    // Returns a deterministic rejection reason or the allocated request
+    // sequence when the request is accepted for immediate dispatch or
+    // bounded FIFO queueing.
+    SubmitResult submit_request(
         protocol::Byte request_type,
         const protocol::Bytes &payload,
         TimeMs now_ms);

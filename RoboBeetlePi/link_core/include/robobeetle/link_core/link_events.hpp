@@ -4,6 +4,7 @@
 #include "robobeetle/protocol/protocol_error.hpp"
 
 #include <cstdint>
+#include <optional>
 
 namespace robobeetle::link_core {
 
@@ -44,6 +45,19 @@ enum class OutcomeKind {
     Rejected,
     OutcomeUnknown,
     Cancelled,
+};
+
+enum class SubmitStatus {
+    Accepted,
+    NotActive,
+    PayloadTooLarge,
+    QueueFull,
+    TransportRejected,
+};
+
+struct SubmitResult {
+    SubmitStatus status{SubmitStatus::NotActive};
+    std::optional<std::uint16_t> sequence;
 };
 
 struct CommandOutcome {

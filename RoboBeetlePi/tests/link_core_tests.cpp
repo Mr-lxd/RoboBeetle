@@ -23,6 +23,8 @@ using robobeetle::link_core::LinkEvent;
 using robobeetle::link_core::LinkEventType;
 using robobeetle::link_core::LinkState;
 using robobeetle::link_core::OutcomeKind;
+using robobeetle::link_core::SubmitResult;
+using robobeetle::link_core::SubmitStatus;
 using robobeetle::link_core::TimeMs;
 using robobeetle::protocol::Byte;
 using robobeetle::protocol::Bytes;
@@ -60,6 +62,12 @@ bool has_event(const std::vector<LinkEvent> &events, LinkEventType type)
                        [type](const LinkEvent &event) {
                            return event.type == type;
                        });
+}
+
+bool accepted(const SubmitResult &result)
+{
+    return result.status == SubmitStatus::Accepted &&
+           result.sequence.has_value();
 }
 
 bool activate_link(LinkCore &link,
@@ -189,11 +197,11 @@ void test_ack_correlation_and_results()
 
     const auto request_identity = link.submit_request(
         0x10U, bytes({0x01U, 0U}), 2U);
-    expect(request_identity.has_value(),
+    expect(accepted(request_identity),
            "ordinary request must be accepted for dispatch");
     const Frame request = decode_write(transport, 1U);
-    if (request_identity.has_value()) {
-        expect(request_identity.value() == request.sequence,
+    if (accepted(request_identity)) {
+        expect(request_identity.sequence.value() == request.sequence,
                "returned request identity must equal the wire sequence");
     }
 
@@ -244,16 +252,16 @@ void test_timeout_and_stale_ack()
 
     const auto request_identity = link.submit_request(
         0x12U, bytes({0x01U}), 2U);
-    expect(request_identity.has_value(),
+    expect(accepted(request_identity),
            "ordinary request must start the timeout test");
     const Frame request = decode_write(transport, 1U);
     const auto queued_identity_b = link.submit_request(
         0x13U, bytes({0x02U}), 2U);
-    expect(queued_identity_b.has_value(),
+    expect(accepted(queued_identity_b),
            "second ordinary request must be queued");
     const auto queued_identity_c = link.submit_request(
         0x14U, bytes({0x03U}), 2U);
-    expect(queued_identity_c.has_value(),
+    expect(accepted(queued_identity_c),
            "third ordinary request must be queued");
     expect(link.queued_ordinary_count() == 2U,
            "ordinary queue must retain bounded unsent work");
@@ -295,7 +303,7 @@ void test_receive_stream_and_telemetry()
            "receive stream test requires an active LinkCore");
     const auto request_identity = link.submit_request(
         0x10U, bytes({0x01U, 0U}), 2U);
-    expect(request_identity.has_value(),
+    expect(accepted(request_identity),
            "receive stream test must create an ordinary request");
     const Frame request = decode_write(transport, 1U);
     const Bytes ack = ack_wire(request.sequence, request.message_type);
@@ -318,7 +326,7 @@ void test_receive_stream_and_telemetry()
            "malformed recovery test requires an active LinkCore");
     const auto malformed_identity = malformed_link.submit_request(
         0x10U, bytes({0x01U, 0U}), 2U);
-    expect(malformed_identity.has_value(),
+    expect(accepted(malformed_identity),
            "malformed recovery test must create an ordinary request");
     const Frame malformed_request = decode_write(malformed_transport, 1U);
     Bytes bad = ack_wire(malformed_request.sequence,
@@ -340,7 +348,7 @@ void test_receive_stream_and_telemetry()
            "unknown-type test requires an active LinkCore");
     const auto unknown_identity = unknown_link.submit_request(
         0x10U, bytes({0x01U, 0U}), 2U);
-    expect(unknown_identity.has_value(),
+    expect(accepted(unknown_identity),
            "unknown-type test must create an ordinary request");
     const Frame unknown_request = decode_write(unknown_transport, 1U);
     const Bytes unknown = frame_wire({0x7FU, 99U, bytes({0xAAU})});
@@ -374,7 +382,7 @@ void test_state_and_heartbeat_independence()
 
     const auto ordinary_identity = link.submit_request(
         0x10U, bytes({0x01U, 0U}), 2U);
-    expect(ordinary_identity.has_value(),
+    expect(accepted(ordinary_identity),
            "ordinary timeout must be independent of Heartbeat lane");
     const auto ordinary = decode_write(transport, 1U);
     const auto degraded_events = link.poll(22U);
@@ -431,8 +439,8 @@ void test_transport_write_failure_terminates_queue()
     const auto identity_a = link.submit_request(0x20U, bytes({0x01U}), 2U);
     const auto identity_b = link.submit_request(0x21U, bytes({0x02U}), 2U);
     const auto identity_c = link.submit_request(0x22U, bytes({0x03U}), 2U);
-    expect(identity_a.has_value() && identity_b.has_value() &&
-               identity_c.has_value(),
+    expect(accepted(identity_a) && accepted(identity_b) &&
+               accepted(identity_c),
            "A, B, and C must be accepted before the transport failure");
     const Frame request_a = decode_write(transport, 1U);
 
@@ -446,13 +454,15 @@ void test_transport_write_failure_terminates_queue()
     expect(failed != nullptr,
            "transport refusal must be observable as a write failure");
     expect(cancelled_b != nullptr &&
-               cancelled_b->outcome.sequence == identity_b.value_or(0xFFFFU) &&
+               cancelled_b->outcome.sequence ==
+                   identity_b.sequence.value_or(0xFFFFU) &&
                cancelled_b->outcome.kind == OutcomeKind::Cancelled,
            "queued request B must receive an explicit terminal cancellation");
     const bool cancelled_c = std::any_of(
         events.begin(), events.end(), [&](const LinkEvent &event) {
             return event.type == LinkEventType::RequestCancelled &&
-                   event.outcome.sequence == identity_c.value_or(0xFFFFU);
+                   event.outcome.sequence ==
+                       identity_c.sequence.value_or(0xFFFFU);
         });
     expect(cancelled_c,
            "remaining queued request C must receive a terminal cancellation");
@@ -486,7 +496,7 @@ void test_degraded_recovery_barrier()
     const Frame h1 = decode_write(transport, 1U);
     const auto ordinary_identity = link.submit_request(
         0x23U, bytes({0x01U}), 11U);
-    expect(ordinary_identity.has_value(),
+    expect(accepted(ordinary_identity),
            "ordinary request must be accepted while Active");
     const auto timeout_events = link.poll(31U);
     expect(has_event(timeout_events, LinkEventType::RequestOutcomeUnknown) &&
@@ -519,14 +529,16 @@ void test_submission_state_gate_and_restart()
     LinkCore link(transport, config);
     const auto unconfirmed_identity = link.submit_request(
         0x30U, bytes({0x01U}), 0U);
-    expect(!unconfirmed_identity.has_value() && transport.writes().empty(),
+    expect(unconfirmed_identity.status == SubmitStatus::NotActive &&
+               !unconfirmed_identity.sequence.has_value() &&
+               transport.writes().empty(),
            "ordinary requests must not transmit while Unconfirmed");
     expect(activate_link(link, transport),
            "state-gate test requires Heartbeat confirmation");
 
     const auto active_identity = link.submit_request(
         0x31U, bytes({0x02U}), 2U);
-    expect(active_identity.has_value() && transport.writes().size() == 2U,
+    expect(accepted(active_identity) && transport.writes().size() == 2U,
            "ordinary requests must transmit while Active");
     expect(!link.start(3U) && link.ordinary_request_in_flight(),
            "restart while Active must be rejected without discarding work");
@@ -537,7 +549,8 @@ void test_submission_state_gate_and_restart()
     const std::size_t writes_before_degraded_submit = transport.writes().size();
     const auto degraded_identity = link.submit_request(
         0x32U, bytes({0x03U}), 23U);
-    expect(!degraded_identity.has_value() &&
+    expect(degraded_identity.status == SubmitStatus::NotActive &&
+               !degraded_identity.sequence.has_value() &&
                transport.writes().size() == writes_before_degraded_submit,
            "ordinary requests must not transmit while Degraded");
 }
@@ -565,6 +578,123 @@ void test_live_heartbeat_correlations_not_evicted()
            "a live Heartbeat ACK must remain correlatable past history capacity");
 }
 
+void test_degraded_cancels_queued_work()
+{
+    FakeTransport transport;
+    LinkCoreConfig config = quiet_config();
+    config.heartbeat_interval_ms = 10U;
+    config.ack_timeout_ms = 100U;
+    config.liveness_timeout_ms = 1000U;
+    config.ordinary_queue_capacity = 2U;
+    LinkCore link(transport, config);
+    expect(activate_link(link, transport),
+           "Degraded FIFO test requires an active LinkCore");
+
+    const auto identity_a = link.submit_request(0x40U, bytes({0x01U}), 2U);
+    const auto identity_b = link.submit_request(0x41U, bytes({0x02U}), 2U);
+    const auto identity_c = link.submit_request(0x42U, bytes({0x03U}), 2U);
+    expect(accepted(identity_a) && accepted(identity_b) &&
+               accepted(identity_c),
+           "A, B, and C must be accepted before Degraded transition");
+    const Frame request_a = decode_write(transport, 1U);
+
+    const auto h1_events = link.poll(10U);
+    expect(has_event(h1_events, LinkEventType::HeartbeatDispatched),
+           "H1 must be dispatched while the link is Active");
+    const Frame h1 = decode_write(transport, 2U);
+    const auto rejected_h1 = link.receive(
+        ack_wire(h1.sequence, h1.message_type, 1U), 11U);
+    expect(link.state() == LinkState::Degraded,
+           "non-OK Heartbeat ACK must enter Degraded");
+    expect(std::count_if(rejected_h1.begin(), rejected_h1.end(),
+                         [](const LinkEvent &event) {
+                             return event.type == LinkEventType::RequestCancelled;
+                         }) == 2,
+           "entering Degraded must cancel all unsent ordinary work");
+    expect(link.queued_ordinary_count() == 0U &&
+               transport.writes().size() == 3U,
+           "Degraded transition must leave no queued work to transmit");
+
+    const auto completed_a = link.receive(
+        ack_wire(request_a.sequence, request_a.message_type, 0U, 0x9001U),
+        12U);
+    const LinkEvent *a_outcome = find_event(
+        completed_a, LinkEventType::RequestAccepted);
+    expect(a_outcome != nullptr &&
+               a_outcome->outcome.sequence == identity_a.sequence.value_or(
+                   0xFFFFU),
+           "in-flight A must receive only its own terminal outcome");
+    expect(transport.writes().size() == 3U &&
+               link.state() == LinkState::Degraded,
+           "A completion must not dispatch B while Degraded");
+
+    const auto h2_events = link.poll(20U);
+    expect(has_event(h2_events, LinkEventType::HeartbeatDispatched),
+           "Degraded link must dispatch a fresh recovery Heartbeat");
+    const Frame h2 = decode_write(transport, 3U);
+    const auto h2_ack = link.receive(
+        ack_wire(h2.sequence, h2.message_type), 21U);
+    expect(has_event(h2_ack, LinkEventType::RequestAccepted) &&
+               link.state() == LinkState::Active,
+           "post-Degraded Heartbeat ACK must restore Active");
+
+    const auto identity_d = link.submit_request(0x43U, bytes({0x04U}), 22U);
+    expect(accepted(identity_d) && transport.writes().size() == 5U,
+           "only newly submitted work after recovery may transmit");
+    (void)identity_b;
+    (void)identity_c;
+}
+
+void test_submit_rejection_statuses()
+{
+    FakeTransport transport;
+    LinkCoreConfig config = quiet_config();
+    config.ordinary_queue_capacity = 1U;
+    LinkCore link(transport, config);
+    const auto not_active = link.submit_request(
+        0x50U, bytes({0x01U}), 0U);
+    expect(not_active.status == SubmitStatus::NotActive &&
+               !not_active.sequence.has_value() && transport.writes().empty(),
+           "ordinary submit while Unconfirmed must report NotActive");
+    expect(activate_link(link, transport),
+           "submission status test requires an active LinkCore");
+
+    const Bytes oversized(Codec::MaxPayloadSize + 1U, 0U);
+    const std::size_t writes_before_oversized = transport.writes().size();
+    const auto payload_too_large = link.submit_request(
+        0x51U, oversized, 2U);
+    expect(payload_too_large.status == SubmitStatus::PayloadTooLarge &&
+               !payload_too_large.sequence.has_value() &&
+               transport.writes().size() == writes_before_oversized,
+           "oversized payload must report PayloadTooLarge without transmission");
+
+    const auto identity_a = link.submit_request(0x52U, bytes({0x02U}), 2U);
+    const auto identity_b = link.submit_request(0x53U, bytes({0x03U}), 2U);
+    const std::size_t writes_before_full = transport.writes().size();
+    const auto queue_full = link.submit_request(0x54U, bytes({0x04U}), 2U);
+    expect(accepted(identity_a) && accepted(identity_b) &&
+               queue_full.status == SubmitStatus::QueueFull &&
+               !queue_full.sequence.has_value() &&
+               transport.writes().size() == writes_before_full,
+           "full ordinary FIFO must report QueueFull without transmission");
+
+    FakeTransport rejected_transport;
+    LinkCore rejected_link(rejected_transport, config);
+    expect(activate_link(rejected_link, rejected_transport),
+           "transport rejection status test requires an active LinkCore");
+    rejected_transport.set_write_succeeds(false);
+    const std::size_t writes_before_rejection =
+        rejected_transport.writes().size();
+    const auto transport_rejected = rejected_link.submit_request(
+        0x55U, bytes({0x05U}), 2U);
+    expect(transport_rejected.status == SubmitStatus::TransportRejected &&
+               !transport_rejected.sequence.has_value() &&
+               rejected_transport.writes().size() == writes_before_rejection &&
+               rejected_link.state() == LinkState::Degraded &&
+               !rejected_link.ordinary_request_in_flight(),
+           "immediate transport refusal must be diagnosable and Degraded");
+}
+
 } // namespace
 
 void test_link_core_contract()
@@ -579,6 +709,8 @@ void test_link_core_contract()
     test_degraded_recovery_barrier();
     test_submission_state_gate_and_restart();
     test_live_heartbeat_correlations_not_evicted();
+    test_degraded_cancels_queued_work();
+    test_submit_rejection_statuses();
 }
 
 } // namespace rbp2_test
