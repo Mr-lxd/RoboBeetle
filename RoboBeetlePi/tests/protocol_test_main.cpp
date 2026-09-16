@@ -11,6 +11,7 @@ void test_cobs_round_trip_and_edges();
 void test_codec_boundaries_and_unknown_type();
 void test_stream_decoder_contract();
 void test_link_core_contract();
+void test_frame_tx_queue_contract();
 int failures = 0;
 } // namespace rbp2_test
 
@@ -23,6 +24,7 @@ int main()
     rbp2_test::test_codec_boundaries_and_unknown_type();
     rbp2_test::test_stream_decoder_contract();
     rbp2_test::test_link_core_contract();
+    rbp2_test::test_frame_tx_queue_contract();
 
     if (rbp2_test::failures == 0) {
         std::cout << "All Raspberry Pi Protocol V2 tests passed\n";

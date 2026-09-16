@@ -30,6 +30,15 @@ target_include_directories(rbp2_link_core PUBLIC
 target_compile_features(rbp2_link_core PUBLIC cxx_std_17)
 target_link_libraries(rbp2_link_core PUBLIC rbp2_protocol)
 
+add_library(rbp2_transport STATIC
+    transport/src/frame_tx_queue.cpp
+)
+target_include_directories(rbp2_transport PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/transport/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/protocol/include
+)
+target_compile_features(rbp2_transport PUBLIC cxx_std_17)
+
 if(BUILD_TESTING)
     add_executable(rbp2_protocol_tests
         tests/protocol_test_main.cpp
@@ -39,6 +48,7 @@ if(BUILD_TESTING)
         tests/codec_tests.cpp
         tests/stream_decoder_tests.cpp
         tests/link_core_tests.cpp
+        tests/frame_tx_queue_tests.cpp
     )
     target_include_directories(rbp2_protocol_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/protocol/include
@@ -46,6 +56,6 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/transport/include
         ${CMAKE_CURRENT_SOURCE_DIR}/tests
     )
-    target_link_libraries(rbp2_protocol_tests PRIVATE rbp2_protocol rbp2_link_core)
+    target_link_libraries(rbp2_protocol_tests PRIVATE rbp2_protocol rbp2_link_core rbp2_transport)
     add_test(NAME rbp2_protocol_tests COMMAND rbp2_protocol_tests)
 endif()
