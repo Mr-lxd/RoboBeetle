@@ -20,6 +20,7 @@ static unsigned int tim_stop_call_count;
 static uint8_t tx_wires[TEST_MAX_TX_FRAMES][RBP2_MAX_WIRE_SIZE];
 static uint16_t tx_lengths[TEST_MAX_TX_FRAMES];
 static size_t tx_frame_count;
+static unsigned int blocking_tx_call_count;
 
 static void expect(bool condition, const char *message)
 {
@@ -47,6 +48,26 @@ HAL_StatusTypeDef HAL_UART_Receive_IT(
     return HAL_OK;
 }
 
+HAL_StatusTypeDef HAL_UART_Transmit_IT(
+    UART_HandleTypeDef *huart,
+    const uint8_t *data,
+    uint16_t size)
+{
+    if ((huart == NULL) ||
+        (huart->Instance != USART1) ||
+        (data == NULL) ||
+        (size > RBP2_MAX_WIRE_SIZE) ||
+        (tx_frame_count >= TEST_MAX_TX_FRAMES))
+    {
+        return HAL_ERROR;
+    }
+    memcpy(tx_wires[tx_frame_count], data, size);
+    tx_lengths[tx_frame_count] = size;
+    ++tx_frame_count;
+    huart->gState = HAL_UART_STATE_BUSY_TX;
+    return HAL_OK;
+}
+
 HAL_StatusTypeDef HAL_UART_Transmit(
     UART_HandleTypeDef *huart,
     const uint8_t *data,
@@ -55,6 +76,7 @@ HAL_StatusTypeDef HAL_UART_Transmit(
 {
     (void)huart;
     (void)timeout;
+    ++blocking_tx_call_count;
     if ((data == NULL) ||
         (size > RBP2_MAX_WIRE_SIZE) ||
         (tx_frame_count >= TEST_MAX_TX_FRAMES))
@@ -65,6 +87,32 @@ HAL_StatusTypeDef HAL_UART_Transmit(
     tx_lengths[tx_frame_count] = size;
     ++tx_frame_count;
     return HAL_OK;
+}
+
+HAL_StatusTypeDef HAL_UART_AbortTransmit_IT(
+    UART_HandleTypeDef *huart)
+{
+    if (huart != NULL)
+    {
+        huart->gState = HAL_UART_STATE_READY;
+    }
+    return HAL_OK;
+}
+
+HAL_UART_StateTypeDef HAL_UART_GetState(
+    const UART_HandleTypeDef *huart)
+{
+    if (huart == NULL)
+    {
+        return HAL_UART_STATE_RESET;
+    }
+    return (HAL_UART_StateTypeDef)(huart->gState | huart->RxState);
+}
+
+uint32_t HAL_UART_GetError(
+    const UART_HandleTypeDef *huart)
+{
+    return huart == NULL ? HAL_UART_ERROR_NONE : huart->ErrorCode;
 }
 
 uint32_t HAL_GetTick(void)
@@ -143,6 +191,11 @@ static void inject_heartbeat(
         payload,
         sizeof payload);
     app_main_process();
+    while (uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_ACTIVE)
+    {
+        host_uart->gState = HAL_UART_STATE_READY;
+        uart_transport_stm32_on_tx_complete(host_uart);
+    }
 }
 
 static void send_servo_enable(
@@ -161,6 +214,11 @@ static void send_servo_enable(
         payload,
         sizeof payload);
     app_main_process();
+    while (uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_ACTIVE)
+    {
+        host_uart->gState = HAL_UART_STATE_READY;
+        uart_transport_stm32_on_tx_complete(host_uart);
+    }
 }
 
 static void send_gait_backend(
@@ -175,6 +233,11 @@ static void send_gait_backend(
         &backend,
         1U);
     app_main_process();
+    while (uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_ACTIVE)
+    {
+        host_uart->gState = HAL_UART_STATE_READY;
+        uart_transport_stm32_on_tx_complete(host_uart);
+    }
 }
 
 static bool ack_matches(
@@ -235,6 +298,8 @@ int main(void)
            "this test must compile with reduced diagnostics active");
     expect(tx_frame_count == 1U,
            "reduced diagnostics must preserve Heartbeat ACK and suppress optional telemetry");
+    expect(blocking_tx_call_count == 0U,
+           "reduced diagnostics must not use blocking TX");
     expect(ack_matches(
                0U,
                1U,
@@ -252,6 +317,11 @@ int main(void)
 
     test_tick = SAFETY_SUPERVISOR_HEARTBEAT_TIMEOUT_MS + 1U;
     app_main_process();
+    while (uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_ACTIVE)
+    {
+        uart1.gState = HAL_UART_STATE_READY;
+        uart_transport_stm32_on_tx_complete(&uart1);
+    }
     expect(tim_stop_call_count > 0U,
            "reduced diagnostics must preserve host-liveness actuator fail-safe");
 

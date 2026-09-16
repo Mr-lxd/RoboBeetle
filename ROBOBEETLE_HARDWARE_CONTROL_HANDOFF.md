@@ -694,7 +694,7 @@ USART1_IRQHandler
 - 环形数组 128 字节，保留一个空槽区分满/空，实际可用 127 字节。
 - 满时静默丢弃新字节，无 overflow 计数；RX 重挂返回值也未检查。
 - ISR 只推入字节并重挂接收；解析、ACK、PWM 均在 main loop。
-- ACK 使用 `HAL_UART_Transmit(..., 100 ms)`，是 main-loop 阻塞发送，不在 ISR 中。
+- ACK/telemetry frame 先复制到固定 owned TX queue，再由 USART1 `HAL_UART_Transmit_IT()` 与 HAL completion callback 非阻塞发送；enqueue acceptance 与 physical completion 分开，不在 main loop 等待 9600 baud 串行化。
 - 有效 Heartbeat 更新本地 `last_heartbeat_rx_ms` 并设置 `host_alive`。
 - 超过 500 ms 未收到有效 Heartbeat 时停止 Servo1 PWM、清空 enable mask；恢复后必须重新 Heartbeat + Enable。
 - 没有独立硬件看门狗、Emergency Stop、漏水安全响应、电池/过流输入或持久故障记录；Leak D0 按轮询方式更新内部状态，并通过 PR #9 的 `LeakStatus (0x20)` 做 monitoring-only 遥测。该遥测不触发 Servo/Safety 动作；PA11 → LeakStatus → Qt 端到端路径已 Hardware Verified。
@@ -1550,11 +1550,72 @@ because `305 us < 10000 us`. The measured nominal median cycle count rose
 slightly from `49153` at 16 MHz to `51371` at 168 MHz while wall time improved
 by approximately 10x. The frozen baseline has no catch-up cycle fields, so no
 catch-up cycle delta is reconstructed. The isolated 168 MHz CPG compute
-deadline is **[PASS]**, but this does not prove zero Motion jitter or solve
-blocking UART behavior. Servo stutter investigation remains separate.
+deadline is **[PASS]**, but this does not prove zero Motion jitter, zero Servo
+stutter, or physical PWM/HAL target behavior. Servo stutter investigation
+remains separate.
 
 The `ROBOBEETLE_CPG_TARGET_BENCHMARK=ON` image is temporary and is not the
 production image. Normal operation must be rebuilt with
 `ROBOBEETLE_CPG_TARGET_BENCHMARK=OFF`. This evidence update does not change
 production source, CPG mathematics, Servo calibration, or the normal build
 configuration.
+
+## 2026-09-16 USART1 non-blocking TX target short-trial acceptance (user-supplied)
+
+The following results were supplied from frozen normal STOP reports for the
+USART1 non-blocking TX implementation at head
+`3ffa19f36cd13e49064968a8c8db4b84db27d806`. Both trials reported
+`SystemCoreClock = 168 MHz`. They are short-trial timing and transport evidence
+for the named runtime backends; they do not establish zero jitter for all
+workloads or a complete physical root cause for Servo stutter.
+
+### NORMAL / CPG
+
+| Item | Supplied result |
+| --- | --- |
+| Runtime backend / report state | `CPG` / frozen normal STOP report |
+| Worst Motion interval | `1,710,195 cycles` approximately `10.18 ms` |
+| Gaps strictly `>12 ms`, `>15 ms`, `>20 ms`, `>30 ms` | `0`, `0`, `0`, `0` |
+| UART transport | ACK/Leak/IMU/Depth `enqueued == completed`; rejected `0`; dropped `0`; queue full `0`; start busy/error `0`; UART error `0`; unexpected callback `0` |
+| Foreground enqueue maxima | ACK approximately `17.6 us`; IMU approximately `10.5 us` |
+
+### NORMAL / SimpleGait
+
+| Item | Supplied result |
+| --- | --- |
+| Runtime backend / report state | `SimpleGait` / frozen normal STOP report |
+| Worst Motion interval | `1,686,244 cycles` approximately `10.04 ms` |
+| Gaps strictly `>12 ms`, `>15 ms`, `>20 ms`, `>30 ms` | `0`, `0`, `0`, `0` |
+| ACK | `45 enqueued / 45 completed` |
+| Leak | `22 enqueued / 22 completed` |
+| IMU | `11 enqueued / 11 completed` |
+| Depth | `11 enqueued / 11 completed` |
+| Transport/recovery counters | rejected `0`; dropped `0`; control queue full `0`; telemetry queue full `0`; start busy `0`; start error `0`; UART error `0`; unexpected callback `0`; busy recovery `0`; RX error `0` |
+| Queue high-water mark | `2` |
+| Worst-gap context | Contains no TX calls |
+
+### Approved before/after comparison
+
+| Trial | Before non-blocking TX | After non-blocking TX |
+| --- | --- | --- |
+| NORMAL / CPG | Worst approximately `96 ms`; `>30 ms = 39` | Worst approximately `10.18 ms`; `>30 ms = 0` |
+| NORMAL / SimpleGait | Worst approximately `97 ms`; `>30 ms = 43` | Worst approximately `10.04 ms`; `>30 ms = 0` |
+
+The supplied desktop mechanical observation is recorded narrowly as:
+**visibly/audibly significantly smoother on the desktop bench**. It is not
+water evidence, electrical evidence, PWM waveform evidence, or complete
+physical-root-cause proof. The supplied comparison does not claim ideal 10.5x
+scaling or that Servo stutter is fixed.
+
+| Status item | Current evidence status |
+| --- | --- |
+| USART1 non-blocking TX remediation | **IMPLEMENTED / HOST-TESTED / ARM-BUILT / TARGET SHORT-TRIAL VERIFIED** |
+| Communication-induced `>30 ms` Motion gaps | **Removed in the supplied NORMAL CPG and SimpleGait short trials** |
+| Oscilloscope/logic-analyzer PWM evidence | **Pending** |
+| Independent physical HAL tick verification | **Pending** |
+| Electrical/mechanical exclusion | **Pending** |
+| Water behavior | **Pending** |
+
+`ARM-BUILT` and the target measurements above are user-supplied target
+acceptance evidence. The pending physical evidence categories remain separate
+and are not upgraded by these short trials.

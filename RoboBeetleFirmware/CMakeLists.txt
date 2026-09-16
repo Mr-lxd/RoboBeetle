@@ -60,6 +60,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/App/app_main.c
     Core/Src/rb_protocol_v2.c
     Core/Communication/ring_buffer.c
+    Core/Communication/uart_tx_queue.c
     Core/Communication/uart_transport_stm32.c
     Core/Communication/jy901s_transport_stm32.c
     Core/Communication/depth_transport_stm32.c

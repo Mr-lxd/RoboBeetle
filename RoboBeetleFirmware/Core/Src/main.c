@@ -427,8 +427,19 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     depth_transport_stm32_on_rx_complete(huart);
 }
 
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    uart_transport_stm32_on_tx_complete(huart);
+}
+
+void HAL_UART_AbortTransmitCpltCallback(UART_HandleTypeDef *huart)
+{
+    uart_transport_stm32_on_abort_transmit_complete(huart);
+}
+
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
+    uart_transport_stm32_on_error(huart);
     jy901s_transport_stm32_on_error(huart);
     depth_transport_stm32_on_error(huart);
 }

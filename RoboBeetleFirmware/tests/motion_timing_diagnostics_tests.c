@@ -28,6 +28,8 @@ _Static_assert(sizeof(motion_timing_motion_report_t) == 456U,
                "Motion ABI size changed");
 _Static_assert(sizeof(motion_timing_gap_context_t) == 120U,
                "worst-gap context ABI size changed");
+_Static_assert(sizeof(motion_timing_uart_transport_report_t) == 132U,
+               "UART transport ABI size changed");
 _Static_assert(offsetof(motion_timing_report_t, magic) == 0U,
                "magic ABI offset changed");
 _Static_assert(offsetof(motion_timing_report_t, abi_version) == 4U,
@@ -72,7 +74,10 @@ _Static_assert(offsetof(motion_timing_report_t,
 _Static_assert(offsetof(motion_timing_report_t,
                         worst_gap_context) == 1180U,
                "worst-gap context ABI offset changed");
-_Static_assert(sizeof(motion_timing_report_t) == 1300U,
+_Static_assert(offsetof(motion_timing_report_t,
+                        uart_transport) == 1300U,
+               "UART transport ABI offset changed");
+_Static_assert(sizeof(motion_timing_report_t) == MOTION_TIMING_REPORT_SIZE,
                "report ABI size changed");
 
 static void test_wrap_delta(void)

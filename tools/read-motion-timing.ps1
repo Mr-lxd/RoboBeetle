@@ -130,7 +130,7 @@ if ($symbolMatches.Count -ne 1) {
 $reportAddress = [Convert]::ToUInt32(
     $symbolMatches[0].Groups[1].Value,
     16)
-$reportSize = 1300
+$reportSize = 1432
 $temporaryDump = $false
 
 if ([string]::IsNullOrWhiteSpace($RawReportPath)) {
@@ -176,7 +176,7 @@ try {
     }
 
     $abiVersion = Read-U32 $bytes 4
-    if ($abiVersion -ne 3) {
+    if ($abiVersion -ne 4) {
         Stop-WithError "report ABI version mismatch: $abiVersion"
     }
 
@@ -266,6 +266,40 @@ try {
         tx_cycles = $txContextCycles
     }
 
+    $uartNames = @('ack', 'leak', 'imu', 'depth')
+    $uartTransport = [ordered]@{
+        enqueued_count = @()
+        coalesced_count = @()
+        completed_count = @()
+        rejected_count = @()
+        dropped_count = @()
+    }
+    for ($index = 0; $index -lt 4; ++$index) {
+        $uartTransport.enqueued_count +=
+            Read-U32 $bytes (1300 + (4 * $index))
+        $uartTransport.coalesced_count +=
+            Read-U32 $bytes (1316 + (4 * $index))
+        $uartTransport.completed_count +=
+            Read-U32 $bytes (1332 + (4 * $index))
+        $uartTransport.rejected_count +=
+            Read-U32 $bytes (1348 + (4 * $index))
+        $uartTransport.dropped_count +=
+            Read-U32 $bytes (1364 + (4 * $index))
+    }
+    $uartTransport.control_queue_full_count = Read-U32 $bytes 1380
+    $uartTransport.telemetry_queue_full_count = Read-U32 $bytes 1384
+    $uartTransport.start_busy_count = Read-U32 $bytes 1388
+    $uartTransport.start_error_count = Read-U32 $bytes 1392
+    $uartTransport.uart_error_count = Read-U32 $bytes 1396
+    $uartTransport.unexpected_callback_count = Read-U32 $bytes 1400
+    $uartTransport.high_water_mark = Read-U32 $bytes 1404
+    $uartTransport.reinitialization_count = Read-U32 $bytes 1408
+    $uartTransport.busy_recovery_count = Read-U32 $bytes 1412
+    $uartTransport.rx_error_count = Read-U32 $bytes 1416
+    $uartTransport.rx_rearm_attempt_count = Read-U32 $bytes 1420
+    $uartTransport.rx_rearm_busy_count = Read-U32 $bytes 1424
+    $uartTransport.rx_rearm_error_count = Read-U32 $bytes 1428
+
     $branch = $BranchSha
     if ([string]::IsNullOrWhiteSpace($branch)) {
         try {
@@ -310,6 +344,7 @@ try {
         diagnostic_counter_wrap_count = Read-U32 $bytes 1164
         diagnostic_invalid_count = Read-U32 $bytes 1168
         worst_gap_context = $worstGapContext
+        uart_transport = $uartTransport
         raw_report_path = (Resolve-Path -LiteralPath $RawReportPath).Path
     }
 

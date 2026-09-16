@@ -22,6 +22,7 @@ static uint8_t *uart6_receive_destination = NULL;
 static uint8_t tx_wires[TEST_MAX_TX_FRAMES][RBP2_MAX_WIRE_SIZE];
 static uint16_t tx_lengths[TEST_MAX_TX_FRAMES];
 static size_t tx_frame_count = 0U;
+static unsigned int blocking_tx_call_count = 0U;
 
 static void expect(bool condition, const char *message)
 {
@@ -75,14 +76,11 @@ HAL_StatusTypeDef HAL_UART_Receive_IT(
     return HAL_OK;
 }
 
-HAL_StatusTypeDef HAL_UART_Transmit(
+HAL_StatusTypeDef HAL_UART_Transmit_IT(
     UART_HandleTypeDef *huart,
     const uint8_t *data,
-    uint16_t size,
-    uint32_t timeout)
+    uint16_t size)
 {
-    (void)timeout;
-
     if ((huart == NULL) ||
         (huart->Instance != USART1) ||
         (data == NULL) ||
@@ -95,7 +93,48 @@ HAL_StatusTypeDef HAL_UART_Transmit(
     memcpy(tx_wires[tx_frame_count], data, size);
     tx_lengths[tx_frame_count] = size;
     ++tx_frame_count;
+    huart->gState = HAL_UART_STATE_BUSY_TX;
     return HAL_OK;
+}
+
+HAL_StatusTypeDef HAL_UART_Transmit(
+    UART_HandleTypeDef *huart,
+    const uint8_t *data,
+    uint16_t size,
+    uint32_t timeout)
+{
+    (void)huart;
+    (void)data;
+    (void)size;
+    (void)timeout;
+    ++blocking_tx_call_count;
+    return HAL_ERROR;
+}
+
+HAL_StatusTypeDef HAL_UART_AbortTransmit_IT(
+    UART_HandleTypeDef *huart)
+{
+    if (huart != NULL)
+    {
+        huart->gState = HAL_UART_STATE_READY;
+    }
+    return HAL_OK;
+}
+
+HAL_UART_StateTypeDef HAL_UART_GetState(
+    const UART_HandleTypeDef *huart)
+{
+    if (huart == NULL)
+    {
+        return HAL_UART_STATE_RESET;
+    }
+    return (HAL_UART_StateTypeDef)(huart->gState | huart->RxState);
+}
+
+uint32_t HAL_UART_GetError(
+    const UART_HandleTypeDef *huart)
+{
+    return huart == NULL ? HAL_UART_ERROR_NONE : huart->ErrorCode;
 }
 
 uint32_t HAL_GetTick(void)
@@ -189,6 +228,11 @@ static void send_heartbeat(
     }
 
     app_main_process();
+    while (uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_ACTIVE)
+    {
+        host_uart->gState = HAL_UART_STATE_READY;
+        uart_transport_stm32_on_tx_complete(host_uart);
+    }
 }
 
 static void send_servo_enable(
@@ -215,6 +259,11 @@ static void send_servo_enable(
     }
 
     app_main_process();
+    while (uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_ACTIVE)
+    {
+        host_uart->gState = HAL_UART_STATE_READY;
+        uart_transport_stm32_on_tx_complete(host_uart);
+    }
 }
 
 static void send_servo_pwm(
@@ -247,6 +296,11 @@ static void send_servo_pwm(
     }
 
     app_main_process();
+    while (uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_ACTIVE)
+    {
+        host_uart->gState = HAL_UART_STATE_READY;
+        uart_transport_stm32_on_tx_complete(host_uart);
+    }
 }
 
 static bool decode_tx_frame(
@@ -334,11 +388,18 @@ int main(void)
 
     expect(tx_frame_count == 0U,
            "application initialization transmitted unexpectedly");
+    expect(blocking_tx_call_count == 0U,
+           "application initialization must not use blocking TX");
 
     inject_depth_line(
         &uart6,
         "Depth:4.32m Temp:18.75C\r\n");
     app_main_process();
+    while (uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_ACTIVE)
+    {
+        uart1.gState = HAL_UART_STATE_READY;
+        uart_transport_stm32_on_tx_complete(&uart1);
+    }
 
     send_heartbeat(&uart1, 1U);
     send_heartbeat(&uart1, 2U);
@@ -416,6 +477,11 @@ int main(void)
         &uart6,
         "Depth:5.67m Temp:19.25C\r\n");
     app_main_process();
+    while (uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_ACTIVE)
+    {
+        uart1.gState = HAL_UART_STATE_READY;
+        uart_transport_stm32_on_tx_complete(&uart1);
+    }
     send_heartbeat(&uart1, 7U);
     send_heartbeat(&uart1, 8U);
     send_heartbeat(&uart1, 9U);
