@@ -12,12 +12,15 @@ int main()
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <fcntl.h>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
+#include <utility>
 
 // The lifecycle tests substitute only the existing clock seam. The admission
 // backpressure test additionally suppresses writable readiness for one poll.
@@ -94,6 +97,26 @@ struct Pty {
         }
         return bytes;
     }
+    Bytes receive_expected(const Bytes &expected) const
+    {
+        Bytes bytes;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (bytes.size() < expected.size() && std::chrono::steady_clock::now() < deadline) {
+            pollfd ready{master, POLLIN, 0};
+            const int result = ::poll(&ready, 1, 10);
+            if (result < 0 && errno == EINTR) { continue; }
+            if (result < 0 || (ready.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+                throw std::runtime_error("PTY output poll failed");
+            }
+            if (result == 0) { continue; }
+            const auto available = receive();
+            bytes.insert(bytes.end(), available.begin(), available.end());
+        }
+        if (bytes.size() < expected.size()) {
+            throw std::runtime_error("timed out waiting for complete PTY output");
+        }
+        return bytes;
+    }
 };
 
 Bytes ack(std::uint16_t sequence, std::uint8_t type, std::uint8_t result = 0)
@@ -130,6 +153,37 @@ struct Fixture {
         runtime::detail::LinkRuntimeTestAccess::clock(
             application::detail::OnboardApplicationTestAccess::runtime(app), clock_now);
     }
+    template<class Predicate>
+    ApplicationRunResult receive_until(Predicate complete, ApplicationRunResult result = {})
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        auto &runtime_ref = application::detail::OnboardApplicationTestAccess::runtime(app);
+        for (unsigned iteration = 0; !complete(result.events) && iteration < 256 &&
+             std::chrono::steady_clock::now() < deadline; ++iteration) {
+            // Wait for actual slave readability before calling the real runtime.
+            // Incomplete frames can require multiple notifications/iterations.
+            pollfd ready{runtime_ref.native_fd(), POLLIN, 0};
+            const int available = ::poll(&ready, 1, 10);
+            if (available < 0 && errno == EINTR) { continue; }
+            if (available < 0 || (ready.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+                throw std::runtime_error("PTY input poll failed");
+            }
+            if (available == 0) { continue; }
+            auto next = app.run_once();
+            result.status = next.status;
+            result.error_number = next.error_number;
+            result.events.insert(result.events.end(), std::make_move_iterator(next.events.begin()),
+                                 std::make_move_iterator(next.events.end()));
+        }
+        if (!complete(result.events)) {
+            throw std::runtime_error("timed out waiting for application receive events");
+        }
+        return result;
+    }
+    ApplicationRunResult receive_ack(LinkEventType type = LinkEventType::RequestAccepted)
+    {
+        return receive_until([type](const auto &events) { return find_event(events, type) != nullptr; });
+    }
     void activate(Pty &port, runtime::TimeMs quiet_end, std::uint16_t sequence,
                   std::uint32_t uptime)
     {
@@ -143,16 +197,17 @@ struct Fixture {
                "no wire TX before 575-ms deadline");
         now_ms = quiet_end;
         const auto resync = app.run_once();
-        expect(port.receive() == Bytes{0}, "standalone raw zero precedes heartbeat");
+        expect(port.receive_expected({0}) == Bytes{0}, "standalone raw zero precedes heartbeat");
         expect(find_event(resync.events, LinkEventType::HeartbeatDispatched) != nullptr,
                "raw drain schedules heartbeat through runtime");
         app.run_once();
-        expect(port.receive() == Codec::encodeWire({0x01, sequence,
+        const auto heartbeat = Codec::encodeWire({0x01, sequence,
             {static_cast<std::uint8_t>(uptime), static_cast<std::uint8_t>(uptime >> 8U),
-             static_cast<std::uint8_t>(uptime >> 16U), static_cast<std::uint8_t>(uptime >> 24U)}}),
+             static_cast<std::uint8_t>(uptime >> 16U), static_cast<std::uint8_t>(uptime >> 24U)}});
+        expect(port.receive_expected(heartbeat) == heartbeat,
                "exact heartbeat frame preserves sequence and uptime");
         port.send(ack(sequence, 0x01));
-        app.run_once();
+        receive_ack();
         expect(app.link_state() == link_core::LinkState::Active, "heartbeat ACK activates link");
     }
     void activate() { activate(pty, 575, 0, 0); }
@@ -165,10 +220,11 @@ struct Fixture {
         const auto sent = app.run_once();
         expect(!find_event(sent.events, LinkEventType::RequestAccepted),
                "admission and physical TX are not successful ACK");
-        expect(pty.receive() == Codec::encodeWire({type, *submitted.sequence, payload}),
+        const auto wire = Codec::encodeWire({type, *submitted.sequence, payload});
+        expect(pty.receive_expected(wire) == wire,
                "typed API produces exact Protocol V2 request");
         pty.send(ack(*submitted.sequence, type, result));
-        auto completed = app.run_once();
+        auto completed = receive_ack(result == 0 ? LinkEventType::RequestAccepted : LinkEventType::RequestRejected);
         const auto *outcome = find_event(completed.events,
             result == 0 ? LinkEventType::RequestAccepted : LinkEventType::RequestRejected);
         expect(outcome && outcome->outcome.sequence == *submitted.sequence &&
@@ -220,8 +276,9 @@ void telemetry_interleave_and_malformed()
     f.activate();
     const auto submitted = f.app.enable_servos(1);
     f.app.run_once();
-    f.pty.receive();
     if (!submitted.sequence) { throw std::runtime_error("missing telemetry test sequence"); }
+    const auto submitted_wire = Codec::encodeWire({0x10, *submitted.sequence, {1, 0}});
+    expect(f.pty.receive_expected(submitted_wire) == submitted_wire, "telemetry test command fully transmitted");
     Bytes imu(56, 0); imu[0] = 1; imu[1] = 7; imu[2] = 0xfe; imu[3] = 0xff;
     Bytes depth(38, 0); depth[0] = 1; depth[1] = 3; depth[2] = 42; depth[8] = 0xff; depth[9] = 0xff;
     const std::vector<protocol::Frame> frames{{0x20, 10, {2}}, {0x21, 11, imu}, {0x22, 12, depth}};
@@ -229,8 +286,18 @@ void telemetry_interleave_and_malformed()
     incoming = rbp2_test::concat(incoming, ack(*submitted.sequence, 0x10));
     incoming = rbp2_test::concat(incoming, Codec::encodeWire(frames[1]));
     incoming = rbp2_test::concat(incoming, Codec::encodeWire(frames[2]));
-    f.pty.send(incoming);
-    const auto result = f.app.run_once();
+    // Deliberately split inside the batch so event accumulation is exercised,
+    // even on hosts which ordinarily deliver these short writes in one read.
+    const auto split = incoming.size() / 2;
+    f.pty.send(Bytes(incoming.begin(), incoming.begin() + split));
+    auto partial = f.receive_until([](const auto &events) {
+        return find_event(events, LinkEventType::RequestAccepted) && count<LeakTelemetry>(events) == 1;
+    });
+    f.pty.send(Bytes(incoming.begin() + split, incoming.end()));
+    const auto result = f.receive_until([](const auto &events) {
+        return find_event(events, LinkEventType::RequestAccepted) && count<LeakTelemetry>(events) == 1 &&
+               count<ImuTelemetry>(events) == 1 && count<DepthTelemetry>(events) == 1;
+    }, std::move(partial));
     expect(find_event(result.events, LinkEventType::RequestAccepted) != nullptr,
            "interleaved telemetry leaves ACK correlation intact");
     expect(count<LeakTelemetry>(result.events) == 1 && count<ImuTelemetry>(result.events) == 1 &&
@@ -258,14 +325,20 @@ void telemetry_interleave_and_malformed()
     }
     expect(telemetry_index == 3, "all raw telemetry events retained");
     const auto pending = f.app.neutral_servos(1);
-    f.app.run_once(); f.pty.receive();
+    if (!pending.sequence) { throw std::runtime_error("missing pending sequence"); }
+    f.app.run_once();
+    const auto pending_wire = Codec::encodeWire({0x14, *pending.sequence, {1, 0}});
+    expect(f.pty.receive_expected(pending_wire) == pending_wire, "pending command fully transmitted");
     for (const auto type : {0x20, 0x21, 0x22}) {
         f.pty.send(Codec::encodeWire({static_cast<std::uint8_t>(type), 20, {0xff}}));
-        const auto malformed = f.app.run_once();
+        const auto malformed = f.receive_until([](const auto &events) { return count<TelemetryMalformed>(events) == 1; });
         expect(count<TelemetryMalformed>(malformed.events) == 1 &&
                find_event(malformed.events, LinkEventType::FrameReceived),
                "malformed telemetry yields both raw and malformed events");
-        const auto *notice = std::get_if<TelemetryMalformed>(&malformed.events.back());
+        const TelemetryMalformed *notice = nullptr;
+        for (const auto &event : malformed.events) {
+            if (const auto *value = std::get_if<TelemetryMalformed>(&event)) { notice = value; break; }
+        }
         expect(notice && notice->message_type == type && notice->sequence == 20 &&
                notice->reason == (type == 0x20 ? TelemetryMalformedReason::InvalidValue : TelemetryMalformedReason::WrongLength),
                "malformed notice identifies frame and exact decode error");
@@ -275,9 +348,8 @@ void telemetry_interleave_and_malformed()
                f.app.link_state() == link_core::LinkState::Active,
                "malformed telemetry neither completes command nor tears down link");
     }
-    if (!pending.sequence) { throw std::runtime_error("missing pending sequence"); }
     f.pty.send(ack(*pending.sequence, 0x14));
-    expect(find_event(f.app.run_once().events, LinkEventType::RequestAccepted),
+    expect(find_event(f.receive_ack().events, LinkEventType::RequestAccepted),
            "pending command still completes on its own ACK");
 }
 
@@ -288,8 +360,9 @@ void loss_explicit_reopen_no_replay()
     const auto pending = f.app.set_servo_angle(ServoId::FrontRight, 1000);
     const auto queued = f.app.neutral_servos(1);
     f.app.run_once();
+    const auto pending_wire = Codec::encodeWire({0x13, 1, {1, 0, 0xe8, 3}});
     expect(pending.sequence == 1 && queued.sequence == 2 &&
-           f.pty.receive() == Codec::encodeWire({0x13, 1, {1, 0, 0xe8, 3}}),
+           f.pty.receive_expected(pending_wire) == pending_wire,
            "one request transmitted while later request remains queued");
     now_ms = 580;
     f.pty.disconnect();
@@ -310,13 +383,15 @@ void loss_explicit_reopen_no_replay()
     expect(reopened.receive().empty(), "reopen has no replayed actuator frames");
     now_ms = 1255;
     f.app.run_once();
-    expect(reopened.receive() == Codec::encodeWire({0x01, 4, {0xa8, 2, 0, 0}}),
+    const auto heartbeat = Codec::encodeWire({0x01, 4, {0xa8, 2, 0, 0}});
+    expect(reopened.receive_expected(heartbeat) == heartbeat,
            "next idle tick sends only heartbeat, never unknown or cancelled actuator work");
-    reopened.send(ack(4, 0x01)); f.app.run_once();
+    reopened.send(ack(4, 0x01)); f.receive_ack();
     const auto fresh = f.app.disable_servos(1);
     expect(fresh.sequence == 5, "only explicit new decision submits continuous next sequence");
     f.app.run_once();
-    expect(reopened.receive() == Codec::encodeWire({0x11, 5, {1, 0}}), "fresh explicit command reaches wire");
+    const auto fresh_wire = Codec::encodeWire({0x11, 5, {1, 0}});
+    expect(reopened.receive_expected(fresh_wire) == fresh_wire, "fresh explicit command reaches wire");
 }
 
 void abort_and_queue_admission()
