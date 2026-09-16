@@ -4,7 +4,7 @@
 
 **Goal:** Add a typed, Linux-safe OnboardApplication facade, firmware-parity telemetry decoders, and a manual Raspberry Pi smoke CLI above the frozen Slice 5 LinkRuntime.
 
-**Architecture:** Portable robot_types and robot_codec validate and encode Protocol V2 payloads and decode the three existing telemetry payloads. Linux-only OnboardApplication delegates open/run/submit/abort to LinkRuntime, preserves every raw LinkEvent, and appends typed telemetry or malformed notices. The smoke executable issues one explicit command at a time; it never owns a descriptor, scheduler, retry policy, or robot-state cache.
+**Architecture:** Portable robot_types and robot_codec validate and encode Protocol V2 payloads and decode the three existing telemetry payloads. Linux-only OnboardApplication delegates open/run/submit/abort to LinkRuntime, preserves every raw LinkEvent, and appends typed telemetry or malformed notices. The smoke executable issues one explicit command at a time; it never owns the serial descriptor, makes serial-fd calls, or owns a scheduler, retry policy, or robot-state cache. It may use bounded readiness checks on stdin so runtime service continues while an operator types.
 
 **Tech Stack:** C++17, existing CMake/CTest targets, std::variant, std::optional, existing rbp2_protocol, rbp2_link_runtime, and Linux PTY tests.
 
@@ -200,7 +200,7 @@ git commit -m "feat: add Raspberry Pi typed onboard application"
 
 - [ ] Step 1: Register robobeetle_pi_smoke only on Linux and link it to rbp2_onboard_application.
 
-- [ ] Step 2: Implement a line-oriented CLI requiring one device path. Support link status, enable/disable/neutral mask, angle servo/cdeg, gait simple/cpg, motion forward/turn_left/turn_right/ascend/descend/stop/backward, and telemetry display. Parse numeric arguments with checked conversion, print Submitted plus sequence or the typed rejection, and print Pending hardware qualification for backward without sending bytes. Do not add daemonization, background threads, retry/backoff, automatic reconnect, batch motion, or direct fd calls.
+- [ ] Step 2: Implement a line-oriented CLI requiring one device path. Support link status, enable/disable/neutral mask, angle servo/cdeg, gait simple/cpg, motion forward/turn_left/turn_right/ascend/descend/stop/backward, and telemetry display. Parse numeric arguments with checked conversion, print Submitted plus sequence or the typed rejection, and print Pending hardware qualification for backward without sending bytes. Do not add daemonization, background threads, retry/backoff, automatic reconnect, batch motion, or serial-fd calls; bounded stdin-only readiness polling is allowed so the runtime remains serviced while input is incomplete.
 
 - [ ] Step 3: Document that ACK/admission is not physical execution, no authoritative Pi robot state is stored, and Hardware Acceptance is PENDING USER VERIFICATION. Document that every action is explicitly entered by the operator.
 
@@ -230,8 +230,8 @@ git commit -m "feat: add Raspberry Pi actuator smoke tool"
 ~~~powershell
 git status --short
 git diff --check
-git diff --stat HEAD~5..HEAD
-git diff --name-only HEAD~5..HEAD
+git diff --stat 488760688a9735248337779e7e0e3038f1d57f3a..HEAD
+git diff --name-only 488760688a9735248337779e7e0e3038f1d57f3a..HEAD
 git -C D:\RoboBeetle status --short
 git -C D:\RoboBeetle-worktrees\dsh-qt-ui status --short
 ~~~

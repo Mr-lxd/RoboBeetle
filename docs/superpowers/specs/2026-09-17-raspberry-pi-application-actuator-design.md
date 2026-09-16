@@ -91,8 +91,8 @@ allocated a sequence; it does not mean that an actuator executed. Later raw
 `LinkEvent` values remain visible and carry `RequestAccepted`,
 `RequestRejected`, `RequestOutcomeUnknown`, or `RequestCancelled`.
 
-`ApplicationEvent` is a `std::variant` containing `LinkEventNotice` (the
-unmodified underlying `LinkEvent`), typed `LeakTelemetry`, `ImuTelemetry`, and
+`ApplicationEvent` is a `std::variant` containing the unmodified underlying
+`link_core::LinkEvent`, typed `LeakTelemetry`, `ImuTelemetry`, and
 `DepthTelemetry` notices, and `TelemetryMalformed`. A telemetry frame keeps its
 raw LinkEvent and adds one typed notice or one malformed notice. Malformed
 telemetry never aborts the session, completes an ACK, or changes LinkCore
