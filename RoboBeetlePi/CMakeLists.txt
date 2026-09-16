@@ -53,6 +53,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     )
     target_link_libraries(rbp2_serial_session PUBLIC rbp2_link_core rbp2_posix_serial_transport)
     target_compile_features(rbp2_serial_session PUBLIC cxx_std_17)
+
+    add_library(rbp2_link_runtime STATIC runtime/src/link_runtime.cpp)
+    target_include_directories(rbp2_link_runtime PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/include
+    )
+    target_link_libraries(rbp2_link_runtime PUBLIC rbp2_serial_session)
+    target_compile_features(rbp2_link_runtime PUBLIC cxx_std_17)
 endif()
 
 if(BUILD_TESTING)
@@ -85,5 +92,10 @@ if(BUILD_TESTING)
         add_executable(rbp2_serial_session_tests tests/serial_session_tests.cpp)
         target_link_libraries(rbp2_serial_session_tests PRIVATE rbp2_serial_session)
         add_test(NAME rbp2_serial_session_tests COMMAND rbp2_serial_session_tests)
+
+        add_executable(rbp2_link_runtime_tests tests/link_runtime_tests.cpp)
+        target_link_libraries(rbp2_link_runtime_tests PRIVATE rbp2_link_runtime)
+        add_test(NAME rbp2_link_runtime_tests COMMAND rbp2_link_runtime_tests)
+        set_tests_properties(rbp2_link_runtime_tests PROPERTIES TIMEOUT 15)
     endif()
 endif()
