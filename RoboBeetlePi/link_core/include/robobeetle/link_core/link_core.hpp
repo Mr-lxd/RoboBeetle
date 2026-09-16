@@ -23,7 +23,9 @@ public:
     // Starts or restarts the logical LinkCore session. Sequence allocation
     // and process uptime remain continuous across a restart; pending wire
     // correlations are local state and are cleared.
-    void start(TimeMs now_ms);
+    // Returns false when a restart is attempted before Lost. An accepted
+    // request remains owned by the current session in that case.
+    bool start(TimeMs now_ms);
 
     // Deterministic scheduler tick. It never sleeps or reads a wall clock.
     std::vector<LinkEvent> poll(TimeMs now_ms);
@@ -35,9 +37,12 @@ public:
 
     // Queues an ordinary ACKed request. At most one ordinary request is
     // transmitted at a time; later requests use the bounded FIFO.
-    bool submit_request(protocol::Byte request_type,
-                        const protocol::Bytes &payload,
-                        TimeMs now_ms);
+    // Returns the allocated request sequence when the request is accepted
+    // for immediate dispatch or bounded FIFO queueing.
+    std::optional<std::uint16_t> submit_request(
+        protocol::Byte request_type,
+        const protocol::Bytes &payload,
+        TimeMs now_ms);
 
     [[nodiscard]] LinkState state() const { return state_; }
     [[nodiscard]] std::size_t queued_ordinary_count() const
@@ -80,6 +85,7 @@ private:
         TimeMs deadline{0U};
         bool acknowledged{false};
         bool timed_out{false};
+        bool recovery_candidate{false};
     };
 
     struct CorrelationHistory {
@@ -98,6 +104,7 @@ private:
                                 std::vector<LinkEvent> &events);
     void process_timeouts(TimeMs now_ms, std::vector<LinkEvent> &events);
     void process_liveness(TimeMs now_ms, std::vector<LinkEvent> &events);
+    void trim_heartbeat_history();
     void handle_frame(const protocol::Frame &frame,
                       TimeMs now_ms,
                       std::vector<LinkEvent> &events);
@@ -138,6 +145,7 @@ private:
     std::deque<QueuedOrdinary> ordinary_queue_;
     std::deque<HeartbeatRecord> heartbeat_history_;
     std::deque<CorrelationHistory> correlation_history_;
+    bool recovery_required_{false};
 };
 
 } // namespace robobeetle::link_core

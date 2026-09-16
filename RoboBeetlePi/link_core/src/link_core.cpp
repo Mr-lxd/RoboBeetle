@@ -61,8 +61,12 @@ LinkCore::LinkCore(transport::Transport &transport, LinkCoreConfig config)
     }
 }
 
-void LinkCore::start(TimeMs now_ms)
+bool LinkCore::start(TimeMs now_ms)
 {
+    if (started_ && state_ != LinkState::Lost) {
+        return false;
+    }
+
     if (!started_) {
         process_start_ms_ = now_ms;
         started_ = true;
@@ -77,6 +81,8 @@ void LinkCore::start(TimeMs now_ms)
     first_heartbeat_dispatch_ms_.reset();
     last_good_heartbeat_ack_ms_.reset();
     next_heartbeat_due_ms_ = now_ms;
+    recovery_required_ = false;
+    return true;
 }
 
 std::vector<LinkEvent> LinkCore::poll(TimeMs now_ms)
@@ -114,15 +120,16 @@ std::vector<LinkEvent> LinkCore::receive(const Bytes &bytes, TimeMs now_ms)
     return events;
 }
 
-bool LinkCore::submit_request(Byte request_type,
-                              const Bytes &payload,
-                              TimeMs now_ms)
+std::optional<std::uint16_t> LinkCore::submit_request(Byte request_type,
+                                                      const Bytes &payload,
+                                                      TimeMs now_ms)
 {
     if (!started_) {
         start(now_ms);
     }
-    if (state_ == LinkState::Lost || payload.size() > Codec::MaxPayloadSize) {
-        return false;
+    if (state_ != LinkState::Active ||
+        payload.size() > Codec::MaxPayloadSize) {
+        return std::nullopt;
     }
 
     QueuedOrdinary request;
@@ -131,19 +138,24 @@ bool LinkCore::submit_request(Byte request_type,
     request.frame.payload = payload;
     request.wire = Codec::encodeWire(request.frame);
     if (request.wire.empty()) {
-        return false;
+        return std::nullopt;
     }
 
     if (pending_ordinary_.has_value()) {
         if (ordinary_queue_.size() >= config_.ordinary_queue_capacity) {
-            return false;
+            return std::nullopt;
         }
+        const auto sequence = request.frame.sequence;
         ordinary_queue_.push_back(std::move(request));
-        return true;
+        return sequence;
     }
 
     std::vector<LinkEvent> ignored_events;
-    return dispatch_ordinary(std::move(request), now_ms, ignored_events);
+    const auto sequence = request.frame.sequence;
+    if (!dispatch_ordinary(std::move(request), now_ms, ignored_events)) {
+        return std::nullopt;
+    }
+    return sequence;
 }
 
 std::uint16_t LinkCore::allocate_sequence()
@@ -190,6 +202,15 @@ bool LinkCore::dispatch_ordinary(QueuedOrdinary request,
         LinkEvent event = make_simple_event(LinkEventType::TransportWriteFailed);
         event.frame = request.frame;
         events.push_back(event);
+
+        LinkEvent cancelled = make_simple_event(
+            LinkEventType::RequestCancelled);
+        cancelled.outcome.kind = OutcomeKind::Cancelled;
+        cancelled.outcome.sequence = request.frame.sequence;
+        cancelled.outcome.request_type = request.frame.message_type;
+        events.push_back(cancelled);
+        cancel_ordinary_queue(events);
+        set_state(LinkState::Degraded, events);
         return false;
     }
 
@@ -228,10 +249,10 @@ void LinkCore::dispatch_due_heartbeat(TimeMs now_ms,
         HeartbeatRecord record;
         record.frame = heartbeat;
         record.deadline = now_ms + config_.ack_timeout_ms;
+        record.recovery_candidate =
+            state_ == LinkState::Degraded && recovery_required_;
         heartbeat_history_.push_back(std::move(record));
-        while (heartbeat_history_.size() > config_.heartbeat_history_capacity) {
-            heartbeat_history_.pop_front();
-        }
+        trim_heartbeat_history();
         if (!first_heartbeat_dispatch_ms_.has_value()) {
             first_heartbeat_dispatch_ms_ = now_ms;
         }
@@ -277,6 +298,7 @@ void LinkCore::process_timeouts(TimeMs now_ms,
             heartbeat.timed_out = true;
         }
     }
+    trim_heartbeat_history();
 }
 
 void LinkCore::process_liveness(TimeMs now_ms,
@@ -451,13 +473,16 @@ void LinkCore::complete_heartbeat(HeartbeatRecord &heartbeat,
     events.push_back(event);
 
     if (result == 0U) {
-        last_good_heartbeat_ack_ms_ = now_ms;
-        if (state_ != LinkState::Lost) {
+        const bool recovery_ack = state_ != LinkState::Degraded ||
+                                   heartbeat.recovery_candidate;
+        if (state_ != LinkState::Lost && recovery_ack) {
+            last_good_heartbeat_ack_ms_ = now_ms;
             set_state(LinkState::Active, events);
         }
     } else if (state_ == LinkState::Active) {
         set_state(LinkState::Degraded, events);
     }
+    trim_heartbeat_history();
 }
 
 void LinkCore::cancel_ordinary_queue(std::vector<LinkEvent> &events)
@@ -495,6 +520,7 @@ void LinkCore::enter_lost(TimeMs now_ms, std::vector<LinkEvent> &events)
             heartbeat.timed_out = true;
         }
     }
+    trim_heartbeat_history();
     (void)now_ms;
     set_state(LinkState::Lost, events);
 }
@@ -504,10 +530,30 @@ void LinkCore::set_state(LinkState state, std::vector<LinkEvent> &events)
     if (state_ == state) {
         return;
     }
+    if (state == LinkState::Degraded) {
+        recovery_required_ = true;
+    } else if (state == LinkState::Active) {
+        recovery_required_ = false;
+    }
     state_ = state;
     LinkEvent event = make_simple_event(LinkEventType::StateChanged);
     event.state = state;
     events.push_back(event);
+}
+
+void LinkCore::trim_heartbeat_history()
+{
+    while (heartbeat_history_.size() > config_.heartbeat_history_capacity) {
+        const auto retired = std::find_if(
+            heartbeat_history_.begin(), heartbeat_history_.end(),
+            [](const HeartbeatRecord &heartbeat) {
+                return heartbeat.acknowledged || heartbeat.timed_out;
+            });
+        if (retired == heartbeat_history_.end()) {
+            return;
+        }
+        heartbeat_history_.erase(retired);
+    }
 }
 
 void LinkCore::remember_correlation(std::uint16_t sequence,
