@@ -113,4 +113,14 @@ build with GCC 16.1.0 and `-Wall -Wextra -Werror` **PASS**; CTest **2/2 PASS**
 (`rbp2_protocol_tests`, `rbp2_robot_codec_tests`); both direct test executables
 **PASS**. Generated Windows build rules omit `robobeetle_pi_smoke` as required.
 
+Final Slice 6 software gate on 2026-09-17: the Windows portable Protocol,
+LinkCore, FrameTxQueue, and robot-codec build/tests **PASS**; the unchanged
+Firmware host runner **PASS** with 36 executables, 13 app/backend/benchmark/
+diagnostics compile-contract objects, and the USART2 source/config contract.
+Native Linux/PTY and smoke compilation/execution are **NOT RUN** in this
+environment: `wsl --list --verbose` has no usable distribution (exit 1), and
+Docker, QEMU aarch64, and `arm-none-eabi-gcc` are unavailable. These results
+do not establish Raspberry Pi, UART waveform, actuator, water, or physical
+hardware acceptance.
+
 **Hardware Acceptance: PENDING USER VERIFICATION**
