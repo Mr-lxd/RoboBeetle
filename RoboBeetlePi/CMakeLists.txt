@@ -39,6 +39,13 @@ target_include_directories(rbp2_transport PUBLIC
 )
 target_compile_features(rbp2_transport PUBLIC cxx_std_17)
 
+add_library(rbp2_robot_codec STATIC application/src/robot_codec.cpp)
+target_include_directories(rbp2_robot_codec PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/application/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/protocol/include
+)
+target_compile_features(rbp2_robot_codec PUBLIC cxx_std_17)
+
 # Keep Linux headers and syscalls out of all portable targets.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_library(rbp2_posix_serial_transport STATIC
@@ -82,8 +89,6 @@ if(BUILD_TESTING)
     target_link_libraries(rbp2_protocol_tests PRIVATE rbp2_protocol rbp2_link_core rbp2_transport)
     add_test(NAME rbp2_protocol_tests COMMAND rbp2_protocol_tests)
 
-    # The guarded RED test intentionally builds without a codec library until
-    # the portable Slice 6 implementation is added.
     add_executable(rbp2_robot_codec_tests tests/robot_codec_tests.cpp)
     target_include_directories(rbp2_robot_codec_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/application/include
@@ -91,6 +96,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests
     )
     target_compile_features(rbp2_robot_codec_tests PRIVATE cxx_std_17)
+    target_link_libraries(rbp2_robot_codec_tests PRIVATE rbp2_robot_codec)
     add_test(NAME rbp2_robot_codec_tests COMMAND rbp2_robot_codec_tests)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

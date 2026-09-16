@@ -1,12 +1,3 @@
-#if !__has_include("robobeetle/application/robot_codec.hpp")
-#include <cstdio>
-
-int main()
-{
-    std::fprintf(stderr, "FAIL: Slice 6 robot codec is not implemented\n");
-    return 1;
-}
-#else
 #include "test_support.hpp"
 #include "robobeetle/application/robot_codec.hpp"
 
@@ -25,6 +16,11 @@ using rbp2_test::bytes;
 using rbp2_test::expect;
 using Bytes = std::vector<std::uint8_t>;
 
+bool encoded_as(const CodecResult &result, const Bytes &payload)
+{
+    return result.status == CodecStatus::Ok && result.payload == payload;
+}
+
 void write_le16(Bytes &payload, std::size_t offset, std::uint16_t value)
 {
     payload[offset] = static_cast<std::uint8_t>(value & 0xffU);
@@ -41,44 +37,44 @@ void write_le32(Bytes &payload, std::size_t offset, std::uint32_t value)
 
 void command_payloads_and_validation()
 {
-    expect(encode_servo_mask(0x001f).payload == bytes({0x1f, 0x00}),
+    expect(encoded_as(encode_servo_mask(0x001f), bytes({0x1f, 0x00})),
            "servo mask uses little endian bytes");
     expect(encode_servo_mask(0).status == CodecStatus::InvalidMask,
            "zero servo mask is rejected");
     expect(encode_servo_mask(0x8000).status == CodecStatus::InvalidMask,
            "unsupported servo mask bits are rejected");
 
-    expect(encode_servo_angle(ServoId::FrontLeft, 0x1234).payload ==
-               bytes({1, 1, 0x34, 0x12}),
+    expect(encoded_as(encode_servo_angle(ServoId::FrontLeft, 0x1234),
+               bytes({1, 1, 0x34, 0x12})),
            "positive servo angle is encoded little endian");
-    expect(encode_servo_angle(ServoId::FrontRight, 0).payload ==
-               bytes({1, 0, 0, 0}),
+    expect(encoded_as(encode_servo_angle(ServoId::FrontRight, 0),
+               bytes({1, 0, 0, 0})),
            "zero servo angle is encoded");
-    expect(encode_servo_angle(ServoId::RearLeft, -2).payload ==
-               bytes({1, 4, 0xfe, 0xff}),
+    expect(encoded_as(encode_servo_angle(ServoId::RearLeft, -2),
+               bytes({1, 4, 0xfe, 0xff})),
            "negative servo angle is two complement little endian");
-    expect(encode_servo_angle(ServoId::FrontAxis, INT16_MIN).payload ==
-               bytes({1, 2, 0x00, 0x80}),
+    expect(encoded_as(encode_servo_angle(ServoId::FrontAxis, INT16_MIN),
+               bytes({1, 2, 0x00, 0x80})),
            "minimum int16 servo angle is encoded");
-    expect(encode_servo_angle(ServoId::RearRight, INT16_MAX).payload ==
-               bytes({1, 3, 0xff, 0x7f}),
+    expect(encoded_as(encode_servo_angle(ServoId::RearRight, INT16_MAX),
+               bytes({1, 3, 0xff, 0x7f})),
            "maximum int16 servo angle is encoded");
     expect(encode_servo_angle(static_cast<ServoId>(5), 0).status ==
                CodecStatus::InvalidServoId,
            "invalid servo id is rejected");
 
-    expect(encode_servo_pwm(ServoId::FrontRight, 2000).payload ==
-               bytes({1, 0, 0xd0, 0x07}),
+    expect(encoded_as(encode_servo_pwm(ServoId::FrontRight, 2000),
+               bytes({1, 0, 0xd0, 0x07})),
            "maintenance PWM is encoded little endian");
     expect(encode_servo_pwm(static_cast<ServoId>(5), 1500).status ==
                CodecStatus::InvalidServoId,
            "invalid maintenance PWM servo id is rejected");
 
-    expect(encode_motion(MotionMode::Forward, MotionAction::Start).payload ==
-               bytes({1, 1, 1}),
+    expect(encoded_as(encode_motion(MotionMode::Forward, MotionAction::Start),
+               bytes({1, 1, 1})),
            "motion START payload is encoded");
-    expect(encode_motion(MotionMode::Stop, MotionAction::Stop).payload ==
-               bytes({1, 0, 0}),
+    expect(encoded_as(encode_motion(MotionMode::Stop, MotionAction::Stop),
+               bytes({1, 0, 0})),
            "motion STOP payload is encoded");
     expect(encode_motion(MotionMode::Stop, MotionAction::Start).status ==
                CodecStatus::InvalidMotionMode,
@@ -86,8 +82,8 @@ void command_payloads_and_validation()
     expect(encode_motion(MotionMode::Forward, MotionAction::Stop).status ==
                CodecStatus::InvalidMotionMode,
            "motion STOP with non-STOP mode is rejected");
-    expect(encode_motion(MotionMode::Backward, MotionAction::Start).payload ==
-               bytes({1, 2, 1}),
+    expect(encoded_as(encode_motion(MotionMode::Backward, MotionAction::Start),
+               bytes({1, 2, 1})),
            "codec accepts wire-level BACKWARD START value");
     expect(encode_motion(static_cast<MotionMode>(7), MotionAction::Start).status ==
                CodecStatus::InvalidMotionMode,
@@ -96,9 +92,9 @@ void command_payloads_and_validation()
                CodecStatus::InvalidMotionAction,
            "invalid motion action is rejected");
 
-    expect(encode_gait_backend(GaitBackend::SimpleGait).payload == bytes({0}),
+    expect(encoded_as(encode_gait_backend(GaitBackend::SimpleGait), bytes({0})),
            "SimpleGait uses wire value zero");
-    expect(encode_gait_backend(GaitBackend::CPG).payload == bytes({1}),
+    expect(encoded_as(encode_gait_backend(GaitBackend::CPG), bytes({1})),
            "CPG uses wire value one");
     expect(encode_gait_backend(static_cast<GaitBackend>(2)).status ==
                CodecStatus::InvalidGaitBackend,
@@ -121,6 +117,17 @@ void telemetry_decoders_match_firmware_layout()
     const auto leak_invalid = decode_leak(bytes({3}), &reason);
     expect(!leak_invalid && reason == TelemetryMalformedReason::InvalidValue,
            "invalid LeakStatus value is malformed");
+    expect(!decode_leak(bytes({}), &reason) &&
+               reason == TelemetryMalformedReason::WrongLength,
+           "empty LeakStatus is malformed");
+    expect(!decode_leak(bytes({0, 1}), &reason) &&
+               reason == TelemetryMalformedReason::WrongLength,
+           "long LeakStatus is malformed");
+    expect(decode_leak(bytes({1}), &reason) &&
+               reason == TelemetryMalformedReason::None,
+           "successful decode clears a previous malformed reason");
+    expect(decode_leak(bytes({2})).has_value() && !decode_leak(bytes({3})),
+           "LeakStatus reason output is optional");
 
     Bytes imu(56U, 0U);
     imu[0] = 1U;
@@ -260,6 +267,35 @@ void telemetry_decoders_match_firmware_layout()
     expect(!decode_depth(depth_invalid_temperature, &reason) &&
                reason == TelemetryMalformedReason::InvalidDomain,
            "nonzero invalid temperature domain is malformed");
+
+    Bytes depth_zero_invalid(38U, 0U);
+    depth_zero_invalid[0] = 1U;
+    write_le16(depth_zero_invalid, 8U, 0xffffU);
+    const auto depth_zero_decoded = decode_depth(depth_zero_invalid, &reason);
+    expect(depth_zero_decoded && depth_zero_decoded->validity_flags == 0U &&
+               depth_zero_decoded->depth_mm == 0 &&
+               depth_zero_decoded->temperature_centi_c == 0 &&
+               depth_zero_decoded->sample_age_ms == 0xffffU &&
+               reason == TelemetryMalformedReason::None,
+           "zero invalid depth and temperature with unknown age is legal");
+
+    Bytes depth_boundary = depth;
+    write_le32(depth_boundary, 2U, 0x80000000U);
+    write_le16(depth_boundary, 6U, 0x8000U);
+    write_le16(depth_boundary, 8U, 0U);
+    const auto minimum = decode_depth(depth_boundary);
+    expect(minimum && minimum->depth_mm == INT32_MIN &&
+               minimum->temperature_centi_c == INT16_MIN && minimum->sample_age_ms == 0U,
+           "signed depth and temperature minima decode without range policy");
+    write_le32(depth_boundary, 2U, 0x7fffffffU);
+    write_le16(depth_boundary, 6U, 0x7fffU);
+    const auto maximum = decode_depth(depth_boundary);
+    expect(maximum && maximum->depth_mm == INT32_MAX &&
+               maximum->temperature_centi_c == INT16_MAX,
+           "signed depth and temperature maxima decode without range policy");
+    expect(decode_imu(imu).has_value() && !decode_imu(Bytes{}) &&
+               !decode_depth(Bytes{}),
+           "IMU and Depth reason outputs are optional");
 }
 
 } // namespace
@@ -273,4 +309,3 @@ int main()
     }
     return EXIT_FAILURE;
 }
-#endif
