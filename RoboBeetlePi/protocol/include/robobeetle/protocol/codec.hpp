@@ -15,6 +15,11 @@ public:
     static constexpr std::size_t MaxPayloadSize = 64U;
     static constexpr std::size_t HeaderSize = 8U;
     static constexpr std::size_t CrcSize = 2U;
+    static constexpr std::size_t MaxLogicalSize = HeaderSize +
+                                                  MaxPayloadSize + CrcSize;
+    static constexpr std::size_t MaxEncodedBodySize = MaxLogicalSize + 1U;
+    // Includes the trailing 0x00 delimiter appended by encodeWire().
+    static constexpr std::size_t MaxWireSize = 76U;
 
     static Bytes encodeLogical(const Frame &frame);
     static Bytes encodeWire(const Frame &frame);

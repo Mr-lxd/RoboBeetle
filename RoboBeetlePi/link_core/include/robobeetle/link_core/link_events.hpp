@@ -16,6 +16,8 @@ enum class LinkState {
 };
 
 enum class LinkEventType {
+    // Dispatched means accepted into Transport ownership; it does not imply
+    // physical UART completion.
     HeartbeatDispatched,
     OrdinaryDispatched,
     RequestAccepted,

@@ -478,6 +478,168 @@ void test_transport_write_failure_terminates_queue()
     (void)identity_c;
 }
 
+void test_abort_session_contract()
+{
+    FakeTransport transport;
+    LinkCoreConfig config = quiet_config();
+    config.heartbeat_interval_ms = 1000U;
+    LinkCore link(transport, config);
+    expect(activate_link(link, transport),
+           "abort-session test requires an active LinkCore");
+
+    const auto identity_a = link.submit_request(
+        0x60U, bytes({0x01U}), 2U);
+    const auto identity_b = link.submit_request(
+        0x61U, bytes({0x02U}), 2U);
+    const auto identity_c = link.submit_request(
+        0x62U, bytes({0x03U}), 2U);
+    expect(accepted(identity_a) && accepted(identity_b) &&
+               accepted(identity_c) && link.ordinary_request_in_flight() &&
+               link.queued_ordinary_count() == 2U,
+           "abort-session test must have one pending and two queued requests");
+
+    const std::size_t writes_before_abort = transport.writes().size();
+    const std::uint16_t next_sequence_before_abort = link.next_sequence();
+    const auto abort_events = link.abort_session(3U);
+    const auto unknown_count = std::count_if(
+        abort_events.begin(), abort_events.end(),
+        [](const LinkEvent &event) {
+            return event.type == LinkEventType::RequestOutcomeUnknown;
+        });
+    const auto cancelled_count = std::count_if(
+        abort_events.begin(), abort_events.end(),
+        [](const LinkEvent &event) {
+            return event.type == LinkEventType::RequestCancelled;
+        });
+    expect(unknown_count == 1U && cancelled_count == 2U,
+           "abort-session must terminate pending and queued ordinary work once");
+    expect(link.state() == LinkState::Lost &&
+               !link.ordinary_request_in_flight() &&
+               link.queued_ordinary_count() == 0U,
+           "abort-session must enter Lost and clear ordinary work");
+    expect(transport.writes().size() == writes_before_abort,
+           "abort-session must not write to the transport");
+    expect(link.next_sequence() == next_sequence_before_abort,
+           "abort-session must not allocate a new sequence");
+
+    const auto repeated_abort_events = link.abort_session(4U);
+    expect(std::count_if(repeated_abort_events.begin(),
+                         repeated_abort_events.end(),
+                         [](const LinkEvent &event) {
+                             return event.type == LinkEventType::RequestOutcomeUnknown ||
+                                    event.type == LinkEventType::RequestCancelled;
+                         }) == 0U,
+           "repeated abort-session must not duplicate terminal outcomes");
+
+    expect(link.start(5U),
+           "explicit restart after abort must remain available to the session owner");
+    link.poll(5U);
+    const Frame restarted_heartbeat = decode_write(
+        transport, transport.writes().size() - 1U);
+    expect(restarted_heartbeat.sequence == next_sequence_before_abort,
+           "restart after abort must preserve sequence allocation continuity");
+}
+
+void test_next_wakeup_contract()
+{
+    FakeTransport initial_transport;
+    LinkCoreConfig initial_config = quiet_config();
+    initial_config.heartbeat_interval_ms = 50U;
+    initial_config.ack_timeout_ms = 20U;
+    initial_config.liveness_timeout_ms = 100U;
+    LinkCore initial(initial_transport, initial_config);
+    initial.start(100U);
+    const auto initial_due = initial.next_wakeup_ms();
+    expect(initial_due.has_value() && initial_due.value() == 100U,
+           "initial session must schedule Heartbeat immediately");
+    initial.poll(100U);
+    const auto initial_heartbeat_deadline = initial.next_wakeup_ms();
+    expect(initial_heartbeat_deadline.has_value() &&
+               initial_heartbeat_deadline.value() == 120U,
+           "Heartbeat ACK deadline must be the earliest wake after acceptance");
+    const Frame initial_heartbeat = decode_write(initial_transport, 0U);
+    initial.receive(ack_wire(initial_heartbeat.sequence,
+                             initial_heartbeat.message_type),
+                    105U);
+    const auto after_heartbeat_ack = initial.next_wakeup_ms();
+    expect(after_heartbeat_ack.has_value() && after_heartbeat_ack.value() == 150U,
+           "matching Heartbeat ACK must remove its deadline and expose next Heartbeat");
+
+    FakeTransport ordinary_transport;
+    LinkCoreConfig ordinary_config = quiet_config();
+    ordinary_config.heartbeat_interval_ms = 1000U;
+    ordinary_config.ack_timeout_ms = 20U;
+    ordinary_config.liveness_timeout_ms = 50U;
+    LinkCore ordinary(ordinary_transport, ordinary_config);
+    expect(activate_link(ordinary, ordinary_transport),
+           "next-wakeup ordinary test requires an active LinkCore");
+    const auto liveness_due = ordinary.next_wakeup_ms();
+    expect(liveness_due.has_value() && liveness_due.value() == 51U,
+           "liveness deadline must participate after a successful Heartbeat ACK");
+    const auto ordinary_identity = ordinary.submit_request(
+        0x63U, bytes({0x04U}), 2U);
+    expect(accepted(ordinary_identity),
+           "ordinary request must be accepted for its deadline test");
+    const auto ordinary_due = ordinary.next_wakeup_ms();
+    expect(ordinary_due.has_value() && ordinary_due.value() == 22U,
+           "ordinary ACK deadline must participate in next wakeup");
+    const Frame ordinary_frame = decode_write(ordinary_transport, 1U);
+    const auto ordinary_ack_events = ordinary.receive(
+        ack_wire(ordinary_frame.sequence, ordinary_frame.message_type), 10U);
+    expect(has_event(ordinary_ack_events, LinkEventType::RequestAccepted),
+           "ordinary ACK must complete before checking its removed deadline");
+    const auto after_ordinary_ack = ordinary.next_wakeup_ms();
+    expect(after_ordinary_ack.has_value() && after_ordinary_ack.value() == 51U,
+           "completed ordinary ACK must remove its deadline");
+
+    FakeTransport retired_transport;
+    LinkCoreConfig retired_config = quiet_config();
+    retired_config.heartbeat_interval_ms = 1000U;
+    retired_config.ack_timeout_ms = 20U;
+    retired_config.liveness_timeout_ms = 1000U;
+    LinkCore retired(retired_transport, retired_config);
+    retired.start(0U);
+    retired.poll(0U);
+    retired.poll(20U);
+    const auto retired_due = retired.next_wakeup_ms();
+    expect(retired_due.has_value() && retired_due.value() == 1000U,
+           "retired Heartbeat correlation must not create a wakeup");
+
+    FakeTransport lost_transport;
+    LinkCoreConfig lost_config = quiet_config();
+    lost_config.heartbeat_interval_ms = 1000U;
+    lost_config.ack_timeout_ms = 20U;
+    lost_config.liveness_timeout_ms = 20U;
+    LinkCore lost(lost_transport, lost_config);
+    lost.start(0U);
+    lost.poll(0U);
+    lost.poll(20U);
+    expect(lost.state() == LinkState::Lost && !lost.next_wakeup_ms().has_value(),
+           "Lost LinkCore must expose no scheduling wakeup");
+
+    FakeTransport boundary_transport;
+    LinkCoreConfig boundary_config = quiet_config();
+    boundary_config.heartbeat_interval_ms = 1000U;
+    boundary_config.ack_timeout_ms = 20U;
+    boundary_config.liveness_timeout_ms = 1000U;
+    LinkCore boundary(boundary_transport, boundary_config);
+    expect(activate_link(boundary, boundary_transport),
+           "deadline-boundary test requires an active LinkCore");
+    const auto boundary_identity = boundary.submit_request(
+        0x64U, bytes({0x05U}), 2U);
+    expect(accepted(boundary_identity),
+           "deadline-boundary ordinary request must be accepted");
+    const Frame boundary_frame = decode_write(boundary_transport, 1U);
+    const auto boundary_timeout = boundary.poll(22U);
+    expect(has_event(boundary_timeout, LinkEventType::RequestOutcomeUnknown),
+           "poll at an exact ACK deadline must expire the request");
+    const auto boundary_ack = boundary.receive(
+        ack_wire(boundary_frame.sequence, boundary_frame.message_type), 22U);
+    expect(has_event(boundary_ack, LinkEventType::AckIgnored) &&
+               boundary_ack.front().ack_disposition == AckDisposition::Late,
+           "ACK received at an expired deadline must remain late");
+}
+
 void test_degraded_recovery_barrier()
 {
     FakeTransport transport;
@@ -711,6 +873,8 @@ void test_link_core_contract()
     test_live_heartbeat_correlations_not_evicted();
     test_degraded_cancels_queued_work();
     test_submit_rejection_statuses();
+    test_abort_session_contract();
+    test_next_wakeup_contract();
 }
 
 } // namespace rbp2_test

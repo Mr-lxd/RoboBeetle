@@ -35,8 +35,20 @@ public:
     std::vector<LinkEvent> receive(const protocol::Bytes &bytes,
                                    TimeMs now_ms);
 
+    // Immediately aborts the logical session without attempting transport
+    // I/O. Pending ordinary work becomes OutcomeUnknown, queued ordinary
+    // work is cancelled, and the session enters Lost. The sequence allocator
+    // remains continuous and repeated aborts are idempotent.
+    std::vector<LinkEvent> abort_session(TimeMs now_ms);
+
+    // Returns the earliest absolute monotonic timestamp at which poll() must
+    // run again. This is a read-only scheduler seam; it performs no I/O.
+    [[nodiscard]] std::optional<TimeMs> next_wakeup_ms() const;
+
     // Queues an ordinary ACKed request. At most one ordinary request is
     // transmitted at a time; later requests use the bounded FIFO.
+    // Its ACK timeout is an end-to-end budget anchored when Transport accepts
+    // the complete wire frame, not when physical UART transmission finishes.
     // Returns a deterministic rejection reason or the allocated request
     // sequence when the request is accepted for immediate dispatch or
     // bounded FIFO queueing.
