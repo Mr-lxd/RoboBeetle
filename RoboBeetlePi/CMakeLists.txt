@@ -39,6 +39,15 @@ target_include_directories(rbp2_transport PUBLIC
 )
 target_compile_features(rbp2_transport PUBLIC cxx_std_17)
 
+# Keep Linux headers and syscalls out of all portable targets.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_library(rbp2_posix_serial_transport STATIC
+        transport/src/posix_serial_transport.cpp
+    )
+    target_link_libraries(rbp2_posix_serial_transport PUBLIC rbp2_transport)
+    target_compile_features(rbp2_posix_serial_transport PUBLIC cxx_std_17)
+endif()
+
 if(BUILD_TESTING)
     add_executable(rbp2_protocol_tests
         tests/protocol_test_main.cpp
@@ -58,4 +67,12 @@ if(BUILD_TESTING)
     )
     target_link_libraries(rbp2_protocol_tests PRIVATE rbp2_protocol rbp2_link_core rbp2_transport)
     add_test(NAME rbp2_protocol_tests COMMAND rbp2_protocol_tests)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(rbp2_posix_serial_transport_tests
+            tests/posix_serial_transport_tests.cpp
+        )
+        target_link_libraries(rbp2_posix_serial_transport_tests PRIVATE rbp2_posix_serial_transport)
+        add_test(NAME rbp2_posix_serial_transport_tests COMMAND rbp2_posix_serial_transport_tests)
+    endif()
 endif()
