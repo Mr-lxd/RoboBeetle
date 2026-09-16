@@ -17,7 +17,11 @@ single `uart_transport_stm32` instance uses `&huart2`.
 
 USART1 remains initialized at 9600 on PA9/PA10 with its existing IRQ for the
 APC220/legacy hardware path, but it is no longer the active Protocol V2 host
-transport. USART3 and USART6 remain unchanged.
+transport. More precisely, `uart_transport_stm32` binds only `&huart2`; USART1
+does not arm an RX receive for that transport, and USART1 bytes do not enter
+Protocol V2, create Heartbeats, affect Safety, or gain control authority. The
+retained USART1/APC220 hardware must not be described as an already-available
+backup control link. USART3 and USART6 remain unchanged.
 
 ## Architecture and data flow
 
@@ -31,10 +35,13 @@ transport. USART3 and USART6 remain unchanged.
    USART1/3/6 branches are retained.
 4. `USART2_IRQHandler()` dispatches to `HAL_UART_IRQHandler(&huart2)`. The
    existing USART1 handler remains present for the retained peripheral.
-5. `uart_transport_stm32` is not refactored. PR #20's exact
-   `UART_HandleTypeDef *` binding predicate continues to decide which callbacks
-   are accepted, so callbacks from the retained but unbound USART1 handle are
-   ignored by the active transport.
+5. The existing unified `HAL_UART_RxCpltCallback`, `HAL_UART_TxCpltCallback`,
+   `HAL_UART_ErrorCallback`, and `HAL_UART_AbortTransmitCpltCallback`
+   dispatchers remain the only application callback path. No USART2-specific
+   callback branch is added. `uart_transport_stm32` is not refactored; PR #20's
+   exact `UART_HandleTypeDef *` binding predicate continues to decide which
+   callbacks are accepted, so callbacks from the retained but unbound USART1
+   handle are ignored by the active transport.
 
 No second transport instance, failover, arbitration, APC command path, or
 Raspberry Pi application code is introduced.
@@ -90,6 +97,14 @@ Acceptance requires all host executables and existing compile-contract checks
 to pass, the new USART2 contract to pass, a clean diff check, and no changes to
 the excluded Protocol/Safety/Motion/Servo/USART3/USART6 surfaces.
 
+The new contract must explicitly assert: USART2/PA2/PA3/115200/NVIC `.ioc`
+values; `huart2` and `MX_USART2_UART_Init()` fields; an exact
+`app_main_init(&huart2, ...)` first argument; retained USART1 initialization,
+9600 settings, PA9/PA10 MSP, and IRQ; USART2 PA2/PA3 AF7, APB1 clock, and IRQ
+0/0; the exact `USART2_IRQHandler()` HAL call; unchanged USART3/USART6
+configuration; and the absence of edits to `uart_transport_stm32.c` or the
+unified HAL callback dispatcher.
+
 ## Alternatives considered
 
 - **CubeMX CLI regeneration:** not selected because the CLI is unavailable in
@@ -97,4 +112,3 @@ the excluded Protocol/Safety/Motion/Servo/USART3/USART6 surfaces.
   churn that is harder to audit.
 - **Generic multi-UART transport/configuration abstraction:** not selected;
   it would expand this single-instance binding change into a new architecture.
-
