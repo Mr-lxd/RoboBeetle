@@ -171,6 +171,8 @@ void enablePaddles(rb::FakeTransport &transport, rb::RobotController &controller
     }
 }
 
+QGroupBox *findGroupBox(const QWidget *root, const QString &title);
+
 void testImuPanelLifecycle()
 {
     rb::FakeTransport transport;
@@ -255,6 +257,13 @@ void testMotionPanelLifecycleAndManualArbitration()
     if (panel == nullptr) {
         return;
     }
+
+    // The motion panel splits into two visually distinct subareas: a D-pad-like
+    // Motion Control block and a separate Gait / Vertical block.
+    expect(findGroupBox(panel, QStringLiteral("Motion Control")) != nullptr,
+           "Motion panel must expose a Motion Control subarea");
+    expect(findGroupBox(panel, QStringLiteral("Gait / Vertical")) != nullptr,
+           "Motion panel must expose a Gait / Vertical subarea");
 
     expect(gaitBackendCombo(panel) != nullptr,
            "Motion panel must expose a dedicated gait backend combo");
@@ -460,6 +469,16 @@ void testDashboardLayout()
     expect(estop != nullptr, "MainWindow must expose an Emergency Stop button");
     expect(estop != nullptr && !estop->isEnabled(),
            "Emergency Stop must remain disabled (no Phase 1 message)");
+
+    // The 2x2 status grid keeps all four compact status cards present.
+    expect(findGroupBox(&window, QStringLiteral("Leak Detection")) != nullptr,
+           "dashboard status grid must keep the Leak Detection card");
+    expect(findGroupBox(&window, QStringLiteral("IMU — JY901S")) != nullptr,
+           "dashboard status grid must keep the IMU card");
+    expect(findGroupBox(&window, QStringLiteral("Depth Sensor — ROVMAKER")) != nullptr,
+           "dashboard status grid must keep the Depth card");
+    expect(findGroupBox(&window, QStringLiteral("Protocol / Link")) != nullptr,
+           "dashboard status grid must keep the Protocol / Link card");
 
     // Actuator Control exists.
     expect(findGroupBox(&window, QStringLiteral("Actuator Control")) != nullptr,
