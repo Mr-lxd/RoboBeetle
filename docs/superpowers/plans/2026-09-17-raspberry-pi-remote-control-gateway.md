@@ -1059,7 +1059,8 @@ The correction implementation is complete at the new, unrevised normal
 commit:
 
 ```text
-test commit:         ec19449f0a34c3bd26f04ff99540e7d5b9240b1a
+test commits:        ec19449f0a34c3bd26f04ff99540e7d5b9240b1a
+                     8b9d8c5f5aefcc3d086077098a29863afe636662
 implementation HEAD: c84ce6672a779886292afb4fc49a3b5ba7193e86
 ```
 
@@ -1087,6 +1088,9 @@ Regression coverage added or updated:
 [x] queued replacement survives A generation rollover with fresh source ID
 [x] newest pending source registration replaces an older pending generation
 [x] real PTY lifecycle waits for ControlState(link=Active)
+[x] remote heartbeat stress remains authoritative while owner work is active
+[x] heartbeat at the lease deadline expires; inbound exhaustion remains
+    SourceLost/fail-safe
 ```
 
 Windows verification after the correction commits:
