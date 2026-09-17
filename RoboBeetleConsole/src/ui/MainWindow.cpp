@@ -190,6 +190,34 @@ void addDashboardCardHeader(QVBoxLayout *layout,
     layout->addWidget(divider);
 }
 
+void addSectionHeader(QVBoxLayout *layout,
+                      QWidget *parent,
+                      const QString &text)
+{
+    auto *header = new QHBoxLayout;
+    header->setContentsMargins(0, 0, 0, 0);
+    header->setSpacing(7);
+
+    auto *accent = new QWidget(parent);
+    accent->setFixedSize(4, 18);
+    accent->setStyleSheet(QStringLiteral(
+        "background: #1976D2;"
+        "border-radius: 2px;"
+    ));
+    header->addWidget(accent);
+
+    auto *title = new QLabel(text, parent);
+    title->setStyleSheet(QStringLiteral(
+        "color: #18364F;"
+        "font-size: 14px;"
+        "font-weight: 700;"
+    ));
+    header->addWidget(title);
+    header->addStretch();
+
+    layout->addLayout(header);
+}
+
 } // namespace
 
 MainWindow::MainWindow(RobotController *controller, QWidget *parent)
@@ -1077,36 +1105,84 @@ QWidget *MainWindow::createMotionPanel()
 
 QWidget *MainWindow::createDataPlotsTab()
 {
-    // Independent central Data Plots region. Internally uses placeholder
-    // sub-tabs (IMU | Depth | Actuator). No plotting backend or buffer.
-    auto *tab = new QTabWidget(this);
+    auto *section = new QGroupBox(QStringLiteral("Data Plots"), this);
+    applySectionStyle(section);
+
+    auto *outer = new QVBoxLayout(section);
+    outer->setContentsMargins(10, 8, 10, 10);
+    outer->setSpacing(7);
+    addSectionHeader(
+        outer, section, QStringLiteral("Data Plots"));
+
+    auto *tabs = new QTabWidget(section);
     const QString titles[] = {
         QStringLiteral("IMU"),
         QStringLiteral("Depth"),
         QStringLiteral("Actuator"),
     };
     for (const QString &title : titles) {
-        auto *placeholder = new QGroupBox(
-            QStringLiteral("%1 Plots").arg(title), this);
-        applyCardStyle(placeholder);
-        auto *inner = new QVBoxLayout(placeholder);
-        auto *label = new QLabel(QStringLiteral("Plot placeholder — no data buffer"), placeholder);
+        auto *page = new QWidget(tabs);
+        page->setStyleSheet(QStringLiteral(
+            "background: #FFFFFF;"
+        ));
+
+        auto *pageLayout = new QVBoxLayout(page);
+        pageLayout->setContentsMargins(10, 10, 10, 10);
+        pageLayout->setSpacing(8);
+
+        auto *pageTitle = new QLabel(QStringLiteral("%1 Plots").arg(title), page);
+        pageTitle->setStyleSheet(QStringLiteral(
+            "color: #49657A;"
+            "font-size: 12px;"
+            "font-weight: 600;"
+        ));
+        pageLayout->addWidget(pageTitle);
+
+        auto *viewport = new QWidget(page);
+        viewport->setStyleSheet(QStringLiteral(
+            "background: #F8FAFC;"
+            "border: 1px solid #E1E8EE;"
+            "border-radius: 6px;"
+        ));
+
+        auto *viewportLayout = new QVBoxLayout(viewport);
+        viewportLayout->setContentsMargins(12, 12, 12, 12);
+        auto *label = new QLabel(QStringLiteral("Plot placeholder — no data buffer"), viewport);
         label->setAlignment(Qt::AlignCenter);
-        label->setStyleSheet(QStringLiteral("color: #90a4ae;"));
-        inner->addWidget(label);
-        tab->addTab(placeholder, title);
+        label->setStyleSheet(QStringLiteral(
+            "color: #8497A5;"
+            "font-size: 11px;"
+        ));
+        viewportLayout->addStretch();
+        viewportLayout->addWidget(label);
+        viewportLayout->addStretch();
+
+        pageLayout->addWidget(viewport, 1);
+        tabs->addTab(page, title);
     }
-    return tab;
+    outer->addWidget(tabs, 1);
+    return section;
 }
 
 QWidget *MainWindow::createLogTab()
 {
     auto *tab = new QWidget(this);
     auto *layout = new QVBoxLayout(tab);
-    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setContentsMargins(8, 8, 8, 8);
     log_ = new QPlainTextEdit(tab);
     log_->setReadOnly(true);
     log_->setMaximumBlockCount(1000);
+    log_->setPlaceholderText(
+        QStringLiteral("Runtime events and controller messages will appear here."));
+    log_->setStyleSheet(QStringLiteral(
+        "QPlainTextEdit {"
+        "  background: #F8FAFC;"
+        "  border: 1px solid #E1E8EE;"
+        "  border-radius: 6px;"
+        "  color: #405A6B;"
+        "  padding: 6px;"
+        "}"
+    ));
     layout->addWidget(log_);
     return tab;
 }
@@ -1115,7 +1191,7 @@ QWidget *MainWindow::createTelemetryDetailsTab()
 {
     auto *tab = new QWidget(this);
     auto *layout = new QVBoxLayout(tab);
-    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setContentsMargins(8, 8, 8, 8);
     auto *form = new QFormLayout;
     imuDiagnostics_ = new QLabel(QStringLiteral("--"), tab);
     imuDiagnostics_->setWordWrap(true);
@@ -1132,7 +1208,7 @@ QWidget *MainWindow::createProtocolDetailsTab()
 {
     auto *tab = new QWidget(this);
     auto *layout = new QVBoxLayout(tab);
-    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setContentsMargins(8, 8, 8, 8);
     auto *form = new QFormLayout;
     txHex_ = new QLineEdit(tab);
     rxHex_ = new QLineEdit(tab);
@@ -1151,6 +1227,7 @@ QWidget *MainWindow::createProtocolDetailsTab()
 QTabWidget *MainWindow::createLogDetailsTabs()
 {
     auto *tabs = new QTabWidget(this);
+    tabs->setObjectName(QStringLiteral("diagnosticsTabs"));
     tabs->addTab(createLogTab(), QStringLiteral("Log"));
     tabs->addTab(createTelemetryDetailsTab(), QStringLiteral("Telemetry Details"));
     tabs->addTab(createProtocolDetailsTab(), QStringLiteral("Protocol Details"));
@@ -1159,14 +1236,27 @@ QTabWidget *MainWindow::createLogDetailsTabs()
 
 QWidget *MainWindow::createLowerDashboard()
 {
-    // Motion + independent Data Plots + Log/Protocol Details side by side.
     auto *lower = new QWidget(this);
     auto *layout = new QHBoxLayout(lower);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(8);
-    layout->addWidget(createMotionPanel());
+
+    auto *diagnostics = new QGroupBox(QStringLiteral("Diagnostics / Log"), lower);
+    applySectionStyle(diagnostics);
+    auto *diagLayout = new QVBoxLayout(diagnostics);
+    diagLayout->setContentsMargins(10, 8, 10, 10);
+    diagLayout->setSpacing(7);
+    addSectionHeader(
+        diagLayout,
+        diagnostics,
+        QStringLiteral("Diagnostics / Log"));
+
+    QTabWidget *detailsTabs = createLogDetailsTabs();
+    diagLayout->addWidget(detailsTabs, 1);
+
+    layout->addWidget(createMotionPanel(), 1);
     layout->addWidget(createDataPlotsTab(), 1);
-    layout->addWidget(createLogDetailsTabs(), 1);
+    layout->addWidget(diagnostics, 1);
     return lower;
 }
 
