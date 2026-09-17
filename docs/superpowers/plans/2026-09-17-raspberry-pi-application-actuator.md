@@ -200,13 +200,13 @@ git commit -m "feat: add Raspberry Pi typed onboard application"
 
 - [x] Step 1: Register robobeetle_pi_smoke only on Linux and link it to rbp2_onboard_application. **Executed: Windows target inventory omits it.**
 
-- [x] Step 2: Implement a line-oriented CLI requiring one device path. Support link status, enable/disable/neutral mask, angle servo/cdeg, gait simple/cpg, motion forward/turn_left/turn_right/ascend/descend/stop/backward, and telemetry display. Parse numeric arguments with checked conversion, print Submitted plus sequence or the typed rejection, and print Pending hardware qualification for backward without sending bytes. Do not add daemonization, background threads, retry/backoff, automatic reconnect, batch motion, or serial-fd calls; bounded stdin-only readiness polling is allowed so the runtime remains serviced while input is incomplete. **Implemented as `da99d3f`/`b82a8cc`; explicit same-process `reopen` fix resolved in `8dad183`.**
+- [x] Step 2: Implement a line-oriented CLI requiring one device path. Support link status, enable/disable/neutral mask, angle servo/cdeg, gait simple/cpg, motion forward/turn_left/turn_right/ascend/descend/stop/backward, and telemetry display. Parse numeric arguments with checked conversion, print Submitted plus sequence or the typed rejection, and print Pending hardware qualification for backward without sending bytes. Do not add daemonization, background threads, retry/backoff, automatic reconnect, batch motion, or serial-fd calls; bounded stdin-only readiness polling is allowed so the runtime remains serviced while input is incomplete. **Implemented as `da99d3f`/`b82a8cc`; explicit same-process `reopen` fix resolved in `e20dc46`.**
 
 - [x] Step 3: Document that ACK/admission is not physical execution, no authoritative Pi robot state is stored, and Hardware Acceptance is PENDING USER VERIFICATION. Document that every action is explicitly entered by the operator. **Executed in README.**
 
 - [ ] Step 4: Build the smoke target with -Wall -Wextra -Werror as part of the Linux command in Task 3. **Linux smoke build: NOT RUN; Windows CMake omission and portable codec build: PASS.**
 
-- [x] Step 5: Commit. **Committed as `da99d3f`/`b82a8cc`; reopen fix committed in follow-up `8dad183`.**
+- [x] Step 5: Commit. **Committed as `da99d3f`/`b82a8cc`; reopen fix committed in follow-up `e20dc46`.**
 
 ~~~powershell
 git add RoboBeetlePi/CMakeLists.txt RoboBeetlePi/tools/robobeetle_pi_smoke.cpp RoboBeetlePi/application/README.md
@@ -238,7 +238,7 @@ git -C D:\RoboBeetle-worktrees\dsh-qt-ui status --short
 
 Confirm no RoboBeetleConsole/, no RoboBeetleFirmware/, and no frozen Pi production layer files are listed. Do not alter either protected worktree.
 
-- [x] Step 5: Dispatch spec-compliance review against the approved design, then code-quality review only after spec review has no Critical/Important gaps. Re-run reviews after valid fixes. **Internal task/final reviews passed; ChatGPT external review found one smoke-tool reopen blocker, resolved in `8dad183`; awaiting re-review.**
+- [x] Step 5: Dispatch spec-compliance review against the approved design, then code-quality review only after spec review has no Critical/Important gaps. Re-run reviews after valid fixes. **Internal task/final reviews passed; ChatGPT external review found one smoke-tool reopen blocker, resolved in `e20dc46`; awaiting re-review.**
 
 - [x] Step 6: Push and stop. **Initial feature push was `5bb5941`; follow-up fix `e20dc46` was pushed normally without force.**
 
@@ -263,7 +263,7 @@ Do not create a PR, merge, delete the feature branch, or start Slice 7. Final ha
 - [ ] Hardware Acceptance — **PENDING USER VERIFICATION**
 
 ChatGPT external review found one smoke-tool same-process `reopen` blocker;
-the fix is resolved in `8dad183` and awaits re-review.
+the fix is resolved in `e20dc46` and awaits re-review.
 
 ## Plan self-review
 
