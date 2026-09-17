@@ -77,6 +77,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 if(BUILD_TESTING)
+    add_executable(rbp2_rbrp_codec_tests tests/rbrp_codec_tests.cpp)
+    target_include_directories(rbp2_rbrp_codec_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    )
+    target_compile_features(rbp2_rbrp_codec_tests PRIVATE cxx_std_17)
+    add_test(NAME rbp2_rbrp_codec_tests COMMAND rbp2_rbrp_codec_tests)
+
     add_executable(rbp2_protocol_tests
         tests/protocol_test_main.cpp
         tests/protocol_golden_tests.cpp
