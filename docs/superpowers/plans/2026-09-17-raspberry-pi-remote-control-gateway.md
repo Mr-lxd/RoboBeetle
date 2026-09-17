@@ -1116,3 +1116,146 @@ application Slice 6 changed?    NO
 dsh/qt-ui touched?              NO
 Slice 6 worktree touched?       NO
 ```
+
+## 15. External Code Review Round 2 implementation plan (2026-09-17)
+
+Round 2 reviewed the pushed correction at:
+
+```text
+reviewed HEAD: 502f11e2262c894935a0f1bd2f44f86125d92901
+base:          9bc66130467ebb4810d49c2a509c81f838855c6e
+```
+
+The review requires four blockers and two strengthening fixes. The existing
+Core and Linux gateway boundaries remain in place; the changes below are
+limited to trusted ingress timing, bounded owner scheduling, and state-event
+serialization.
+
+### Task 1: Trusted receive-time lease gate
+
+Files: `RoboBeetlePi/gateway/src/control_gateway_core.cpp` and
+`RoboBeetlePi/tests/control_gateway_core_tests.cpp`.
+
+- [x] Add portable RED cases for `CommandRequest` received at and after the
+  lease deadline, with processing time both before and after the deadline;
+  assert zero application submits, one abort, and `Unowned` authority.
+- [x] Add a RED case for a command received immediately before the deadline;
+  it may submit in sequence order, but must not extend the lease.
+- [x] Make the Core gate authority-dependent envelopes by their trusted
+  `RemoteEnvelope::received_at_ms`; an on-time heartbeat refreshes from its
+  received time, while a heartbeat at or after the deadline revokes without
+  relying on a stale owner timestamp.
+- [x] Run `rbp2_gateway_core_tests` and confirm the new tests fail before the
+  production change and pass after it.
+
+### Task 2: Deterministic inbound ingress barrier
+
+Files: `RoboBeetlePi/gateway/linux/include/robobeetle/gateway/tcp_adapter.hpp`,
+`RoboBeetlePi/gateway/linux/src/tcp_adapter.cpp`,
+`RoboBeetlePi/gateway/linux/src/gateway_owner.cpp`, and
+`RoboBeetlePi/tests/tcp_gateway_integration_tests.cpp`.
+
+- [x] Add a deterministic Linux regression whose inbound callback blocks after
+  the worker marks delivery in flight and before enqueue completion; owner
+  lease evaluation must not expire, and releasing the callback must preserve
+  authority.
+- [x] Mark delivery in flight before sampling `received_at_ms`, keep the mark
+  through the synchronous enqueue callback, and expose only an atomic read-only
+  query to the owner.
+- [x] Require the owner lease boundary to hold `bridge_mutex_`, see no pending
+  bridge work and no in-flight delivery, then call `Core::check_time` with a
+  monotonic sample. A delivery beginning after that boundary must timestamp at
+  or after the boundary.
+
+### Task 3: Finite owner phases and source/state regressions
+
+Files: `RoboBeetlePi/gateway/linux/include/robobeetle/gateway/gateway_owner.hpp`,
+`RoboBeetlePi/gateway/linux/src/gateway_owner.cpp`,
+`RoboBeetlePi/gateway/src/control_gateway_core.cpp`, and the two gateway test
+files.
+
+- [x] Replace drain-until-quiet with one finite bridge snapshot per phase:
+  SourceLost, current source registration, complete snapshot inbound, then a
+  safe lease check; call `GatewayApplicationPort::run_once()` once between
+  phase A and phase B.
+- [x] Add a portable event-vector RED case where the application final state is
+  Active but events are Degraded then Active; emitted ControlState messages
+  must preserve event order and event values.
+- [x] Serialize non-Lost state events from the event snapshot while retaining
+  the existing Lost/ReopenRequired revoke path.
+- [x] Strengthen Linux source-generation and poll-generation regressions with
+  explicit synchronization/observable state rather than sleep-only ordering.
+
+### Task 4: Acquire reply and verification record
+
+Files: `RoboBeetlePi/gateway/src/control_gateway_core.cpp`,
+`RoboBeetlePi/tests/control_gateway_core_tests.cpp`, and this plan.
+
+- [x] Publish the Granted `AcquireReply` lease remaining from the fresh
+  post-open monotonic sample, bounded in `[0, 1000]`.
+- [x] Run a fresh Windows configure/build/full portable CTest and record that
+  native Linux/Pi qualification is not run on Windows.
+- [x] Create only normal commits, push normally, verify the remote SHA, and
+  report the exact diff from `502f11e` without creating a PR.
+
+## 16. External Code Review Round 2 verification record (2026-09-17)
+
+Round 2 reviewed remote HEAD `502f11e2262c894935a0f1bd2f44f86125d92901`.
+The fixes were recorded as two new normal commits:
+
+```text
+5774fc295f9c78ea5333468b4b676eeee1ab5d41
+4075498df7de5afe535bc9fb12c347050df77f40
+```
+
+Blocker coverage:
+
+```text
+[x] trusted received_at lease gate rejects deadline/late command requests
+    before application.submit(), expires late heartbeats, preserves TCP, and
+    leaves pre-deadline commands ordered without extending the lease
+[x] TcpAdapter marks inbound delivery before timestamp capture and the owner
+    evaluates time only at a bridge/in-flight-safe boundary
+[x] owner processing is finite per phase with one application run_once between
+    phase A and phase B; sustained inbound/PTY coverage was added
+[x] non-Lost GatewayStateLinkEvent serialization uses event session/link
+    snapshots, including Degraded then Active in one event vector
+[x] Acquired ControlState remaining uses the post-open monotonic sample
+```
+
+Linux-side regression coverage added or strengthened:
+
+```text
+[x] deterministic blocked inbound callback proves a timely heartbeat cannot be
+    expired while decoded delivery is in flight
+[x] fixed poll-generation predicate rejects stale A HUP/POLLIN/POLLOUT for B
+[x] real source A/B/C reconnect covers B loss, C registration, Hello, Acquire
+[x] controlled sustained inbound traffic observes continued Protocol V2 PTY
+    heartbeats and authority usability
+```
+
+Windows portable verification:
+
+```text
+compiler: GNU 16.1.0 MinGW
+configure: cmake -S RoboBeetlePi -B build-slice7-round2-final -G Ninja
+           -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+build:     PASS
+CTest:     4/4 PASS
+```
+
+Native Linux/Pi configure/build, Linux gateway integration tests, hardware
+acceptance, PR creation, merge, Slice 8, rebase, amend, and force push were
+not performed on this Windows host.
+
+Frozen scope remains unchanged:
+
+```text
+Firmware changed?               NO
+Qt changed?                     NO
+Protocol/LinkCore changed?      NO
+Transport/Session/Runtime?      NO
+application Slice 6 changed?    NO
+dsh/qt-ui touched?              NO
+Slice 6 worktree touched?       NO
+```
