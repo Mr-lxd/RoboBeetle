@@ -274,24 +274,36 @@ QWidget *MainWindow::createImuCard()
 {
     auto *box = new QGroupBox(QStringLiteral("IMU — JY901S"), this);
     applyCardStyle(box);
-    auto *grid = new QGridLayout(box);
+    auto *layout = new QVBoxLayout(box);
+    layout->setContentsMargins(6, 4, 6, 4);
+    layout->setSpacing(2);
+    auto *statusRow = new QHBoxLayout;
     imuDot_ = new QLabel(box);
     imuDot_->setFixedSize(10, 10);
     imuDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     imuStatus_ = new QLabel(QStringLiteral("Unknown"), box);
     imuStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+    statusRow->addWidget(imuDot_);
+    statusRow->addSpacing(4);
+    statusRow->addWidget(imuStatus_);
+    statusRow->addStretch();
+    layout->addLayout(statusRow);
+
+    auto *metricsRow = new QHBoxLayout;
+    metricsRow->setSpacing(2);
     imuAcc_ = new QLabel(QStringLiteral("--"), box);
     imuGyro_ = new QLabel(QStringLiteral("--"), box);
     imuAngle_ = new QLabel(QStringLiteral("--"), box);
-    grid->addWidget(imuDot_, 0, 0);
-    grid->addWidget(imuStatus_, 0, 1, 1, 3);
-    grid->addWidget(new QLabel(QStringLiteral("Acc"), box), 1, 0);
-    grid->addWidget(imuAcc_, 1, 1);
-    grid->addWidget(new QLabel(QStringLiteral("Gyro"), box), 1, 2);
-    grid->addWidget(imuGyro_, 1, 3);
-    grid->addWidget(new QLabel(QStringLiteral("Angle"), box), 2, 0);
-    grid->addWidget(imuAngle_, 2, 1, 1, 3);
-    grid->setColumnStretch(3, 1);
+    metricsRow->addWidget(new QLabel(QStringLiteral("Acc"), box));
+    metricsRow->addWidget(imuAcc_);
+    metricsRow->addSpacing(8);
+    metricsRow->addWidget(new QLabel(QStringLiteral("Gyro"), box));
+    metricsRow->addWidget(imuGyro_);
+    metricsRow->addSpacing(8);
+    metricsRow->addWidget(new QLabel(QStringLiteral("Angle"), box));
+    metricsRow->addWidget(imuAngle_);
+    metricsRow->addStretch();
+    layout->addLayout(metricsRow);
     return box;
 }
 
@@ -299,24 +311,36 @@ QWidget *MainWindow::createDepthCard()
 {
     auto *box = new QGroupBox(QStringLiteral("Depth Sensor — ROVMAKER"), this);
     applyCardStyle(box);
-    auto *grid = new QGridLayout(box);
+    auto *layout = new QVBoxLayout(box);
+    layout->setContentsMargins(6, 4, 6, 4);
+    layout->setSpacing(2);
+    auto *statusRow = new QHBoxLayout;
     depthDot_ = new QLabel(box);
     depthDot_->setFixedSize(10, 10);
     depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     depthStatus_ = new QLabel(QStringLiteral("Unknown"), box);
     depthStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+    statusRow->addWidget(depthDot_);
+    statusRow->addSpacing(4);
+    statusRow->addWidget(depthStatus_);
+    statusRow->addStretch();
+    layout->addLayout(statusRow);
+
+    auto *metricsRow = new QHBoxLayout;
+    metricsRow->setSpacing(2);
     depthValue_ = new QLabel(QStringLiteral("--"), box);
     depthTemperature_ = new QLabel(QStringLiteral("--"), box);
     depthAge_ = new QLabel(QStringLiteral("--"), box);
-    grid->addWidget(depthDot_, 0, 0);
-    grid->addWidget(depthStatus_, 0, 1, 1, 3);
-    grid->addWidget(new QLabel(QStringLiteral("Depth"), box), 1, 0);
-    grid->addWidget(depthValue_, 1, 1);
-    grid->addWidget(new QLabel(QStringLiteral("Temp"), box), 1, 2);
-    grid->addWidget(depthTemperature_, 1, 3);
-    grid->addWidget(new QLabel(QStringLiteral("Age"), box), 2, 0);
-    grid->addWidget(depthAge_, 2, 1, 1, 3);
-    grid->setColumnStretch(3, 1);
+    metricsRow->addWidget(new QLabel(QStringLiteral("Depth"), box));
+    metricsRow->addWidget(depthValue_);
+    metricsRow->addSpacing(8);
+    metricsRow->addWidget(new QLabel(QStringLiteral("Temp"), box));
+    metricsRow->addWidget(depthTemperature_);
+    metricsRow->addSpacing(8);
+    metricsRow->addWidget(new QLabel(QStringLiteral("Age"), box));
+    metricsRow->addWidget(depthAge_);
+    metricsRow->addStretch();
+    layout->addLayout(metricsRow);
     return box;
 }
 
@@ -324,23 +348,37 @@ QWidget *MainWindow::createProtocolSummaryCard()
 {
     auto *box = new QGroupBox(QStringLiteral("Protocol / Link"), this);
     applyCardStyle(box);
-    auto *layout = new QGridLayout(box);
+    auto *layout = new QVBoxLayout(box);
+    layout->setContentsMargins(6, 4, 6, 4);
+    layout->setSpacing(2);
     txCount_ = new QLabel(QStringLiteral("0"), box);
     rxCount_ = new QLabel(QStringLiteral("0"), box);
     crcCount_ = new QLabel(QStringLiteral("0"), box);
     timeoutCount_ = new QLabel(QStringLiteral("0"), box);
     ackRtt_ = new QLabel(QStringLiteral("—"), box);
-    layout->addWidget(new QLabel(QStringLiteral("TX"), box), 0, 0);
-    layout->addWidget(txCount_, 0, 1);
-    layout->addWidget(new QLabel(QStringLiteral("RX"), box), 1, 0);
-    layout->addWidget(rxCount_, 1, 1);
-    layout->addWidget(new QLabel(QStringLiteral("CRC"), box), 2, 0);
-    layout->addWidget(crcCount_, 2, 1);
-    layout->addWidget(new QLabel(QStringLiteral("Timeout"), box), 3, 0);
-    layout->addWidget(timeoutCount_, 3, 1);
-    layout->addWidget(new QLabel(QStringLiteral("ACK RTT"), box), 4, 0);
-    layout->addWidget(ackRtt_, 4, 1);
-    layout->setColumnStretch(1, 1);
+
+    auto *row1 = new QHBoxLayout;
+    row1->setSpacing(2);
+    row1->addWidget(new QLabel(QStringLiteral("TX"), box));
+    row1->addWidget(txCount_);
+    row1->addSpacing(8);
+    row1->addWidget(new QLabel(QStringLiteral("RX"), box));
+    row1->addWidget(rxCount_);
+    row1->addSpacing(8);
+    row1->addWidget(new QLabel(QStringLiteral("CRC"), box));
+    row1->addWidget(crcCount_);
+    row1->addStretch();
+    layout->addLayout(row1);
+
+    auto *row2 = new QHBoxLayout;
+    row2->setSpacing(2);
+    row2->addWidget(new QLabel(QStringLiteral("Timeout"), box));
+    row2->addWidget(timeoutCount_);
+    row2->addSpacing(8);
+    row2->addWidget(new QLabel(QStringLiteral("ACK RTT"), box));
+    row2->addWidget(ackRtt_);
+    row2->addStretch();
+    layout->addLayout(row2);
     return box;
 }
 
@@ -350,10 +388,23 @@ QWidget *MainWindow::createStatusColumn()
     auto *layout = new QVBoxLayout(column);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
-    layout->addWidget(createLeakCard());
-    layout->addWidget(createImuCard(), 1);
-    layout->addWidget(createDepthCard(), 1);
-    layout->addWidget(createProtocolSummaryCard());
+    // Use natural (Minimum) vertical size policy so the telemetry cards keep
+    // their readable content height and cannot shrink below their sizeHint().
+    QWidget *leak = createLeakCard();
+    QWidget *imu = createImuCard();
+    QWidget *depth = createDepthCard();
+    QWidget *protocol = createProtocolSummaryCard();
+    leak->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    imu->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    depth->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    protocol->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    layout->addWidget(leak);
+    layout->addWidget(imu);
+    layout->addWidget(depth);
+    layout->addWidget(protocol);
+    // Leftover vertical space is assigned to the bottom stretch, never by
+    // shrinking the telemetry cards below their content height.
+    layout->addStretch(1);
     return column;
 }
 

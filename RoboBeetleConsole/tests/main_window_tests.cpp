@@ -613,6 +613,45 @@ void testDashboardLayout()
     }
     expect(!anyClipped,
            "no servo card may be wider than the window (horizontal clip)");
+
+    // Vertical-clipping regression: after showing at the default size and
+    // letting the layout settle, every critical dashboard telemetry label must
+    // actually be laid out at a height at least its required (minimum) height.
+    // This is relative to each widget's own minimumSizeHint(), so it is
+    // independent of font metrics and fixed pixel coordinates.
+    window.show();
+    for (int i = 0; i < 20; ++i) {
+        QApplication::processEvents();
+    }
+    auto checkLabelHeight = [&window](const QString &title) {
+        QGroupBox *box = findGroupBox(&window, title);
+        if (box == nullptr) {
+            return false;
+        }
+        bool ok = true;
+        const auto labels = box->findChildren<QLabel *>();
+        for (const QLabel *label : labels) {
+            if (label->text().isEmpty()) {
+                continue;
+            }
+            const int required = label->minimumSizeHint().height();
+            const int actual = label->height();
+            if (actual > 0 && actual < required) {
+                ok = false;
+            }
+        }
+        return ok;
+    };
+    expect(checkLabelHeight(QStringLiteral("IMU — JY901S")),
+           "IMU card status/metric labels must not be vertically clipped");
+    expect(checkLabelHeight(QStringLiteral("Depth Sensor — ROVMAKER")),
+           "Depth card status/metric labels must not be vertically clipped");
+    expect(checkLabelHeight(QStringLiteral("Protocol / Link")),
+           "Protocol/Link card TX/RX/CRC/Timeout/ACK RTT labels must not be "
+           "vertically clipped");
+    expect(checkLabelHeight(QStringLiteral("Leak Detection")),
+           "Leak card label must not be vertically clipped");
+    window.hide();
 }
 
 } // namespace
