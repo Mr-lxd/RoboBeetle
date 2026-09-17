@@ -74,24 +74,29 @@ QString motionModeText(MotionMode mode)
     return QStringLiteral("UNKNOWN");
 }
 
-// Subtle industrial-console card style: light background, thin border, no
-// gradients or glassmorphism, to keep the surface low-noise.
+// Subtle industrial-console card style: white card surface separated from the
+// page tint, a soft shadowed border for layering, and a stronger section title
+// that reads as a module header rather than plain content text.
 void applyCardStyle(QGroupBox *box)
 {
     box->setStyleSheet(QStringLiteral(
         "QGroupBox {"
-        "  border: 1px solid #cfd6dd;"
-        "  border-radius: 6px;"
-        "  margin-top: 10px;"
-        "  padding: 8px;"
         "  background: #ffffff;"
+        "  border: 1px solid #d5dce3;"
+        "  border-radius: 7px;"
+        "  margin-top: 14px;"
+        "  padding-top: 6px;"
         "}"
         "QGroupBox::title {"
         "  subcontrol-origin: margin;"
         "  left: 10px;"
-        "  padding: 0 4px;"
-        "  color: #37474f;"
-        "  font-weight: bold;"
+        "  top: 2px;"
+        "  padding: 0 6px;"
+        "  background: #ffffff;"
+        "  color: #263238;"
+        "  font-size: 13px;"
+        "  font-weight: 700;"
+        "  letter-spacing: 0.3px;"
         "}"));
 }
 
@@ -107,8 +112,8 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
 
     auto *central = new QWidget(this);
     auto *root = new QVBoxLayout(central);
-    root->setContentsMargins(6, 6, 6, 6);
-    root->setSpacing(8);
+    root->setContentsMargins(4, 4, 4, 4);
+    root->setSpacing(6);
 
     root->addWidget(createConnectionBar());
     root->addWidget(createDashboard(), 1);
@@ -116,6 +121,43 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     root->addWidget(createLowerDashboard(), 1);
 
     setCentralWidget(central);
+
+    // Application-wide styling system (Slice A): a subtle page background tint,
+    // a shared base font, and product-style tabs/inputs. Cards and section
+    // titles are styled locally via applyCardStyle(). Per-widget stylesheets
+    // (motion buttons, header actions) override these app-wide defaults.
+    setStyleSheet(QStringLiteral(
+        "QMainWindow { background: #e9eef3; }"
+        "QWidget { font-family: \"Segoe UI\"; font-size: 13px; color: #37474f; }"
+        "QTabWidget::pane { border: 1px solid #cfd6dd; border-radius: 6px; "
+        "  background: #ffffff; top: -1px; }"
+        "QTabBar::tab { background: #eef2f6; border: 1px solid #d5dce3; "
+        "  border-bottom: none; border-top-left-radius: 5px; "
+        "  border-top-right-radius: 5px; padding: 5px 14px; margin-right: 2px; "
+        "  color: #455a64; }"
+        "QTabBar::tab:selected { background: #ffffff; color: #1565c0; "
+        "  font-weight: bold; border-top: 2px solid #1976D2; }"
+        "QTabBar::tab:hover:!selected { background: #e2e8ee; }"
+        "QPushButton { background: #f2f5f8; border: 1px solid #c4ccd4; "
+        "  border-radius: 5px; padding: 6px 14px; color: #37474f; }"
+        "QPushButton:hover { background: #e3e9ef; border-color: #aeb7c0; }"
+        "QPushButton:pressed { background: #d7dfe7; }"
+        "QPushButton:disabled { color: #9aa5ad; background: #f0f2f4; "
+        "  border-color: #dde1e5; }"
+        "QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit { background: #ffffff; "
+        "  border: 1px solid #c4ccd4; border-radius: 4px; padding: 3px 6px; "
+        "  color: #37474f; }"
+        "QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus { "
+        "  border-color: #1976D2; }"
+        "QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, "
+        "QLineEdit:disabled { color: #9aa5ad; background: #f0f2f4; }"
+        "QSlider::groove:horizontal { height: 6px; background: #d3dae1; "
+        "  border-radius: 3px; }"
+        "QSlider::handle:horizontal { width: 14px; margin: -4px 0; "
+        "  background: #1976D2; border-radius: 7px; }"
+        "QSlider::handle:horizontal:disabled { background: #b8c1c9; }"
+        "QPlainTextEdit { background: #fbfcfd; border: 1px solid #c4ccd4; "
+        "  border-radius: 4px; color: #37474f; }"));
 
     connect(controller_, &RobotController::serialPortsChanged, this, [this](const QStringList &ports) {
         const QString current = portCombo_->currentText();
@@ -190,13 +232,21 @@ QWidget *MainWindow::createConnectionBar()
 {
     auto *bar = new QWidget(this);
     bar->setFixedHeight(48);
+    bar->setObjectName(QStringLiteral("topHeaderBar"));
+    bar->setStyleSheet(QStringLiteral(
+        "#topHeaderBar { background: #ffffff; border: 1px solid #d5dce3; "
+        "  border-radius: 6px; }"));
     auto *layout = new QHBoxLayout(bar);
-    layout->setContentsMargins(6, 4, 6, 4);
+    layout->setContentsMargins(10, 4, 10, 4);
     layout->setSpacing(6);
 
     auto *title = new QLabel(QStringLiteral("RoboBeetle Console"), bar);
-    title->setStyleSheet(QStringLiteral("font-weight: bold; font-size: 13px; color: #37474f;"));
+    title->setStyleSheet(QStringLiteral(
+        "font-weight: 700; font-size: 14px; color: #1565c0; "
+        "letter-spacing: 0.4px;"));
     layout->addWidget(title);
+
+    layout->addSpacing(6);
 
     layout->addWidget(new QLabel(QStringLiteral("Serial Port"), bar));
     portCombo_ = new QComboBox(bar);
@@ -209,20 +259,45 @@ QWidget *MainWindow::createConnectionBar()
     baudSpin_->setValue(9600);
     layout->addWidget(baudSpin_);
 
+    // Secondary action: Refresh.
     auto *refresh = new QPushButton(QStringLiteral("Refresh"), bar);
+    refresh->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #ffffff; border: 1px solid #90a4ae; "
+        "  border-radius: 5px; padding: 6px 14px; color: #455a64; }"
+        "QPushButton:hover { background: #eef2f6; border-color: #78909c; }"
+        "QPushButton:pressed { background: #e0e6ec; }"));
+
+    // Primary action: Connect.
     connectButton_ = new QPushButton(QStringLiteral("Connect"), bar);
+    connectButton_->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #1976D2; border: 1px solid #1565c0; "
+        "  border-radius: 5px; padding: 6px 16px; color: #ffffff; "
+        "  font-weight: 700; }"
+        "QPushButton:hover { background: #1565c0; }"
+        "QPushButton:pressed { background: #11519b; }"
+        "QPushButton:disabled { background: #9eb6cf; color: #e6edf3; "
+        "  border-color: #8aa6c0; }"));
     layout->addWidget(refresh);
     layout->addWidget(connectButton_);
 
+    // Danger action: Emergency Stop.
     auto *emergencyStop = new QPushButton(QStringLiteral("Emergency Stop"), bar);
     emergencyStop->setEnabled(false);
     emergencyStop->setToolTip(QStringLiteral("Protocol V2 has no Emergency Stop message in Phase 1"));
+    emergencyStop->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #E53935; border: 1px solid #c62828; "
+        "  border-radius: 5px; padding: 6px 14px; color: #ffffff; "
+        "  font-weight: 700; }"
+        "QPushButton:hover { background: #d32f2f; }"
+        "QPushButton:pressed { background: #b71c1c; }"
+        "QPushButton:disabled { background: #f2c2c1; color: #fdeaea; "
+        "  border-color: #e5a5a3; }"));
     layout->addWidget(emergencyStop);
 
     layout->addStretch();
     layout->addWidget(new QLabel(QStringLiteral("State"), bar));
     connectionStatus_ = new QLabel(QStringLiteral("Disconnected"), bar);
-    connectionStatus_->setStyleSheet(QStringLiteral("font-weight: bold;"));
+    connectionStatus_->setStyleSheet(QStringLiteral("font-weight: 700; color: #263238;"));
     layout->addWidget(connectionStatus_);
 
     connect(refresh, &QPushButton::clicked, controller_, &RobotController::refreshSerialPorts);
@@ -258,14 +333,20 @@ QWidget *MainWindow::createLeakCard()
 {
     auto *box = new QGroupBox(QStringLiteral("Leak Detection"), this);
     applyCardStyle(box);
-    auto *layout = new QHBoxLayout(box);
+    auto *layout = new QVBoxLayout(box);
+    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setSpacing(4);
+    auto *statusRow = new QHBoxLayout;
     leakDot_ = new QLabel(box);
-    leakDot_->setFixedSize(12, 12);
-    leakDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 6px;"));
-    leakStatus_ = new QLabel(QStringLiteral("Leak: Unknown"), box);
-    leakStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
-    layout->addWidget(leakDot_);
-    layout->addWidget(leakStatus_);
+    leakDot_->setFixedSize(10, 10);
+    leakDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
+    leakStatus_ = new QLabel(QStringLiteral("Unknown"), box);
+    leakStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 13px; font-weight: 600;"));
+    statusRow->addWidget(leakDot_);
+    statusRow->addSpacing(4);
+    statusRow->addWidget(leakStatus_);
+    statusRow->addStretch();
+    layout->addLayout(statusRow);
     layout->addStretch();
     return box;
 }
@@ -275,35 +356,40 @@ QWidget *MainWindow::createImuCard()
     auto *box = new QGroupBox(QStringLiteral("IMU — JY901S"), this);
     applyCardStyle(box);
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(6, 4, 6, 4);
-    layout->setSpacing(2);
+    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setSpacing(3);
     auto *statusRow = new QHBoxLayout;
     imuDot_ = new QLabel(box);
     imuDot_->setFixedSize(10, 10);
     imuDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     imuStatus_ = new QLabel(QStringLiteral("Unknown"), box);
-    imuStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+    imuStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 13px; font-weight: 600;"));
     statusRow->addWidget(imuDot_);
     statusRow->addSpacing(4);
     statusRow->addWidget(imuStatus_);
     statusRow->addStretch();
     layout->addLayout(statusRow);
 
-    auto *metricsRow = new QHBoxLayout;
-    metricsRow->setSpacing(2);
+    auto *metrics = new QGridLayout;
+    metrics->setHorizontalSpacing(8);
+    metrics->setVerticalSpacing(1);
     imuAcc_ = new QLabel(QStringLiteral("--"), box);
     imuGyro_ = new QLabel(QStringLiteral("--"), box);
     imuAngle_ = new QLabel(QStringLiteral("--"), box);
-    metricsRow->addWidget(new QLabel(QStringLiteral("Acc"), box));
-    metricsRow->addWidget(imuAcc_);
-    metricsRow->addSpacing(8);
-    metricsRow->addWidget(new QLabel(QStringLiteral("Gyro"), box));
-    metricsRow->addWidget(imuGyro_);
-    metricsRow->addSpacing(8);
-    metricsRow->addWidget(new QLabel(QStringLiteral("Angle"), box));
-    metricsRow->addWidget(imuAngle_);
-    metricsRow->addStretch();
-    layout->addLayout(metricsRow);
+    for (QLabel *label : {imuAcc_, imuGyro_, imuAngle_}) {
+        label->setStyleSheet(QStringLiteral("color: #546e7a; font-size: 11px;"));
+    }
+    for (int row = 0; row < 3; ++row) {
+        auto *label = new QLabel(QStringList{QStringLiteral("Acc"), QStringLiteral("Gyro"), QStringLiteral("Angle")}.at(row), box);
+        label->setStyleSheet(QStringLiteral("color: #78909c; font-size: 11px;"));
+        metrics->addWidget(label, row, 0);
+    }
+    metrics->addWidget(imuAcc_, 0, 1);
+    metrics->addWidget(imuGyro_, 1, 1);
+    metrics->addWidget(imuAngle_, 2, 1);
+    metrics->setColumnStretch(1, 1);
+    layout->addLayout(metrics);
+    layout->addStretch();
     return box;
 }
 
@@ -312,35 +398,40 @@ QWidget *MainWindow::createDepthCard()
     auto *box = new QGroupBox(QStringLiteral("Depth Sensor — ROVMAKER"), this);
     applyCardStyle(box);
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(6, 4, 6, 4);
-    layout->setSpacing(2);
+    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setSpacing(3);
     auto *statusRow = new QHBoxLayout;
     depthDot_ = new QLabel(box);
     depthDot_->setFixedSize(10, 10);
     depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     depthStatus_ = new QLabel(QStringLiteral("Unknown"), box);
-    depthStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+    depthStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 13px; font-weight: 600;"));
     statusRow->addWidget(depthDot_);
     statusRow->addSpacing(4);
     statusRow->addWidget(depthStatus_);
     statusRow->addStretch();
     layout->addLayout(statusRow);
 
-    auto *metricsRow = new QHBoxLayout;
-    metricsRow->setSpacing(2);
+    auto *metrics = new QGridLayout;
+    metrics->setHorizontalSpacing(8);
+    metrics->setVerticalSpacing(1);
     depthValue_ = new QLabel(QStringLiteral("--"), box);
     depthTemperature_ = new QLabel(QStringLiteral("--"), box);
     depthAge_ = new QLabel(QStringLiteral("--"), box);
-    metricsRow->addWidget(new QLabel(QStringLiteral("Depth"), box));
-    metricsRow->addWidget(depthValue_);
-    metricsRow->addSpacing(8);
-    metricsRow->addWidget(new QLabel(QStringLiteral("Temp"), box));
-    metricsRow->addWidget(depthTemperature_);
-    metricsRow->addSpacing(8);
-    metricsRow->addWidget(new QLabel(QStringLiteral("Age"), box));
-    metricsRow->addWidget(depthAge_);
-    metricsRow->addStretch();
-    layout->addLayout(metricsRow);
+    for (QLabel *label : {depthValue_, depthTemperature_, depthAge_}) {
+        label->setStyleSheet(QStringLiteral("color: #546e7a; font-size: 11px;"));
+    }
+    for (int row = 0; row < 3; ++row) {
+        auto *label = new QLabel(QStringList{QStringLiteral("Depth"), QStringLiteral("Temp"), QStringLiteral("Age")}.at(row), box);
+        label->setStyleSheet(QStringLiteral("color: #78909c; font-size: 11px;"));
+        metrics->addWidget(label, row, 0);
+    }
+    metrics->addWidget(depthValue_, 0, 1);
+    metrics->addWidget(depthTemperature_, 1, 1);
+    metrics->addWidget(depthAge_, 2, 1);
+    metrics->setColumnStretch(1, 1);
+    layout->addLayout(metrics);
+    layout->addStretch();
     return box;
 }
 
@@ -348,63 +439,62 @@ QWidget *MainWindow::createProtocolSummaryCard()
 {
     auto *box = new QGroupBox(QStringLiteral("Protocol / Link"), this);
     applyCardStyle(box);
-    auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(6, 4, 6, 4);
-    layout->setSpacing(2);
+    auto *layout = new QGridLayout(box);
+    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setHorizontalSpacing(8);
+    layout->setVerticalSpacing(3);
     txCount_ = new QLabel(QStringLiteral("0"), box);
     rxCount_ = new QLabel(QStringLiteral("0"), box);
     crcCount_ = new QLabel(QStringLiteral("0"), box);
     timeoutCount_ = new QLabel(QStringLiteral("0"), box);
     ackRtt_ = new QLabel(QStringLiteral("—"), box);
-
-    auto *row1 = new QHBoxLayout;
-    row1->setSpacing(2);
-    row1->addWidget(new QLabel(QStringLiteral("TX"), box));
-    row1->addWidget(txCount_);
-    row1->addSpacing(8);
-    row1->addWidget(new QLabel(QStringLiteral("RX"), box));
-    row1->addWidget(rxCount_);
-    row1->addSpacing(8);
-    row1->addWidget(new QLabel(QStringLiteral("CRC"), box));
-    row1->addWidget(crcCount_);
-    row1->addStretch();
-    layout->addLayout(row1);
-
-    auto *row2 = new QHBoxLayout;
-    row2->setSpacing(2);
-    row2->addWidget(new QLabel(QStringLiteral("Timeout"), box));
-    row2->addWidget(timeoutCount_);
-    row2->addSpacing(8);
-    row2->addWidget(new QLabel(QStringLiteral("ACK RTT"), box));
-    row2->addWidget(ackRtt_);
-    row2->addStretch();
-    layout->addLayout(row2);
+    for (QLabel *value : {txCount_, rxCount_, crcCount_, timeoutCount_, ackRtt_}) {
+        value->setStyleSheet(QStringLiteral("color: #546e7a; font-size: 11px; font-weight: 600;"));
+    }
+    const QStringList labels = {
+        QStringLiteral("TX"), QStringLiteral("RX"), QStringLiteral("CRC"),
+        QStringLiteral("Timeout"), QStringLiteral("ACK RTT"),
+    };
+    for (int index = 0; index < labels.size(); ++index) {
+        auto *label = new QLabel(labels.at(index), box);
+        label->setStyleSheet(QStringLiteral("color: #78909c; font-size: 11px;"));
+        const int row = index < 4 ? index / 2 : 2;
+        const int column = index < 4 ? (index % 2) * 2 : 0;
+        layout->addWidget(label, row, column);
+    }
+    layout->addWidget(txCount_, 0, 1);
+    layout->addWidget(rxCount_, 0, 3);
+    layout->addWidget(crcCount_, 1, 1);
+    layout->addWidget(timeoutCount_, 1, 3);
+    layout->addWidget(ackRtt_, 2, 1);
+    layout->setColumnStretch(1, 1);
+    layout->setColumnStretch(3, 1);
     return box;
 }
 
 QWidget *MainWindow::createStatusColumn()
 {
     auto *column = new QWidget(this);
-    auto *layout = new QVBoxLayout(column);
+    auto *layout = new QGridLayout(column);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
-    // Use natural (Minimum) vertical size policy so the telemetry cards keep
-    // their readable content height and cannot shrink below their sizeHint().
+    // Keep the dashboard telemetry as one balanced 2x2 grid alongside video.
     QWidget *leak = createLeakCard();
     QWidget *imu = createImuCard();
     QWidget *depth = createDepthCard();
     QWidget *protocol = createProtocolSummaryCard();
-    leak->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
-    imu->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
-    depth->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
-    protocol->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
-    layout->addWidget(leak);
-    layout->addWidget(imu);
-    layout->addWidget(depth);
-    layout->addWidget(protocol);
-    // Leftover vertical space is assigned to the bottom stretch, never by
-    // shrinking the telemetry cards below their content height.
-    layout->addStretch(1);
+    leak->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    imu->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    depth->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    protocol->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    layout->addWidget(leak, 0, 0);
+    layout->addWidget(imu, 0, 1);
+    layout->addWidget(depth, 1, 0);
+    layout->addWidget(protocol, 1, 1);
+    layout->setColumnStretch(0, 1);
+    layout->setColumnStretch(1, 1);
+    layout->setRowStretch(0, 1);
+    layout->setRowStretch(1, 1);
     return column;
 }
 
@@ -429,9 +519,30 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
         : QString::fromLatin1(descriptor->displayName);
     auto *box = new QGroupBox(semanticName, this);
     applyCardStyle(box);
+    box->setStyleSheet(box->styleSheet() + QStringLiteral(
+        "QGroupBox { margin-top: 5px; padding-top: 3px; }"
+        "QGroupBox::title { color: transparent; background: transparent; }"));
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(4, 4, 4, 4);
-    layout->setSpacing(4);
+    layout->setContentsMargins(6, 6, 6, 6);
+    layout->setSpacing(3);
+
+    const bool angleSupported = supported && descriptor != nullptr && descriptor->angleSupported;
+
+    auto *header = new QHBoxLayout;
+    header->setSpacing(4);
+    auto *name = new QLabel(semanticName, box);
+    name->setStyleSheet(QStringLiteral("color: #263238; font-size: 13px; font-weight: 700;"));
+    header->addWidget(name);
+    header->addStretch();
+    auto *statusDot = new QLabel(box);
+    statusDot->setObjectName(QStringLiteral("servoStatusDot%1").arg(index));
+    statusDot->setFixedSize(8, 8);
+    statusDot->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 4px;"));
+    header->addWidget(statusDot);
+    statusLabels_[index] = new QLabel(QStringLiteral("Disconnected"), box);
+    statusLabels_[index]->setStyleSheet(QStringLiteral("color: #666666; font-size: 11px; font-weight: 600;"));
+    header->addWidget(statusLabels_[index]);
+    layout->addLayout(header);
 
     const QString warningText = descriptor == nullptr || !supported
         ? QStringLiteral("UNSUPPORTED — NO HARDWARE CHANNEL")
@@ -446,17 +557,12 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
                   .arg(static_cast<double>(descriptor->commandMaxAngleCdeg) / 100.0, 0, 'f', 1);
     auto *warning = new QLabel(warningText, box);
     warning->setWordWrap(true);
-    warning->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
+    warning->setStyleSheet(QStringLiteral("color: #8b6f4e; font-size: 10px; font-weight: 500;"));
     layout->addWidget(warning);
 
-    auto *statusRow = new QHBoxLayout;
-    statusLabels_[index] = new QLabel(QStringLiteral("Disconnected"), box);
-    statusLabels_[index]->setStyleSheet(QStringLiteral("font-weight: bold;"));
-    statusRow->addWidget(statusLabels_[index]);
-    statusRow->addStretch();
-    layout->addLayout(statusRow);
-
+    // PWM label + spin + slider share one compact row.
     auto *pwmRow = new QHBoxLayout;
+    pwmRow->setSpacing(2);
     pwmSpins_[index] = new QSpinBox(box);
     pwmSpins_[index]->setRange(descriptor == nullptr ? 0 : descriptor->commandMinPwmUs,
                                descriptor == nullptr ? 0 : descriptor->commandMaxPwmUs);
@@ -464,16 +570,46 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     pwmSpins_[index]->setSuffix(QStringLiteral(" μs"));
     pwmSpins_[index]->setEnabled(supported);
     pwmRow->addWidget(new QLabel(QStringLiteral("PWM"), box));
-    pwmRow->addWidget(pwmSpins_[index], 1);
-    layout->addLayout(pwmRow);
-
+    pwmRow->addWidget(pwmSpins_[index]);
     pwmSliders_[index] = new QSlider(Qt::Horizontal, box);
     pwmSliders_[index]->setRange(descriptor == nullptr ? 0 : descriptor->commandMinPwmUs,
                                  descriptor == nullptr ? 0 : descriptor->commandMaxPwmUs);
     pwmSliders_[index]->setValue(descriptor == nullptr ? 0 : descriptor->neutralPwmUs);
     pwmSliders_[index]->setEnabled(supported);
-    layout->addWidget(pwmSliders_[index]);
+    pwmRow->addWidget(pwmSliders_[index], 1);
+    layout->addLayout(pwmRow);
 
+    // Angle + Set Angle share one compact row.
+    auto *angleRow = new QHBoxLayout;
+    angleRow->setSpacing(2);
+    angleSpins_[index] = new QDoubleSpinBox(box);
+    angleSpins_[index]->setRange(descriptor == nullptr ? 0.0
+                                                      : static_cast<double>(descriptor->commandMinAngleCdeg) / 100.0,
+                                 descriptor == nullptr ? 0.0
+                                                      : static_cast<double>(descriptor->commandMaxAngleCdeg) / 100.0);
+    angleSpins_[index]->setDecimals(1);
+    angleSpins_[index]->setSingleStep(0.1);
+    angleSpins_[index]->setValue(0.0);
+    angleSpins_[index]->setSuffix(QStringLiteral(" deg"));
+    angleSpins_[index]->setEnabled(false);
+    angleRow->addWidget(new QLabel(QStringLiteral("Angle"), box));
+    angleRow->addWidget(angleSpins_[index], 1);
+    angleButtons_[index] = new QPushButton(
+        angleSupported
+            ? QStringLiteral("Set Angle")
+            : QStringLiteral("Set Angle — PWM Only / Planned"),
+        box);
+    angleButtons_[index]->setEnabled(false);
+    angleButtons_[index]->setToolTip(
+        angleSupported
+            ? QStringLiteral("Send %1 as Protocol V2 centidegrees after Enable ACK")
+                  .arg(semanticName)
+            : QStringLiteral("%1 has no angle capability; use PWM only while calibration is pending")
+                  .arg(semanticName));
+    angleRow->addWidget(angleButtons_[index]);
+    layout->addLayout(angleRow);
+
+    // Enable / Neutral / Apply on a single row.
     enableButtons_[index] = new QPushButton(QStringLiteral("Enable PWM"), box);
     enableButtons_[index]->setToolTip(QStringLiteral(
         "Enable PWM drive and hold the calibrated neutral position."));
@@ -489,42 +625,17 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     }
     applyButtons_[index] = new QPushButton(QStringLiteral("Apply PWM"), box);
 
-    auto *actionColumn = new QVBoxLayout;
-    actionColumn->setSpacing(2);
-    actionColumn->addWidget(enableButtons_[index]);
-    actionColumn->addWidget(neutralButtons_[index]);
-    actionColumn->addWidget(applyButtons_[index]);
-    layout->addLayout(actionColumn);
-
-    auto *angleRow = new QHBoxLayout;
-    angleSpins_[index] = new QDoubleSpinBox(box);
-    angleSpins_[index]->setRange(descriptor == nullptr ? 0.0
-                                                      : static_cast<double>(descriptor->commandMinAngleCdeg) / 100.0,
-                                 descriptor == nullptr ? 0.0
-                                                      : static_cast<double>(descriptor->commandMaxAngleCdeg) / 100.0);
-    angleSpins_[index]->setDecimals(1);
-    angleSpins_[index]->setSingleStep(0.1);
-    angleSpins_[index]->setValue(0.0);
-    angleSpins_[index]->setSuffix(QStringLiteral(" deg"));
-    angleSpins_[index]->setEnabled(false);
-    angleRow->addWidget(new QLabel(QStringLiteral("Angle"), box));
-    angleRow->addWidget(angleSpins_[index], 1);
-    layout->addLayout(angleRow);
-
-    const bool angleSupported = supported && descriptor != nullptr && descriptor->angleSupported;
-    angleButtons_[index] = new QPushButton(
-        angleSupported
-            ? QStringLiteral("Set Angle")
-            : QStringLiteral("Set Angle — PWM Only / Planned"),
-        box);
-    angleButtons_[index]->setEnabled(false);
-    angleButtons_[index]->setToolTip(
-        angleSupported
-            ? QStringLiteral("Send %1 as Protocol V2 centidegrees after Enable ACK")
-                  .arg(semanticName)
-            : QStringLiteral("%1 has no angle capability; use PWM only while calibration is pending")
-                  .arg(semanticName));
-    layout->addWidget(angleButtons_[index]);
+    for (QPushButton *button : {enableButtons_[index], neutralButtons_[index], applyButtons_[index]}) {
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        button->setMinimumWidth(0);
+        button->setStyleSheet(QStringLiteral("QPushButton { padding: 4px 3px; }"));
+    }
+    auto *actionsRow = new QHBoxLayout;
+    actionsRow->setSpacing(2);
+    actionsRow->addWidget(enableButtons_[index], 1);
+    actionsRow->addWidget(neutralButtons_[index], 1);
+    actionsRow->addWidget(applyButtons_[index], 1);
+    layout->addLayout(actionsRow);
 
     connect(pwmSpins_[index], qOverload<int>(&QSpinBox::valueChanged),
             pwmSliders_[index], &QSlider::setValue);
@@ -563,11 +674,21 @@ QWidget *MainWindow::createActuatorPanel()
     auto *box = new QGroupBox(QStringLiteral("Actuator Control"), this);
     applyCardStyle(box);
     auto *layout = new QVBoxLayout(box);
+    layout->setContentsMargins(6, 4, 6, 6);
     layout->setSpacing(4);
 
     auto *header = new QHBoxLayout;
+    header->setContentsMargins(0, 0, 0, 0);
     header->addStretch();
     auto *disableAll = new QPushButton(QStringLiteral("Disable All"), box);
+    disableAll->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #E53935; border: 1px solid #c62828; "
+        "  border-radius: 5px; padding: 6px 16px; color: #ffffff; "
+        "  font-weight: 700; }"
+        "QPushButton:hover { background: #d32f2f; }"
+        "QPushButton:pressed { background: #b71c1c; }"
+        "QPushButton:disabled { background: #f2c2c1; color: #fdeaea; "
+        "  border-color: #e5a5a3; }"));
     header->addWidget(disableAll);
     layout->addLayout(header);
 
@@ -592,24 +713,35 @@ QWidget *MainWindow::createMotionPanel()
 {
     auto *box = new QGroupBox(QStringLiteral("Motion / Gait — Bench"), this);
     applyCardStyle(box);
-    auto *layout = new QGridLayout(box);
-    const MotionMode modes[] = {
+    auto *layout = new QGridLayout(box);    // Top-level: Motion Control | Gait / Vertical
+
+    // --- Motion Control (left): D-pad-like arrangement ---
+    auto *motionGroup = new QGroupBox(QStringLiteral("Motion Control"), box);
+    applyCardStyle(motionGroup);
+    auto *dpad = new QGridLayout(motionGroup);
+    dpad->setContentsMargins(8, 12, 8, 8);
+    dpad->setSpacing(6);
+
+    const MotionMode dpadModes[] = {
         MotionMode::Forward,
-        MotionMode::Backward,
         MotionMode::TurnLeft,
         MotionMode::TurnRight,
-        MotionMode::Ascend,
-        MotionMode::Descend,
+        MotionMode::Backward,
     };
-    const int modeCount = static_cast<int>(sizeof(modes) / sizeof(modes[0]));
-    for (int index = 0; index < modeCount; ++index) {
-        const MotionMode mode = modes[index];
-        auto *button = new QPushButton(motionModeText(mode), box);
+    for (const MotionMode mode : dpadModes) {
+        auto *button = new QPushButton(motionModeText(mode), motionGroup);
         button->setCheckable(true);
         button->setAutoExclusive(false);
         button->setStyleSheet(QStringLiteral(
+            "QPushButton { background: #ffffff; border: 1px solid #b0bbc4; "
+            "  border-radius: 6px; padding: 8px 10px; color: #37474f; "
+            "  font-weight: 600; }"
+            "QPushButton:hover { background: #eef2f6; border-color: #90a4ae; }"
+            "QPushButton:pressed { background: #e0e6ec; }"
+            "QPushButton:disabled { color: #a8b2ba; background: #f2f4f6; "
+            "  border-color: #d8dee3; }"
             "QPushButton:checked { background-color: #1976D2; color: white; "
-            "font-weight: bold; }"));
+            "  font-weight: bold; border-color: #1565c0; }"));
         motionButtons_[static_cast<std::size_t>(mode)] = button;
         if (mode == MotionMode::Backward) {
             button->setEnabled(false);
@@ -623,33 +755,84 @@ QWidget *MainWindow::createMotionPanel()
                     controller_->startMotion(mode);
                     refreshMotionUi();
                 });
-        layout->addWidget(
-            motionButtons_[static_cast<std::size_t>(mode)],
-            index / 3,
-            index % 3);
     }
-    motionStopButton_ = new QPushButton(QStringLiteral("Stop"), box);
-    motionStatus_ = new QLabel(QStringLiteral("Stopped"), box);
-    gaitBackendCombo_ = new QComboBox(box);
+    motionStopButton_ = new QPushButton(QStringLiteral("Stop"), motionGroup);
+    motionStopButton_->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #E53935; border: 1px solid #c62828; "
+        "  border-radius: 6px; padding: 8px 14px; color: #ffffff; "
+        "  font-weight: 700; font-size: 14px; }"
+        "QPushButton:hover { background: #d32f2f; }"
+        "QPushButton:pressed { background: #b71c1c; }"
+        "QPushButton:disabled { background: #f2c2c1; color: #fdeaea; "
+        "  border-color: #e5a5a3; }"));
+    connect(motionStopButton_, &QPushButton::clicked, this, [this] {
+        controller_->stopMotion();
+        refreshMotionUi();
+    });
+
+    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Forward)], 0, 1);
+    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::TurnLeft)], 1, 0);
+    dpad->addWidget(motionStopButton_, 1, 1);
+    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::TurnRight)], 1, 2);
+    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Backward)], 2, 1);
+
+    // --- Gait / Vertical (right) ---
+    auto *gaitGroup = new QGroupBox(QStringLiteral("Gait / Vertical"), box);
+    applyCardStyle(gaitGroup);
+    auto *gaitLayout = new QGridLayout(gaitGroup);
+    gaitLayout->setContentsMargins(8, 12, 8, 8);
+    gaitLayout->setSpacing(6);
+
+    const MotionMode verticalModes[] = {
+        MotionMode::Ascend,
+        MotionMode::Descend,
+    };
+    for (const MotionMode mode : verticalModes) {
+        auto *button = new QPushButton(motionModeText(mode), gaitGroup);
+        button->setCheckable(true);
+        button->setAutoExclusive(false);
+        button->setStyleSheet(QStringLiteral(
+            "QPushButton { background: #ffffff; border: 1px solid #b0bbc4; "
+            "  border-radius: 6px; padding: 8px 10px; color: #37474f; "
+            "  font-weight: 600; }"
+            "QPushButton:hover { background: #eef2f6; border-color: #90a4ae; }"
+            "QPushButton:pressed { background: #e0e6ec; }"
+            "QPushButton:checked { background-color: #1976D2; color: white; "
+            "  font-weight: bold; border-color: #1565c0; }"));
+        motionButtons_[static_cast<std::size_t>(mode)] = button;
+        connect(button,
+                &QPushButton::clicked,
+                this,
+                [this, mode] {
+                    controller_->startMotion(mode);
+                    refreshMotionUi();
+                });
+    }
+
+    motionStatus_ = new QLabel(QStringLiteral("Stopped"), gaitGroup);
+    gaitBackendCombo_ = new QComboBox(gaitGroup);
     gaitBackendCombo_->setObjectName(QStringLiteral("gaitBackendCombo"));
     gaitBackendCombo_->addItem(QStringLiteral("Unknown"), -1);
     gaitBackendCombo_->addItem(
         QStringLiteral("SimpleGait"), static_cast<int>(GaitBackend::SimpleGait));
     gaitBackendCombo_->addItem(
         QStringLiteral("CPG"), static_cast<int>(GaitBackend::CPG));
-    gaitBackendStatus_ = new QLabel(QStringLiteral("Unknown"), box);
+    gaitBackendStatus_ = new QLabel(QStringLiteral("Unknown"), gaitGroup);
     auto *provisional = new QLabel(
         QStringLiteral("Bench Provisional / Pending Water Verification"),
-        box);
+        gaitGroup);
     provisional->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
 
-    layout->addWidget(new QLabel(QStringLiteral("Gait Backend:"), box), 2, 0);
-    layout->addWidget(gaitBackendCombo_, 2, 1);
-    layout->addWidget(gaitBackendStatus_, 2, 2);
-    layout->addWidget(motionStopButton_, 3, 0);
-    layout->addWidget(new QLabel(QStringLiteral("Status"), box), 3, 1);
-    layout->addWidget(motionStatus_, 3, 2);
-    layout->addWidget(provisional, 4, 0, 1, 3);
+    gaitLayout->addWidget(new QLabel(QStringLiteral("Gait Backend:"), gaitGroup), 0, 0);
+    gaitLayout->addWidget(gaitBackendCombo_, 0, 1, 1, 2);
+    gaitLayout->addWidget(new QLabel(QStringLiteral("Status:"), gaitGroup), 1, 0);
+    gaitLayout->addWidget(motionStatus_, 1, 1, 1, 2);
+    gaitLayout->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)], 2, 0);
+    gaitLayout->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Descend)], 2, 1);
+    gaitLayout->addWidget(provisional, 3, 0, 1, 3);
+
+    layout->addWidget(motionGroup, 0, 0);
+    layout->addWidget(gaitGroup, 0, 1);
 
     connect(gaitBackendCombo_, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int index) {
@@ -669,10 +852,6 @@ QWidget *MainWindow::createMotionPanel()
                 refreshGaitBackendUi();
             });
 
-    connect(motionStopButton_, &QPushButton::clicked, this, [this] {
-        controller_->stopMotion();
-        refreshMotionUi();
-    });
     refreshMotionUi();
     refreshGaitBackendUi();
     return box;
@@ -778,19 +957,22 @@ void MainWindow::setLeakUiState(LeakState state)
     if (leakStatus_ == nullptr || leakDot_ == nullptr) {
         return;
     }
-    leakStatus_->setText(leakStateDisplayText(state));
+    const QString stateText = leakStateDisplayText(state);
+    leakStatus_->setText(stateText.startsWith(QStringLiteral("Leak: "))
+                             ? stateText.mid(6)
+                             : QStringLiteral("Wet"));
     switch (state) {
     case LeakState::Unknown:
-        leakStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
-        leakDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 6px;"));
+        leakStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 13px; font-weight: 600;"));
+        leakDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
         break;
     case LeakState::Dry:
-        leakStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-weight: bold;"));
-        leakDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 6px;"));
+        leakStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-size: 13px; font-weight: 600;"));
+        leakDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 5px;"));
         break;
     case LeakState::Wet:
-        leakStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-weight: bold;"));
-        leakDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 6px;"));
+        leakStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-size: 13px; font-weight: 600;"));
+        leakDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 5px;"));
         break;
     }
 }
@@ -965,18 +1147,27 @@ void MainWindow::refreshServoUi(int index)
                                        && !pendingDisable && !motionActive);
     applyButtons_[index]->setEnabled(connected && supported && enabled
                                      && !pendingDisable && !motionActive);
+    QString statusColor = QStringLiteral("#9e9e9e");
     if (!connected) {
         statusLabels_[index]->setText(QStringLiteral("Disconnected"));
     } else if (!supported) {
         statusLabels_[index]->setText(QStringLiteral("Unsupported"));
     } else if (pendingDisable) {
         statusLabels_[index]->setText(QStringLiteral("Disable pending ACK"));
+        statusColor = QStringLiteral("#b35c00");
     } else if (enabled) {
         statusLabels_[index]->setText(QStringLiteral("Enabled / ACKed"));
+        statusColor = QStringLiteral("#43a047");
     } else if (descriptor->calibrationPending) {
         statusLabels_[index]->setText(QStringLiteral("Disabled — Calibration Pending"));
     } else {
         statusLabels_[index]->setText(QStringLiteral("Disabled"));
+    }
+    statusLabels_[index]->setStyleSheet(
+        QStringLiteral("color: %1; font-size: 11px; font-weight: 600;").arg(statusColor));
+    if (auto *statusDot = findChild<QLabel *>(QStringLiteral("servoStatusDot%1").arg(index))) {
+        statusDot->setStyleSheet(
+            QStringLiteral("background: %1; border-radius: 4px;").arg(statusColor));
     }
     setAngleUiEnabled(index, enabled);
 }
