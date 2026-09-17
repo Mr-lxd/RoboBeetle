@@ -168,14 +168,7 @@ LinuxOnboardApplicationPort::map_submit_result(
         status = GatewayApplicationSubmitStatus::TransportRejected;
         break;
     }
-    if (status == GatewayApplicationSubmitStatus::Submitted &&
-        result.sequence.has_value()) {
-        return {status, result.sequence};
-    }
-    if (status == GatewayApplicationSubmitStatus::Submitted) {
-        return {GatewayApplicationSubmitStatus::TransportRejected, std::nullopt};
-    }
-    return {status, std::nullopt};
+    return {status, result.sequence};
 }
 
 std::vector<GatewayApplicationEvent> LinuxOnboardApplicationPort::map_events(

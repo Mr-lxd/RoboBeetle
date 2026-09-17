@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <iterator>
+#include <optional>
 #include <poll.h>
 #include <stdexcept>
 #include <string>
@@ -42,6 +43,13 @@ struct LinuxOnboardApplicationPortTestAccess {
     application(LinuxOnboardApplicationPort &port)
     {
         return port.application_;
+    }
+
+    static GatewayApplicationSubmitResult map_submit_result(
+        const LinuxOnboardApplicationPort &port,
+        const application::CommandSubmitResult &result)
+    {
+        return port.map_submit_result(result);
     }
 };
 } // namespace robobeetle::gateway::detail
@@ -214,6 +222,32 @@ struct Fixture {
                "heartbeat ACK maps the port link to Active");
     }
 };
+
+void submit_result_mapping_preserves_lower_layer_invariants()
+{
+    LinuxOnboardApplicationPort port("/unused");
+    const auto submitted_without_sequence =
+        detail::LinuxOnboardApplicationPortTestAccess::map_submit_result(
+            port,
+            application::CommandSubmitResult{
+                application::CommandSubmitStatus::Submitted, std::nullopt});
+    expect(submitted_without_sequence.status ==
+                   GatewayApplicationSubmitStatus::Submitted &&
+               !submitted_without_sequence.sequence.has_value(),
+           "Linux application-port mapping preserves Submitted without sequence");
+
+    const auto not_active_with_sequence =
+        detail::LinuxOnboardApplicationPortTestAccess::map_submit_result(
+            port,
+            application::CommandSubmitResult{
+                application::CommandSubmitStatus::NotActive,
+                static_cast<std::uint16_t>(123U)});
+    expect(not_active_with_sequence.status ==
+                   GatewayApplicationSubmitStatus::NotActive &&
+               not_active_with_sequence.sequence.has_value() &&
+               *not_active_with_sequence.sequence == 123U,
+           "Linux application-port mapping preserves non-Submitted sequence");
+}
 
 const GatewayCommandOutcomeEvent *find_outcome(
     const GatewayApplicationRunResult &result)
@@ -483,6 +517,7 @@ void application_state_and_all_outcome_kinds_map()
 int main()
 {
     try {
+        submit_result_mapping_preserves_lower_layer_invariants();
         typed_commands_and_submit_statuses();
         queue_full_status_has_no_sequence();
         telemetry_and_malformed_data_map_once();
