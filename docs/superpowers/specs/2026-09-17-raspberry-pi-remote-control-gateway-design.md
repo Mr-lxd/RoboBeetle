@@ -1525,8 +1525,16 @@ The following revoke authority:
 SessionLost
 PollFatal
 unexpected ReopenRequired while Owned
-LinkState::Lost
+Online session + LinkState::Lost
 ```
+
+`LinkState::Lost` by itself is authority-fatal only for the current `Online`
+session. During `SafetyQuiet` or `Resynchronizing` after explicit reopen, the
+underlying LinkCore may still report the previous generation's `Lost` state
+until the resynchronization delimiter is transmitted and `LinkCore::start()`
+begins the new generation. That transitional `Lost` value alone must not
+revoke authority. `SessionLost`, `PollFatal`, and unexpected `ReopenRequired`
+remain authority-fatal.
 
 If TCP is still usable, best-effort source-addressed `ControlState(LinkLost)` may be queued before closure policy completes, but safety teardown does not wait for network delivery.
 

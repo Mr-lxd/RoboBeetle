@@ -183,6 +183,13 @@ const T *find_any_output(const OutputSink &sink, ControlSourceId source)
     return nullptr;
 }
 
+void grant_test_authority(ControlGatewayCore &core, ControlSourceId source)
+{
+    core.source_connected(source);
+    core.process(envelope(source, 1U, hello(1U)), 1U);
+    core.process(envelope(source, 2U, acquire(2U)), 2U);
+}
+
 void hello_is_required_and_acquire_is_explicit()
 {
     FakeGatewayApplicationPort application;
@@ -906,6 +913,111 @@ void nonlost_state_changes_are_forwarded_to_current_controller()
     }
 }
 
+void application_run_result_revoke_policy_is_session_aware()
+{
+    {
+        FakeGatewayApplicationPort application;
+        OutputSink sink;
+        ControlGatewayCore core(application, sink.callbacks());
+        grant_test_authority(core, 46U);
+        application.session = GatewayApplicationSessionState::SafetyQuiet;
+        application.link = GatewayApplicationLinkState::Lost;
+
+        core.consume_application_run_result(
+            GatewayApplicationRunResult{
+                GatewayApplicationRunStatus::Progress, {}, 0},
+            3U);
+        expect(core.authority_state() == AuthorityState::Owned &&
+                   application.abort_calls == 0U,
+               "SafetyQuiet plus Lost does not revoke on a nonfatal run result");
+    }
+
+    {
+        FakeGatewayApplicationPort application;
+        OutputSink sink;
+        ControlGatewayCore core(application, sink.callbacks());
+        grant_test_authority(core, 47U);
+        application.session = GatewayApplicationSessionState::Resynchronizing;
+        application.link = GatewayApplicationLinkState::Lost;
+
+        core.consume_application_run_result(
+            GatewayApplicationRunResult{
+                GatewayApplicationRunStatus::Progress, {}, 0},
+            3U);
+        expect(core.authority_state() == AuthorityState::Owned &&
+                   application.abort_calls == 0U,
+               "Resynchronizing plus Lost does not revoke on a nonfatal run result");
+    }
+
+    {
+        FakeGatewayApplicationPort application;
+        OutputSink sink;
+        ControlGatewayCore core(application, sink.callbacks());
+        grant_test_authority(core, 48U);
+        application.session = GatewayApplicationSessionState::Online;
+        application.link = GatewayApplicationLinkState::Lost;
+
+        core.consume_application_run_result(
+            GatewayApplicationRunResult{
+                GatewayApplicationRunStatus::Progress, {}, 0},
+            3U);
+        expect(core.authority_state() == AuthorityState::Unowned &&
+                   application.abort_calls == 1U,
+               "Online plus Lost revokes authority through one abort");
+    }
+
+    {
+        FakeGatewayApplicationPort application;
+        OutputSink sink;
+        ControlGatewayCore core(application, sink.callbacks());
+        grant_test_authority(core, 49U);
+        application.session = GatewayApplicationSessionState::SafetyQuiet;
+        application.link = GatewayApplicationLinkState::Active;
+
+        core.consume_application_run_result(
+            GatewayApplicationRunResult{
+                GatewayApplicationRunStatus::SessionLost, {}, 0},
+            3U);
+        expect(core.authority_state() == AuthorityState::Unowned &&
+                   application.abort_calls == 1U,
+               "SessionLost remains authority-fatal regardless of session snapshot");
+    }
+
+    {
+        FakeGatewayApplicationPort application;
+        OutputSink sink;
+        ControlGatewayCore core(application, sink.callbacks());
+        grant_test_authority(core, 50U);
+        application.session = GatewayApplicationSessionState::SafetyQuiet;
+        application.link = GatewayApplicationLinkState::Active;
+
+        core.consume_application_run_result(
+            GatewayApplicationRunResult{
+                GatewayApplicationRunStatus::PollFatal, {}, 0},
+            3U);
+        expect(core.authority_state() == AuthorityState::Unowned &&
+                   application.abort_calls == 1U,
+               "PollFatal remains authority-fatal regardless of session snapshot");
+    }
+
+    {
+        FakeGatewayApplicationPort application;
+        OutputSink sink;
+        ControlGatewayCore core(application, sink.callbacks());
+        grant_test_authority(core, 51U);
+        application.session = GatewayApplicationSessionState::ReopenRequired;
+        application.link = GatewayApplicationLinkState::Active;
+
+        core.consume_application_run_result(
+            GatewayApplicationRunResult{
+                GatewayApplicationRunStatus::Progress, {}, 0},
+            3U);
+        expect(core.authority_state() == AuthorityState::Unowned &&
+                   application.abort_calls == 1U,
+               "unexpected ReopenRequired while Owned remains authority-fatal");
+    }
+}
+
 void session_link_loss_and_network_failure_use_abort_path()
 {
     FakeGatewayApplicationPort lost_application;
@@ -981,6 +1093,7 @@ int main()
     submitted_correlation_is_live_before_publish_failure();
     impossible_submitted_invariants_fail_safe();
     nonlost_state_changes_are_forwarded_to_current_controller();
+    application_run_result_revoke_policy_is_session_aware();
     session_link_loss_and_network_failure_use_abort_path();
     shutdown_is_graceful_and_does_not_synthesize_actuator_commands();
 

@@ -811,6 +811,9 @@ void ControlGatewayCore::consume_application_run_result(
     last_now_ms_ = owner_now_ms;
     consume_events(result.events, owner_now_ms);
 
+    const auto session_state = application_.session_state();
+    const auto link_state = application_.link_state();
+
     if (result.status == GatewayApplicationRunStatus::SessionLost ||
         result.status == GatewayApplicationRunStatus::PollFatal) {
         revoke(current_source_, GatewayStateReason::LinkLost, owner_now_ms,
@@ -818,9 +821,9 @@ void ControlGatewayCore::consume_application_run_result(
         return;
     }
     if (authority_ == AuthorityState::Owned &&
-        (application_.session_state() ==
-             GatewayApplicationSessionState::ReopenRequired ||
-         application_.link_state() == GatewayApplicationLinkState::Lost)) {
+        (session_state == GatewayApplicationSessionState::ReopenRequired ||
+         (session_state == GatewayApplicationSessionState::Online &&
+          link_state == GatewayApplicationLinkState::Lost))) {
         revoke(current_source_, GatewayStateReason::LinkLost, owner_now_ms,
                false);
     }
