@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
@@ -911,6 +912,43 @@ void real_owner_rejected_ack_and_telemetry_forwarding()
            "real owner forwards the typed Depth telemetry schema");
 }
 
+void real_owner_queued_heartbeat_does_not_false_expire()
+{
+    RealOwnerFixture fixture;
+    fixture.hello_acquire(60U, 61U);
+    (void)fixture.activate();
+
+    std::atomic<bool> stop_acknowledger{false};
+    std::thread uart_acknowledger([&fixture, &stop_acknowledger] {
+        while (!stop_acknowledger.load()) {
+            try {
+                const auto frame = fixture.pty.next_frame(100);
+                if (frame.message_type == 0x01U) {
+                    fixture.pty.send(protocol_ack(frame.sequence, 0x01U));
+                }
+            } catch (const std::exception &) {
+                // A short poll timeout is expected between lower-layer
+                // heartbeat frames; keep servicing until the stress window.
+            }
+        }
+    });
+
+    RequestId request_id = 100U;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(1500);
+    while (std::chrono::steady_clock::now() < deadline) {
+        send_remote(fixture.client, RbrpMessageKind::ControlHeartbeat,
+                    request_id++, {});
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+
+    stop_acknowledger.store(true);
+    uart_acknowledger.join();
+    const auto submitted = submit_remote_command(fixture, 200U, {0x06U});
+    expect(submitted.payload[0] == 0U && submitted.payload[1] == 1U,
+           "heartbeats queued while owner work runs do not false-expire the lease");
+}
+
 void real_owner_lease_expiry_aborts_without_synthesized_command()
 {
     RealOwnerFixture fixture;
@@ -1084,6 +1122,7 @@ int main()
         critical_bound_partial_telemetry_and_shutdown_contract();
         real_owner_pty_lifecycle();
         real_owner_rejected_ack_and_telemetry_forwarding();
+        real_owner_queued_heartbeat_does_not_false_expire();
         real_owner_lease_expiry_aborts_without_synthesized_command();
         real_owner_uart_loss_and_tcp_survival();
         real_owner_disconnect_reconnect_isolation_and_no_replay();
