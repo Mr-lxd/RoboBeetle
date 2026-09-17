@@ -524,6 +524,87 @@ void inbound_delivery_barrier_preserves_timely_heartbeat()
     adapter.stop();
 }
 
+void coalesced_recv_batch_shares_one_trusted_timestamp()
+{
+    CallbackState callbacks;
+    GatewayTimeMs next_received_at = 1999U;
+    TcpAdapterCallbacks adapter_callbacks = callbacks.callbacks();
+    adapter_callbacks.now_ms = [&next_received_at] {
+        return next_received_at++;
+    };
+    TcpAdapter adapter("127.0.0.1", 0U, std::move(adapter_callbacks));
+    expect(adapter.start() == 0,
+           "TCP adapter starts for coalesced receive-batch coverage");
+    const int client = connect_loopback(adapter.bound_port());
+    expect(callbacks.wait_for([&callbacks] {
+               return callbacks.connected.size() == 1U;
+           }),
+           "coalesced receive-batch source connects");
+    const auto source = callbacks.last_source();
+
+    const auto command =
+        encode_frame(RbrpMessageKind::CommandRequest, 20U, {0x06U});
+    const auto heartbeat =
+        encode_frame(RbrpMessageKind::ControlHeartbeat, 21U, {});
+    Bytes batch = command.wire;
+    batch.insert(batch.end(), heartbeat.wire.begin(), heartbeat.wire.end());
+    send_all(client, batch);
+    expect(callbacks.wait_for([&callbacks] {
+               return callbacks.inbound_count() == 2U;
+           }),
+           "one client write delivers both decoded messages");
+
+    std::vector<RemoteEnvelope> captured;
+    {
+        std::lock_guard<std::mutex> lock(callbacks.mutex);
+        captured = callbacks.inbound;
+    }
+    expect(captured.size() == 2U && captured[0].source == source &&
+               captured[1].source == source &&
+               captured[0].received_at_ms == captured[1].received_at_ms,
+           "all complete messages from one recv/decode batch share one timestamp");
+
+    BarrierApplication application;
+    GatewayTimeMs fake_now = 1000U;
+    std::vector<GatewayOutbound> outputs;
+    ControlGatewayCore core(
+        application,
+        GatewayCoreCallbacks{
+            [&](const GatewayOutbound &output) {
+                outputs.push_back(output);
+                return true;
+            },
+            [](const CloseSourceSignal &) { return true; },
+            [](const char *) {},
+            [&fake_now] { return fake_now; },
+        });
+    core.source_connected(source);
+    core.process(RemoteEnvelope{source, fake_now,
+                                RemoteMessage{RbrpMessageKind::Hello, 10U,
+                                              HelloRequest{0U}}},
+                 fake_now);
+    core.process(RemoteEnvelope{source, fake_now,
+                                RemoteMessage{RbrpMessageKind::AcquireControl,
+                                              11U, AcquireControlRequest{}}},
+                 fake_now);
+
+    bool authority_survived_batch = false;
+    if (captured.size() == 2U) {
+        core.process(captured[0], fake_now);
+        core.process(captured[1], fake_now);
+        authority_survived_batch =
+            core.authority_state() == AuthorityState::Owned &&
+            application.abort_calls == 0U &&
+            core.lease_deadline_ms() == captured[1].received_at_ms + 1000U;
+    }
+    expect(authority_survived_batch,
+           "a coalesced ordinary message and heartbeat cannot false-expire authority");
+
+    ::shutdown(client, SHUT_RDWR);
+    ::close(client);
+    adapter.stop();
+}
+
 void newest_source_registration_replaces_pending_older_generation()
 {
     GatewayOwner owner("/unused", "127.0.0.1", 0U);
@@ -1131,73 +1212,163 @@ void real_owner_sustained_inbound_does_not_starve_pty()
     fixture.hello_acquire(70U, 71U);
     (void)fixture.activate();
 
-    std::mutex traffic_mutex;
-    std::condition_variable traffic_changed;
-    bool permit = true;
-    bool stop_traffic = false;
-    bool traffic_failed = false;
-    RequestId request_id = 300U;
+    std::atomic<bool> stop_traffic{false};
+    std::atomic<bool> traffic_failed{false};
     std::thread traffic([&] {
-        for (;;) {
-            std::unique_lock<std::mutex> lock(traffic_mutex);
-            traffic_changed.wait(lock,
-                                 [&] { return stop_traffic || permit; });
-            if (stop_traffic) {
-                return;
-            }
-            permit = false;
-            const auto id = request_id++;
-            lock.unlock();
+        RequestId request_id = 300U;
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(2200);
+        auto next_send = std::chrono::steady_clock::now();
+        while (!stop_traffic.load() &&
+               std::chrono::steady_clock::now() < deadline) {
             try {
                 send_remote(fixture.client,
-                            RbrpMessageKind::ControlHeartbeat, id, {});
+                            RbrpMessageKind::ControlHeartbeat, request_id++, {});
             } catch (const std::exception &) {
-                std::lock_guard<std::mutex> failed_lock(traffic_mutex);
-                traffic_failed = true;
-                traffic_changed.notify_all();
+                traffic_failed.store(true);
                 return;
             }
+            next_send += std::chrono::milliseconds(20);
+            std::this_thread::sleep_until(next_send);
         }
     });
 
     std::size_t onboard_heartbeats = 0U;
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(2200);
-    while (onboard_heartbeats < 3U &&
-           std::chrono::steady_clock::now() < deadline) {
+    while (std::chrono::steady_clock::now() < deadline) {
         const auto remaining = static_cast<int>(std::max(
             1LL,
-            static_cast<long long>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    deadline - std::chrono::steady_clock::now())
-                    .count())));
-        const auto frame = fixture.pty.next_frame(remaining);
-        if (frame.message_type != 0x01U) {
+            std::min(200LL,
+                     static_cast<long long>(
+                         std::chrono::duration_cast<std::chrono::milliseconds>(
+                             deadline - std::chrono::steady_clock::now())
+                             .count()))));
+        Frame frame;
+        try {
+            frame = fixture.pty.next_frame(remaining);
+        } catch (const std::exception &) {
             continue;
+        }
+        if (frame.message_type != 0x01U) {
+            throw std::runtime_error(
+                "unexpected UART frame during independent ingress stress");
         }
         fixture.pty.send(protocol_ack(frame.sequence, 0x01U));
         ++onboard_heartbeats;
-        {
-            std::lock_guard<std::mutex> lock(traffic_mutex);
-            permit = true;
-        }
-        traffic_changed.notify_all();
     }
 
-    {
-        std::lock_guard<std::mutex> lock(traffic_mutex);
-        stop_traffic = true;
-        permit = true;
-    }
-    traffic_changed.notify_all();
+    stop_traffic.store(true);
     traffic.join();
 
-    expect(onboard_heartbeats >= 3U && !traffic_failed,
-           "finite inbound snapshots keep servicing Protocol V2 heartbeats under sustained traffic");
+    expect(onboard_heartbeats >= 3U && !traffic_failed.load(),
+           "independent bounded inbound traffic still services multiple Protocol V2 heartbeats");
     const auto submitted = submit_remote_command(
         fixture, 400U, {0x06U});
     expect(submitted.payload[0] == 0U && submitted.payload[1] == 1U,
            "authority remains usable after sustained inbound traffic");
+}
+
+void real_owner_nonheartbeat_traffic_does_not_keep_lease_alive()
+{
+    RealOwnerFixture fixture;
+    fixture.hello_acquire(80U, 81U);
+    (void)fixture.activate();
+    fixture.reader.reset();
+
+    std::atomic<bool> stop_uart{false};
+    std::atomic<bool> uart_failed{false};
+    std::thread uart_acknowledger([&fixture, &stop_uart, &uart_failed] {
+        while (!stop_uart.load()) {
+            try {
+                const auto frame = fixture.pty.next_frame(100);
+                if (frame.message_type == 0x01U) {
+                    fixture.pty.send(protocol_ack(frame.sequence, 0x01U));
+                } else {
+                    uart_failed.store(true);
+                    return;
+                }
+            } catch (const std::exception &) {
+                // A short poll timeout is expected between lower-layer
+                // heartbeat frames; keep servicing until the stress window.
+            }
+        }
+    });
+
+    RbrpSocketReader response_reader{fixture.client};
+    std::mutex response_mutex;
+    std::condition_variable response_changed;
+    std::atomic<bool> stop_responses{false};
+    bool lease_expired = false;
+    bool link_lost = false;
+    std::thread responses([&] {
+        while (!stop_responses.load()) {
+            try {
+                const auto frame = response_reader.next(100);
+                if (frame.kind != RbrpMessageKind::ControlState ||
+                    frame.payload.size() < 4U) {
+                    continue;
+                }
+                std::lock_guard<std::mutex> lock(response_mutex);
+                if (frame.payload[3] ==
+                    static_cast<Byte>(GatewayStateReason::LeaseExpired)) {
+                    lease_expired = true;
+                }
+                if (frame.payload[3] ==
+                    static_cast<Byte>(GatewayStateReason::LinkLost)) {
+                    link_lost = true;
+                }
+                response_changed.notify_all();
+            } catch (const std::exception &) {
+                // The reader is intentionally independent of the bounded
+                // producer so TCP responses cannot become its backpressure.
+            }
+        }
+    });
+
+    std::atomic<bool> traffic_failed{false};
+    std::atomic<bool> stop_traffic{false};
+    std::thread traffic([&] {
+        RequestId request_id = 500U;
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(1600);
+        auto next_send = std::chrono::steady_clock::now();
+        while (!stop_traffic.load() &&
+               std::chrono::steady_clock::now() < deadline) {
+            try {
+                send_remote(fixture.client, RbrpMessageKind::Hello,
+                            request_id++, {0U, 0U});
+            } catch (const std::exception &) {
+                traffic_failed.store(true);
+                return;
+            }
+            next_send += std::chrono::milliseconds(20);
+            std::this_thread::sleep_until(next_send);
+        }
+    });
+
+    bool observed_lease_expired = false;
+    {
+        std::unique_lock<std::mutex> lock(response_mutex);
+        observed_lease_expired = response_changed.wait_for(
+            lock, std::chrono::milliseconds(2500),
+            [&] { return lease_expired; });
+    }
+
+    stop_traffic.store(true);
+    traffic.join();
+    stop_responses.store(true);
+    ::shutdown(fixture.client, SHUT_RDWR);
+    responses.join();
+    stop_uart.store(true);
+    uart_acknowledger.join();
+
+    {
+        std::lock_guard<std::mutex> lock(response_mutex);
+        expect(observed_lease_expired && lease_expired && !link_lost &&
+                   !traffic_failed.load() && !uart_failed.load(),
+               "independent duplicate Hello traffic cannot keep authority alive or cause LinkLost");
+    }
 }
 
 void real_owner_lease_expiry_aborts_without_synthesized_command()
@@ -1383,6 +1554,7 @@ int main()
         queued_replacement_survives_same_poll_generation_rollover();
         stale_poll_revents_are_rejected_by_generation();
         inbound_delivery_barrier_preserves_timely_heartbeat();
+        coalesced_recv_batch_shares_one_trusted_timestamp();
         newest_source_registration_replaces_pending_older_generation();
         stale_close_and_old_telemetry_never_affect_new_source();
         inbound_queue_exhaustion_is_source_loss();
@@ -1391,6 +1563,7 @@ int main()
         real_owner_rejected_ack_and_telemetry_forwarding();
         real_owner_queued_heartbeat_does_not_false_expire();
         real_owner_sustained_inbound_does_not_starve_pty();
+        real_owner_nonheartbeat_traffic_does_not_keep_lease_alive();
         real_owner_lease_expiry_aborts_without_synthesized_command();
         real_owner_uart_loss_and_tcp_survival();
         real_owner_disconnect_reconnect_isolation_and_no_replay();

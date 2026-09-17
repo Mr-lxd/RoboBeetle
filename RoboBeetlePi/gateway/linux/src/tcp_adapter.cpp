@@ -65,6 +65,21 @@ std::size_t telemetry_slot(const GatewayMessagePayload &payload) noexcept
 } // namespace
 
 struct TcpAdapter::Impl {
+    struct InboundDeliveryScope {
+        std::atomic<std::size_t> &counter;
+
+        explicit InboundDeliveryScope(std::atomic<std::size_t> &value)
+            : counter(value)
+        {
+            counter.fetch_add(1U);
+        }
+
+        ~InboundDeliveryScope() { counter.fetch_sub(1U); }
+
+        InboundDeliveryScope(const InboundDeliveryScope &) = delete;
+        InboundDeliveryScope &operator=(const InboundDeliveryScope &) = delete;
+    };
+
     struct PendingFrame {
         ControlSourceId source{0};
         Bytes wire;
@@ -104,6 +119,14 @@ struct TcpAdapter::Impl {
         : bind_address(std::move(address)), requested_port(port),
           callbacks(std::move(configured_callbacks))
     {
+    }
+
+    GatewayTimeMs now_ms() const noexcept
+    {
+        if (callbacks.now_ms) {
+            return callbacks.now_ms();
+        }
+        return monotonic_now();
     }
 
     void report(const char *message) noexcept
@@ -301,7 +324,8 @@ struct TcpAdapter::Impl {
     }
 
     void handle_remote_frames(ControlSourceId source,
-                              std::vector<RbrpFrame> &frames)
+                              std::vector<RbrpFrame> &frames,
+                              GatewayTimeMs received_at_ms)
     {
         for (auto &frame : frames) {
             const auto decoded = decode_remote_message(frame);
@@ -313,11 +337,9 @@ struct TcpAdapter::Impl {
                 report("well-framed non-request RBRP message ignored");
                 continue;
             }
-            inbound_deliveries_in_flight.fetch_add(1U);
             const RemoteEnvelope envelope{
-                source, monotonic_now(), *decoded.message};
+                source, received_at_ms, *decoded.message};
             const bool accepted = invoke_inbound(envelope);
-            inbound_deliveries_in_flight.fetch_sub(1U);
             if (!accepted) {
                 close_current(true, SourceLostReason::InboundQueueExhausted);
                 return;
@@ -343,6 +365,8 @@ struct TcpAdapter::Impl {
             const auto received =
                 ::recv(fd, buffer.data(), buffer.size(), MSG_DONTWAIT);
             if (received > 0) {
+                InboundDeliveryScope delivery_scope{
+                    inbound_deliveries_in_flight};
                 std::vector<RbrpFrame> frames;
                 if (decoder.feed(buffer.data(),
                                  static_cast<std::size_t>(received), frames) ==
@@ -350,7 +374,8 @@ struct TcpAdapter::Impl {
                     close_current(true, SourceLostReason::FatalProtocol);
                     return;
                 }
-                handle_remote_frames(source, frames);
+                const auto received_at_ms = now_ms();
+                handle_remote_frames(source, frames, received_at_ms);
                 if (current_source_id() == 0U) {
                     return;
                 }

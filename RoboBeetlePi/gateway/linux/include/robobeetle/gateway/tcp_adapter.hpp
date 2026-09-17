@@ -37,6 +37,7 @@ struct TcpAdapterCallbacks {
     std::function<bool(const RemoteEnvelope &)> enqueue_inbound;
     std::function<void(const SourceLostSignal &)> source_lost;
     std::function<void(const char *)> diagnostic;
+    std::function<GatewayTimeMs()> now_ms;
 };
 
 class TcpAdapter final {

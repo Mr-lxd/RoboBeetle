@@ -33,6 +33,7 @@ GatewayOwner::GatewayOwner(std::string device_path, std::string bind_address,
                    on_source_lost(signal);
                },
                [this](const char *message) { on_diagnostic(message); },
+               [this] { return monotonic_now(); },
            }),
       core_(application_,
              GatewayCoreCallbacks{
@@ -213,9 +214,22 @@ void GatewayOwner::process_bridge_snapshot_and_check_time(
     {
         std::unique_lock<std::mutex> lock(bridge_mutex_);
         const auto check_now = monotonic_now();
+        bool pending_timely_heartbeat = false;
+        if (core_.authority_state() == AuthorityState::Owned &&
+            core_.source_present()) {
+            for (const auto &envelope : pending_inbound_) {
+                if (envelope.source == core_.current_source_id() &&
+                    envelope.message.kind ==
+                        RbrpMessageKind::ControlHeartbeat &&
+                    envelope.received_at_ms < core_.lease_deadline_ms()) {
+                    pending_timely_heartbeat = true;
+                    break;
+                }
+            }
+        }
         if (!pending_connections_.empty() ||
-            !pending_source_losses_.empty() || !pending_inbound_.empty() ||
-            tcp_.inbound_delivery_in_flight()) {
+            !pending_source_losses_.empty() || tcp_.inbound_delivery_in_flight() ||
+            pending_timely_heartbeat) {
             return;
         }
         core_.check_time(check_now);
