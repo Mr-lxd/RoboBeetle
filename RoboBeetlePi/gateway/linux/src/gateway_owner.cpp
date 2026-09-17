@@ -218,6 +218,10 @@ void GatewayOwner::iteration()
 {
     const auto first_now = monotonic_now();
     process_source_losses(first_now);
+    // Register a live source after the loss edge but before draining its first
+    // envelope. This preserves both immediate reconnect ordering and the
+    // initial Hello that may already be queued by the TCP worker.
+    process_connections();
     drain_inbound(first_now);
     core_.check_time(monotonic_now());
 
@@ -229,12 +233,9 @@ void GatewayOwner::iteration()
 
     const auto second_now = monotonic_now();
     process_source_losses(second_now);
+    process_connections();
     drain_inbound(second_now);
     core_.check_time(monotonic_now());
-    // Register connections only after both SourceLost passes. This preserves
-    // immediate A->B reconnects when the worker reports both lifecycle edges
-    // before the owner gets its next turn.
-    process_connections();
 }
 
 void GatewayOwner::owner_loop()
