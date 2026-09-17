@@ -1286,8 +1286,8 @@ void real_owner_sustained_inbound_does_not_starve_pty()
 
     std::atomic<bool> stop_traffic{false};
     std::atomic<bool> traffic_failed{false};
+    RequestId next_request_id = 300U;
     std::thread traffic([&] {
-        RequestId request_id = 300U;
         const auto deadline = std::chrono::steady_clock::now() +
                               std::chrono::milliseconds(2200);
         auto next_send = std::chrono::steady_clock::now();
@@ -1295,7 +1295,8 @@ void real_owner_sustained_inbound_does_not_starve_pty()
                std::chrono::steady_clock::now() < deadline) {
             try {
                 send_remote(fixture.client,
-                            RbrpMessageKind::ControlHeartbeat, request_id++, {});
+                            RbrpMessageKind::ControlHeartbeat,
+                            next_request_id++, {});
             } catch (const std::exception &) {
                 traffic_failed.store(true);
                 return;
@@ -1336,7 +1337,7 @@ void real_owner_sustained_inbound_does_not_starve_pty()
     expect(onboard_heartbeats >= 3U && !traffic_failed.load(),
            "independent bounded inbound traffic still services multiple Protocol V2 heartbeats");
     const auto submitted = submit_remote_command(
-        fixture, 400U, {0x06U});
+        fixture, next_request_id++, {0x06U});
     expect(submitted.payload[0] == 0U && submitted.payload[1] == 1U,
            "authority remains usable after sustained inbound traffic");
 }
