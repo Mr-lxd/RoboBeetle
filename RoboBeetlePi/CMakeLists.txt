@@ -64,6 +64,8 @@ target_compile_features(rbp2_gateway_core PUBLIC cxx_std_17)
 
 # Keep Linux headers and syscalls out of all portable targets.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+
     add_library(rbp2_posix_serial_transport STATIC
         transport/src/posix_serial_transport.cpp
     )
@@ -99,6 +101,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         rbp2_gateway_core rbp2_onboard_application
     )
     target_compile_features(rbp2_gateway_linux_application_port PUBLIC cxx_std_17)
+
+    add_library(rbp2_gateway_tcp STATIC
+        gateway/linux/src/tcp_adapter.cpp
+    )
+    target_include_directories(rbp2_gateway_tcp PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/linux/include
+    )
+    target_link_libraries(rbp2_gateway_tcp PUBLIC
+        rbp2_rbrp_codec Threads::Threads
+    )
+    target_compile_features(rbp2_gateway_tcp PUBLIC cxx_std_17)
 
     add_executable(robobeetle_pi_smoke tools/robobeetle_pi_smoke.cpp)
     target_link_libraries(robobeetle_pi_smoke PRIVATE rbp2_onboard_application)
@@ -206,6 +220,8 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests
         )
         target_compile_features(rbp2_tcp_gateway_integration_tests PRIVATE cxx_std_17)
+        target_link_libraries(rbp2_tcp_gateway_integration_tests
+            PRIVATE rbp2_gateway_tcp)
         add_test(NAME rbp2_tcp_gateway_integration_tests
             COMMAND rbp2_tcp_gateway_integration_tests)
         set_tests_properties(rbp2_tcp_gateway_integration_tests PROPERTIES TIMEOUT 20)
