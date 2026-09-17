@@ -774,7 +774,7 @@ void critical_bound_partial_telemetry_and_shutdown_contract()
     for (std::size_t i = 0U; i < 10000U; ++i) {
         if (!adapter.publish(
                 GatewayOutbound{source, GatewayMessage{
-                                           i + 1U,
+                                           static_cast<RequestId>(i + 1U),
                                            ServiceErrorMessage{
                                                ServiceErrorCode::NotAuthority,
                                                RbrpMessageKind::CommandRequest,
@@ -954,7 +954,12 @@ Bytes protocol_ack(std::uint16_t sequence, std::uint8_t type,
 }
 
 struct RbrpSocketReader {
-    int fd;
+    explicit RbrpSocketReader(int socket_fd)
+        : fd(socket_fd)
+    {
+    }
+
+    int fd{-1};
     RbrpDecoder decoder;
     std::vector<RbrpFrame> pending;
 
