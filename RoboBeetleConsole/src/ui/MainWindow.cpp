@@ -727,7 +727,7 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     statusDot->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 4px;"));
     header->addWidget(statusDot);
     statusLabels_[index] = new QLabel(QStringLiteral("Disconnected"), box);
-    statusLabels_[index]->setStyleSheet(QStringLiteral("color: #666666; font-size: 11px; font-weight: 600;"));
+    statusLabels_[index]->setStyleSheet(QStringLiteral("color: #6F7F8B; font-size: 11px; font-weight: 600;"));
     header->addWidget(statusLabels_[index]);
     layout->addLayout(header);
 
@@ -744,7 +744,11 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
                   .arg(static_cast<double>(descriptor->commandMaxAngleCdeg) / 100.0, 0, 'f', 1);
     auto *warning = new QLabel(warningText, box);
     warning->setWordWrap(true);
-    warning->setStyleSheet(QStringLiteral("color: #8b6f4e; font-size: 10px; font-weight: 500;"));
+    warning->setStyleSheet(QStringLiteral(
+        "color: #756451;"
+        "font-size: 10px;"
+        "font-weight: 600;"
+    ));
     layout->addWidget(warning);
 
     // PWM label + spin + slider share one compact row.
@@ -1122,27 +1126,18 @@ QWidget *MainWindow::createDataPlotsTab()
     };
     for (const QString &title : titles) {
         auto *page = new QWidget(tabs);
-        page->setStyleSheet(QStringLiteral(
-            "background: #FFFFFF;"
-        ));
-
         auto *pageLayout = new QVBoxLayout(page);
         pageLayout->setContentsMargins(10, 10, 10, 10);
         pageLayout->setSpacing(8);
 
-        auto *pageTitle = new QLabel(QStringLiteral("%1 Plots").arg(title), page);
-        pageTitle->setStyleSheet(QStringLiteral(
-            "color: #49657A;"
-            "font-size: 12px;"
-            "font-weight: 600;"
-        ));
-        pageLayout->addWidget(pageTitle);
-
         auto *viewport = new QWidget(page);
+        viewport->setObjectName(QStringLiteral("plotViewport"));
         viewport->setStyleSheet(QStringLiteral(
-            "background: #F8FAFC;"
-            "border: 1px solid #E1E8EE;"
-            "border-radius: 6px;"
+            "#plotViewport {"
+            "  background: #F8FAFC;"
+            "  border: 1px solid #E1E8EE;"
+            "  border-radius: 6px;"
+            "}"
         ));
 
         auto *viewportLayout = new QVBoxLayout(viewport);
@@ -1150,8 +1145,12 @@ QWidget *MainWindow::createDataPlotsTab()
         auto *label = new QLabel(QStringLiteral("Plot placeholder — no data buffer"), viewport);
         label->setAlignment(Qt::AlignCenter);
         label->setStyleSheet(QStringLiteral(
-            "color: #8497A5;"
-            "font-size: 11px;"
+            "QLabel {"
+            "  background: transparent;"
+            "  border: none;"
+            "  color: #8497A5;"
+            "  font-size: 11px;"
+            "}"
         ));
         viewportLayout->addStretch();
         viewportLayout->addWidget(label);
@@ -1455,7 +1454,7 @@ void MainWindow::refreshServoUi(int index)
                                        && !pendingDisable && !motionActive);
     applyButtons_[index]->setEnabled(connected && supported && enabled
                                      && !pendingDisable && !motionActive);
-    QString statusColor = QStringLiteral("#9e9e9e");
+    QString statusColor = QStringLiteral("#6F7F8B");
     if (!connected) {
         statusLabels_[index]->setText(QStringLiteral("Disconnected"));
     } else if (!supported) {
