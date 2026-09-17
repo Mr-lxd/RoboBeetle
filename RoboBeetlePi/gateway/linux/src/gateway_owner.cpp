@@ -179,6 +179,12 @@ void GatewayOwner::process_connections()
         connections.swap(pending_connections_);
     }
     for (const auto source : connections) {
+        // A connection may close before the owner observes its registration.
+        // Do not resurrect that source after its SourceLost edge.
+        if (tcp_.current_source_id() != source) {
+            on_diagnostic("stale source registration ignored");
+            continue;
+        }
         core_.source_connected(source);
     }
 }
@@ -210,10 +216,6 @@ void GatewayOwner::drain_inbound(GatewayTimeMs owner_now_ms)
 
 void GatewayOwner::iteration()
 {
-    // Connection registration is a lifecycle edge that must precede a possible
-    // same-round EOF edge. SourceLost itself remains the first safety action.
-    process_connections();
-
     const auto first_now = monotonic_now();
     process_source_losses(first_now);
     drain_inbound(first_now);
@@ -229,6 +231,10 @@ void GatewayOwner::iteration()
     process_source_losses(second_now);
     drain_inbound(second_now);
     core_.check_time(monotonic_now());
+    // Register connections only after both SourceLost passes. This preserves
+    // immediate A->B reconnects when the worker reports both lifecycle edges
+    // before the owner gets its next turn.
+    process_connections();
 }
 
 void GatewayOwner::owner_loop()
