@@ -274,6 +274,70 @@ void lease_uses_grant_time_and_trusted_receive_time()
            "heartbeat at the deadline cannot revive authority");
 }
 
+void authority_dependent_requests_expire_by_trusted_receive_time()
+{
+    const auto late_command = [](GatewayTimeMs received_at,
+                                 GatewayTimeMs owner_now,
+                                 const char *description) {
+        FakeGatewayApplicationPort application;
+        application.submit_result = {
+            GatewayApplicationSubmitStatus::Submitted, 701U};
+        OutputSink sink;
+        ControlGatewayCore core(application, sink.callbacks());
+        core.source_connected(46U);
+        core.process(envelope(46U, 1U, hello(1U)), 1U);
+        core.process(envelope(46U, 2U, acquire(2U)), 0U);
+        sink.clear_outputs();
+
+        core.process(envelope(
+                         46U, received_at,
+                         command(3U, RobotCommandKind::StopMotion,
+                                 StopMotion{})),
+                     owner_now);
+        expect(application.submit_calls == 0U &&
+                   core.authority_state() == AuthorityState::Unowned &&
+                   application.abort_calls == 1U && sink.closes.empty(),
+               description);
+    };
+
+    late_command(1000U, 999U,
+                 "CommandRequest at the deadline expires before submit");
+    late_command(1001U, 500U,
+                 "CommandRequest after the deadline expires before submit");
+
+    FakeGatewayApplicationPort timely_application;
+    timely_application.submit_result = {
+        GatewayApplicationSubmitStatus::Submitted, 702U};
+    OutputSink timely_sink;
+    ControlGatewayCore timely_core(timely_application,
+                                   timely_sink.callbacks());
+    timely_core.source_connected(47U);
+    timely_core.process(envelope(47U, 1U, hello(1U)), 1U);
+    timely_core.process(envelope(47U, 2U, acquire(2U)), 0U);
+    timely_sink.clear_outputs();
+    timely_core.process(envelope(
+                            47U, 999U,
+                            command(3U, RobotCommandKind::StopMotion,
+                                    StopMotion{})),
+                        999U);
+    expect(timely_application.submit_calls == 1U &&
+               timely_core.authority_state() == AuthorityState::Owned &&
+               timely_core.lease_deadline_ms() == 1000U,
+           "CommandRequest before the deadline remains ordered and does not extend the lease");
+
+    FakeGatewayApplicationPort heartbeat_application;
+    OutputSink heartbeat_sink;
+    ControlGatewayCore heartbeat_core(heartbeat_application,
+                                      heartbeat_sink.callbacks());
+    heartbeat_core.source_connected(48U);
+    heartbeat_core.process(envelope(48U, 1U, hello(1U)), 1U);
+    heartbeat_core.process(envelope(48U, 2U, acquire(2U)), 0U);
+    heartbeat_core.process(envelope(48U, 1000U, heartbeat(3U, 1000U)), 500U);
+    expect(heartbeat_core.authority_state() == AuthorityState::Unowned &&
+               heartbeat_application.abort_calls == 1U,
+           "a late heartbeat cannot revive authority using a stale owner time");
+}
+
 void grant_deadline_uses_post_open_monotonic_sample()
 {
     FakeGatewayApplicationPort application;
@@ -286,9 +350,13 @@ void grant_deadline_uses_post_open_monotonic_sample()
     core.process(envelope(40U, 1U, hello(1U)), 500U);
     core.process(envelope(40U, 2U, acquire(2U)), 500U);
 
+    const auto *state = find_output<ControlStateMessage>(sink, 40U, 0U);
+
     expect(core.authority_state() == AuthorityState::Owned &&
-               core.lease_deadline_ms() == 1750U,
-           "initial lease samples monotonic time after successful open");
+               core.lease_deadline_ms() == 1750U && state != nullptr &&
+               state->reason == GatewayStateReason::Acquired &&
+               state->lease_remaining_ms == 1000U,
+           "initial lease samples and publishes the post-open monotonic time");
 }
 
 void backlog_does_not_create_an_eight_message_lease_budget()
@@ -750,6 +818,30 @@ void nonlost_state_changes_are_forwarded_to_current_controller()
     expect(recovered != nullptr &&
                recovered->link_state == GatewayApplicationLinkState::Active,
            "Degraded to Active is forwarded as unsolicited ControlState");
+
+    sink.outputs.clear();
+    application.link = GatewayApplicationLinkState::Active;
+    core.consume_application_run_result(
+        GatewayApplicationRunResult{
+            GatewayApplicationRunStatus::Progress,
+            {GatewayStateLinkEvent{GatewayApplicationSessionState::Online,
+                                   GatewayApplicationLinkState::Degraded},
+             GatewayStateLinkEvent{GatewayApplicationSessionState::Online,
+                                   GatewayApplicationLinkState::Active}},
+            0},
+        6U);
+    expect(sink.outputs.size() == 2U,
+           "a state event vector emits one ControlState per non-Lost event");
+    if (sink.outputs.size() == 2U) {
+        const auto *first = std::get_if<ControlStateMessage>(
+            &sink.outputs[0].message.payload);
+        const auto *second = std::get_if<ControlStateMessage>(
+            &sink.outputs[1].message.payload);
+        expect(first != nullptr && second != nullptr &&
+                   first->link_state == GatewayApplicationLinkState::Degraded &&
+                   second->link_state == GatewayApplicationLinkState::Active,
+               "state event snapshots preserve Degraded then Active ordering");
+    }
 }
 
 void session_link_loss_and_network_failure_use_abort_path()
@@ -814,6 +906,7 @@ int main()
     hello_is_required_and_acquire_is_explicit();
     acquire_failure_and_invalid_state_do_not_adopt_sessions();
     lease_uses_grant_time_and_trusted_receive_time();
+    authority_dependent_requests_expire_by_trusted_receive_time();
     grant_deadline_uses_post_open_monotonic_sample();
     backlog_does_not_create_an_eight_message_lease_budget();
     release_and_source_loss_abort_exactly_once();

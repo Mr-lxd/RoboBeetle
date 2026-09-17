@@ -30,6 +30,13 @@ bool is_valid_gait_backend(GaitBackend backend) noexcept
     return static_cast<Byte>(backend) <= static_cast<Byte>(GaitBackend::CPG);
 }
 
+bool is_authority_dependent(RbrpMessageKind kind) noexcept
+{
+    return kind == RbrpMessageKind::ControlHeartbeat ||
+           kind == RbrpMessageKind::ReleaseControl ||
+           kind == RbrpMessageKind::CommandRequest;
+}
+
 } // namespace
 
 ControlGatewayCore::ControlGatewayCore(GatewayApplicationPort &application,
@@ -172,12 +179,22 @@ void ControlGatewayCore::emit_state(ControlSourceId source,
         lease_deadline_ms_ > owner_now_ms
             ? static_cast<std::uint32_t>(lease_deadline_ms_ - owner_now_ms)
             : 0U;
+    emit_state_snapshot(source, authority_, session, link, reason, remaining,
+                        owner_now_ms);
+}
+
+void ControlGatewayCore::emit_state_snapshot(
+    ControlSourceId source, AuthorityState authority,
+    GatewayApplicationSessionState session, GatewayApplicationLinkState link,
+    GatewayStateReason reason, std::uint32_t lease_remaining_ms,
+    GatewayTimeMs owner_now_ms)
+{
     emit(GatewayOutbound{
              source,
              GatewayMessage{
                  0U,
-                 ControlStateMessage{authority_, session, link, reason,
-                                     remaining}}},
+                 ControlStateMessage{authority, session, link, reason,
+                                     lease_remaining_ms}}},
          owner_now_ms);
 }
 
@@ -486,7 +503,8 @@ void ControlGatewayCore::handle_payload(const RemoteEnvelope &envelope,
                                    static_cast<std::uint32_t>(kLeaseTimeoutMs),
                                    0U}}},
              owner_now_ms);
-        emit_state(envelope.source, GatewayStateReason::Acquired, owner_now_ms);
+        emit_state(envelope.source, GatewayStateReason::Acquired,
+                   grant_now_ms);
         mark_completed(request_id);
         return;
     }
@@ -507,9 +525,9 @@ void ControlGatewayCore::handle_payload(const RemoteEnvelope &envelope,
         }
         if (envelope.received_at_ms < lease_deadline_ms_) {
             lease_deadline_ms_ = envelope.received_at_ms + kLeaseTimeoutMs;
-        } else if (owner_now_ms >= lease_deadline_ms_) {
+        } else {
             revoke(envelope.source, GatewayStateReason::LeaseExpired,
-                   owner_now_ms, false);
+                   std::max(owner_now_ms, envelope.received_at_ms), false);
         }
         mark_completed(request_id);
         return;
@@ -572,6 +590,12 @@ void ControlGatewayCore::process(const RemoteEnvelope &envelope,
         return;
     }
 
+    if (authority_request_expired(envelope)) {
+        revoke(current_source_, GatewayStateReason::LeaseExpired,
+               std::max(owner_now_ms, envelope.received_at_ms), false);
+        return;
+    }
+
     const auto request_id = envelope.message.request_id;
     if (request_id == 0U) {
         emit_error(envelope.source, request_id, envelope.message.kind,
@@ -585,6 +609,14 @@ void ControlGatewayCore::process(const RemoteEnvelope &envelope,
     }
 
     handle_payload(envelope, owner_now_ms);
+}
+
+bool ControlGatewayCore::authority_request_expired(
+    const RemoteEnvelope &envelope) const noexcept
+{
+    return authority_ == AuthorityState::Owned &&
+           is_authority_dependent(envelope.message.kind) &&
+           envelope.received_at_ms >= lease_deadline_ms_;
 }
 
 void ControlGatewayCore::source_lost(const SourceLostSignal &signal,
@@ -678,7 +710,13 @@ void ControlGatewayCore::consume_event(const GatewayApplicationEvent &event,
                    owner_now_ms, false);
             return;
         }
-        emit_state(current_source_, GatewayStateReason::None, owner_now_ms);
+        const std::uint32_t remaining =
+            lease_deadline_ms_ > owner_now_ms
+                ? static_cast<std::uint32_t>(lease_deadline_ms_ - owner_now_ms)
+                : 0U;
+        emit_state_snapshot(current_source_, authority_, state->session_state,
+                            state->link_state, GatewayStateReason::None,
+                            remaining, owner_now_ms);
     }
 }
 

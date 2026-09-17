@@ -91,6 +91,11 @@ private:
                     std::uint32_t detail, GatewayTimeMs owner_now_ms);
     void emit_state(ControlSourceId source, GatewayStateReason reason,
                     GatewayTimeMs owner_now_ms);
+    void emit_state_snapshot(
+        ControlSourceId source, AuthorityState authority,
+        GatewayApplicationSessionState session,
+        GatewayApplicationLinkState link, GatewayStateReason reason,
+        std::uint32_t lease_remaining_ms, GatewayTimeMs owner_now_ms);
     void diagnostic(const char *message);
     void mark_completed(RequestId request_id);
     [[nodiscard]] bool request_id_is_duplicate(RequestId request_id) const;
@@ -107,6 +112,8 @@ private:
                         GatewayTimeMs owner_now_ms);
     void consume_event(const GatewayApplicationEvent &event,
                        GatewayTimeMs owner_now_ms);
+    [[nodiscard]] bool authority_request_expired(
+        const RemoteEnvelope &envelope) const noexcept;
     void terminalize_outstanding(GatewayCommandOutcome outcome,
                                  GatewayTimeMs owner_now_ms);
     [[nodiscard]] GatewayTimeMs grant_now(GatewayTimeMs owner_now_ms) const;
