@@ -982,7 +982,8 @@ this documentation-only commit.
 ```text
 branch: codex/raspberry-pi-remote-control-gateway
 base:   9bc66130467ebb4810d49c2a509c81f838855c6e
-implementation HEAD for handoff: a84ce01e9691e2f41b16a39293789d4a55c1394d
+implementation HEAD for original pre-review handoff:
+a84ce0180ddf3918966759e48d8ecddc7942240f
 ```
 
 The implementation follows the frozen design and plan. Corrective commit
@@ -1044,3 +1045,70 @@ Hardware acceptance?            NOT RUN
 No hardware acceptance, PR, push, merge, or Slice 8 work is part of this
 record. External code review remains the next gate; Linux/Pi software evidence
 is still required before hardware qualification.
+
+## 14. External Code Review Round 1 correction record (2026-09-17)
+
+Round 1 reviewed the pushed handoff at:
+
+```text
+reviewed HEAD: 9a785af758712a590a163260eb822d8e8fb0f635
+base:          9bc66130467ebb4810d49c2a509c81f838855c6e
+```
+
+The correction implementation is complete at the new, unrevised normal
+commit:
+
+```text
+test commit:         ec19449f0a34c3bd26f04ff99540e7d5b9240b1a
+implementation HEAD: c84ce6672a779886292afb4fc49a3b5ba7193e86
+```
+
+The six blockers were addressed as follows:
+
+```text
+[x] Linux application-port SessionState namespace uses robobeetle::session
+[x] ProtocolPty declares protocol_ack before use; HelloReply checks 0/512
+[x] Submitted correlation is live before CommandSubmitted publication;
+    ambiguous application invariants fail safe and late outcomes stay local
+[x] TCP worker snapshots fd/source generation and discards stale revents
+[x] owner registration coalesces to the newest source generation
+[x] non-Lost link transitions publish unsolicited ControlState
+[x] initial lease uses an injected post-open monotonic sample
+[x] owner drains bridge work under a synchronized lease-evaluation boundary
+```
+
+Regression coverage added or updated:
+
+```text
+[x] failed CommandSubmitted publication -> abort, CloseSource, zero correlation
+[x] late old sequence after a new source remains diagnostic only
+[x] Submitted-without-sequence and live-sequence collision fail safe
+[x] post-open lease anchor and Active/Degraded/Active state forwarding
+[x] queued replacement survives A generation rollover with fresh source ID
+[x] newest pending source registration replaces an older pending generation
+[x] real PTY lifecycle waits for ControlState(link=Active)
+```
+
+Windows verification after the correction commits:
+
+```text
+[x] fresh CMake/Ninja configure: GNU 16.1.0 MinGW, BUILD_TESTING=ON
+[x] fresh build: cmake --build build-slice7-round1-final --parallel 4
+[x] full portable CTest: 4/4 PASS
+```
+
+Linux/Pi native configure/build and CTest were not run on this Windows host;
+no Linux success is claimed here. Hardware acceptance, PR creation, merge,
+Slice 8, and forced history operations remain out of scope.
+
+Frozen scope remains unchanged:
+
+```text
+Firmware changed?               NO
+Qt changed?                     NO
+Protocol/LinkCore changed?      NO
+Transport/Session/Runtime?      NO
+application Slice 6 changed?    NO
+dsh/qt-ui touched?              NO
+Slice 6 worktree touched?       NO
+```
