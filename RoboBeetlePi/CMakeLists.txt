@@ -236,7 +236,7 @@ if(BUILD_TESTING)
         )
         target_compile_features(rbp2_tcp_gateway_integration_tests PRIVATE cxx_std_17)
         target_link_libraries(rbp2_tcp_gateway_integration_tests
-            PRIVATE rbp2_gateway_tcp)
+            PRIVATE rbp2_gateway_tcp rbp2_gateway_owner)
         add_test(NAME rbp2_tcp_gateway_integration_tests
             COMMAND rbp2_tcp_gateway_integration_tests)
         set_tests_properties(rbp2_tcp_gateway_integration_tests PROPERTIES TIMEOUT 20)

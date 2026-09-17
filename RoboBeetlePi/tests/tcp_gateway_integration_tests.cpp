@@ -1,8 +1,11 @@
 #include "test_support.hpp"
+#include "robobeetle/gateway/gateway_owner.hpp"
 #include "robobeetle/gateway/tcp_adapter.hpp"
 #include "robobeetle/gateway/rbrp_codec.hpp"
+#include "robobeetle/protocol/codec.hpp"
 
 #include <arpa/inet.h>
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -13,8 +16,10 @@
 #include <fcntl.h>
 #include <mutex>
 #include <netinet/in.h>
+#include <optional>
 #include <poll.h>
 #include <stdexcept>
+#include <string>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
@@ -26,6 +31,8 @@ namespace rbp2_test { int failures = 0; }
 namespace {
 
 using namespace robobeetle::gateway;
+using robobeetle::protocol::Codec;
+using robobeetle::protocol::Frame;
 using rbp2_test::expect;
 
 struct CallbackState {
@@ -395,6 +402,588 @@ void critical_bound_partial_telemetry_and_shutdown_contract()
     adapter.stop();
 }
 
+struct ProtocolPty {
+    int master{-1};
+    std::string path;
+    Bytes buffered;
+
+    ProtocolPty()
+    {
+        master = ::posix_openpt(O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+        if (master < 0 || ::grantpt(master) != 0 || ::unlockpt(master) != 0 ||
+            ::ptsname(master) == nullptr) {
+            if (master >= 0) {
+                ::close(master);
+            }
+            throw std::runtime_error("protocol PTY setup failed");
+        }
+        path = ::ptsname(master);
+    }
+
+    ~ProtocolPty()
+    {
+        close_master();
+    }
+
+    void close_master() noexcept
+    {
+        if (master >= 0) {
+            ::close(master);
+            master = -1;
+        }
+    }
+
+    void send(const Bytes &wire) const
+    {
+        std::size_t offset = 0U;
+        while (offset < wire.size()) {
+            const auto written =
+                ::write(master, wire.data() + offset, wire.size() - offset);
+            if (written < 0 && errno == EINTR) {
+                continue;
+            }
+            if (written <= 0) {
+                throw std::runtime_error("protocol PTY write failed");
+            }
+            offset += static_cast<std::size_t>(written);
+        }
+    }
+
+    Bytes next_wire(int timeout_ms = 2000)
+    {
+        for (;;) {
+            const auto delimiter =
+                std::find(buffered.begin(), buffered.end(), Byte{0U});
+            if (delimiter != buffered.end()) {
+                const auto end = delimiter + 1;
+                Bytes frame(buffered.begin(), end);
+                buffered.erase(buffered.begin(), end);
+                return frame;
+            }
+
+            pollfd ready{master, POLLIN, 0};
+            const int polled = ::poll(&ready, 1, timeout_ms);
+            if (polled < 0 && errno == EINTR) {
+                continue;
+            }
+            if (polled <= 0 ||
+                (ready.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                throw std::runtime_error("protocol PTY receive timeout");
+            }
+            std::array<Byte, 512U> bytes{};
+            const auto received =
+                ::read(master, bytes.data(), bytes.size());
+            if (received < 0 && errno == EINTR) {
+                continue;
+            }
+            if (received <= 0) {
+                throw std::runtime_error("protocol PTY receive EOF");
+            }
+            buffered.insert(buffered.end(), bytes.begin(),
+                            bytes.begin() + received);
+        }
+    }
+
+    Frame next_frame(int timeout_ms = 2000)
+    {
+        for (;;) {
+            const auto wire = next_wire(timeout_ms);
+            if (wire.size() == 1U && wire[0] == 0U) {
+                continue;
+            }
+            Bytes body(wire.begin(), wire.end() - 1);
+            const auto decoded = Codec::decodeWire(body);
+            if (!decoded.ok()) {
+                throw std::runtime_error("malformed Protocol V2 output");
+            }
+            return decoded.frame;
+        }
+    }
+
+    Frame next_frame_of_type(std::uint8_t type)
+    {
+        for (;;) {
+            const auto frame = next_frame();
+            if (frame.message_type == type) {
+                return frame;
+            }
+        }
+    }
+
+    bool no_command_for(int timeout_ms)
+    {
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(timeout_ms);
+        for (;;) {
+            if (master < 0) {
+                return true;
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) {
+                return true;
+            }
+            const auto remaining = static_cast<int>(std::min(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - now)
+                    .count(),
+                static_cast<long long>(200)));
+            pollfd ready{master, POLLIN, 0};
+            const int polled = ::poll(&ready, 1, remaining);
+            if (polled < 0 && errno == EINTR) {
+                continue;
+            }
+            if (polled <= 0 ||
+                (ready.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                return true;
+            }
+            const auto wire = next_wire(remaining);
+            if (wire.size() == 1U && wire[0] == 0U) {
+                continue;
+            }
+            Bytes body(wire.begin(), wire.end() - 1);
+            const auto decoded = Codec::decodeWire(body);
+            if (!decoded.ok()) {
+                throw std::runtime_error("malformed Protocol V2 output");
+            }
+            if (decoded.frame.message_type == 0x01U) {
+                send(protocol_ack(decoded.frame.sequence, 0x01U));
+                continue;
+            }
+            return false;
+        }
+    }
+};
+
+Bytes protocol_ack(std::uint16_t sequence, std::uint8_t type,
+                   std::uint8_t result = 0U)
+{
+    return Codec::encodeWire(Frame{
+        0x02U, sequence,
+        {static_cast<std::uint8_t>(sequence & 0xffU),
+         static_cast<std::uint8_t>(sequence >> 8U), type, result}});
+}
+
+struct RbrpSocketReader {
+    int fd;
+    RbrpDecoder decoder;
+    std::vector<RbrpFrame> pending;
+
+    RbrpFrame next(int timeout_ms = 2000)
+    {
+        for (;;) {
+            if (!pending.empty()) {
+                RbrpFrame frame = std::move(pending.front());
+                pending.erase(pending.begin());
+                return frame;
+            }
+            pollfd ready{fd, POLLIN, 0};
+            const int polled = ::poll(&ready, 1, timeout_ms);
+            if (polled < 0 && errno == EINTR) {
+                continue;
+            }
+            if (polled <= 0 ||
+                (ready.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                throw std::runtime_error("RBRP client receive timeout");
+            }
+            std::array<Byte, 1024U> bytes{};
+            const auto received =
+                ::recv(fd, bytes.data(), bytes.size(), 0);
+            if (received <= 0) {
+                throw std::runtime_error("RBRP client receive EOF");
+            }
+            if (decoder.feed(bytes.data(), static_cast<std::size_t>(received),
+                             pending) == RbrpFeedStatus::Fatal) {
+                throw std::runtime_error("gateway emitted fatal RBRP");
+            }
+        }
+    }
+
+    RbrpFrame next_kind(RbrpMessageKind kind)
+    {
+        for (;;) {
+            auto frame = next();
+            if (frame.kind == kind) {
+                return frame;
+            }
+        }
+    }
+
+    std::optional<RbrpFrame> try_next_kind(RbrpMessageKind kind,
+                                            int timeout_ms)
+    {
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(timeout_ms);
+        for (;;) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) {
+                return std::nullopt;
+            }
+            const auto remaining = static_cast<int>(std::max(
+                1LL,
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - now)
+                    .count()));
+            RbrpFrame frame;
+            try {
+                frame = next(remaining);
+            } catch (const std::exception &) {
+                return std::nullopt;
+            }
+            if (frame.kind == kind) {
+                return frame;
+            }
+        }
+    }
+};
+
+std::uint16_t le16(const Bytes &bytes, std::size_t offset)
+{
+    return static_cast<std::uint16_t>(
+        static_cast<std::uint16_t>(bytes[offset]) |
+        (static_cast<std::uint16_t>(bytes[offset + 1U]) << 8U));
+}
+
+void send_remote(int fd, RbrpMessageKind kind, RequestId request_id,
+                 const Bytes &payload)
+{
+    const auto encoded = encode_frame(kind, request_id, payload);
+    if (encoded.status != RbrpEncodeStatus::Ok) {
+        throw std::runtime_error("invalid test RBRP frame");
+    }
+    send_all(fd, encoded.wire);
+}
+
+Bytes protocol_frame(std::uint8_t type, std::uint16_t sequence,
+                     const Bytes &payload)
+{
+    return Codec::encodeWire(Frame{type, sequence, payload});
+}
+
+void acknowledge_heartbeats_for(ProtocolPty &pty, int timeout_ms)
+{
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        const auto remaining = static_cast<int>(std::max(
+            1LL,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - std::chrono::steady_clock::now())
+                .count()));
+        Frame frame;
+        try {
+            frame = pty.next_frame(remaining);
+        } catch (const std::exception &) {
+            return;
+        }
+        if (frame.message_type != 0x01U) {
+            throw std::runtime_error("unexpected UART frame while leasing");
+        }
+        pty.send(protocol_ack(frame.sequence, 0x01U));
+    }
+}
+
+struct RealOwnerFixture {
+    ProtocolPty pty;
+    GatewayOwner owner;
+    int client{-1};
+    std::optional<RbrpSocketReader> reader;
+
+    RealOwnerFixture()
+        : owner(pty.path, "127.0.0.1", 0U)
+    {
+        if (owner.start() != 0) {
+            throw std::runtime_error("GatewayOwner start failed");
+        }
+        connect_client();
+    }
+
+    ~RealOwnerFixture()
+    {
+        disconnect_client();
+        owner.stop();
+    }
+
+    void connect_client()
+    {
+        client = connect_loopback(owner.bound_port());
+        reader.emplace(client);
+    }
+
+    void disconnect_client() noexcept
+    {
+        reader.reset();
+        if (client >= 0) {
+            ::shutdown(client, SHUT_RDWR);
+            ::close(client);
+            client = -1;
+        }
+    }
+
+    RbrpFrame next_kind(RbrpMessageKind kind)
+    {
+        return reader->next_kind(kind);
+    }
+
+    void hello_acquire(RequestId hello_id, RequestId acquire_id)
+    {
+        send_remote(client, RbrpMessageKind::Hello, hello_id, {0U, 0U});
+        const auto hello = next_kind(RbrpMessageKind::HelloReply);
+        expect(hello.request_id == hello_id && hello.payload.size() == 8U,
+               "real owner completes Hello with the negotiated payload");
+
+        send_remote(client, RbrpMessageKind::AcquireControl, acquire_id, {});
+        const auto acquire = next_kind(RbrpMessageKind::AcquireReply);
+        expect(acquire.request_id == acquire_id && acquire.payload.size() == 12U &&
+                   acquire.payload[0] == 0U && acquire.payload[1] == 2U,
+               "real owner grants authority only after explicit Acquire");
+        (void)next_kind(RbrpMessageKind::ControlState);
+    }
+
+    std::uint16_t activate()
+    {
+        const auto raw_zero = pty.next_wire();
+        expect(raw_zero == Bytes{0U},
+               "real owner preserves the 575-ms safety-quiet boundary");
+        const auto heartbeat = pty.next_frame();
+        expect(heartbeat.message_type == 0x01U,
+               "real owner emits a heartbeat before any post-acquire command");
+        if (heartbeat.message_type == 0x01U) {
+            pty.send(protocol_ack(heartbeat.sequence, 0x01U));
+        }
+        return heartbeat.sequence;
+    }
+};
+
+RbrpFrame submit_remote_command(RealOwnerFixture &fixture,
+                                RequestId request_id, const Bytes &payload)
+{
+    send_remote(fixture.client, RbrpMessageKind::CommandRequest, request_id,
+                payload);
+    const auto submitted = fixture.next_kind(RbrpMessageKind::CommandSubmitted);
+    expect(submitted.request_id == request_id && submitted.payload.size() == 4U,
+           "real owner returns CommandSubmitted for a typed command");
+    return submitted;
+}
+
+Frame next_uart_command(ProtocolPty &pty, std::uint8_t message_type)
+{
+    for (;;) {
+        const auto frame = pty.next_frame();
+        if (frame.message_type == 0x01U) {
+            pty.send(protocol_ack(frame.sequence, 0x01U));
+            continue;
+        }
+        if (frame.message_type == message_type) {
+            return frame;
+        }
+        throw std::runtime_error("unexpected Protocol V2 command frame");
+    }
+}
+
+void real_owner_rejected_ack_and_telemetry_forwarding()
+{
+    RealOwnerFixture fixture;
+    fixture.hello_acquire(1U, 2U);
+    (void)fixture.activate();
+
+    const auto submitted = submit_remote_command(
+        fixture, 10U, {0x02U, 0x01U, 0x00U});
+    expect(submitted.payload[0] == 0U && submitted.payload[1] == 1U,
+           "a valid command is admitted before its final ACK");
+    const auto command = next_uart_command(fixture.pty, 0x11U);
+    expect(command.payload == Bytes{0x01U, 0x00U},
+           "real owner preserves the typed DisableServos payload");
+    fixture.pty.send(protocol_ack(command.sequence, 0x11U, 7U));
+    const auto rejected = fixture.next_kind(RbrpMessageKind::CommandOutcome);
+    expect(rejected.request_id == 10U && rejected.payload.size() == 5U &&
+               rejected.payload[0] == 1U && rejected.payload[1] == 2U &&
+               le16(rejected.payload, 2U) == command.sequence &&
+               rejected.payload[4] == 7U,
+           "a rejected STM32 ACK becomes a source-correlated outcome");
+
+    fixture.pty.send(protocol_frame(
+        0x20U, 55U, {2U}));
+    const auto leak = fixture.next_kind(RbrpMessageKind::LeakTelemetry);
+    expect(leak.request_id == 0U && leak.payload == Bytes{55U, 0U, 2U},
+           "real owner forwards typed Leak telemetry with its sequence");
+
+    Bytes imu(56U, 0U);
+    imu[0] = 1U;
+    imu[1] = 0x07U;
+    fixture.pty.send(protocol_frame(0x21U, 56U, imu));
+    const auto imu_wire = fixture.next_kind(RbrpMessageKind::ImuTelemetry);
+    expect(imu_wire.request_id == 0U && imu_wire.payload.size() == 58U &&
+               le16(imu_wire.payload, 0U) == 56U &&
+               imu_wire.payload[2] == 1U && imu_wire.payload[3] == 0x07U,
+           "real owner forwards the typed IMU telemetry schema");
+
+    Bytes depth(38U, 0U);
+    depth[0] = 1U;
+    depth[1] = 0x03U;
+    fixture.pty.send(protocol_frame(0x22U, 57U, depth));
+    const auto depth_wire = fixture.next_kind(RbrpMessageKind::DepthTelemetry);
+    expect(depth_wire.request_id == 0U && depth_wire.payload.size() == 40U &&
+               le16(depth_wire.payload, 0U) == 57U &&
+               depth_wire.payload[2] == 1U && depth_wire.payload[3] == 0x03U,
+           "real owner forwards the typed Depth telemetry schema");
+}
+
+void real_owner_lease_expiry_aborts_without_synthesized_command()
+{
+    RealOwnerFixture fixture;
+    fixture.hello_acquire(20U, 21U);
+    (void)fixture.activate();
+
+    acknowledge_heartbeats_for(fixture.pty, 1400);
+    const auto state = fixture.next_kind(RbrpMessageKind::ControlState);
+    expect(state.request_id == 0U && state.payload.size() == 8U &&
+               state.payload[0] == 0U &&
+               state.payload[3] == static_cast<Byte>(GatewayStateReason::LeaseExpired),
+           "gateway lease expiry revokes authority while TCP remains open");
+    expect(fixture.pty.no_command_for(200),
+           "lease expiry reaches abort without synthesizing a UART command");
+}
+
+void real_owner_uart_loss_and_tcp_survival()
+{
+    RealOwnerFixture fixture;
+    fixture.hello_acquire(30U, 31U);
+    (void)fixture.activate();
+    fixture.pty.close_master();
+
+    const auto state = fixture.next_kind(RbrpMessageKind::ControlState);
+    expect(state.request_id == 0U && state.payload.size() == 8U &&
+               state.payload[0] == 0U &&
+               state.payload[3] == static_cast<Byte>(GatewayStateReason::LinkLost),
+           "UART/PTTY loss revokes authority without closing TCP generation");
+
+    send_remote(fixture.client, RbrpMessageKind::ControlHeartbeat, 32U, {});
+    const auto not_authority = fixture.next_kind(RbrpMessageKind::ServiceError);
+    expect(not_authority.request_id == 32U && not_authority.payload.size() == 8U &&
+               le16(not_authority.payload, 0U) ==
+                   static_cast<std::uint16_t>(ServiceErrorCode::NotAuthority),
+           "TCP remains responsive after UART loss but cannot command");
+}
+
+void real_owner_disconnect_reconnect_isolation_and_no_replay()
+{
+    RealOwnerFixture fixture;
+    fixture.hello_acquire(40U, 41U);
+    const auto heartbeat_a = fixture.activate();
+
+    const auto pending = submit_remote_command(
+        fixture, 42U, {0x03U, 0x01U, 0x2cU, 0x01U});
+    const auto pending_wire = next_uart_command(fixture.pty, 0x13U);
+    expect(pending.payload[0] == 0U && pending.payload[1] == 1U &&
+               le16(pending.payload, 2U) == pending_wire.sequence,
+           "A command remains pending after UART ownership acceptance");
+
+    const auto queued = submit_remote_command(
+        fixture, 43U, {0x02U, 0x01U, 0x00U});
+    expect(queued.payload[0] == 0U && queued.payload[1] == 1U,
+           "a second command is admitted to the bounded ordinary queue");
+    expect(fixture.pty.no_command_for(120),
+           "queued command has no UART bytes before the first ACK");
+
+    fixture.disconnect_client();
+    expect(fixture.pty.no_command_for(350),
+           "TCP disconnect aborts pending work without synthesizing a command");
+
+    fixture.connect_client();
+    send_remote(fixture.client, RbrpMessageKind::CommandRequest, 100U,
+                {0x06U});
+    const auto before_hello = fixture.next_kind(RbrpMessageKind::ServiceError);
+    expect(before_hello.request_id == 100U && before_hello.payload.size() == 8U &&
+               le16(before_hello.payload, 0U) ==
+                   static_cast<std::uint16_t>(ServiceErrorCode::NotHello),
+           "a replacement TCP source must perform Hello again");
+
+    fixture.hello_acquire(101U, 102U);
+    const auto heartbeat_b = fixture.activate();
+    expect(heartbeat_b != heartbeat_a && heartbeat_b != pending_wire.sequence,
+           "reconnect preserves STM32 sequence continuity without reuse");
+
+    fixture.pty.send(protocol_ack(pending_wire.sequence, 0x13U));
+    expect(!fixture.reader->try_next_kind(RbrpMessageKind::CommandOutcome, 150),
+           "late A ACK cannot create an outcome for replacement source B");
+
+    const auto replacement = submit_remote_command(
+        fixture, 103U, {0x03U, 0x02U, 0x90U, 0x01U});
+    const auto replacement_wire = next_uart_command(fixture.pty, 0x13U);
+    expect(replacement.payload[0] == 0U && replacement.payload[1] == 1U &&
+               replacement_wire.sequence == le16(replacement.payload, 2U) &&
+               replacement_wire.sequence != pending_wire.sequence,
+           "replacement source receives only its new command, never A replay");
+    fixture.pty.send(protocol_ack(replacement_wire.sequence, 0x13U));
+    const auto outcome = fixture.next_kind(RbrpMessageKind::CommandOutcome);
+    expect(outcome.request_id == 103U && outcome.payload[0] == 0U,
+           "replacement source completes only its own command");
+}
+
+void real_owner_pty_lifecycle()
+{
+    ProtocolPty pty;
+    GatewayOwner owner(pty.path, "127.0.0.1", 0U);
+    expect(owner.start() == 0, "GatewayOwner starts the real TCP/PTY stack");
+
+    const int client = connect_loopback(owner.bound_port());
+    RbrpSocketReader reader{client};
+
+    send_all(client, encode_frame(
+                         RbrpMessageKind::Hello, 1U, Bytes{0U, 0U})
+                         .wire);
+    const auto hello = reader.next_kind(RbrpMessageKind::HelloReply);
+    expect(hello.request_id == 1U && hello.payload.size() == 8U &&
+               le16(hello.payload, 0U) == 512U,
+           "real owner returns an exact HelloReply");
+
+    send_all(client, encode_frame(
+                         RbrpMessageKind::AcquireControl, 2U, {}).wire);
+    const auto acquire = reader.next_kind(RbrpMessageKind::AcquireReply);
+    expect(acquire.request_id == 2U && acquire.payload.size() == 12U &&
+               acquire.payload[0] == 0U && acquire.payload[1] == 2U,
+           "real owner performs explicit Acquire and grants authority");
+    (void)reader.next_kind(RbrpMessageKind::ControlState);
+
+    const auto raw_zero = pty.next_wire();
+    expect(raw_zero == Bytes{0U},
+           "real owner preserves the 575-ms raw resynchronization boundary");
+    const auto heartbeat = pty.next_frame_of_type(0x01U);
+    expect(heartbeat.sequence == 0U && heartbeat.payload.size() == 4U,
+           "real owner emits the first Protocol V2 heartbeat");
+    pty.send(protocol_ack(heartbeat.sequence, 0x01U));
+
+    send_all(client, encode_frame(
+                         RbrpMessageKind::CommandRequest, 100U,
+                         Bytes{0x03U, 0x00U, 0x00U, 0x00U})
+                         .wire);
+    const auto submitted =
+        reader.next_kind(RbrpMessageKind::CommandSubmitted);
+    expect(submitted.request_id == 100U && submitted.payload.size() == 4U &&
+               submitted.payload[0] == 0U && submitted.payload[1] == 1U,
+           "real owner separates command admission from final outcome");
+    const auto command_sequence = le16(submitted.payload, 2U);
+
+    const auto command_wire = pty.next_frame_of_type(0x13U);
+    expect(command_wire.sequence == command_sequence &&
+               command_wire.payload == Bytes{1U, 0U, 0U, 0U},
+           "real owner maps the typed remote command to Protocol V2");
+    pty.send(protocol_ack(command_sequence, 0x13U));
+
+    const auto outcome = reader.next_kind(RbrpMessageKind::CommandOutcome);
+    expect(outcome.request_id == 100U && outcome.payload.size() == 5U &&
+               outcome.payload[0] == 0U && outcome.payload[1] == 3U &&
+               le16(outcome.payload, 2U) == command_sequence &&
+               outcome.payload[4] == 0U,
+           "real owner maps the STM32 ACK to a final CommandOutcome");
+
+    ::shutdown(client, SHUT_RDWR);
+    ::close(client);
+    owner.stop();
+    expect(!owner.started(),
+           "normal owner shutdown joins the worker and owner threads");
+}
+
 } // namespace
 
 int main()
@@ -405,6 +994,11 @@ int main()
         stale_close_and_old_telemetry_never_affect_new_source();
         inbound_queue_exhaustion_is_source_loss();
         critical_bound_partial_telemetry_and_shutdown_contract();
+        real_owner_pty_lifecycle();
+        real_owner_rejected_ack_and_telemetry_forwarding();
+        real_owner_lease_expiry_aborts_without_synthesized_command();
+        real_owner_uart_loss_and_tcp_survival();
+        real_owner_disconnect_reconnect_isolation_and_no_replay();
     } catch (const std::exception &error) {
         std::fprintf(stderr, "FAIL: %s\n", error.what());
         return EXIT_FAILURE;
