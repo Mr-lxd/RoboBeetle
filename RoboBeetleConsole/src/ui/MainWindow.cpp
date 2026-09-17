@@ -138,6 +138,58 @@ void applySubpanelStyle(QGroupBox *box)
     ));
 }
 
+void applyDashboardCardStyle(QGroupBox *box)
+{
+    box->setStyleSheet(QStringLiteral(
+        "QGroupBox {"
+        "  background: #FFFFFF;"
+        "  border: 1px solid #C5D4E0;"
+        "  border-radius: 8px;"
+        "  margin-top: 0px;"
+        "  padding-top: 0px;"
+        "}"
+        "QGroupBox::title {"
+        "  color: transparent;"
+        "  background: transparent;"
+        "  padding: 0;"
+        "}"
+    ));
+}
+
+void addDashboardCardHeader(QVBoxLayout *layout,
+                            QGroupBox *box,
+                            const QString &text)
+{
+    auto *header = new QHBoxLayout;
+    header->setContentsMargins(0, 0, 0, 0);
+    header->setSpacing(7);
+
+    auto *accent = new QWidget(box);
+    accent->setFixedSize(3, 16);
+    accent->setStyleSheet(QStringLiteral(
+        "background: #2F80C9;"
+        "border-radius: 1px;"
+    ));
+    header->addWidget(accent);
+
+    auto *title = new QLabel(text, box);
+    title->setStyleSheet(QStringLiteral(
+        "color: #1F4058;"
+        "font-size: 13px;"
+        "font-weight: 700;"
+    ));
+    header->addWidget(title);
+    header->addStretch();
+
+    layout->addLayout(header);
+
+    auto *divider = new QWidget(box);
+    divider->setFixedHeight(1);
+    divider->setStyleSheet(
+        QStringLiteral("background: #E3EBF2;"));
+    layout->addWidget(divider);
+}
+
 } // namespace
 
 MainWindow::MainWindow(RobotController *controller, QWidget *parent)
@@ -363,36 +415,70 @@ QWidget *MainWindow::createConnectionBar()
 QWidget *MainWindow::createVideoPlaceholder()
 {
     auto *box = new QGroupBox(QStringLiteral("Realtime Video"), this);
-    applyCardStyle(box);
+    applyDashboardCardStyle(box);
     auto *layout = new QVBoxLayout(box);
-    auto *title = new QLabel(QStringLiteral("Waiting for video stream"), box);
+    layout->setContentsMargins(10, 9, 10, 10);
+    layout->setSpacing(8);
+    addDashboardCardHeader(
+        layout, box, QStringLiteral("Realtime Video"));
+
+    auto *stage = new QWidget(box);
+    stage->setObjectName(QStringLiteral("videoEmptyStage"));
+    stage->setStyleSheet(QStringLiteral(
+        "#videoEmptyStage {"
+        "  background: #F7FAFC;"
+        "  border: 1px solid #E1E9F0;"
+        "  border-radius: 6px;"
+        "}"
+    ));
+
+    auto *stageLayout = new QVBoxLayout(stage);
+    stageLayout->setContentsMargins(16, 16, 16, 16);
+    stageLayout->setSpacing(5);
+    auto *title = new QLabel(QStringLiteral("Waiting for video stream"), stage);
     title->setAlignment(Qt::AlignCenter);
-    title->setStyleSheet(QStringLiteral("font-size: 15px; color: #455a64; font-weight: bold;"));
-    auto *subtitle = new QLabel(QStringLiteral("Video backend not connected"), box);
+    title->setStyleSheet(QStringLiteral(
+        "font-size: 15px;"
+        "font-weight: 700;"
+        "color: #294B63;"
+    ));
+    auto *subtitle = new QLabel(QStringLiteral("Video backend not connected"), stage);
     subtitle->setAlignment(Qt::AlignCenter);
-    subtitle->setStyleSheet(QStringLiteral("color: #78909c;"));
-    layout->addStretch();
-    layout->addWidget(title);
-    layout->addWidget(subtitle);
-    layout->addStretch();
+    subtitle->setStyleSheet(QStringLiteral(
+        "font-size: 11px;"
+        "color: #7B8F9D;"
+    ));
+    stageLayout->addStretch();
+    stageLayout->addWidget(title);
+    stageLayout->addWidget(subtitle);
+    stageLayout->addStretch();
+    layout->addWidget(stage, 1);
     return box;
 }
 
 QWidget *MainWindow::createLeakCard()
 {
     auto *box = new QGroupBox(QStringLiteral("Leak Detection"), this);
-    applyCardStyle(box);
+    applyDashboardCardStyle(box);
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(8, 6, 8, 6);
-    layout->setSpacing(4);
+    layout->setContentsMargins(10, 9, 10, 9);
+    layout->setSpacing(7);
+    addDashboardCardHeader(
+        layout, box, QStringLiteral("Leak Detection"));
+
     auto *statusRow = new QHBoxLayout;
+    statusRow->setContentsMargins(1, 1, 0, 0);
+    statusRow->setSpacing(7);
     leakDot_ = new QLabel(box);
     leakDot_->setFixedSize(10, 10);
     leakDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     leakStatus_ = new QLabel(QStringLiteral("Unknown"), box);
-    leakStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 13px; font-weight: 600;"));
+    leakStatus_->setStyleSheet(QStringLiteral(
+        "color: #566B79;"
+        "font-size: 12px;"
+        "font-weight: 600;"
+    ));
     statusRow->addWidget(leakDot_);
-    statusRow->addSpacing(4);
     statusRow->addWidget(leakStatus_);
     statusRow->addStretch();
     layout->addLayout(statusRow);
@@ -403,34 +489,42 @@ QWidget *MainWindow::createLeakCard()
 QWidget *MainWindow::createImuCard()
 {
     auto *box = new QGroupBox(QStringLiteral("IMU — JY901S"), this);
-    applyCardStyle(box);
+    applyDashboardCardStyle(box);
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(8, 6, 8, 6);
-    layout->setSpacing(3);
+    layout->setContentsMargins(10, 9, 10, 9);
+    layout->setSpacing(6);
+    addDashboardCardHeader(
+        layout, box, QStringLiteral("IMU — JY901S"));
+
     auto *statusRow = new QHBoxLayout;
+    statusRow->setContentsMargins(1, 0, 0, 0);
+    statusRow->setSpacing(7);
     imuDot_ = new QLabel(box);
     imuDot_->setFixedSize(10, 10);
     imuDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     imuStatus_ = new QLabel(QStringLiteral("Unknown"), box);
-    imuStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 13px; font-weight: 600;"));
+    imuStatus_->setStyleSheet(QStringLiteral(
+        "color: #566B79;"
+        "font-size: 12px;"
+        "font-weight: 600;"
+    ));
     statusRow->addWidget(imuDot_);
-    statusRow->addSpacing(4);
     statusRow->addWidget(imuStatus_);
     statusRow->addStretch();
     layout->addLayout(statusRow);
 
     auto *metrics = new QGridLayout;
-    metrics->setHorizontalSpacing(8);
-    metrics->setVerticalSpacing(1);
+    metrics->setHorizontalSpacing(10);
+    metrics->setVerticalSpacing(2);
     imuAcc_ = new QLabel(QStringLiteral("--"), box);
     imuGyro_ = new QLabel(QStringLiteral("--"), box);
     imuAngle_ = new QLabel(QStringLiteral("--"), box);
     for (QLabel *label : {imuAcc_, imuGyro_, imuAngle_}) {
-        label->setStyleSheet(QStringLiteral("color: #546e7a; font-size: 11px;"));
+        label->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
     }
     for (int row = 0; row < 3; ++row) {
         auto *label = new QLabel(QStringList{QStringLiteral("Acc"), QStringLiteral("Gyro"), QStringLiteral("Angle")}.at(row), box);
-        label->setStyleSheet(QStringLiteral("color: #78909c; font-size: 11px;"));
+        label->setStyleSheet(QStringLiteral("color: #7B8F9D; font-size: 11px; font-weight: 500;"));
         metrics->addWidget(label, row, 0);
     }
     metrics->addWidget(imuAcc_, 0, 1);
@@ -445,34 +539,42 @@ QWidget *MainWindow::createImuCard()
 QWidget *MainWindow::createDepthCard()
 {
     auto *box = new QGroupBox(QStringLiteral("Depth Sensor — ROVMAKER"), this);
-    applyCardStyle(box);
+    applyDashboardCardStyle(box);
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(8, 6, 8, 6);
-    layout->setSpacing(3);
+    layout->setContentsMargins(10, 9, 10, 9);
+    layout->setSpacing(6);
+    addDashboardCardHeader(
+        layout, box, QStringLiteral("Depth Sensor — ROVMAKER"));
+
     auto *statusRow = new QHBoxLayout;
+    statusRow->setContentsMargins(1, 0, 0, 0);
+    statusRow->setSpacing(7);
     depthDot_ = new QLabel(box);
     depthDot_->setFixedSize(10, 10);
     depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     depthStatus_ = new QLabel(QStringLiteral("Unknown"), box);
-    depthStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 13px; font-weight: 600;"));
+    depthStatus_->setStyleSheet(QStringLiteral(
+        "color: #566B79;"
+        "font-size: 12px;"
+        "font-weight: 600;"
+    ));
     statusRow->addWidget(depthDot_);
-    statusRow->addSpacing(4);
     statusRow->addWidget(depthStatus_);
     statusRow->addStretch();
     layout->addLayout(statusRow);
 
     auto *metrics = new QGridLayout;
-    metrics->setHorizontalSpacing(8);
-    metrics->setVerticalSpacing(1);
+    metrics->setHorizontalSpacing(10);
+    metrics->setVerticalSpacing(2);
     depthValue_ = new QLabel(QStringLiteral("--"), box);
     depthTemperature_ = new QLabel(QStringLiteral("--"), box);
     depthAge_ = new QLabel(QStringLiteral("--"), box);
     for (QLabel *label : {depthValue_, depthTemperature_, depthAge_}) {
-        label->setStyleSheet(QStringLiteral("color: #546e7a; font-size: 11px;"));
+        label->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
     }
     for (int row = 0; row < 3; ++row) {
         auto *label = new QLabel(QStringList{QStringLiteral("Depth"), QStringLiteral("Temp"), QStringLiteral("Age")}.at(row), box);
-        label->setStyleSheet(QStringLiteral("color: #78909c; font-size: 11px;"));
+        label->setStyleSheet(QStringLiteral("color: #7B8F9D; font-size: 11px; font-weight: 500;"));
         metrics->addWidget(label, row, 0);
     }
     metrics->addWidget(depthValue_, 0, 1);
@@ -487,18 +589,24 @@ QWidget *MainWindow::createDepthCard()
 QWidget *MainWindow::createProtocolSummaryCard()
 {
     auto *box = new QGroupBox(QStringLiteral("Protocol / Link"), this);
-    applyCardStyle(box);
-    auto *layout = new QGridLayout(box);
-    layout->setContentsMargins(8, 6, 8, 6);
-    layout->setHorizontalSpacing(8);
-    layout->setVerticalSpacing(3);
+    applyDashboardCardStyle(box);
+    auto *layout = new QVBoxLayout(box);
+    layout->setContentsMargins(10, 9, 10, 9);
+    layout->setSpacing(7);
+    addDashboardCardHeader(
+        layout, box, QStringLiteral("Protocol / Link"));
+
+    auto *metrics = new QGridLayout;
+    metrics->setContentsMargins(1, 0, 0, 0);
+    metrics->setHorizontalSpacing(10);
+    metrics->setVerticalSpacing(5);
     txCount_ = new QLabel(QStringLiteral("0"), box);
     rxCount_ = new QLabel(QStringLiteral("0"), box);
     crcCount_ = new QLabel(QStringLiteral("0"), box);
     timeoutCount_ = new QLabel(QStringLiteral("0"), box);
     ackRtt_ = new QLabel(QStringLiteral("—"), box);
     for (QLabel *value : {txCount_, rxCount_, crcCount_, timeoutCount_, ackRtt_}) {
-        value->setStyleSheet(QStringLiteral("color: #546e7a; font-size: 11px; font-weight: 600;"));
+        value->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
     }
     const QStringList labels = {
         QStringLiteral("TX"), QStringLiteral("RX"), QStringLiteral("CRC"),
@@ -506,18 +614,20 @@ QWidget *MainWindow::createProtocolSummaryCard()
     };
     for (int index = 0; index < labels.size(); ++index) {
         auto *label = new QLabel(labels.at(index), box);
-        label->setStyleSheet(QStringLiteral("color: #78909c; font-size: 11px;"));
+        label->setStyleSheet(QStringLiteral("color: #7B8F9D; font-size: 11px; font-weight: 500;"));
         const int row = index < 4 ? index / 2 : 2;
         const int column = index < 4 ? (index % 2) * 2 : 0;
-        layout->addWidget(label, row, column);
+        metrics->addWidget(label, row, column);
     }
-    layout->addWidget(txCount_, 0, 1);
-    layout->addWidget(rxCount_, 0, 3);
-    layout->addWidget(crcCount_, 1, 1);
-    layout->addWidget(timeoutCount_, 1, 3);
-    layout->addWidget(ackRtt_, 2, 1);
-    layout->setColumnStretch(1, 1);
-    layout->setColumnStretch(3, 1);
+    metrics->addWidget(txCount_, 0, 1);
+    metrics->addWidget(rxCount_, 0, 3);
+    metrics->addWidget(crcCount_, 1, 1);
+    metrics->addWidget(timeoutCount_, 1, 3);
+    metrics->addWidget(ackRtt_, 2, 1);
+    metrics->setColumnStretch(1, 1);
+    metrics->setColumnStretch(3, 1);
+    layout->addLayout(metrics);
+    layout->addStretch();
     return box;
 }
 
@@ -1071,15 +1181,15 @@ void MainWindow::setLeakUiState(LeakState state)
                              : QStringLiteral("Wet"));
     switch (state) {
     case LeakState::Unknown:
-        leakStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 13px; font-weight: 600;"));
+        leakStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 12px; font-weight: 600;"));
         leakDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
         break;
     case LeakState::Dry:
-        leakStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-size: 13px; font-weight: 600;"));
+        leakStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-size: 12px; font-weight: 600;"));
         leakDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 5px;"));
         break;
     case LeakState::Wet:
-        leakStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-size: 13px; font-weight: 600;"));
+        leakStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-size: 12px; font-weight: 600;"));
         leakDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 5px;"));
         break;
     }
@@ -1094,19 +1204,19 @@ void MainWindow::setImuUiState(const ImuMonitorState &state)
     imuStatus_->setText(imuStatusText(state.status));
     switch (state.status) {
     case ImuStatus::Unknown:
-        imuStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+        imuStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 12px; font-weight: 600;"));
         imuDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
         break;
     case ImuStatus::Receiving:
-        imuStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-weight: bold;"));
+        imuStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-size: 12px; font-weight: 600;"));
         imuDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 5px;"));
         break;
     case ImuStatus::Stale:
-        imuStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
+        imuStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-size: 12px; font-weight: 600;"));
         imuDot_->setStyleSheet(QStringLiteral("background: #FB8C00; border-radius: 5px;"));
         break;
     case ImuStatus::Error:
-        imuStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-weight: bold;"));
+        imuStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-size: 12px; font-weight: 600;"));
         imuDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 5px;"));
         break;
     }
@@ -1152,19 +1262,19 @@ void MainWindow::setDepthUiState(const DepthMonitorState &state)
     depthStatus_->setText(depthStatusText(state.status));
     switch (state.status) {
     case DepthStatus::Unknown:
-        depthStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+        depthStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 12px; font-weight: 600;"));
         depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
         break;
     case DepthStatus::Receiving:
-        depthStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-weight: bold;"));
+        depthStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-size: 12px; font-weight: 600;"));
         depthDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 5px;"));
         break;
     case DepthStatus::Stale:
-        depthStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
+        depthStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-size: 12px; font-weight: 600;"));
         depthDot_->setStyleSheet(QStringLiteral("background: #FB8C00; border-radius: 5px;"));
         break;
     case DepthStatus::Error:
-        depthStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-weight: bold;"));
+        depthStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-size: 12px; font-weight: 600;"));
         depthDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 5px;"));
         break;
     }
