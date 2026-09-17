@@ -28,6 +28,23 @@
 
 namespace rbp2_test { int failures = 0; }
 
+namespace robobeetle::gateway::detail {
+struct GatewayOwnerTestAccess {
+    static void queue_connection(GatewayOwner &owner, ControlSourceId source)
+    {
+        owner.on_source_connected(source);
+    }
+
+    static std::vector<ControlSourceId>
+    pending_connections(const GatewayOwner &owner)
+    {
+        std::lock_guard<std::mutex> lock(owner.bridge_mutex_);
+        return {owner.pending_connections_.begin(),
+                owner.pending_connections_.end()};
+    }
+};
+} // namespace robobeetle::gateway::detail
+
 namespace {
 
 using namespace robobeetle::gateway;
@@ -187,6 +204,9 @@ GatewayMessage hello_reply()
     return GatewayMessage{1U, HelloReply{0U, 512U, 250U, 1000U}};
 }
 
+Bytes protocol_ack(std::uint16_t sequence, std::uint8_t type,
+                   std::uint8_t result = 0U);
+
 void one_source_fragmented_input_and_source_addressed_output()
 {
     CallbackState callbacks;
@@ -281,6 +301,61 @@ void second_source_is_closed_and_ids_do_not_inherit()
     ::shutdown(replacement, SHUT_RDWR);
     ::close(replacement);
     adapter.stop();
+}
+
+void queued_replacement_survives_same_poll_generation_rollover()
+{
+    CallbackState callbacks;
+    TcpAdapter adapter("127.0.0.1", 0U, callbacks.callbacks());
+    expect(adapter.start() == 0,
+           "TCP adapter starts for deterministic generation rollover");
+    const int first = connect_loopback(adapter.bound_port());
+    expect(callbacks.wait_for([&callbacks] {
+               return callbacks.connected.size() == 1U;
+           }),
+           "source A is registered before the replacement is queued");
+    const auto source_a = callbacks.last_source();
+    expect(adapter.publish(GatewayOutbound{source_a, hello_reply()}),
+           "source A has a pending critical output during rollover setup");
+
+    const int replacement = connect_loopback(adapter.bound_port());
+    ::shutdown(first, SHUT_RDWR);
+    ::close(first);
+    expect(callbacks.wait_for([&callbacks] {
+               return callbacks.connected.size() == 2U;
+           }),
+           "source B waiting in the listener survives A client revents");
+    const auto source_b = callbacks.last_source();
+    expect(source_b != 0U && source_b > source_a &&
+               adapter.current_source_id() == source_b,
+           "replacement source receives a fresh increasing generation ID");
+
+    send_all(replacement,
+             encode_frame(RbrpMessageKind::Hello, 1U, {0U, 0U}).wire);
+    expect(callbacks.wait_for([&callbacks] {
+               return callbacks.inbound.size() == 1U;
+           }),
+           "the replacement source remains readable after A rollover");
+    {
+        std::lock_guard<std::mutex> lock(callbacks.mutex);
+        expect(callbacks.inbound.front().source == source_b,
+               "old A client revents cannot retag B inbound data");
+    }
+
+    ::shutdown(replacement, SHUT_RDWR);
+    ::close(replacement);
+    adapter.stop();
+}
+
+void newest_source_registration_replaces_pending_older_generation()
+{
+    GatewayOwner owner("/unused", "127.0.0.1", 0U);
+    detail::GatewayOwnerTestAccess::queue_connection(owner, 70U);
+    detail::GatewayOwnerTestAccess::queue_connection(owner, 71U);
+    const auto pending =
+        detail::GatewayOwnerTestAccess::pending_connections(owner);
+    expect(pending.size() == 1U && pending.front() == 71U,
+           "a newer source registration coalesces the older pending generation");
 }
 
 void stale_close_and_old_telemetry_never_affect_new_source()
@@ -556,7 +631,7 @@ struct ProtocolPty {
 };
 
 Bytes protocol_ack(std::uint16_t sequence, std::uint8_t type,
-                   std::uint8_t result = 0U)
+                   std::uint8_t result)
 {
     return Codec::encodeWire(Frame{
         0x02U, sequence,
@@ -753,6 +828,11 @@ struct RealOwnerFixture {
         if (heartbeat.message_type == 0x01U) {
             pty.send(protocol_ack(heartbeat.sequence, 0x01U));
         }
+        const auto state = next_kind(RbrpMessageKind::ControlState);
+        expect(state.request_id == 0U && state.payload.size() == 8U &&
+                   state.payload[2] ==
+                       static_cast<Byte>(GatewayApplicationLinkState::Active),
+               "real owner publishes Link Active before remote commands proceed");
         return heartbeat.sequence;
     }
 };
@@ -934,7 +1014,8 @@ void real_owner_pty_lifecycle()
                          .wire);
     const auto hello = reader.next_kind(RbrpMessageKind::HelloReply);
     expect(hello.request_id == 1U && hello.payload.size() == 8U &&
-               le16(hello.payload, 0U) == 512U,
+               le16(hello.payload, 0U) == 0U &&
+               le16(hello.payload, 2U) == 512U,
            "real owner returns an exact HelloReply");
 
     send_all(client, encode_frame(
@@ -952,6 +1033,11 @@ void real_owner_pty_lifecycle()
     expect(heartbeat.sequence == 0U && heartbeat.payload.size() == 4U,
            "real owner emits the first Protocol V2 heartbeat");
     pty.send(protocol_ack(heartbeat.sequence, 0x01U));
+    const auto active = reader.next_kind(RbrpMessageKind::ControlState);
+    expect(active.request_id == 0U && active.payload.size() == 8U &&
+               active.payload[2] ==
+                   static_cast<Byte>(GatewayApplicationLinkState::Active),
+           "real owner waits for an explicit Active state before commands");
 
     send_all(client, encode_frame(
                          RbrpMessageKind::CommandRequest, 100U,
@@ -991,6 +1077,8 @@ int main()
     try {
         one_source_fragmented_input_and_source_addressed_output();
         second_source_is_closed_and_ids_do_not_inherit();
+        queued_replacement_survives_same_poll_generation_rollover();
+        newest_source_registration_replaces_pending_older_generation();
         stale_close_and_old_telemetry_never_affect_new_source();
         inbound_queue_exhaustion_is_source_loss();
         critical_bound_partial_telemetry_and_shutdown_contract();

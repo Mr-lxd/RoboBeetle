@@ -30,10 +30,14 @@ struct FakeGatewayApplicationPort final : GatewayApplicationPort {
     GatewayApplicationRunResult run_result;
     GatewayApplicationAbortResult abort_result;
     std::vector<RobotCommand> submitted_commands;
+    std::function<void()> on_open;
 
     int open() override
     {
         ++open_calls;
+        if (on_open) {
+            on_open();
+        }
         if (open_result == 0) {
             session = GatewayApplicationSessionState::SafetyQuiet;
         }
@@ -79,12 +83,14 @@ struct OutputSink {
     std::size_t diagnostics{0};
     bool accept_outputs{true};
     bool accept_closes{true};
+    std::function<bool(const GatewayOutbound &)> accept_output;
+    std::function<GatewayTimeMs()> now_provider;
 
     GatewayCoreCallbacks callbacks()
     {
         return GatewayCoreCallbacks{
             [this](const GatewayOutbound &output) {
-                if (!accept_outputs) {
+                if (!accept_outputs || (accept_output && !accept_output(output))) {
                     return false;
                 }
                 outputs.push_back(output);
@@ -98,6 +104,7 @@ struct OutputSink {
                 return true;
             },
             [this](const char *) { ++diagnostics; },
+            now_provider,
         };
     }
 
@@ -127,6 +134,7 @@ RemoteMessage acquire(RequestId request_id)
 
 RemoteMessage heartbeat(RequestId request_id, GatewayTimeMs received_at)
 {
+    (void)received_at;
     return RemoteMessage{RbrpMessageKind::ControlHeartbeat, request_id,
                           ControlHeartbeatRequest{}};
 }
@@ -264,6 +272,23 @@ void lease_uses_grant_time_and_trusted_receive_time()
     expect(core.authority_state() == AuthorityState::Unowned &&
                application.abort_calls == 1U,
            "heartbeat at the deadline cannot revive authority");
+}
+
+void grant_deadline_uses_post_open_monotonic_sample()
+{
+    FakeGatewayApplicationPort application;
+    OutputSink sink;
+    GatewayTimeMs now = 500U;
+    sink.now_provider = [&now] { return now; };
+    application.on_open = [&now] { now = 750U; };
+    ControlGatewayCore core(application, sink.callbacks());
+    core.source_connected(40U);
+    core.process(envelope(40U, 1U, hello(1U)), 500U);
+    core.process(envelope(40U, 2U, acquire(2U)), 500U);
+
+    expect(core.authority_state() == AuthorityState::Owned &&
+               core.lease_deadline_ms() == 1750U,
+           "initial lease samples monotonic time after successful open");
 }
 
 void backlog_does_not_create_an_eight_message_lease_budget()
@@ -560,6 +585,173 @@ void final_outcomes_correlate_only_by_live_sequence()
            "Cancelled remains an explicit final outcome");
 }
 
+void submitted_correlation_is_live_before_publish_failure()
+{
+    FakeGatewayApplicationPort application;
+    application.submit_result = {
+        GatewayApplicationSubmitStatus::Submitted, 813U};
+    OutputSink sink;
+    sink.accept_output = [](const GatewayOutbound &output) {
+        return !std::holds_alternative<CommandSubmittedMessage>(
+            output.message.payload);
+    };
+    ControlGatewayCore core(application, sink.callbacks());
+    core.source_connected(41U);
+    core.process(envelope(41U, 1U, hello(1U)), 1U);
+    core.process(envelope(41U, 2U, acquire(2U)), 2U);
+    sink.outputs.clear();
+
+    core.process(envelope(
+                     41U, 3U, command(3U, RobotCommandKind::StopMotion,
+                                      StopMotion{})),
+                 3U);
+    expect(core.authority_state() == AuthorityState::Unowned &&
+               !core.source_present() && application.abort_calls == 1U &&
+               core.outstanding_count() == 0U && sink.closes.size() == 1U &&
+               sink.closes.front().source == 41U,
+           "failed CommandSubmitted publication sees live correlation and fails safe");
+
+    sink.accept_output = nullptr;
+    const auto diagnostics_before = core.diagnostic_count();
+    core.consume_application_run_result(
+        GatewayApplicationRunResult{
+            GatewayApplicationRunStatus::Progress,
+            {GatewayCommandOutcomeEvent{
+                GatewayCommandOutcome::Accepted, 813U, 0U}},
+            0},
+        4U);
+    expect(core.outstanding_count() == 0U &&
+               core.diagnostic_count() > diagnostics_before,
+           "late outcome for failed publication is diagnostic only");
+
+    core.source_connected(42U);
+    core.process(envelope(42U, 5U, hello(1U)), 5U);
+    core.process(envelope(42U, 6U, acquire(2U)), 6U);
+    application.submit_result = {
+        GatewayApplicationSubmitStatus::Submitted, 814U};
+    core.process(envelope(
+                     42U, 7U, command(7U, RobotCommandKind::StopMotion,
+                                      StopMotion{})),
+                 7U);
+    const auto diagnostics_after_new_command = core.diagnostic_count();
+    core.consume_application_run_result(
+        GatewayApplicationRunResult{
+            GatewayApplicationRunStatus::Progress,
+            {GatewayCommandOutcomeEvent{
+                GatewayCommandOutcome::Accepted, 813U, 0U}},
+            0},
+        8U);
+    expect(core.outstanding_count() == 1U &&
+               core.diagnostic_count() > diagnostics_after_new_command,
+           "late old sequence cannot be assigned to a new source");
+}
+
+void impossible_submitted_invariants_fail_safe()
+{
+    {
+        FakeGatewayApplicationPort application;
+        application.submit_result = {
+            GatewayApplicationSubmitStatus::Submitted, std::nullopt};
+        OutputSink sink;
+        ControlGatewayCore core(application, sink.callbacks());
+        core.source_connected(43U);
+        core.process(envelope(43U, 1U, hello(1U)), 1U);
+        core.process(envelope(43U, 2U, acquire(2U)), 2U);
+        sink.outputs.clear();
+
+        core.process(envelope(
+                         43U, 3U,
+                         command(3U, RobotCommandKind::StopMotion,
+                                 StopMotion{})),
+                     3U);
+        expect(core.authority_state() == AuthorityState::Unowned &&
+                   application.abort_calls == 1U &&
+                   core.outstanding_count() == 0U &&
+                   find_output<CommandSubmittedMessage>(sink, 43U, 3U) ==
+                       nullptr,
+               "Submitted without sequence revokes authority instead of becoming TransportRejected");
+    }
+
+    {
+        FakeGatewayApplicationPort application;
+        application.submit_result = {
+            GatewayApplicationSubmitStatus::Submitted, 900U};
+        OutputSink sink;
+        ControlGatewayCore core(application, sink.callbacks());
+        core.source_connected(44U);
+        core.process(envelope(44U, 1U, hello(1U)), 1U);
+        core.process(envelope(44U, 2U, acquire(2U)), 2U);
+        core.process(envelope(
+                         44U, 3U,
+                         command(3U, RobotCommandKind::StopMotion,
+                                 StopMotion{})),
+                     3U);
+        core.process(envelope(
+                         44U, 4U,
+                         command(4U, RobotCommandKind::StopMotion,
+                                 StopMotion{})),
+                     4U);
+        expect(core.authority_state() == AuthorityState::Unowned &&
+                   application.abort_calls == 1U &&
+                   core.outstanding_count() == 0U,
+               "Submitted with a live sequence collision revokes authority");
+    }
+}
+
+void nonlost_state_changes_are_forwarded_to_current_controller()
+{
+    FakeGatewayApplicationPort application;
+    OutputSink sink;
+    ControlGatewayCore core(application, sink.callbacks());
+    core.source_connected(45U);
+    core.process(envelope(45U, 1U, hello(1U)), 1U);
+    core.process(envelope(45U, 2U, acquire(2U)), 2U);
+    sink.outputs.clear();
+
+    application.session = GatewayApplicationSessionState::Online;
+    application.link = GatewayApplicationLinkState::Active;
+    core.consume_application_run_result(
+        GatewayApplicationRunResult{
+            GatewayApplicationRunStatus::Progress,
+            {GatewayStateLinkEvent{GatewayApplicationSessionState::Online,
+                                   GatewayApplicationLinkState::Active}},
+            0},
+        3U);
+    const auto *active = find_output<ControlStateMessage>(sink, 45U, 0U);
+    expect(active != nullptr &&
+               active->link_state == GatewayApplicationLinkState::Active &&
+               active->reason == GatewayStateReason::None,
+           "Unconfirmed to Active is forwarded as unsolicited ControlState");
+
+    sink.outputs.clear();
+    application.link = GatewayApplicationLinkState::Degraded;
+    core.consume_application_run_result(
+        GatewayApplicationRunResult{
+            GatewayApplicationRunStatus::Progress,
+            {GatewayStateLinkEvent{GatewayApplicationSessionState::Online,
+                                   GatewayApplicationLinkState::Degraded}},
+            0},
+        4U);
+    const auto *degraded = find_output<ControlStateMessage>(sink, 45U, 0U);
+    expect(degraded != nullptr &&
+               degraded->link_state == GatewayApplicationLinkState::Degraded,
+           "Active to Degraded is forwarded as unsolicited ControlState");
+
+    sink.outputs.clear();
+    application.link = GatewayApplicationLinkState::Active;
+    core.consume_application_run_result(
+        GatewayApplicationRunResult{
+            GatewayApplicationRunStatus::Progress,
+            {GatewayStateLinkEvent{GatewayApplicationSessionState::Online,
+                                   GatewayApplicationLinkState::Active}},
+            0},
+        5U);
+    const auto *recovered = find_output<ControlStateMessage>(sink, 45U, 0U);
+    expect(recovered != nullptr &&
+               recovered->link_state == GatewayApplicationLinkState::Active,
+           "Degraded to Active is forwarded as unsolicited ControlState");
+}
+
 void session_link_loss_and_network_failure_use_abort_path()
 {
     FakeGatewayApplicationPort lost_application;
@@ -622,12 +814,16 @@ int main()
     hello_is_required_and_acquire_is_explicit();
     acquire_failure_and_invalid_state_do_not_adopt_sessions();
     lease_uses_grant_time_and_trusted_receive_time();
+    grant_deadline_uses_post_open_monotonic_sample();
     backlog_does_not_create_an_eight_message_lease_budget();
     release_and_source_loss_abort_exactly_once();
     source_generation_isolation_prevents_stale_loss();
     request_ids_are_scoped_and_duplicate_safe();
     local_rejections_and_backward_never_submit();
     final_outcomes_correlate_only_by_live_sequence();
+    submitted_correlation_is_live_before_publish_failure();
+    impossible_submitted_invariants_fail_safe();
+    nonlost_state_changes_are_forwarded_to_current_controller();
     session_link_loss_and_network_failure_use_abort_path();
     shutdown_is_graceful_and_does_not_synthesize_actuator_commands();
 
