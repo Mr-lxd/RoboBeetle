@@ -88,6 +88,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(rbp2_onboard_application PUBLIC rbp2_link_runtime rbp2_robot_codec)
     target_compile_features(rbp2_onboard_application PUBLIC cxx_std_17)
 
+    add_library(rbp2_gateway_linux_application_port STATIC
+        gateway/linux/src/linux_onboard_application_port.cpp
+    )
+    target_include_directories(rbp2_gateway_linux_application_port PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/linux/include
+    )
+    target_link_libraries(rbp2_gateway_linux_application_port PUBLIC
+        rbp2_gateway_core rbp2_onboard_application
+    )
+    target_compile_features(rbp2_gateway_linux_application_port PUBLIC cxx_std_17)
+
     add_executable(robobeetle_pi_smoke tools/robobeetle_pi_smoke.cpp)
     target_link_libraries(robobeetle_pi_smoke PRIVATE rbp2_onboard_application)
 endif()
@@ -179,6 +191,8 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests
         )
         target_compile_features(rbp2_gateway_linux_application_port_tests PRIVATE cxx_std_17)
+        target_link_libraries(rbp2_gateway_linux_application_port_tests
+            PRIVATE rbp2_gateway_linux_application_port)
         add_test(NAME rbp2_gateway_linux_application_port_tests
             COMMAND rbp2_gateway_linux_application_port_tests)
         set_tests_properties(rbp2_gateway_linux_application_port_tests PROPERTIES TIMEOUT 20)

@@ -50,6 +50,7 @@ namespace rbp2_test { int failures = 0; }
 
 namespace {
 
+using namespace robobeetle;
 using namespace robobeetle::gateway;
 using robobeetle::protocol::Bytes;
 using robobeetle::protocol::Codec;
@@ -160,8 +161,9 @@ void install_test_clock(LinuxOnboardApplicationPort &port)
 {
     auto &application =
         detail::LinuxOnboardApplicationPortTestAccess::application(port);
-    runtime::detail::LinkRuntimeTestAccess::clock(
-        application::detail::OnboardApplicationTestAccess::runtime(application),
+    robobeetle::runtime::detail::LinkRuntimeTestAccess::clock(
+        robobeetle::application::detail::OnboardApplicationTestAccess::runtime(
+            application),
         gateway_clock);
 }
 
