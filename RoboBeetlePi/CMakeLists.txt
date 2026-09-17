@@ -54,6 +54,14 @@ target_include_directories(rbp2_rbrp_codec PUBLIC
 )
 target_compile_features(rbp2_rbrp_codec PUBLIC cxx_std_17)
 
+add_library(rbp2_gateway_core STATIC
+    gateway/src/control_gateway_core.cpp
+)
+target_include_directories(rbp2_gateway_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+)
+target_compile_features(rbp2_gateway_core PUBLIC cxx_std_17)
+
 # Keep Linux headers and syscalls out of all portable targets.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_library(rbp2_posix_serial_transport STATIC
@@ -100,6 +108,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests
     )
     target_compile_features(rbp2_gateway_core_tests PRIVATE cxx_std_17)
+    target_link_libraries(rbp2_gateway_core_tests PRIVATE rbp2_gateway_core)
     add_test(NAME rbp2_gateway_core_tests COMMAND rbp2_gateway_core_tests)
 
     add_executable(rbp2_protocol_tests
