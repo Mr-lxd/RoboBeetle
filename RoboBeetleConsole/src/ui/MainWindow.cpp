@@ -74,30 +74,34 @@ QString motionModeText(MotionMode mode)
     return QStringLiteral("UNKNOWN");
 }
 
-// Subtle industrial-console card style: white card surface separated from the
-// page tint, a soft shadowed border for layering, and a stronger section title
-// that reads as a module header rather than plain content text.
+void applySectionStyle(QGroupBox *box)
+{
+    box->setStyleSheet(QStringLiteral(
+        "QGroupBox { background: #f5f8fb; border: 1px solid #c8d3de; "
+        "  border-radius: 8px; margin-top: 16px; padding-top: 7px; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 10px; top: 2px; "
+        "  padding: 0 6px; background: #f5f8fb; color: #1f3447; "
+        "  font-size: 14px; font-weight: 700; }"));
+}
+
 void applyCardStyle(QGroupBox *box)
 {
     box->setStyleSheet(QStringLiteral(
-        "QGroupBox {"
-        "  background: #ffffff;"
-        "  border: 1px solid #d5dce3;"
-        "  border-radius: 7px;"
-        "  margin-top: 14px;"
-        "  padding-top: 6px;"
-        "}"
-        "QGroupBox::title {"
-        "  subcontrol-origin: margin;"
-        "  left: 10px;"
-        "  top: 2px;"
-        "  padding: 0 6px;"
-        "  background: #ffffff;"
-        "  color: #263238;"
-        "  font-size: 13px;"
-        "  font-weight: 700;"
-        "  letter-spacing: 0.3px;"
-        "}"));
+        "QGroupBox { background: #ffffff; border: 1px solid #d9e2ea; "
+        "  border-radius: 7px; margin-top: 14px; padding-top: 6px; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 10px; top: 2px; "
+        "  padding: 0 6px; background: #ffffff; color: #263238; "
+        "  font-size: 13px; font-weight: 700; }"));
+}
+
+void applySubpanelStyle(QGroupBox *box)
+{
+    box->setStyleSheet(QStringLiteral(
+        "QGroupBox { background: #fafcfe; border: 1px solid #e0e7ed; "
+        "  border-radius: 7px; margin-top: 13px; padding-top: 6px; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 8px; top: 2px; "
+        "  padding: 0 5px; background: #fafcfe; color: #37474f; "
+        "  font-size: 12px; font-weight: 600; }"));
 }
 
 } // namespace
@@ -111,9 +115,11 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     setMinimumSize(1100, 720);
 
     auto *central = new QWidget(this);
+    central->setObjectName(QStringLiteral("appCanvas"));
+    central->setStyleSheet(QStringLiteral("#appCanvas { background: #eaf0f5; }"));
     auto *root = new QVBoxLayout(central);
-    root->setContentsMargins(4, 4, 4, 4);
-    root->setSpacing(6);
+    root->setContentsMargins(8, 8, 8, 8);
+    root->setSpacing(8);
 
     root->addWidget(createConnectionBar());
     root->addWidget(createDashboard(), 1);
@@ -672,13 +678,19 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
 QWidget *MainWindow::createActuatorPanel()
 {
     auto *box = new QGroupBox(QStringLiteral("Actuator Control"), this);
-    applyCardStyle(box);
+    applySectionStyle(box);
+    box->setStyleSheet(box->styleSheet() + QStringLiteral(
+        "QGroupBox { margin-top: 0; padding-top: 0; }"
+        "QGroupBox::title { color: transparent; background: transparent; }"));
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(6, 4, 6, 6);
-    layout->setSpacing(4);
+    layout->setContentsMargins(8, 6, 8, 8);
+    layout->setSpacing(6);
 
     auto *header = new QHBoxLayout;
     header->setContentsMargins(0, 0, 0, 0);
+    auto *title = new QLabel(QStringLiteral("Actuator Control"), box);
+    title->setStyleSheet(QStringLiteral("color: #1f3447; font-size: 14px; font-weight: 700;"));
+    header->addWidget(title);
     header->addStretch();
     auto *disableAll = new QPushButton(QStringLiteral("Disable All"), box);
     disableAll->setStyleSheet(QStringLiteral(
@@ -712,12 +724,12 @@ QWidget *MainWindow::createActuatorPanel()
 QWidget *MainWindow::createMotionPanel()
 {
     auto *box = new QGroupBox(QStringLiteral("Motion / Gait — Bench"), this);
-    applyCardStyle(box);
+    applySectionStyle(box);
     auto *layout = new QGridLayout(box);    // Top-level: Motion Control | Gait / Vertical
 
     // --- Motion Control (left): D-pad-like arrangement ---
     auto *motionGroup = new QGroupBox(QStringLiteral("Motion Control"), box);
-    applyCardStyle(motionGroup);
+    applySubpanelStyle(motionGroup);
     auto *dpad = new QGridLayout(motionGroup);
     dpad->setContentsMargins(8, 12, 8, 8);
     dpad->setSpacing(6);
@@ -778,7 +790,7 @@ QWidget *MainWindow::createMotionPanel()
 
     // --- Gait / Vertical (right) ---
     auto *gaitGroup = new QGroupBox(QStringLiteral("Gait / Vertical"), box);
-    applyCardStyle(gaitGroup);
+    applySubpanelStyle(gaitGroup);
     auto *gaitLayout = new QGridLayout(gaitGroup);
     gaitLayout->setContentsMargins(8, 12, 8, 8);
     gaitLayout->setSpacing(6);
@@ -823,13 +835,15 @@ QWidget *MainWindow::createMotionPanel()
         gaitGroup);
     provisional->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
 
-    gaitLayout->addWidget(new QLabel(QStringLiteral("Gait Backend:"), gaitGroup), 0, 0);
-    gaitLayout->addWidget(gaitBackendCombo_, 0, 1, 1, 2);
-    gaitLayout->addWidget(new QLabel(QStringLiteral("Status:"), gaitGroup), 1, 0);
-    gaitLayout->addWidget(motionStatus_, 1, 1, 1, 2);
-    gaitLayout->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)], 2, 0);
-    gaitLayout->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Descend)], 2, 1);
-    gaitLayout->addWidget(provisional, 3, 0, 1, 3);
+    gaitLayout->addWidget(new QLabel(QStringLiteral("Gait Backend"), gaitGroup), 0, 0, 1, 3);
+    gaitLayout->addWidget(gaitBackendCombo_, 1, 0, 1, 3);
+    gaitLayout->addWidget(new QLabel(QStringLiteral("Current:"), gaitGroup), 2, 0);
+    gaitLayout->addWidget(gaitBackendStatus_, 2, 1, 1, 2);
+    gaitLayout->addWidget(new QLabel(QStringLiteral("Motion Status"), gaitGroup), 3, 0);
+    gaitLayout->addWidget(motionStatus_, 3, 1, 1, 2);
+    gaitLayout->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)], 4, 0);
+    gaitLayout->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Descend)], 4, 1);
+    gaitLayout->addWidget(provisional, 5, 0, 1, 3);
 
     layout->addWidget(motionGroup, 0, 0);
     layout->addWidget(gaitGroup, 0, 1);
