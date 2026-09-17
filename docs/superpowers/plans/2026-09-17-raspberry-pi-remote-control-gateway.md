@@ -982,13 +982,14 @@ this documentation-only commit.
 ```text
 branch: codex/raspberry-pi-remote-control-gateway
 base:   9bc66130467ebb4810d49c2a509c81f838855c6e
-implementation HEAD before Commit 14: 4e9f00346e3b422fb92cc302a1fb248cde40b357
+implementation HEAD for handoff: a84ce01e9691e2f41b16a39293789d4a55c1394d
 ```
 
-The implementation follows the frozen design and plan. The additional
-corrective commit `4e9f003` orders SourceLost processing before connection
-registration and ignores a registration whose TCP source generation has
-already closed; this is required for immediate A-to-B reconnect isolation.
+The implementation follows the frozen design and plan. Corrective commit
+`4e9f003` orders SourceLost processing before connection registration and
+ignores a registration whose TCP source generation has already closed; the
+follow-up `a84ce01` registers a still-live source before draining its first
+envelope, preserving both immediate A-to-B isolation and the initial Hello.
 
 ### Windows portable gate
 
@@ -1024,7 +1025,8 @@ The current Windows host has no installed WSL Linux environment, native Linux
 compiler, or container runtime. A diagnostic `CMAKE_SYSTEM_NAME=Linux`
 MinGW attempt configured but is not a native result and stopped at missing
 POSIX headers (`termios.h`, `poll.h`, and `arpa/inet.h`). The Linux/Pi gate
-must be run on Raspberry Pi/ARM Linux against the implementation HEAD above.
+must be run on Raspberry Pi/ARM Linux against implementation HEAD
+`a84ce01e9691e2f41b16a39293789d4a55c1394d`.
 
 ### Scope and qualification
 
