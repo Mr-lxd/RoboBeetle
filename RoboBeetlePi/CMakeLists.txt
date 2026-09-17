@@ -39,6 +39,13 @@ target_include_directories(rbp2_transport PUBLIC
 )
 target_compile_features(rbp2_transport PUBLIC cxx_std_17)
 
+add_library(rbp2_robot_codec STATIC application/src/robot_codec.cpp)
+target_include_directories(rbp2_robot_codec PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/application/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/protocol/include
+)
+target_compile_features(rbp2_robot_codec PUBLIC cxx_std_17)
+
 # Keep Linux headers and syscalls out of all portable targets.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_library(rbp2_posix_serial_transport STATIC
@@ -60,6 +67,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     )
     target_link_libraries(rbp2_link_runtime PUBLIC rbp2_serial_session)
     target_compile_features(rbp2_link_runtime PUBLIC cxx_std_17)
+
+    add_library(rbp2_onboard_application STATIC application/src/onboard_application.cpp)
+    target_link_libraries(rbp2_onboard_application PUBLIC rbp2_link_runtime rbp2_robot_codec)
+    target_compile_features(rbp2_onboard_application PUBLIC cxx_std_17)
+
+    add_executable(robobeetle_pi_smoke tools/robobeetle_pi_smoke.cpp)
+    target_link_libraries(robobeetle_pi_smoke PRIVATE rbp2_onboard_application)
 endif()
 
 if(BUILD_TESTING)
@@ -82,6 +96,16 @@ if(BUILD_TESTING)
     target_link_libraries(rbp2_protocol_tests PRIVATE rbp2_protocol rbp2_link_core rbp2_transport)
     add_test(NAME rbp2_protocol_tests COMMAND rbp2_protocol_tests)
 
+    add_executable(rbp2_robot_codec_tests tests/robot_codec_tests.cpp)
+    target_include_directories(rbp2_robot_codec_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/application/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/protocol/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    )
+    target_compile_features(rbp2_robot_codec_tests PRIVATE cxx_std_17)
+    target_link_libraries(rbp2_robot_codec_tests PRIVATE rbp2_robot_codec)
+    add_test(NAME rbp2_robot_codec_tests COMMAND rbp2_robot_codec_tests)
+
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(rbp2_posix_serial_transport_tests
             tests/posix_serial_transport_tests.cpp
@@ -97,5 +121,13 @@ if(BUILD_TESTING)
         target_link_libraries(rbp2_link_runtime_tests PRIVATE rbp2_link_runtime)
         add_test(NAME rbp2_link_runtime_tests COMMAND rbp2_link_runtime_tests)
         set_tests_properties(rbp2_link_runtime_tests PROPERTIES TIMEOUT 15)
+
+        add_executable(rbp2_onboard_application_tests tests/onboard_application_tests.cpp)
+        target_include_directories(rbp2_onboard_application_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/application/include
+        )
+        target_link_libraries(rbp2_onboard_application_tests PRIVATE rbp2_onboard_application)
+        add_test(NAME rbp2_onboard_application_tests COMMAND rbp2_onboard_application_tests)
+        set_tests_properties(rbp2_onboard_application_tests PROPERTIES TIMEOUT 15)
     endif()
 endif()
