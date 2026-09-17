@@ -1259,3 +1259,124 @@ application Slice 6 changed?    NO
 dsh/qt-ui touched?              NO
 Slice 6 worktree touched?       NO
 ```
+
+## 17. External Code Review Round 3 implementation plan (2026-09-17)
+
+Round 3 reviewed remote HEAD `e343de16bac487470aa62eae42db786004f0c767`.
+The implementation remains on the existing Slice 7 Core/TCP/Owner seams.
+
+### Task 1: All-envelope trusted lease expiry and pre-grant quarantine
+
+Files: `RoboBeetlePi/gateway/include/robobeetle/gateway/control_gateway_core.hpp`,
+`RoboBeetlePi/gateway/src/control_gateway_core.cpp`, and
+`RoboBeetlePi/tests/control_gateway_core_tests.cpp`.
+
+- [x] Add RED coverage proving late Hello/Acquire traffic cannot defer expiry,
+  and that pre-grant heartbeat, command, and release envelopes cannot act on
+  newly granted authority.
+- [x] Record `authority_granted_at_ms` at the fresh post-open grant sample and
+  clear it on every revoke/source-loss/shutdown path.
+- [x] Apply the all-valid-envelope deadline gate before normal message
+  semantics, then return `ServiceError(NotAuthority)` for authority-dependent
+  envelopes received before the current grant.
+- [x] Run the portable Core test target through RED and GREEN.
+
+### Task 2: Whole recv/decode batch ingress barrier
+
+Files: `RoboBeetlePi/gateway/linux/include/robobeetle/gateway/tcp_adapter.hpp`,
+`RoboBeetlePi/gateway/linux/src/tcp_adapter.cpp`, and
+`RoboBeetlePi/tests/tcp_gateway_integration_tests.cpp`.
+
+- [x] Add a deterministic coalesced ordinary-frame plus heartbeat regression
+  with an injected monotonic provider; both frames must share one batch receive
+  timestamp and remain authoritative in FIFO order.
+- [x] Move the in-flight RAII scope around the complete `recv`/`decoder.feed`
+  attempt, capture one steady-clock timestamp after feed, and enqueue every
+  decoded remote request before clearing the scope.
+- [x] Preserve fatal decoder closure and no-frame cleanup without leaking the
+  in-flight count.
+
+### Task 3: Owner timer boundary and independent fairness regressions
+
+Files: `RoboBeetlePi/gateway/linux/src/gateway_owner.cpp` and
+`RoboBeetlePi/tests/tcp_gateway_integration_tests.cpp`.
+
+- [x] Let the owner evaluate time with ordinary pending inbound traffic while
+  deferring only for in-flight delivery, pending source-generation work, or a
+  current-source timely heartbeat that remains in FIFO order.
+- [x] Add independent duplicate-Hello traffic for more than one lease timeout;
+  consume responses, ACK lower heartbeats, and verify LeaseExpired/abort rather
+  than traffic-based lease extension.
+- [x] Replace the producer-paced-by-PTY fairness test with an independent,
+  bounded-rate inbound producer while independently observing/ACKing multiple
+  Protocol V2 heartbeats; retain queue exhaustion coverage separately.
+
+### Task 4: Round 3 verification and handoff
+
+Files: this plan only after implementation.
+
+- [x] Run fresh Windows configure/build/full portable CTest with 4/4 PASS.
+- [x] Keep Linux/Pi and hardware qualification explicitly unrun on Windows.
+- [x] Commit and push only normal commits, report the exact diff from `e343de1`,
+  and do not create a PR.
+
+## 18. External Code Review Round 3 verification record (2026-09-17)
+
+Round 3 reviewed remote HEAD `e343de16bac487470aa62eae42db786004f0c767`.
+The fixes were recorded as normal commits:
+
+```text
+1fb10a3 fix: close Slice 7 lease semantic gaps
+c2c0b49 fix: harden Slice 7 ingress batch and owner fairness
+```
+
+Blocker coverage:
+
+```text
+[x] all valid current-source envelopes at or after the trusted lease deadline
+    revoke with LeaseExpired before Hello/Acquire/other normal semantics
+[x] authority_granted_at_ms quarantines pre-grant heartbeat, command, and
+    release envelopes with ServiceError(NotAuthority)
+[x] the TCP in-flight barrier covers one complete recv/decode batch and gives
+    all decoded messages one trusted batch timestamp
+[x] Owner check_time is no longer suppressed by ordinary pending traffic; it
+    defers only for source ordering, in-flight delivery, or a timely FIFO
+    heartbeat
+```
+
+Round 3 Linux-side regression coverage added or strengthened:
+
+```text
+[x] coalesced ordinary frame plus ControlHeartbeat preserves authority
+[x] bounded independent duplicate-Hello traffic expires authority and keeps
+    UART heartbeat ACK service independent of TCP response consumption
+[x] independent bounded remote heartbeat producer coexists with multiple
+    independently observed and ACKed Protocol V2 heartbeats
+[x] deliberate inbound queue exhaustion remains a separate SourceLost test
+```
+
+Windows portable verification:
+
+```text
+compiler: GNU 16.1.0 MinGW
+configure: cmake -S RoboBeetlePi -B build-slice7-round3-final -G Ninja
+           -DBUILD_TESTING=ON
+build:     PASS
+CTest:     4/4 PASS
+```
+
+Native Linux/Pi configure/build, Linux gateway integration tests, hardware
+acceptance, PR creation, merge, Slice 8, rebase, amend, and force push were
+not performed on this Windows host.
+
+Frozen scope remains unchanged:
+
+```text
+Firmware changed?               NO
+Qt changed?                     NO
+Protocol/LinkCore changed?     NO
+Transport/Session/Runtime?      NO
+application Slice 6 changed?   NO
+dsh/qt-ui touched?              NO
+Slice 6 worktree touched?       NO
+```
