@@ -298,7 +298,7 @@ void release_and_source_loss_abort_exactly_once()
     core.source_connected(8U);
     core.process(envelope(8U, 1U, hello(1U)), 1U);
     core.process(envelope(8U, 2U, acquire(2U)), 2U);
-    core.clear_outputs();
+    sink.clear_outputs();
     core.process(envelope(
                      8U, 3U, command(3U, RobotCommandKind::SetServoAngle,
                                      SetServoAngle{4U, -2})),
@@ -306,7 +306,7 @@ void release_and_source_loss_abort_exactly_once()
     expect(application.submit_calls == 1U &&
                core.outstanding_count() == 1U,
            "a submitted command remains outstanding for its final outcome");
-    core.clear_outputs();
+    sink.clear_outputs();
 
     core.process(envelope(8U, 4U, release(4U)), 4U);
     const auto *unknown =
