@@ -173,53 +173,58 @@ void GatewayOwner::on_diagnostic(const char *) noexcept
     // become ServiceError or authority transitions.
 }
 
-void GatewayOwner::drain_bridge_until_quiet_and_check_time(
+void GatewayOwner::process_bridge_snapshot_and_check_time(
     GatewayTimeMs owner_now_ms)
 {
-    for (;;) {
-        std::deque<ControlSourceId> connections;
-        std::deque<SourceLostSignal> losses;
-        std::deque<RemoteEnvelope> messages;
-        {
-            std::unique_lock<std::mutex> lock(bridge_mutex_);
-            if (pending_connections_.empty() &&
-                pending_source_losses_.empty() && pending_inbound_.empty()) {
-                // The bridge lock defines the lease-evaluation boundary. A
-                // worker callback that commits after this point belongs to the
-                // next owner iteration and cannot be mistaken for stale work.
-                core_.check_time(monotonic_now());
-                return;
-            }
-            connections.swap(pending_connections_);
-            losses.swap(pending_source_losses_);
-            messages.swap(pending_inbound_);
-            pending_inbound_bytes_ = 0U;
-        }
+    std::deque<ControlSourceId> connections;
+    std::deque<SourceLostSignal> losses;
+    std::deque<RemoteEnvelope> messages;
+    {
+        std::lock_guard<std::mutex> lock(bridge_mutex_);
+        connections.swap(pending_connections_);
+        losses.swap(pending_source_losses_);
+        messages.swap(pending_inbound_);
+        pending_inbound_bytes_ = 0U;
+    }
 
-        // Preserve the safety order for every batch: source loss, live source
-        // registration, then ordinary inbound envelopes.
-        for (const auto &signal : losses) {
-            core_.source_lost(signal, owner_now_ms);
+    // Preserve the safety order for this finite snapshot: source loss, live
+    // source registration, then all inbound envelopes captured at the start
+    // of the phase. Work arriving during processing stays for the next phase.
+    for (const auto &signal : losses) {
+        core_.source_lost(signal, owner_now_ms);
+    }
+    for (const auto source : connections) {
+        // A connection may close before the owner observes its registration.
+        // Do not resurrect that source after its loss edge.
+        if (tcp_.current_source_id() != source) {
+            on_diagnostic("stale source registration ignored");
+            continue;
         }
-        for (const auto source : connections) {
-            // A connection may close before the owner observes its
-            // registration. Do not resurrect that source after its loss edge.
-            if (tcp_.current_source_id() != source) {
-                on_diagnostic("stale source registration ignored");
-                continue;
-            }
-            core_.source_connected(source);
+        core_.source_connected(source);
+    }
+    for (const auto &envelope : messages) {
+        core_.process(envelope, owner_now_ms);
+    }
+
+    // The bridge lock defines the lease boundary. A worker that starts
+    // decoding after this observation timestamps its envelope at or after
+    // check_now; a worker already inside synchronous delivery prevents this
+    // check until its callback has completed.
+    {
+        std::unique_lock<std::mutex> lock(bridge_mutex_);
+        const auto check_now = monotonic_now();
+        if (!pending_connections_.empty() ||
+            !pending_source_losses_.empty() || !pending_inbound_.empty() ||
+            tcp_.inbound_delivery_in_flight()) {
+            return;
         }
-        for (const auto &envelope : messages) {
-            core_.process(envelope, owner_now_ms);
-        }
+        core_.check_time(check_now);
     }
 }
 
 void GatewayOwner::iteration()
 {
-    const auto first_now = monotonic_now();
-    drain_bridge_until_quiet_and_check_time(first_now);
+    process_bridge_snapshot_and_check_time(monotonic_now());
 
     if (application_.session_state() !=
         GatewayApplicationSessionState::ReopenRequired) {
@@ -227,8 +232,7 @@ void GatewayOwner::iteration()
         core_.consume_application_run_result(result, monotonic_now());
     }
 
-    const auto second_now = monotonic_now();
-    drain_bridge_until_quiet_and_check_time(second_now);
+    process_bridge_snapshot_and_check_time(monotonic_now());
 }
 
 void GatewayOwner::owner_loop()

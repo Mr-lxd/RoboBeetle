@@ -14,6 +14,24 @@
 
 namespace robobeetle::gateway {
 
+namespace detail {
+
+struct TcpClientPollSnapshot {
+    int fd{-1};
+    ControlSourceId source{0};
+    short revents{0};
+};
+
+[[nodiscard]] constexpr bool tcp_client_poll_snapshot_is_current(
+    const TcpClientPollSnapshot &snapshot, int current_fd,
+    ControlSourceId current_source) noexcept
+{
+    return snapshot.fd >= 0 && snapshot.source != 0U &&
+           snapshot.fd == current_fd && snapshot.source == current_source;
+}
+
+} // namespace detail
+
 struct TcpAdapterCallbacks {
     std::function<void(ControlSourceId)> source_connected;
     std::function<bool(const RemoteEnvelope &)> enqueue_inbound;
@@ -48,6 +66,7 @@ public:
 
     [[nodiscard]] std::uint16_t bound_port() const noexcept;
     [[nodiscard]] ControlSourceId current_source_id() const noexcept;
+    [[nodiscard]] bool inbound_delivery_in_flight() const noexcept;
 
 private:
     struct Impl;

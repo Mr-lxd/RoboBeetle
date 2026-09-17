@@ -50,7 +50,7 @@ private:
 
     void owner_loop();
     void iteration();
-    void drain_bridge_until_quiet_and_check_time(
+    void process_bridge_snapshot_and_check_time(
         GatewayTimeMs owner_now_ms);
     void notify_owner() noexcept;
     void on_source_connected(ControlSourceId source) noexcept;

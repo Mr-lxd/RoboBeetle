@@ -3,6 +3,7 @@
 #include "robobeetle/gateway/rbrp_codec.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <arpa/inet.h>
 #include <array>
 #include <cerrno>
@@ -96,6 +97,7 @@ struct TcpAdapter::Impl {
 
     RbrpDecoder decoder;
     std::optional<PendingFrame> in_flight;
+    std::atomic<std::size_t> inbound_deliveries_in_flight{0U};
 
     Impl(std::string address, std::uint16_t port,
          TcpAdapterCallbacks configured_callbacks)
@@ -311,9 +313,12 @@ struct TcpAdapter::Impl {
                 report("well-framed non-request RBRP message ignored");
                 continue;
             }
+            inbound_deliveries_in_flight.fetch_add(1U);
             const RemoteEnvelope envelope{
                 source, monotonic_now(), *decoded.message};
-            if (!invoke_inbound(envelope)) {
+            const bool accepted = invoke_inbound(envelope);
+            inbound_deliveries_in_flight.fetch_sub(1U);
+            if (!accepted) {
                 close_current(true, SourceLostReason::InboundQueueExhausted);
                 return;
             }
@@ -516,15 +521,16 @@ struct TcpAdapter::Impl {
             }
 
             bool client_snapshot_is_current = false;
+            const detail::TcpClientPollSnapshot client_snapshot{
+                polled_client_fd, polled_source_id, descriptors[1].revents};
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 client_snapshot_is_current =
-                    polled_client_fd >= 0 && polled_source_id != 0U &&
-                    client_fd == polled_client_fd &&
-                    current_source == polled_source_id;
+                    detail::tcp_client_poll_snapshot_is_current(
+                        client_snapshot, client_fd, current_source);
             }
             if (client_snapshot_is_current) {
-                const auto client_revents = descriptors[1].revents;
+                const auto client_revents = client_snapshot.revents;
                 if ((client_revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
                     close_current(true, SourceLostReason::Disconnected);
                 } else {
@@ -695,6 +701,11 @@ ControlSourceId TcpAdapter::current_source_id() const noexcept
 {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     return impl_->current_source;
+}
+
+bool TcpAdapter::inbound_delivery_in_flight() const noexcept
+{
+    return impl_->inbound_deliveries_in_flight.load() != 0U;
 }
 
 } // namespace robobeetle::gateway

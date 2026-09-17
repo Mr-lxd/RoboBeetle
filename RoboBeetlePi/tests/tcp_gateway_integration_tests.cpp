@@ -125,6 +125,42 @@ struct CallbackState {
     }
 };
 
+struct BarrierApplication final : GatewayApplicationPort {
+    std::size_t abort_calls{0};
+    GatewayApplicationSessionState session{
+        GatewayApplicationSessionState::ReopenRequired};
+    GatewayApplicationLinkState link{GatewayApplicationLinkState::Unconfirmed};
+
+    int open() override
+    {
+        session = GatewayApplicationSessionState::SafetyQuiet;
+        return 0;
+    }
+
+    GatewayApplicationRunResult run_once() override { return {}; }
+
+    GatewayApplicationAbortResult abort() override
+    {
+        ++abort_calls;
+        session = GatewayApplicationSessionState::ReopenRequired;
+        link = GatewayApplicationLinkState::Unconfirmed;
+        return {};
+    }
+
+    GatewayApplicationSubmitResult
+    submit(const RobotCommand &) override
+    {
+        return {GatewayApplicationSubmitStatus::NotActive, std::nullopt};
+    }
+
+    GatewayApplicationSessionState session_state() const noexcept override
+    {
+        return session;
+    }
+
+    GatewayApplicationLinkState link_state() const override { return link; }
+};
+
 int connect_loopback(std::uint16_t port)
 {
     const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
@@ -345,6 +381,146 @@ void queued_replacement_survives_same_poll_generation_rollover()
 
     ::shutdown(replacement, SHUT_RDWR);
     ::close(replacement);
+    adapter.stop();
+}
+
+void stale_poll_revents_are_rejected_by_generation()
+{
+    const detail::TcpClientPollSnapshot old_a{
+        41, 700U, static_cast<short>(POLLHUP | POLLIN | POLLOUT)};
+    expect(!detail::tcp_client_poll_snapshot_is_current(old_a, 42, 701U),
+           "old A HUP/POLLIN/POLLOUT revents are discarded for current B");
+
+    const detail::TcpClientPollSnapshot current_b{
+        42, 701U, static_cast<short>(POLLIN)};
+    expect(detail::tcp_client_poll_snapshot_is_current(current_b, 42, 701U),
+           "current B revents remain eligible after generation rollover");
+}
+
+void inbound_delivery_barrier_preserves_timely_heartbeat()
+{
+    std::mutex inbound_mutex;
+    std::condition_variable inbound_changed;
+    bool connected = false;
+    bool entered = false;
+    bool released = false;
+    bool enqueued = false;
+    std::optional<RemoteEnvelope> captured;
+    std::mutex bridge_mutex;
+    std::optional<RemoteEnvelope> pending;
+
+    TcpAdapter adapter(
+        "127.0.0.1", 0U,
+        TcpAdapterCallbacks{
+            [&](ControlSourceId) {
+                std::lock_guard<std::mutex> lock(inbound_mutex);
+                connected = true;
+                inbound_changed.notify_all();
+            },
+            [&](const RemoteEnvelope &envelope) {
+                std::unique_lock<std::mutex> lock(inbound_mutex);
+                captured = envelope;
+                entered = true;
+                inbound_changed.notify_all();
+                inbound_changed.wait(lock, [&] { return released; });
+                {
+                    std::lock_guard<std::mutex> bridge_lock(bridge_mutex);
+                    pending = envelope;
+                }
+                enqueued = true;
+                inbound_changed.notify_all();
+                return true;
+            },
+            [](const SourceLostSignal &) {},
+            [](const char *) {},
+        });
+    expect(adapter.start() == 0,
+           "TCP adapter starts for deterministic ingress barrier coverage");
+    const int client = connect_loopback(adapter.bound_port());
+    {
+        std::unique_lock<std::mutex> lock(inbound_mutex);
+        expect(inbound_changed.wait_for(
+                   lock, std::chrono::seconds(1), [&] { return connected; }),
+               "ingress barrier source connects before the heartbeat");
+    }
+
+    send_all(client,
+             encode_frame(RbrpMessageKind::ControlHeartbeat, 1U, {}).wire);
+    RemoteEnvelope heartbeat_envelope;
+    {
+        std::unique_lock<std::mutex> lock(inbound_mutex);
+        expect(inbound_changed.wait_for(
+                   lock, std::chrono::seconds(1), [&] { return entered; }),
+               "worker marks decoded heartbeat delivery before enqueue returns");
+        if (captured.has_value()) {
+            heartbeat_envelope = *captured;
+        }
+    }
+    expect(adapter.inbound_delivery_in_flight(),
+           "in-flight delivery remains visible while enqueue is blocked");
+
+    BarrierApplication application;
+    GatewayTimeMs fake_now = heartbeat_envelope.received_at_ms - 999U;
+    std::vector<GatewayOutbound> outputs;
+    ControlGatewayCore core(
+        application,
+        GatewayCoreCallbacks{
+            [&](const GatewayOutbound &output) {
+                outputs.push_back(output);
+                return true;
+            },
+            [](const CloseSourceSignal &) { return true; },
+            [](const char *) {},
+            [&fake_now] { return fake_now; },
+        });
+    const auto source = heartbeat_envelope.source;
+    core.source_connected(source);
+    core.process(RemoteEnvelope{source, fake_now,
+                                RemoteMessage{RbrpMessageKind::Hello, 10U,
+                                              HelloRequest{0U}}},
+                 fake_now);
+    core.process(RemoteEnvelope{source, fake_now,
+                                RemoteMessage{RbrpMessageKind::AcquireControl,
+                                              11U, AcquireControlRequest{}}},
+                 fake_now);
+    const auto check_now = heartbeat_envelope.received_at_ms + 1U;
+    bool evaluated = false;
+    {
+        std::lock_guard<std::mutex> bridge_lock(bridge_mutex);
+        if (!pending.has_value() && !adapter.inbound_delivery_in_flight()) {
+            core.check_time(check_now);
+            evaluated = true;
+        }
+    }
+    expect(!evaluated && core.authority_state() == AuthorityState::Owned,
+           "owner lease boundary does not expire while decoded delivery is in flight");
+
+    {
+        std::lock_guard<std::mutex> lock(inbound_mutex);
+        released = true;
+        inbound_changed.notify_all();
+    }
+    {
+        std::unique_lock<std::mutex> lock(inbound_mutex);
+        expect(inbound_changed.wait_for(
+                   lock, std::chrono::seconds(1), [&] { return enqueued; }),
+               "blocked heartbeat completes enqueue after the lease boundary");
+    }
+    {
+        std::lock_guard<std::mutex> bridge_lock(bridge_mutex);
+        expect(pending.has_value() &&
+                   pending->received_at_ms == heartbeat_envelope.received_at_ms,
+               "the queued envelope keeps its pre-boundary trusted timestamp");
+        if (pending.has_value()) {
+            core.process(*pending, check_now);
+        }
+    }
+    expect(core.authority_state() == AuthorityState::Owned &&
+               application.abort_calls == 0U,
+           "a timely heartbeat remains authoritative after delayed enqueue");
+
+    ::shutdown(client, SHUT_RDWR);
+    ::close(client);
     adapter.stop();
 }
 
@@ -949,6 +1125,81 @@ void real_owner_queued_heartbeat_does_not_false_expire()
            "heartbeats queued while owner work runs do not false-expire the lease");
 }
 
+void real_owner_sustained_inbound_does_not_starve_pty()
+{
+    RealOwnerFixture fixture;
+    fixture.hello_acquire(70U, 71U);
+    (void)fixture.activate();
+
+    std::mutex traffic_mutex;
+    std::condition_variable traffic_changed;
+    bool permit = true;
+    bool stop_traffic = false;
+    bool traffic_failed = false;
+    RequestId request_id = 300U;
+    std::thread traffic([&] {
+        for (;;) {
+            std::unique_lock<std::mutex> lock(traffic_mutex);
+            traffic_changed.wait(lock,
+                                 [&] { return stop_traffic || permit; });
+            if (stop_traffic) {
+                return;
+            }
+            permit = false;
+            const auto id = request_id++;
+            lock.unlock();
+            try {
+                send_remote(fixture.client,
+                            RbrpMessageKind::ControlHeartbeat, id, {});
+            } catch (const std::exception &) {
+                std::lock_guard<std::mutex> failed_lock(traffic_mutex);
+                traffic_failed = true;
+                traffic_changed.notify_all();
+                return;
+            }
+        }
+    });
+
+    std::size_t onboard_heartbeats = 0U;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(2200);
+    while (onboard_heartbeats < 3U &&
+           std::chrono::steady_clock::now() < deadline) {
+        const auto remaining = static_cast<int>(std::max(
+            1LL,
+            static_cast<long long>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now())
+                    .count())));
+        const auto frame = fixture.pty.next_frame(remaining);
+        if (frame.message_type != 0x01U) {
+            continue;
+        }
+        fixture.pty.send(protocol_ack(frame.sequence, 0x01U));
+        ++onboard_heartbeats;
+        {
+            std::lock_guard<std::mutex> lock(traffic_mutex);
+            permit = true;
+        }
+        traffic_changed.notify_all();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(traffic_mutex);
+        stop_traffic = true;
+        permit = true;
+    }
+    traffic_changed.notify_all();
+    traffic.join();
+
+    expect(onboard_heartbeats >= 3U && !traffic_failed,
+           "finite inbound snapshots keep servicing Protocol V2 heartbeats under sustained traffic");
+    const auto submitted = submit_remote_command(
+        fixture, 400U, {0x06U});
+    expect(submitted.payload[0] == 0U && submitted.payload[1] == 1U,
+           "authority remains usable after sustained inbound traffic");
+}
+
 void real_owner_lease_expiry_aborts_without_synthesized_command()
 {
     RealOwnerFixture fixture;
@@ -1036,6 +1287,20 @@ void real_owner_disconnect_reconnect_isolation_and_no_replay()
     const auto outcome = fixture.next_kind(RbrpMessageKind::CommandOutcome);
     expect(outcome.request_id == 103U && outcome.payload[0] == 0U,
            "replacement source completes only its own command");
+
+    fixture.disconnect_client();
+    fixture.connect_client();
+    send_remote(fixture.client, RbrpMessageKind::CommandRequest, 104U,
+                {0x06U});
+    const auto before_hello_c = fixture.next_kind(RbrpMessageKind::ServiceError);
+    expect(before_hello_c.request_id == 104U &&
+               le16(before_hello_c.payload, 0U) ==
+                   static_cast<std::uint16_t>(ServiceErrorCode::NotHello),
+           "source C is not usable until its own Hello after B disconnects");
+    fixture.hello_acquire(105U, 106U);
+    const auto heartbeat_c = fixture.activate();
+    expect(heartbeat_c != heartbeat_b && heartbeat_c != replacement_wire.sequence,
+           "source C completes registration after B loss without replaying B state");
 }
 
 void real_owner_pty_lifecycle()
@@ -1116,6 +1381,8 @@ int main()
         one_source_fragmented_input_and_source_addressed_output();
         second_source_is_closed_and_ids_do_not_inherit();
         queued_replacement_survives_same_poll_generation_rollover();
+        stale_poll_revents_are_rejected_by_generation();
+        inbound_delivery_barrier_preserves_timely_heartbeat();
         newest_source_registration_replaces_pending_older_generation();
         stale_close_and_old_telemetry_never_affect_new_source();
         inbound_queue_exhaustion_is_source_loss();
@@ -1123,6 +1390,7 @@ int main()
         real_owner_pty_lifecycle();
         real_owner_rejected_ack_and_telemetry_forwarding();
         real_owner_queued_heartbeat_does_not_false_expire();
+        real_owner_sustained_inbound_does_not_starve_pty();
         real_owner_lease_expiry_aborts_without_synthesized_command();
         real_owner_uart_loss_and_tcp_survival();
         real_owner_disconnect_reconnect_isolation_and_no_replay();
