@@ -302,6 +302,24 @@ void typed_commands_and_semantic_decode()
            "request ID zero remains a nonfatal semantic case");
 }
 
+void wrong_direction_is_rejected_by_remote_decoder()
+{
+    const auto server_frame = encode_frame(
+        RbrpMessageKind::HelloReply, 77U, Bytes(8U, 0U));
+    RbrpDecoder decoder;
+    std::vector<RbrpFrame> frames;
+    expect(decoder.feed(server_frame.wire.data(), server_frame.wire.size(),
+                        frames) == RbrpFeedStatus::Ok &&
+               frames.size() == 1U,
+           "a valid server-direction frame remains well-framed");
+    if (frames.size() == 1U) {
+        const auto decoded = decode_remote_message(frames.front());
+        expect(decoded.status == RbrpMessageDecodeStatus::WrongDirection &&
+                   !decoded.message.has_value(),
+               "server-direction frame is rejected as WrongDirection without a remote message");
+    }
+}
+
 void server_message_wire_encodings()
 {
     const auto hello = encode_gateway_message(GatewayMessage{
@@ -389,6 +407,7 @@ int main()
     exact_payload_sizes_and_fatal_classification();
     malformed_headers_are_fatal();
     typed_commands_and_semantic_decode();
+    wrong_direction_is_rejected_by_remote_decoder();
     server_message_wire_encodings();
 
     if (rbp2_test::failures == 0) {

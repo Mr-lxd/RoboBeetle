@@ -294,6 +294,36 @@ void one_source_fragmented_input_and_source_addressed_output()
     adapter.stop();
 }
 
+void wrong_direction_frame_closes_source_as_fatal_protocol()
+{
+    CallbackState callbacks;
+    TcpAdapter adapter("127.0.0.1", 0U, callbacks.callbacks());
+    expect(adapter.start() == 0,
+           "TCP adapter starts for wrong-direction protocol coverage");
+    const int client = connect_loopback(adapter.bound_port());
+    expect(callbacks.wait_for([&callbacks] {
+               return callbacks.connected.size() == 1U;
+           }),
+           "wrong-direction test source connects");
+    const auto source = callbacks.last_source();
+
+    const auto server_frame =
+        encode_frame(RbrpMessageKind::HelloReply, 77U, Bytes(8U, 0U));
+    send_all(client, server_frame.wire);
+    expect(callbacks.wait_for([&callbacks] {
+               return callbacks.lost_count() >= 1U;
+           }),
+           "wrong-direction frame closes the TCP source");
+    expect(callbacks.last_lost().source == source &&
+               callbacks.last_lost().reason == SourceLostReason::FatalProtocol &&
+               callbacks.inbound_count() == 0U,
+           "wrong-direction frame produces only a FatalProtocol SourceLost");
+
+    ::shutdown(client, SHUT_RDWR);
+    ::close(client);
+    adapter.stop();
+}
+
 void second_source_is_closed_and_ids_do_not_inherit()
 {
     CallbackState callbacks;
@@ -526,43 +556,72 @@ void inbound_delivery_barrier_preserves_timely_heartbeat()
 
 void coalesced_recv_batch_shares_one_trusted_timestamp()
 {
-    CallbackState callbacks;
-    GatewayTimeMs next_received_at = 1999U;
-    TcpAdapterCallbacks adapter_callbacks = callbacks.callbacks();
-    adapter_callbacks.now_ms = [&next_received_at] {
-        return next_received_at++;
-    };
-    TcpAdapter adapter("127.0.0.1", 0U, std::move(adapter_callbacks));
-    expect(adapter.start() == 0,
-           "TCP adapter starts for coalesced receive-batch coverage");
-    const int client = connect_loopback(adapter.bound_port());
-    expect(callbacks.wait_for([&callbacks] {
-               return callbacks.connected.size() == 1U;
-           }),
-           "coalesced receive-batch source connects");
-    const auto source = callbacks.last_source();
-
     const auto command =
         encode_frame(RbrpMessageKind::CommandRequest, 20U, {0x06U});
     const auto heartbeat =
         encode_frame(RbrpMessageKind::ControlHeartbeat, 21U, {});
     Bytes batch = command.wire;
     batch.insert(batch.end(), heartbeat.wire.begin(), heartbeat.wire.end());
-    send_all(client, batch);
-    expect(callbacks.wait_for([&callbacks] {
-               return callbacks.inbound_count() == 2U;
-           }),
-           "one client write delivers both decoded messages");
-
+    std::atomic<std::size_t> inbound_in_flight{0U};
+    std::mutex batch_mutex;
+    std::condition_variable batch_changed;
+    bool first_delivery_entered = false;
+    bool release_first_delivery = false;
+    bool barrier_active_on_second = false;
+    bool close_called = false;
+    bool process_result = false;
+    std::size_t now_calls = 0U;
     std::vector<RemoteEnvelope> captured;
+    RbrpDecoder decoder;
+
+    std::thread worker([&] {
+        process_result = detail::process_tcp_inbound_batch(
+            decoder, inbound_in_flight, 51U, batch.data(), batch.size(),
+            [&] {
+                ++now_calls;
+                return 1999U;
+            },
+            [&](const RemoteEnvelope &envelope) {
+                std::unique_lock<std::mutex> lock(batch_mutex);
+                captured.push_back(envelope);
+                if (captured.size() == 1U) {
+                    first_delivery_entered = true;
+                    batch_changed.notify_all();
+                    batch_changed.wait(lock,
+                                       [&] { return release_first_delivery; });
+                }
+                if (captured.size() == 2U) {
+                    barrier_active_on_second =
+                        inbound_in_flight.load() == 1U;
+                }
+                batch_changed.notify_all();
+                return true;
+            },
+            [](const char *) {},
+            [&](SourceLostReason) { close_called = true; });
+        std::lock_guard<std::mutex> lock(batch_mutex);
+        batch_changed.notify_all();
+    });
+
     {
-        std::lock_guard<std::mutex> lock(callbacks.mutex);
-        captured = callbacks.inbound;
+        std::unique_lock<std::mutex> lock(batch_mutex);
+        expect(batch_changed.wait_for(
+                   lock, std::chrono::seconds(1),
+                   [&] { return first_delivery_entered; }),
+               "deterministic decode batch reaches its first delivery");
+        expect(inbound_in_flight.load() == 1U,
+               "inbound barrier is active during the first batch delivery");
+        release_first_delivery = true;
+        batch_changed.notify_all();
     }
-    expect(captured.size() == 2U && captured[0].source == source &&
-               captured[1].source == source &&
-               captured[0].received_at_ms == captured[1].received_at_ms,
-           "all complete messages from one recv/decode batch share one timestamp");
+    worker.join();
+
+    expect(process_result && !close_called &&
+               inbound_in_flight.load() == 0U && captured.size() == 2U &&
+               now_calls == 1U &&
+               captured[0].received_at_ms == captured[1].received_at_ms &&
+               barrier_active_on_second,
+           "one decoder.feed batch delivers both frames under one barrier and timestamp");
 
     BarrierApplication application;
     GatewayTimeMs fake_now = 1000U;
@@ -578,12 +637,12 @@ void coalesced_recv_batch_shares_one_trusted_timestamp()
             [](const char *) {},
             [&fake_now] { return fake_now; },
         });
-    core.source_connected(source);
-    core.process(RemoteEnvelope{source, fake_now,
+    core.source_connected(51U);
+    core.process(RemoteEnvelope{51U, fake_now,
                                 RemoteMessage{RbrpMessageKind::Hello, 10U,
                                               HelloRequest{0U}}},
                  fake_now);
-    core.process(RemoteEnvelope{source, fake_now,
+    core.process(RemoteEnvelope{51U, fake_now,
                                 RemoteMessage{RbrpMessageKind::AcquireControl,
                                               11U, AcquireControlRequest{}}},
                  fake_now);
@@ -600,9 +659,6 @@ void coalesced_recv_batch_shares_one_trusted_timestamp()
     expect(authority_survived_batch,
            "a coalesced ordinary message and heartbeat cannot false-expire authority");
 
-    ::shutdown(client, SHUT_RDWR);
-    ::close(client);
-    adapter.stop();
 }
 
 void newest_source_registration_replaces_pending_older_generation()
@@ -1371,6 +1427,25 @@ void real_owner_nonheartbeat_traffic_does_not_keep_lease_alive()
     }
 }
 
+void real_owner_wrong_direction_revokes_authority_without_uart_command()
+{
+    RealOwnerFixture fixture;
+    fixture.hello_acquire(90U, 91U);
+    (void)fixture.activate();
+
+    const auto server_frame =
+        encode_frame(RbrpMessageKind::HelloReply, 92U, Bytes(8U, 0U));
+    send_all(fixture.client, server_frame.wire);
+    const auto state = fixture.next_kind(RbrpMessageKind::ControlState);
+    expect(state.request_id == 0U && state.payload.size() == 8U &&
+               state.payload[0] == 0U &&
+               state.payload[3] ==
+                   static_cast<Byte>(GatewayStateReason::RemoteProtocolViolation),
+           "wrong-direction TCP input revokes active authority as a protocol violation");
+    expect(fixture.pty.no_command_for(200),
+           "wrong-direction TCP input does not synthesize a UART actuator command");
+}
+
 void real_owner_lease_expiry_aborts_without_synthesized_command()
 {
     RealOwnerFixture fixture;
@@ -1550,6 +1625,7 @@ int main()
 {
     try {
         one_source_fragmented_input_and_source_addressed_output();
+        wrong_direction_frame_closes_source_as_fatal_protocol();
         second_source_is_closed_and_ids_do_not_inherit();
         queued_replacement_survives_same_poll_generation_rollover();
         stale_poll_revents_are_rejected_by_generation();
@@ -1564,6 +1640,7 @@ int main()
         real_owner_queued_heartbeat_does_not_false_expire();
         real_owner_sustained_inbound_does_not_starve_pty();
         real_owner_nonheartbeat_traffic_does_not_keep_lease_alive();
+        real_owner_wrong_direction_revokes_authority_without_uart_command();
         real_owner_lease_expiry_aborts_without_synthesized_command();
         real_owner_uart_loss_and_tcp_survival();
         real_owner_disconnect_reconnect_isolation_and_no_replay();

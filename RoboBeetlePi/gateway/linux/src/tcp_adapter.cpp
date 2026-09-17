@@ -64,22 +64,73 @@ std::size_t telemetry_slot(const GatewayMessagePayload &payload) noexcept
 
 } // namespace
 
-struct TcpAdapter::Impl {
-    struct InboundDeliveryScope {
-        std::atomic<std::size_t> &counter;
+namespace detail {
+namespace {
 
-        explicit InboundDeliveryScope(std::atomic<std::size_t> &value)
-            : counter(value)
-        {
-            counter.fetch_add(1U);
+struct InboundDeliveryBatchScope {
+    std::atomic<std::size_t> &counter;
+
+    explicit InboundDeliveryBatchScope(std::atomic<std::size_t> &value)
+        : counter(value)
+    {
+        counter.fetch_add(1U);
+    }
+
+    ~InboundDeliveryBatchScope() { counter.fetch_sub(1U); }
+
+    InboundDeliveryBatchScope(const InboundDeliveryBatchScope &) = delete;
+    InboundDeliveryBatchScope &operator=(const InboundDeliveryBatchScope &) =
+        delete;
+};
+
+} // namespace
+
+bool process_tcp_inbound_batch(
+    RbrpDecoder &decoder, std::atomic<std::size_t> &inbound_in_flight,
+    ControlSourceId source, const Byte *data, std::size_t size,
+    const std::function<GatewayTimeMs()> &now_ms,
+    const TcpInboundBatchEnqueue &enqueue,
+    const TcpInboundBatchDiagnostic &diagnostic,
+    const TcpInboundBatchClose &close_current)
+{
+    InboundDeliveryBatchScope delivery_scope{inbound_in_flight};
+    std::vector<RbrpFrame> frames;
+    if (decoder.feed(data, size, frames) == RbrpFeedStatus::Fatal) {
+        if (close_current) {
+            close_current(SourceLostReason::FatalProtocol);
         }
+        return false;
+    }
 
-        ~InboundDeliveryScope() { counter.fetch_sub(1U); }
+    const auto received_at_ms = now_ms ? now_ms() : 0U;
+    for (auto &frame : frames) {
+        const auto decoded = decode_remote_message(frame);
+        if (decoded.status == RbrpMessageDecodeStatus::WrongDirection) {
+            if (close_current) {
+                close_current(SourceLostReason::FatalProtocol);
+            }
+            return false;
+        }
+        if (!decoded.message) {
+            if (diagnostic) {
+                diagnostic("well-framed RBRP message rejected by semantic decoder");
+            }
+            continue;
+        }
+        const RemoteEnvelope envelope{source, received_at_ms, *decoded.message};
+        if (!enqueue || !enqueue(envelope)) {
+            if (close_current) {
+                close_current(SourceLostReason::InboundQueueExhausted);
+            }
+            return false;
+        }
+    }
+    return true;
+}
 
-        InboundDeliveryScope(const InboundDeliveryScope &) = delete;
-        InboundDeliveryScope &operator=(const InboundDeliveryScope &) = delete;
-    };
+} // namespace detail
 
+struct TcpAdapter::Impl {
     struct PendingFrame {
         ControlSourceId source{0};
         Bytes wire;
@@ -323,30 +374,6 @@ struct TcpAdapter::Impl {
         }
     }
 
-    void handle_remote_frames(ControlSourceId source,
-                              std::vector<RbrpFrame> &frames,
-                              GatewayTimeMs received_at_ms)
-    {
-        for (auto &frame : frames) {
-            const auto decoded = decode_remote_message(frame);
-            if (!decoded.message) {
-                // Known server-to-client kinds received from a client are
-                // well-framed but not a Core request. Keep the worker free of
-                // application policy; the owner may choose its semantic
-                // response in a future adapter.
-                report("well-framed non-request RBRP message ignored");
-                continue;
-            }
-            const RemoteEnvelope envelope{
-                source, received_at_ms, *decoded.message};
-            const bool accepted = invoke_inbound(envelope);
-            if (!accepted) {
-                close_current(true, SourceLostReason::InboundQueueExhausted);
-                return;
-            }
-        }
-    }
-
     void read_client()
     {
         int fd = -1;
@@ -365,18 +392,18 @@ struct TcpAdapter::Impl {
             const auto received =
                 ::recv(fd, buffer.data(), buffer.size(), MSG_DONTWAIT);
             if (received > 0) {
-                InboundDeliveryScope delivery_scope{
-                    inbound_deliveries_in_flight};
-                std::vector<RbrpFrame> frames;
-                if (decoder.feed(buffer.data(),
-                                 static_cast<std::size_t>(received), frames) ==
-                    RbrpFeedStatus::Fatal) {
-                    close_current(true, SourceLostReason::FatalProtocol);
-                    return;
-                }
-                const auto received_at_ms = now_ms();
-                handle_remote_frames(source, frames, received_at_ms);
-                if (current_source_id() == 0U) {
+                const auto source_remains = detail::process_tcp_inbound_batch(
+                    decoder, inbound_deliveries_in_flight, source,
+                    buffer.data(), static_cast<std::size_t>(received),
+                    [this] { return now_ms(); },
+                    [this](const RemoteEnvelope &envelope) {
+                        return invoke_inbound(envelope);
+                    },
+                    [this](const char *message) { report(message); },
+                    [this](SourceLostReason reason) {
+                        close_current(true, reason);
+                    });
+                if (!source_remains || current_source_id() == 0U) {
                     return;
                 }
                 continue;

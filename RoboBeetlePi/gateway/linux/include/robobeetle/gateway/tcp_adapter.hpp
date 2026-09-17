@@ -5,12 +5,15 @@
 #endif
 
 #include "robobeetle/gateway/gateway_types.hpp"
+#include "robobeetle/gateway/rbrp_codec.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace robobeetle::gateway {
 
@@ -29,6 +32,18 @@ struct TcpClientPollSnapshot {
     return snapshot.fd >= 0 && snapshot.source != 0U &&
            snapshot.fd == current_fd && snapshot.source == current_source;
 }
+
+using TcpInboundBatchEnqueue = std::function<bool(const RemoteEnvelope &)>;
+using TcpInboundBatchDiagnostic = std::function<void(const char *)>;
+using TcpInboundBatchClose = std::function<void(SourceLostReason)>;
+
+[[nodiscard]] bool process_tcp_inbound_batch(
+    RbrpDecoder &decoder, std::atomic<std::size_t> &inbound_in_flight,
+    ControlSourceId source, const Byte *data, std::size_t size,
+    const std::function<GatewayTimeMs()> &now_ms,
+    const TcpInboundBatchEnqueue &enqueue,
+    const TcpInboundBatchDiagnostic &diagnostic,
+    const TcpInboundBatchClose &close_current);
 
 } // namespace detail
 
