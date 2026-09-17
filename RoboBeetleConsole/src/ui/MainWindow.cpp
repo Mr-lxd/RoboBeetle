@@ -77,31 +77,65 @@ QString motionModeText(MotionMode mode)
 void applySectionStyle(QGroupBox *box)
 {
     box->setStyleSheet(QStringLiteral(
-        "QGroupBox { background: #f5f8fb; border: 1px solid #c8d3de; "
-        "  border-radius: 8px; margin-top: 16px; padding-top: 7px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 10px; top: 2px; "
-        "  padding: 0 6px; background: #f5f8fb; color: #1f3447; "
-        "  font-size: 14px; font-weight: 700; }"));
+        "QGroupBox {"
+        "  background: #EEF4F8;"
+        "  border: 1px solid #B8C9D8;"
+        "  border-radius: 9px;"
+        "  margin-top: 0px;"
+        "  padding-top: 0px;"
+        "}"
+        "QGroupBox::title {"
+        "  color: transparent;"
+        "  background: transparent;"
+        "  padding: 0;"
+        "}"
+    ));
 }
 
 void applyCardStyle(QGroupBox *box)
 {
     box->setStyleSheet(QStringLiteral(
-        "QGroupBox { background: #ffffff; border: 1px solid #d9e2ea; "
-        "  border-radius: 7px; margin-top: 14px; padding-top: 6px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 10px; top: 2px; "
-        "  padding: 0 6px; background: #ffffff; color: #263238; "
-        "  font-size: 13px; font-weight: 700; }"));
+        "QGroupBox {"
+        "  background: #FFFFFF;"
+        "  border: 1px solid #CCD9E4;"
+        "  border-radius: 8px;"
+        "  margin-top: 14px;"
+        "  padding-top: 6px;"
+        "}"
+        "QGroupBox::title {"
+        "  subcontrol-origin: margin;"
+        "  left: 10px;"
+        "  top: 1px;"
+        "  padding: 0 5px;"
+        "  background: #FFFFFF;"
+        "  color: #29465F;"
+        "  font-size: 12px;"
+        "  font-weight: 600;"
+        "}"
+    ));
 }
 
 void applySubpanelStyle(QGroupBox *box)
 {
     box->setStyleSheet(QStringLiteral(
-        "QGroupBox { background: #fafcfe; border: 1px solid #e0e7ed; "
-        "  border-radius: 7px; margin-top: 13px; padding-top: 6px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 8px; top: 2px; "
-        "  padding: 0 5px; background: #fafcfe; color: #37474f; "
-        "  font-size: 12px; font-weight: 600; }"));
+        "QGroupBox {"
+        "  background: #FAFCFE;"
+        "  border: 1px solid #D6E0E8;"
+        "  border-radius: 7px;"
+        "  margin-top: 14px;"
+        "  padding-top: 6px;"
+        "}"
+        "QGroupBox::title {"
+        "  subcontrol-origin: margin;"
+        "  left: 9px;"
+        "  top: 1px;"
+        "  padding: 0 5px;"
+        "  background: #FAFCFE;"
+        "  color: #49657A;"
+        "  font-size: 12px;"
+        "  font-weight: 600;"
+        "}"
+    ));
 }
 
 } // namespace
@@ -116,7 +150,8 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
 
     auto *central = new QWidget(this);
     central->setObjectName(QStringLiteral("appCanvas"));
-    central->setStyleSheet(QStringLiteral("#appCanvas { background: #eaf0f5; }"));
+    central->setStyleSheet(
+        QStringLiteral("#appCanvas { background: #E2EAF1; }"));
     auto *root = new QVBoxLayout(central);
     root->setContentsMargins(8, 8, 8, 8);
     root->setSpacing(8);
@@ -133,8 +168,8 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     // titles are styled locally via applyCardStyle(). Per-widget stylesheets
     // (motion buttons, header actions) override these app-wide defaults.
     setStyleSheet(QStringLiteral(
-        "QMainWindow { background: #e9eef3; }"
-        "QWidget { font-family: \"Segoe UI\"; font-size: 13px; color: #37474f; }"
+        "QMainWindow { background: #E2EAF1; }"
+        "QWidget { font-family: \"Segoe UI\"; font-size: 12px; color: #334A5C; }"
         "QTabWidget::pane { border: 1px solid #cfd6dd; border-radius: 6px; "
         "  background: #ffffff; top: -1px; }"
         "QTabBar::tab { background: #eef2f6; border: 1px solid #d5dce3; "
@@ -148,15 +183,16 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
         "  border-radius: 5px; padding: 6px 14px; color: #37474f; }"
         "QPushButton:hover { background: #e3e9ef; border-color: #aeb7c0; }"
         "QPushButton:pressed { background: #d7dfe7; }"
-        "QPushButton:disabled { color: #9aa5ad; background: #f0f2f4; "
-        "  border-color: #dde1e5; }"
+        "QPushButton:disabled { color: #7F8F9C; background: #F1F4F6; "
+        "  border-color: #CDD7E0; }"
         "QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit { background: #ffffff; "
         "  border: 1px solid #c4ccd4; border-radius: 4px; padding: 3px 6px; "
         "  color: #37474f; }"
         "QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus { "
         "  border-color: #1976D2; }"
         "QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, "
-        "QLineEdit:disabled { color: #9aa5ad; background: #f0f2f4; }"
+        "QLineEdit:disabled { color: #7F8F9C; background: #F1F4F6; "
+        "  border-color: #CDD7E0; }"
         "QSlider::groove:horizontal { height: 6px; background: #d3dae1; "
         "  border-radius: 3px; }"
         "QSlider::handle:horizontal { width: 14px; margin: -4px 0; "
@@ -240,16 +276,23 @@ QWidget *MainWindow::createConnectionBar()
     bar->setFixedHeight(48);
     bar->setObjectName(QStringLiteral("topHeaderBar"));
     bar->setStyleSheet(QStringLiteral(
-        "#topHeaderBar { background: #ffffff; border: 1px solid #d5dce3; "
-        "  border-radius: 6px; }"));
+        "#topHeaderBar {"
+        "  background: #FFFFFF;"
+        "  border: 1px solid #C5D3DE;"
+        "  border-radius: 7px;"
+        "}"
+    ));
     auto *layout = new QHBoxLayout(bar);
     layout->setContentsMargins(10, 4, 10, 4);
     layout->setSpacing(6);
 
     auto *title = new QLabel(QStringLiteral("RoboBeetle Console"), bar);
     title->setStyleSheet(QStringLiteral(
-        "font-weight: 700; font-size: 14px; color: #1565c0; "
-        "letter-spacing: 0.4px;"));
+        "font-weight: 700;"
+        "font-size: 15px;"
+        "color: #145DA0;"
+        "letter-spacing: 0.3px;"
+    ));
     layout->addWidget(title);
 
     layout->addSpacing(6);
@@ -679,18 +722,30 @@ QWidget *MainWindow::createActuatorPanel()
 {
     auto *box = new QGroupBox(QStringLiteral("Actuator Control"), this);
     applySectionStyle(box);
-    box->setStyleSheet(box->styleSheet() + QStringLiteral(
-        "QGroupBox { margin-top: 0; padding-top: 0; }"
-        "QGroupBox::title { color: transparent; background: transparent; }"));
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(8, 6, 8, 8);
-    layout->setSpacing(6);
+    layout->setContentsMargins(10, 8, 10, 10);
+    layout->setSpacing(7);
 
     auto *header = new QHBoxLayout;
     header->setContentsMargins(0, 0, 0, 0);
+    header->setSpacing(7);
+
+    auto *accent = new QWidget(box);
+    accent->setFixedSize(4, 18);
+    accent->setStyleSheet(QStringLiteral(
+        "background: #1976D2;"
+        "border-radius: 2px;"
+    ));
+    header->addWidget(accent);
+
     auto *title = new QLabel(QStringLiteral("Actuator Control"), box);
-    title->setStyleSheet(QStringLiteral("color: #1f3447; font-size: 14px; font-weight: 700;"));
+    title->setStyleSheet(QStringLiteral(
+        "color: #18364F;"
+        "font-size: 14px;"
+        "font-weight: 700;"
+    ));
     header->addWidget(title);
+
     header->addStretch();
     auto *disableAll = new QPushButton(QStringLiteral("Disable All"), box);
     disableAll->setStyleSheet(QStringLiteral(
@@ -725,7 +780,35 @@ QWidget *MainWindow::createMotionPanel()
 {
     auto *box = new QGroupBox(QStringLiteral("Motion / Gait — Bench"), this);
     applySectionStyle(box);
-    auto *layout = new QGridLayout(box);    // Top-level: Motion Control | Gait / Vertical
+    auto *outer = new QVBoxLayout(box);
+    outer->setContentsMargins(10, 8, 10, 10);
+    outer->setSpacing(7);
+
+    auto *sectionHeader = new QHBoxLayout;
+    sectionHeader->setContentsMargins(0, 0, 0, 0);
+    sectionHeader->setSpacing(7);
+
+    auto *accent = new QWidget(box);
+    accent->setFixedSize(4, 18);
+    accent->setStyleSheet(QStringLiteral(
+        "background: #1976D2;"
+        "border-radius: 2px;"
+    ));
+    sectionHeader->addWidget(accent);
+
+    auto *sectionTitle = new QLabel(QStringLiteral("Motion / Gait — Bench"), box);
+    sectionTitle->setStyleSheet(QStringLiteral(
+        "color: #18364F;"
+        "font-size: 14px;"
+        "font-weight: 700;"
+    ));
+    sectionHeader->addWidget(sectionTitle);
+    sectionHeader->addStretch();
+    outer->addLayout(sectionHeader);
+
+    auto *content = new QHBoxLayout;
+    content->setContentsMargins(0, 0, 0, 0);
+    content->setSpacing(8);
 
     // --- Motion Control (left): D-pad-like arrangement ---
     auto *motionGroup = new QGroupBox(QStringLiteral("Motion Control"), box);
@@ -750,8 +833,8 @@ QWidget *MainWindow::createMotionPanel()
             "  font-weight: 600; }"
             "QPushButton:hover { background: #eef2f6; border-color: #90a4ae; }"
             "QPushButton:pressed { background: #e0e6ec; }"
-            "QPushButton:disabled { color: #a8b2ba; background: #f2f4f6; "
-            "  border-color: #d8dee3; }"
+            "QPushButton:disabled { color: #7F8F9C; background: #F1F4F6; "
+            "  border-color: #C9D4DD; }"
             "QPushButton:checked { background-color: #1976D2; color: white; "
             "  font-weight: bold; border-color: #1565c0; }"));
         motionButtons_[static_cast<std::size_t>(mode)] = button;
@@ -770,13 +853,23 @@ QWidget *MainWindow::createMotionPanel()
     }
     motionStopButton_ = new QPushButton(QStringLiteral("Stop"), motionGroup);
     motionStopButton_->setStyleSheet(QStringLiteral(
-        "QPushButton { background: #E53935; border: 1px solid #c62828; "
-        "  border-radius: 6px; padding: 8px 14px; color: #ffffff; "
-        "  font-weight: 700; font-size: 14px; }"
-        "QPushButton:hover { background: #d32f2f; }"
-        "QPushButton:pressed { background: #b71c1c; }"
-        "QPushButton:disabled { background: #f2c2c1; color: #fdeaea; "
-        "  border-color: #e5a5a3; }"));
+        "QPushButton {"
+        "  background: #455A64;"
+        "  border: 1px solid #37474F;"
+        "  border-radius: 6px;"
+        "  padding: 8px 14px;"
+        "  color: #FFFFFF;"
+        "  font-weight: 700;"
+        "  font-size: 13px;"
+        "}"
+        "QPushButton:hover { background: #37474F; }"
+        "QPushButton:pressed { background: #263238; }"
+        "QPushButton:disabled {"
+        "  background: #D5DDE2;"
+        "  color: #71818D;"
+        "  border-color: #C1CBD2;"
+        "}"
+    ));
     connect(motionStopButton_, &QPushButton::clicked, this, [this] {
         controller_->stopMotion();
         refreshMotionUi();
@@ -845,8 +938,9 @@ QWidget *MainWindow::createMotionPanel()
     gaitLayout->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Descend)], 4, 1);
     gaitLayout->addWidget(provisional, 5, 0, 1, 3);
 
-    layout->addWidget(motionGroup, 0, 0);
-    layout->addWidget(gaitGroup, 0, 1);
+    content->addWidget(motionGroup, 1);
+    content->addWidget(gaitGroup, 1);
+    outer->addLayout(content, 1);
 
     connect(gaitBackendCombo_, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int index) {
