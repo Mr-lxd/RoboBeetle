@@ -168,7 +168,7 @@ Bytes ack(std::uint16_t sequence, std::uint8_t type,
           std::uint8_t result = 0U)
 {
     return Codec::encodeWire(Frame{
-        type, sequence,
+        static_cast<std::uint8_t>(MessageType::Ack), 0x8000U,
         {static_cast<std::uint8_t>(sequence & 0xffU),
          static_cast<std::uint8_t>(sequence >> 8U), type, result}});
 }
