@@ -50,12 +50,15 @@ ctest --test-dir /tmp/robobeetle-pi-build --output-on-failure
 /tmp/robobeetle-pi-build/robobeetle_pi_smoke /dev/serial0
 ```
 
-The tool requires exactly one device path. It opens once; open failure exits.
+The tool requires exactly one device path. It opens that path at startup; an
+initial open failure exits. A later `reopen` command uses the same path and the
+same application/runtime object after an explicit loss.
 Enter one operator-selected command per line:
 
 | Command | Meaning |
 | --- | --- |
 | `link status` | Read current session/link state |
+| `reopen` | Explicitly open the original path when session is `ReopenRequired` |
 | `telemetry display` | Confirm that incoming typed telemetry is displayed |
 | `enable <mask>` | Submit ServoEnable |
 | `disable <mask>` | Submit ServoDisable |
@@ -86,9 +89,14 @@ ACK or uncertain outcome. Incoming LinkEvents and typed telemetry are printed
 continuously. `link status` only reads state; normal runtime service continues
 independently of that command, help, rejected arguments, or Backward. Waiting
 for operator input does not pause link service. Input processing may wait for
-the current runtime iteration to return. After loss, this CLI requires an
-explicit process restart to open again; it provides no reconnect policy,
-daemonization, or automatic actuator replay.
+the current runtime iteration to return. After loss the tool remains in
+`ReopenRequired`; it never reconnects automatically. The operator may explicitly
+enter `reopen`, which calls `open()` on the same `OnboardApplication`/
+`LinkRuntime` instance and reports the resulting session/link state. Same-process
+sequence continuity remains owned by `LinkRuntime`, and no uncertain actuator
+request is replayed. If the session is not `ReopenRequired`, `reopen` rejects
+without silently closing or reopening the active link. There is no reconnect
+policy or daemonization.
 
 Quit/EOF aborts transport ownership and outstanding requests; it does not send
 Motion STOP or prove that an actuator stopped. If a STOP is required, the

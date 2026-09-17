@@ -170,7 +170,7 @@ void print_submit(const app::CommandSubmitResult &result)
 void help()
 {
     std::cout << "Commands (one explicit operator action per line):\n"
-              << "  link status\n  telemetry display\n"
+              << "  link status\n  reopen\n  telemetry display\n"
               << "  enable <mask> | disable <mask> | neutral <mask>\n"
               << "  angle <servo 0..4> <signed cdeg>\n"
               << "  gait simple|cpg\n"
@@ -179,9 +179,27 @@ void help()
               << "Masks: decimal or 0x hexadecimal, nonzero subset of 0x001f.\n";
 }
 
-void execute(app::OnboardApplication &application, const std::vector<std::string> &tokens)
+void execute(app::OnboardApplication &application,
+             const std::string &device_path,
+             const std::vector<std::string> &tokens)
 {
     if (tokens == std::vector<std::string>{"link", "status"}) {
+        std::cout << "session=" << name(application.session_state())
+                  << " link=" << name(application.link_state()) << '\n';
+        return;
+    }
+    if (tokens == std::vector<std::string>{"reopen"}) {
+        if (application.session_state() != session::SessionState::ReopenRequired) {
+            std::cout << "Reopen rejected: session=" << name(application.session_state())
+                      << " link=" << name(application.link_state()) << '\n';
+            return;
+        }
+        const int error = application.open(device_path.c_str());
+        if (error == 0) {
+            std::cout << "Reopen accepted errno=0\n";
+        } else {
+            std::cout << "Reopen failed errno=" << error << '\n';
+        }
         std::cout << "session=" << name(application.session_state())
                   << " link=" << name(application.link_state()) << '\n';
         return;
@@ -257,7 +275,8 @@ int main(int argc, char **argv)
         return 2;
     }
     app::OnboardApplication application;
-    const int error = application.open(argv[1]);
+    const std::string original_device_path = argv[1];
+    const int error = application.open(original_device_path.c_str());
     if (error != 0) {
         std::cerr << "Open failed errno=" << error << '\n';
         return 1;
@@ -291,7 +310,7 @@ int main(int argc, char **argv)
                 for (std::string token; input >> token;) tokens.push_back(token);
                 if (tokens == std::vector<std::string>{"quit"} ||
                     tokens == std::vector<std::string>{"exit"}) break;
-                if (!tokens.empty()) execute(application, tokens);
+                if (!tokens.empty()) execute(application, original_device_path, tokens);
             }
             line.clear();
             overlong = false;
