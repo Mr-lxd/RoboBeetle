@@ -1380,3 +1380,112 @@ application Slice 6 changed?   NO
 dsh/qt-ui touched?              NO
 Slice 6 worktree touched?       NO
 ```
+
+## 19. External Code Review Round 4 implementation plan (2026-09-17)
+
+Round 4 reviewed remote HEAD `3d2ef1f4a5e2dddecc130e06f0398f791da096ab`.
+The correction remains limited to the Slice 7 Linux adapter, RBRP direction
+boundary, and deterministic regression seams.
+
+### Task 1: Preserve lower-layer submit invariants
+
+Files: `RoboBeetlePi/gateway/linux/src/linux_onboard_application_port.cpp` and
+`RoboBeetlePi/tests/linux_onboard_application_port_tests.cpp`.
+
+- [x] Translate only `CommandSubmitStatus` and preserve
+  `CommandSubmitResult::sequence` exactly.
+- [x] Add `LinuxOnboardApplicationPortTestAccess` regressions for Submitted
+  without a sequence and NotActive with sequence 123.
+- [x] Leave impossible-combination policy to `ControlGatewayCore`.
+
+### Task 2: Fail closed on wrong-direction RBRP
+
+Files: `RoboBeetlePi/gateway/linux/src/tcp_adapter.cpp`,
+`RoboBeetlePi/tests/rbrp_codec_tests.cpp`, and
+`RoboBeetlePi/tests/tcp_gateway_integration_tests.cpp`.
+
+- [x] Preserve portable `WrongDirection` plus empty-message decoding.
+- [x] Close a current TCP source with `FatalProtocol` on a wrong-direction
+  frame, without a Core envelope or synthesized ServiceError.
+- [x] Add direct TcpAdapter and real GatewayOwner regressions covering source
+  loss, authority revocation, and zero synthesized UART actuator commands.
+
+### Task 3: Deterministic coalesced-batch regression
+
+Files: `RoboBeetlePi/gateway/linux/include/robobeetle/gateway/tcp_adapter.hpp`,
+`RoboBeetlePi/gateway/linux/src/tcp_adapter.cpp`, and
+`RoboBeetlePi/tests/tcp_gateway_integration_tests.cpp`.
+
+- [x] Extract the production-used `process_tcp_inbound_batch` seam so one test
+  invocation deterministically performs one decoder feed producing both frames.
+- [x] Synchronize the first delivery and assert one timestamp, an active
+  barrier through the second delivery, and normal scope cleanup.
+
+### Task 4: Round 4 verification and handoff
+
+Files: this plan only after implementation.
+
+- [x] Run fresh Windows configure/build/full portable CTest with 4/4 PASS.
+- [x] Keep Linux/Pi and hardware qualification explicitly unrun.
+- [x] Commit and push only normal commits, report the exact diff from
+  `3d2ef1f`, and do not create a PR.
+
+## 20. External Code Review Round 4 verification record (2026-09-17)
+
+Round 4 reviewed remote HEAD `3d2ef1f4a5e2dddecc130e06f0398f791da096ab`.
+The fixes were recorded as normal commits:
+
+```text
+553ed2b fix: preserve Slice 7 application submit invariants
+8a7a0d3 fix: fail closed on wrong-direction Slice 7 traffic
+```
+
+Blocker coverage:
+
+```text
+[x] LinuxOnboardApplicationPort now maps only the submit enum and preserves
+    both Submitted + null sequence and NotActive + sequence 123 unchanged
+[x] Core remains the sole owner of impossible submit-invariant fail-safe policy
+[x] portable decode classifies valid server-direction input as WrongDirection
+    with no RemoteMessage
+[x] TcpAdapter closes wrong-direction input as FatalProtocol without enqueueing
+    an envelope; GatewayOwner revokes active authority through that path
+[x] no synthesized ServiceError or UART actuator command is produced for the
+    wrong-direction protocol violation
+```
+
+Deterministic batch regression:
+
+```text
+[x] one production-used decoder-feed invocation emits ordinary CommandRequest
+    plus ControlHeartbeat
+[x] one trusted timestamp is assigned to both envelopes
+[x] the atomic inbound barrier is observed during first and second delivery
+[x] the barrier is zero after normal completion
+```
+
+Windows portable verification:
+
+```text
+compiler: GNU 16.1.0 MinGW
+configure: cmake -S RoboBeetlePi -B build-slice7-round4-final -G Ninja
+           -DBUILD_TESTING=ON
+build:     PASS
+CTest:     4/4 PASS
+```
+
+Native Linux/Pi configure/build, Linux gateway integration tests, hardware
+acceptance, PR creation, merge, Slice 8, rebase, amend, and force push were
+not performed on this Windows host.
+
+Frozen scope remains unchanged:
+
+```text
+Firmware changed?               NO
+Qt changed?                     NO
+Protocol/LinkCore changed?     NO
+Transport/Session/Runtime?      NO
+application Slice 6 changed?   NO
+dsh/qt-ui touched?              NO
+Slice 6 worktree touched?       NO
+```
