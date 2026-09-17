@@ -163,6 +163,25 @@ if(BUILD_TESTING)
         target_link_libraries(rbp2_onboard_application_tests PRIVATE rbp2_onboard_application)
         add_test(NAME rbp2_onboard_application_tests COMMAND rbp2_onboard_application_tests)
         set_tests_properties(rbp2_onboard_application_tests PROPERTIES TIMEOUT 15)
+
+        add_executable(rbp2_gateway_linux_application_port_tests
+            tests/linux_onboard_application_port_tests.cpp
+        )
+        target_include_directories(rbp2_gateway_linux_application_port_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/gateway/linux/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/application/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/runtime/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/session/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/link_core/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/transport/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/protocol/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        )
+        target_compile_features(rbp2_gateway_linux_application_port_tests PRIVATE cxx_std_17)
+        add_test(NAME rbp2_gateway_linux_application_port_tests
+            COMMAND rbp2_gateway_linux_application_port_tests)
+        set_tests_properties(rbp2_gateway_linux_application_port_tests PROPERTIES TIMEOUT 20)
     endif()
 
     # MinGW test executables need the runtime beside the selected compiler
