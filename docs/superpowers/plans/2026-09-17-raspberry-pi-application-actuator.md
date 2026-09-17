@@ -136,7 +136,7 @@ git commit -m "feat: add Raspberry Pi robot command and telemetry codec"
 
 - [x] Step 1: Register rbp2_onboard_application only inside the Linux conditional, link it to rbp2_link_runtime and rbp2_robot_codec, and add rbp2_onboard_application_tests. Until the facade header exists, the test must print "FAIL: Slice 6 OnboardApplication is not implemented" and return 1. **Executed: guarded RED observed; Windows omits Linux target.**
 
-- [x] Step 2: Write PTY tests before the facade implementation. Use only existing LinkRuntime/SerialSession private test seams. Cover open and 575-ms quiet/raw-zero/Heartbeat activation; exact typed ServoEnable request bytes; matching OK RequestAccepted and non-OK RequestRejected; ACK plus Leak/IMU/Depth interleave; pending OutcomeUnknown and queued Cancelled on loss; explicit reopen with a new sequence and no replay; invalid arguments; and start_motion(Backward) returning PendingQualification with no write. **Executed as test-first RED scaffolding; Linux execution remains NOT RUN.**
+- [x] Step 2: Write PTY tests before the facade implementation. Use only existing LinkRuntime/SerialSession private test seams. Cover open and 575-ms quiet/raw-zero/Heartbeat activation; exact typed ServoEnable request bytes; matching OK RequestAccepted and non-OK RequestRejected; ACK plus Leak/IMU/Depth interleave; pending OutcomeUnknown and queued Cancelled on loss; explicit reopen with a new sequence and no replay; invalid arguments; and start_motion(Backward) returning PendingQualification with no write. **Executed as test-first RED scaffolding; Raspberry Pi native Linux verification subsequently PASS (see final acceptance).**
 
 - [x] Step 3: Define the smallest Linux facade. **Implemented as `c31e1e9`; PTY harness hardening `9d3f824`.**
 
@@ -170,7 +170,7 @@ notice. ApplicationRunResult preserves RuntimeStatus and errno. Command
 mapping only converts existing SubmitStatus values and never caches or replays
 commands.
 
-- [ ] Step 4: Run Linux GREEN when available. **NOT RUN: no usable WSL distribution, Docker, or Linux runner.**
+- [x] Step 4: Run Linux GREEN when available. **PASS on Raspberry Pi native ARM Linux: `-Wall -Wextra -Werror` build and CTest 6/6 passed.**
 
 ~~~sh
 cmake -S RoboBeetlePi -B /tmp/robobeetle-slice6-linux-20260917 -G Ninja \
@@ -202,9 +202,9 @@ git commit -m "feat: add Raspberry Pi typed onboard application"
 
 - [x] Step 2: Implement a line-oriented CLI requiring one device path. Support link status, enable/disable/neutral mask, angle servo/cdeg, gait simple/cpg, motion forward/turn_left/turn_right/ascend/descend/stop/backward, and telemetry display. Parse numeric arguments with checked conversion, print Submitted plus sequence or the typed rejection, and print Pending hardware qualification for backward without sending bytes. Do not add daemonization, background threads, retry/backoff, automatic reconnect, batch motion, or serial-fd calls; bounded stdin-only readiness polling is allowed so the runtime remains serviced while input is incomplete. **Implemented as `da99d3f`/`b82a8cc`; explicit same-process `reopen` fix resolved in `e20dc46`.**
 
-- [x] Step 3: Document that ACK/admission is not physical execution, no authoritative Pi robot state is stored, and Hardware Acceptance is PENDING USER VERIFICATION. Document that every action is explicitly entered by the operator. **Executed in README.**
+- [x] Step 3: Document that ACK/admission is not physical execution, no authoritative Pi robot state is stored, and Hardware Acceptance is recorded separately from software evidence. Document that every action is explicitly entered by the operator. **Executed in README; final user-reported Gates A–E are recorded below.**
 
-- [ ] Step 4: Build the smoke target with -Wall -Wextra -Werror as part of the Linux command in Task 3. **Linux smoke build: NOT RUN; Windows CMake omission and portable codec build: PASS.**
+- [x] Step 4: Build the smoke target with -Wall -Wextra -Werror as part of the Linux command in Task 3. **Raspberry Pi native smoke CLI build/link: PASS; Windows CMake omission and portable codec build: PASS.**
 
 - [x] Step 5: Commit. **Committed as `da99d3f`/`b82a8cc`; reopen fix committed in follow-up `e20dc46`.**
 
@@ -223,7 +223,7 @@ git commit -m "feat: add Raspberry Pi actuator smoke tool"
 
 - [x] Step 2: Run the existing Firmware host regression using its established temporary build procedure. **PASS: 36 executables + 13 compile-contract objects + USART2 source/config contract; no Firmware diff.**
 
-- [ ] Step 3: Run the complete Linux CMake/CTest command from Task 3 when WSL/Docker/Pi Linux is available. **NOT RUN: no usable WSL distribution, Docker, or Pi/Linux runner.**
+- [x] Step 3: Run the complete Linux CMake/CTest command from Task 3 when WSL/Docker/Pi Linux is available. **Raspberry Pi native ARM Linux: build PASS; CTest 6/6 PASS; smoke CLI build/link PASS.**
 
 - [x] Step 4: Execute the exact scope audit. **PASS: base-to-HEAD diff contains only the expected Slice 6 files; forbidden paths absent.**
 
@@ -258,12 +258,78 @@ Do not create a PR, merge, delete the feature branch, or start Slice 7. Final ha
 - [x] Portable CTest and direct executables
 - [x] Firmware host regression: 36 executables + 13 compile-contract objects + USART2 contract
 - [x] Scope audit and feature branch push
-- [ ] Linux native / PTY verification — **NOT RUN** (no usable WSL distribution, Docker, or Pi/Linux runner)
-- [ ] Raspberry Pi native verification — **NOT RUN**
-- [ ] Hardware Acceptance — **PENDING USER VERIFICATION**
+- [x] Linux native / PTY verification — **PASS** (Raspberry Pi ARM Linux build; CTest 6/6)
+- [x] Raspberry Pi native verification — **PASS** (smoke CLI build/link)
+- [x] Hardware Acceptance — **PASS** (user-reported Gates A–E below)
 
 ChatGPT external review found one smoke-tool same-process `reopen` blocker;
 the fix is resolved in `e20dc46` and awaits re-review.
+
+## Final Hardware Acceptance (user-reported)
+
+Hardware-tested implementation SHA: `511a3715c5aa7da37775741e2756986d395a2dda`
+
+### Gate A — Link and typed telemetry: PASS
+
+- `/dev/serial0` open
+- session `Online`
+- link `Active`
+- Leak / IMU / Depth typed telemetry path verified
+- Depth typed telemetry path was verified, but this hardware environment did
+  not produce a valid depth sensor sample (`flags=0`, `valid_lines=0`); this is
+  not a depth sensor measurement PASS
+
+### Gate B — Single safe servo: PASS
+
+- Single unloaded/safe servo
+- enable ACK OK
+- angle ACK OK
+- physical servo movement verified
+- neutral ACK OK
+- disable ACK OK
+
+### Gate C — Loss, safety, and same-process reopen: PASS
+
+- Active actuator link loss detected
+- STM32 safety behavior physically verified
+- Pi reached `Lost` / `NeedsOpen`
+- explicit same-process reopen verified
+- SafetyQuiet / resynchronization verified
+- sequence continuity verified
+- old actuator command was not replayed
+- servo did not return automatically to the pre-loss angle
+
+### Gate D — Gait behavior: PASS
+
+- SimpleGait Forward → STOP physically verified
+- CPG Forward → STOP physically verified
+- smooth return to Neutral verified
+- Backward was not tested and remains `PendingQualification`
+
+### Gate E — Concurrent load: PASS
+
+Concurrent Heartbeat + ACK + Leak + IMU + Depth + CPG Forward load:
+
+- Leak frames: 334
+- IMU frames: 167
+- Depth frames: 167
+- `TelemetryMalformed`: 0
+- `DecodeError`: 0
+- `OutcomeUnknown`: 0
+- `RequestRejected`: 0
+- `TransportWriteFailed`: 0
+- `Degraded`: 0
+- `Lost`: 0
+- `SessionLost`: 0
+- `PollFatal`: 0
+- final link status: `session=Online link=Active`
+- physical motion had no obvious stutter / abnormal stop
+
+### Raspberry Pi native verification
+
+- ARM Linux build: PASS
+- CTest 6/6: PASS
+- smoke CLI build/link: PASS
 
 ## Plan self-review
 
@@ -271,4 +337,4 @@ the fix is resolved in `e20dc46` and awaits re-review.
 - Leak, IMU, and Depth fixtures cover valid values, lengths, schemas, flags, signed fields, diagnostics, and invalid-domain invariants from current Firmware.
 - PTY tests cover explicit open/resync/heartbeat, ACK outcomes, telemetry interleave, loss outcomes, reopen, and no replay.
 - CMake boundaries keep POSIX headers out of portable codec targets and leave Slice 1–5 production files unchanged.
-- No automatic hardware claim is included; unavailable Linux execution is explicitly reported as NOT RUN.
+- User-reported Hardware Acceptance Gates A–E are recorded separately from software evidence; the invalid Depth sample is not promoted to a sensor-measurement PASS, and Backward remains PendingQualification.

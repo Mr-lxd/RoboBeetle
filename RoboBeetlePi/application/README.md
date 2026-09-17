@@ -112,9 +112,9 @@ tests, and the smoke executable are Linux-only. Windows CMake deliberately
 omits the Linux targets. PTYs verify software behavior and wire traffic, not
 physical motion, UART waveform timing, underwater behavior, or hardware safety.
 
-For this Windows development environment, native Linux / Pi CTest, PTY tests,
-and Linux smoke compilation/execution are **NOT RUN**. Run the Linux commands
-above before Pi hardware acceptance; portable build results are not substitutes.
+The Windows development environment does not run the Linux-only targets below;
+portable build evidence and Raspberry Pi native evidence are recorded
+separately.
 
 Windows portable verification on 2026-09-17: fresh CMake/Ninja configure and
 build with GCC 16.1.0 and `-Wall -Wextra -Werror` **PASS**; CTest **2/2 PASS**
@@ -125,10 +125,74 @@ Final Slice 6 software gate on 2026-09-17: the Windows portable Protocol,
 LinkCore, FrameTxQueue, and robot-codec build/tests **PASS**; the unchanged
 Firmware host runner **PASS** with 36 executables, 13 app/backend/benchmark/
 diagnostics compile-contract objects, and the USART2 source/config contract.
-Native Linux/PTY and smoke compilation/execution are **NOT RUN** in this
-environment: `wsl --list --verbose` has no usable distribution (exit 1), and
-Docker, QEMU aarch64, and `arm-none-eabi-gcc` are unavailable. These results
-do not establish Raspberry Pi, UART waveform, actuator, water, or physical
-hardware acceptance.
 
-**Hardware Acceptance: PENDING USER VERIFICATION**
+Raspberry Pi native verification for hardware-tested implementation SHA
+`511a3715c5aa7da37775741e2756986d395a2dda`: ARM Linux build **PASS**, CTest
+**6/6 PASS** (`rbp2_protocol_tests`, `rbp2_posix_serial_transport_tests`,
+`rbp2_serial_session_tests`, `rbp2_link_runtime_tests`,
+`rbp2_robot_codec_tests`, `rbp2_onboard_application_tests`), and smoke CLI
+build/link **PASS**.
+
+## Final Hardware Acceptance (user-reported)
+
+Hardware-tested implementation SHA: `511a3715c5aa7da37775741e2756986d395a2dda`
+
+### Gate A — Link and typed telemetry: PASS
+
+- `/dev/serial0` open
+- session `Online`
+- link `Active`
+- Leak / IMU / Depth typed telemetry path verified
+- Depth typed telemetry path was verified, but this hardware environment did
+  not produce a valid depth sensor sample (`flags=0`, `valid_lines=0`); this is
+  not a depth sensor measurement PASS
+
+### Gate B — Single safe servo: PASS
+
+- Single unloaded/safe servo
+- enable ACK OK
+- angle ACK OK
+- physical servo movement verified
+- neutral ACK OK
+- disable ACK OK
+
+### Gate C — Loss, safety, and same-process reopen: PASS
+
+- Active actuator link loss detected
+- STM32 safety behavior physically verified
+- Pi reached `Lost` / `NeedsOpen`
+- explicit same-process reopen verified
+- SafetyQuiet / resynchronization verified
+- sequence continuity verified
+- old actuator command was not replayed
+- servo did not return automatically to the pre-loss angle
+
+### Gate D — Gait behavior: PASS
+
+- SimpleGait Forward → STOP physically verified
+- CPG Forward → STOP physically verified
+- smooth return to Neutral verified
+- Backward was not tested and remains `PendingQualification`
+
+### Gate E — Concurrent load: PASS
+
+Concurrent Heartbeat + ACK + Leak + IMU + Depth + CPG Forward load:
+
+- Leak frames: 334
+- IMU frames: 167
+- Depth frames: 167
+- `TelemetryMalformed`: 0
+- `DecodeError`: 0
+- `OutcomeUnknown`: 0
+- `RequestRejected`: 0
+- `TransportWriteFailed`: 0
+- `Degraded`: 0
+- `Lost`: 0
+- `SessionLost`: 0
+- `PollFatal`: 0
+- final link status: `session=Online link=Active`
+- physical motion had no obvious stutter / abnormal stop
+
+These user-reported gates record hardware acceptance for the stated setup.
+They do not claim a valid depth sensor measurement where the sample was
+invalid, and Backward remains pending qualification.
