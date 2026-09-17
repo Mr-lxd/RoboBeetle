@@ -240,7 +240,7 @@ Confirm no RoboBeetleConsole/, no RoboBeetleFirmware/, and no frozen Pi producti
 
 - [x] Step 5: Dispatch spec-compliance review against the approved design, then code-quality review only after spec review has no Critical/Important gaps. Re-run reviews after valid fixes. **Internal task/final reviews passed; ChatGPT external review found one smoke-tool reopen blocker, resolved in `8dad183`; awaiting re-review.**
 
-- [x] Step 6: Push and stop. **Initial feature push was `5bb5941`; this follow-up requires a normal non-force push.**
+- [x] Step 6: Push and stop. **Initial feature push was `5bb5941`; follow-up fix `e20dc46` was pushed normally without force.**
 
 ~~~powershell
 git push -u origin codex/raspberry-pi-application-actuator
