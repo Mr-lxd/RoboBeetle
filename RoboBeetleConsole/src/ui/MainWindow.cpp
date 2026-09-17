@@ -1267,7 +1267,7 @@ void MainWindow::setLeakUiState(LeakState state)
     const QString stateText = leakStateDisplayText(state);
     leakStatus_->setText(stateText.startsWith(QStringLiteral("Leak: "))
                              ? stateText.mid(6)
-                             : QStringLiteral("Wet"));
+                             : stateText);
     switch (state) {
     case LeakState::Unknown:
         leakStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 12px; font-weight: 600;"));
