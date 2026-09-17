@@ -131,6 +131,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
     add_executable(robobeetle_pi_smoke tools/robobeetle_pi_smoke.cpp)
     target_link_libraries(robobeetle_pi_smoke PRIVATE rbp2_onboard_application)
+
+    add_executable(robobeetle_pi_gateway tools/robobeetle_pi_gateway.cpp)
+    target_link_libraries(robobeetle_pi_gateway PRIVATE rbp2_gateway_owner)
 endif()
 
 if(BUILD_TESTING)
