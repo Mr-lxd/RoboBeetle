@@ -46,6 +46,14 @@ target_include_directories(rbp2_robot_codec PUBLIC
 )
 target_compile_features(rbp2_robot_codec PUBLIC cxx_std_17)
 
+add_library(rbp2_rbrp_codec STATIC
+    gateway/src/rbrp_codec.cpp
+)
+target_include_directories(rbp2_rbrp_codec PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+)
+target_compile_features(rbp2_rbrp_codec PUBLIC cxx_std_17)
+
 # Keep Linux headers and syscalls out of all portable targets.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_library(rbp2_posix_serial_transport STATIC
@@ -83,6 +91,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests
     )
     target_compile_features(rbp2_rbrp_codec_tests PRIVATE cxx_std_17)
+    target_link_libraries(rbp2_rbrp_codec_tests PRIVATE rbp2_rbrp_codec)
     add_test(NAME rbp2_rbrp_codec_tests COMMAND rbp2_rbrp_codec_tests)
 
     add_executable(rbp2_protocol_tests
@@ -137,5 +146,19 @@ if(BUILD_TESTING)
         target_link_libraries(rbp2_onboard_application_tests PRIVATE rbp2_onboard_application)
         add_test(NAME rbp2_onboard_application_tests COMMAND rbp2_onboard_application_tests)
         set_tests_properties(rbp2_onboard_application_tests PROPERTIES TIMEOUT 15)
+    endif()
+
+    # MinGW test executables need the runtime beside the selected compiler
+    # first in the child-process PATH. This is test-process setup only; no
+    # runtime DLLs are copied into the repository or product targets.
+    if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        get_filename_component(rbp2_test_compiler_bin
+            ${CMAKE_CXX_COMPILER} DIRECTORY)
+        set_tests_properties(
+            rbp2_rbrp_codec_tests
+            rbp2_protocol_tests
+            rbp2_robot_codec_tests
+            PROPERTIES ENVIRONMENT "PATH=${rbp2_test_compiler_bin};$ENV{PATH}"
+        )
     endif()
 endif()
