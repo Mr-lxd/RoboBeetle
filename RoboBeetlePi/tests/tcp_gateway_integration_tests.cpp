@@ -387,13 +387,20 @@ void queued_replacement_survives_same_poll_generation_rollover()
     expect(adapter.publish(GatewayOutbound{source_a, hello_reply()}),
            "source A has a pending critical output during rollover setup");
 
-    const int replacement = connect_loopback(adapter.bound_port());
     ::shutdown(first, SHUT_RDWR);
     ::close(first);
-    expect(callbacks.wait_for([&callbacks] {
-               return callbacks.connected.size() == 2U;
-           }),
+    const int replacement = connect_loopback(adapter.bound_port());
+    const bool replacement_connected = callbacks.wait_for([&callbacks] {
+        return callbacks.connected.size() == 2U;
+    });
+    expect(replacement_connected,
            "source B waiting in the listener survives A client revents");
+    if (!replacement_connected) {
+        ::shutdown(replacement, SHUT_RDWR);
+        ::close(replacement);
+        adapter.stop();
+        return;
+    }
     const auto source_b = callbacks.last_source();
     expect(source_b != 0U && source_b > source_a &&
                adapter.current_source_id() == source_b,
@@ -401,13 +408,15 @@ void queued_replacement_survives_same_poll_generation_rollover()
 
     send_all(replacement,
              encode_frame(RbrpMessageKind::Hello, 1U, {0U, 0U}).wire);
-    expect(callbacks.wait_for([&callbacks] {
-               return callbacks.inbound.size() == 1U;
-           }),
+    const bool inbound_received = callbacks.wait_for([&callbacks] {
+        return callbacks.inbound.size() == 1U;
+    });
+    expect(inbound_received,
            "the replacement source remains readable after A rollover");
-    {
+    if (inbound_received) {
         std::lock_guard<std::mutex> lock(callbacks.mutex);
-        expect(callbacks.inbound.front().source == source_b,
+        expect(!callbacks.inbound.empty() &&
+                   callbacks.inbound.front().source == source_b,
                "old A client revents cannot retag B inbound data");
     }
 
