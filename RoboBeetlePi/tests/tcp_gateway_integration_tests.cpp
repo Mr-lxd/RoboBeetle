@@ -95,6 +95,8 @@ struct CallbackState {
     template<class Predicate>
     bool wait_for(Predicate predicate, int milliseconds = 1000)
     {
+        // Predicate executes with mutex held; inspect protected fields directly
+        // and do not call locking accessors from the predicate.
         std::unique_lock<std::mutex> lock(mutex);
         return changed.wait_for(lock, std::chrono::milliseconds(milliseconds),
                                 std::move(predicate));
@@ -264,7 +266,7 @@ void one_source_fragmented_input_and_source_addressed_output()
         send_all(client, Bytes{byte});
     }
     expect(callbacks.wait_for([&callbacks] {
-               return callbacks.inbound_count() == 1U;
+               return callbacks.inbound.size() == 1U;
            }), "fragmented RBRP is reconstructed by the worker");
 
     {
@@ -286,7 +288,7 @@ void one_source_fragmented_input_and_source_addressed_output()
     ::shutdown(client, SHUT_RDWR);
     ::close(client);
     expect(callbacks.wait_for([&callbacks] {
-               return callbacks.lost_count() >= 1U;
+               return callbacks.lost.size() >= 1U;
            }), "client EOF produces a SourceLost signal");
     expect(callbacks.last_lost().source == source &&
                callbacks.last_lost().reason == SourceLostReason::Disconnected,
@@ -311,7 +313,7 @@ void wrong_direction_frame_closes_source_as_fatal_protocol()
         encode_frame(RbrpMessageKind::HelloReply, 77U, Bytes(8U, 0U));
     send_all(client, server_frame.wire);
     expect(callbacks.wait_for([&callbacks] {
-               return callbacks.lost_count() >= 1U;
+               return callbacks.lost.size() >= 1U;
            }),
            "wrong-direction frame closes the TCP source");
     expect(callbacks.last_lost().source == source &&
@@ -343,7 +345,7 @@ void second_source_is_closed_and_ids_do_not_inherit()
     ::shutdown(first, SHUT_RDWR);
     ::close(first);
     expect(callbacks.wait_for([&callbacks] {
-               return callbacks.lost_count() >= 1U;
+               return callbacks.lost.size() >= 1U;
            }), "first source close is observed");
 
     const int replacement = connect_loopback(adapter.bound_port());
@@ -686,7 +688,7 @@ void stale_close_and_old_telemetry_never_affect_new_source()
     ::shutdown(first, SHUT_RDWR);
     ::close(first);
     expect(callbacks.wait_for([&callbacks] {
-               return callbacks.lost_count() >= 1U;
+               return callbacks.lost.size() >= 1U;
            }), "source A disconnects");
 
     const int second = connect_loopback(adapter.bound_port());
@@ -726,7 +728,7 @@ void inbound_queue_exhaustion_is_source_loss()
         RbrpMessageKind::Hello, 1U, Bytes{0U, 0U});
     send_all(client, hello.wire);
     expect(callbacks.wait_for([&callbacks] {
-               return callbacks.lost_count() >= 1U;
+               return callbacks.lost.size() >= 1U;
            }), "failed inbound enqueue creates high-priority SourceLost");
     expect(callbacks.last_lost().reason ==
                SourceLostReason::InboundQueueExhausted,
