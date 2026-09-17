@@ -196,6 +196,19 @@ if(BUILD_TESTING)
         add_test(NAME rbp2_gateway_linux_application_port_tests
             COMMAND rbp2_gateway_linux_application_port_tests)
         set_tests_properties(rbp2_gateway_linux_application_port_tests PROPERTIES TIMEOUT 20)
+
+        add_executable(rbp2_tcp_gateway_integration_tests
+            tests/tcp_gateway_integration_tests.cpp
+        )
+        target_include_directories(rbp2_tcp_gateway_integration_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/gateway/linux/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        )
+        target_compile_features(rbp2_tcp_gateway_integration_tests PRIVATE cxx_std_17)
+        add_test(NAME rbp2_tcp_gateway_integration_tests
+            COMMAND rbp2_tcp_gateway_integration_tests)
+        set_tests_properties(rbp2_tcp_gateway_integration_tests PROPERTIES TIMEOUT 20)
     endif()
 
     # MinGW test executables need the runtime beside the selected compiler
