@@ -403,8 +403,14 @@ struct TcpAdapter::Impl {
                     [this](SourceLostReason reason) {
                         close_current(true, reason);
                     });
-                if (!source_remains || current_source_id() == 0U) {
+                if (!source_remains) {
                     return;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    if (client_fd != fd || current_source != source) {
+                        return;
+                    }
                 }
                 continue;
             }
