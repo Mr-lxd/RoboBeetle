@@ -64,6 +64,7 @@ void ControlGatewayCore::fail_safe_application_invariant(
     diagnostic(message);
     if (!source_present_) {
         authority_ = AuthorityState::Unowned;
+        authority_granted_at_ms_ = 0U;
         lease_deadline_ms_ = 0U;
         abort_once(owner_now_ms);
         terminalize_outstanding(GatewayCommandOutcome::OutcomeUnknown,
@@ -101,6 +102,7 @@ void ControlGatewayCore::source_connected(ControlSourceId source)
     source_present_ = true;
     hello_complete_ = false;
     authority_ = AuthorityState::Unowned;
+    authority_granted_at_ms_ = 0U;
     lease_deadline_ms_ = 0U;
     abort_called_ = false;
     recent_request_ids_.clear();
@@ -492,6 +494,7 @@ void ControlGatewayCore::handle_payload(const RemoteEnvelope &envelope,
         const auto grant_now_ms = grant_now(owner_now_ms);
         authority_ = AuthorityState::Owned;
         abort_called_ = false;
+        authority_granted_at_ms_ = grant_now_ms;
         lease_deadline_ms_ = grant_now_ms + kLeaseTimeoutMs;
         emit(GatewayOutbound{
                  envelope.source,
@@ -590,7 +593,7 @@ void ControlGatewayCore::process(const RemoteEnvelope &envelope,
         return;
     }
 
-    if (authority_request_expired(envelope)) {
+    if (envelope_lease_expired(envelope)) {
         revoke(current_source_, GatewayStateReason::LeaseExpired,
                std::max(owner_now_ms, envelope.received_at_ms), false);
         return;
@@ -602,6 +605,12 @@ void ControlGatewayCore::process(const RemoteEnvelope &envelope,
                    ServiceErrorCode::InvalidRequestId, 0U, owner_now_ms);
         return;
     }
+    if (authority_request_before_grant(envelope)) {
+        emit_error(envelope.source, request_id, envelope.message.kind,
+                   ServiceErrorCode::NotAuthority, 0U, owner_now_ms);
+        mark_completed(request_id);
+        return;
+    }
     if (request_id_is_duplicate(request_id)) {
         emit_error(envelope.source, request_id, envelope.message.kind,
                    ServiceErrorCode::DuplicateRequestId, 0U, owner_now_ms);
@@ -611,12 +620,19 @@ void ControlGatewayCore::process(const RemoteEnvelope &envelope,
     handle_payload(envelope, owner_now_ms);
 }
 
-bool ControlGatewayCore::authority_request_expired(
+bool ControlGatewayCore::envelope_lease_expired(
+    const RemoteEnvelope &envelope) const noexcept
+{
+    return authority_ == AuthorityState::Owned &&
+           envelope.received_at_ms >= lease_deadline_ms_;
+}
+
+bool ControlGatewayCore::authority_request_before_grant(
     const RemoteEnvelope &envelope) const noexcept
 {
     return authority_ == AuthorityState::Owned &&
            is_authority_dependent(envelope.message.kind) &&
-           envelope.received_at_ms >= lease_deadline_ms_;
+           envelope.received_at_ms < authority_granted_at_ms_;
 }
 
 void ControlGatewayCore::source_lost(const SourceLostSignal &signal,
@@ -772,6 +788,7 @@ void ControlGatewayCore::revoke(ControlSourceId source,
         authority_ != AuthorityState::Unowned ||
         is_active_session(application_.session_state());
     authority_ = AuthorityState::Unowned;
+    authority_granted_at_ms_ = 0U;
     lease_deadline_ms_ = 0U;
     if (needs_abort) {
         abort_once(owner_now_ms);
@@ -845,12 +862,14 @@ void ControlGatewayCore::shutdown(GatewayTimeMs owner_now_ms)
 {
     last_now_ms_ = owner_now_ms;
     accepting_commands_ = false;
+    authority_granted_at_ms_ = 0U;
     const auto source = current_source_;
     if (source_present_) {
         revoke(source, GatewayStateReason::Shutdown, owner_now_ms, true);
         source_present_ = false;
     } else if (is_active_session(application_.session_state())) {
         authority_ = AuthorityState::Unowned;
+        authority_granted_at_ms_ = 0U;
         abort_once(owner_now_ms);
         terminalize_outstanding(GatewayCommandOutcome::OutcomeUnknown,
                                 owner_now_ms);

@@ -338,6 +338,68 @@ void authority_dependent_requests_expire_by_trusted_receive_time()
            "a late heartbeat cannot revive authority using a stale owner time");
 }
 
+void all_valid_client_traffic_expires_authority_at_deadline()
+{
+    const auto late_message = [](RemoteMessage message,
+                                 const char *description) {
+        FakeGatewayApplicationPort application;
+        OutputSink sink;
+        ControlGatewayCore core(application, sink.callbacks());
+        core.source_connected(49U);
+        core.process(envelope(49U, 1U, hello(1U)), 1U);
+        core.process(envelope(49U, 2U, acquire(2U)), 0U);
+        sink.clear_outputs();
+
+        core.process(envelope(49U, 1000U, std::move(message)), 500U);
+        expect(core.authority_state() == AuthorityState::Unowned &&
+                   application.abort_calls == 1U && sink.closes.empty(),
+               description);
+    };
+
+    late_message(hello(3U),
+                 "late duplicate Hello cannot defer authority expiry");
+    late_message(acquire(3U),
+                 "late AcquireControl cannot defer authority expiry");
+    late_message(release(3U),
+                 "late ReleaseControl cannot defer authority expiry");
+}
+
+void pregrant_envelopes_cannot_use_new_authority()
+{
+    FakeGatewayApplicationPort application;
+    application.submit_result = {
+        GatewayApplicationSubmitStatus::Submitted, 901U};
+    OutputSink sink;
+    GatewayTimeMs now = 500U;
+    sink.now_provider = [&now] { return now; };
+    application.on_open = [&now] { now = 750U; };
+    ControlGatewayCore core(application, sink.callbacks());
+    core.source_connected(50U);
+    core.process(envelope(50U, 1U, hello(1U)), 500U);
+    core.process(envelope(50U, 2U, acquire(2U)), 500U);
+    sink.clear_outputs();
+
+    core.process(envelope(50U, 600U, heartbeat(3U, 600U)), 800U);
+    core.process(envelope(
+                     50U, 600U,
+                     command(4U, RobotCommandKind::StopMotion, StopMotion{})),
+                 800U);
+    core.process(envelope(50U, 600U, release(5U)), 800U);
+
+    expect(core.authority_state() == AuthorityState::Owned &&
+               core.lease_deadline_ms() == 1750U &&
+               application.submit_calls == 0U && application.abort_calls == 0U &&
+               find_output<ServiceErrorMessage>(sink, 50U, 3U) != nullptr &&
+               find_output<ServiceErrorMessage>(sink, 50U, 4U) != nullptr &&
+               find_output<ServiceErrorMessage>(sink, 50U, 5U) != nullptr,
+           "pre-grant heartbeat, command, and release cannot act on new authority");
+
+    core.process(envelope(50U, 800U, heartbeat(6U, 800U)), 800U);
+    expect(core.authority_state() == AuthorityState::Owned &&
+               core.lease_deadline_ms() == 1800U,
+           "post-grant heartbeat retains normal trusted refresh semantics");
+}
+
 void grant_deadline_uses_post_open_monotonic_sample()
 {
     FakeGatewayApplicationPort application;
@@ -907,6 +969,8 @@ int main()
     acquire_failure_and_invalid_state_do_not_adopt_sessions();
     lease_uses_grant_time_and_trusted_receive_time();
     authority_dependent_requests_expire_by_trusted_receive_time();
+    all_valid_client_traffic_expires_authority_at_deadline();
+    pregrant_envelopes_cannot_use_new_authority();
     grant_deadline_uses_post_open_monotonic_sample();
     backlog_does_not_create_an_eight_message_lease_budget();
     release_and_source_loss_abort_exactly_once();

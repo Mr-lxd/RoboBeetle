@@ -62,6 +62,11 @@ public:
         return lease_deadline_ms_;
     }
 
+    [[nodiscard]] GatewayTimeMs authority_granted_at_ms() const noexcept
+    {
+        return authority_granted_at_ms_;
+    }
+
     [[nodiscard]] std::size_t outstanding_count() const noexcept
     {
         return request_to_sequence_.size();
@@ -112,7 +117,9 @@ private:
                         GatewayTimeMs owner_now_ms);
     void consume_event(const GatewayApplicationEvent &event,
                        GatewayTimeMs owner_now_ms);
-    [[nodiscard]] bool authority_request_expired(
+    [[nodiscard]] bool envelope_lease_expired(
+        const RemoteEnvelope &envelope) const noexcept;
+    [[nodiscard]] bool authority_request_before_grant(
         const RemoteEnvelope &envelope) const noexcept;
     void terminalize_outstanding(GatewayCommandOutcome outcome,
                                  GatewayTimeMs owner_now_ms);
@@ -131,6 +138,7 @@ private:
     bool hello_complete_{false};
     bool accepting_commands_{true};
     AuthorityState authority_{AuthorityState::Unowned};
+    GatewayTimeMs authority_granted_at_ms_{0};
     GatewayTimeMs lease_deadline_ms_{0};
     bool abort_called_{false};
     bool handling_output_failure_{false};
