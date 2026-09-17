@@ -968,3 +968,77 @@ Implementation phase is complete only when:
 ```
 
 Hardware acceptance and PR are later phases.
+
+---
+
+## 13. Commit 14 verification record (2026-09-17)
+
+This section records the implementation evidence available on the current
+Windows host. The implementation HEAD below is the exact code target before
+this documentation-only commit.
+
+### Implementation state
+
+```text
+branch: codex/raspberry-pi-remote-control-gateway
+base:   9bc66130467ebb4810d49c2a509c81f838855c6e
+implementation HEAD before Commit 14: 4e9f00346e3b422fb92cc302a1fb248cde40b357
+```
+
+The implementation follows the frozen design and plan. The additional
+corrective commit `4e9f003` orders SourceLost processing before connection
+registration and ignores a registration whose TCP source generation has
+already closed; this is required for immediate A-to-B reconnect isolation.
+
+### Windows portable gate
+
+```text
+[x] Configure: CMake + Ninja, GNU 16.1.0 MinGW, BUILD_TESTING=ON
+[x] Build:    cmake --build --parallel 4
+[x] CTest:    ctest --output-on-failure
+```
+
+Result:
+
+```text
+4/4 passed
+rbp2_rbrp_codec_tests       PASS
+rbp2_gateway_core_tests     PASS
+rbp2_protocol_tests         PASS
+rbp2_robot_codec_tests      PASS
+```
+
+The test-process PATH contains the selected MinGW compiler `bin` directory;
+no runtime DLL was copied into the repository or product targets.
+
+### Linux/Pi gate
+
+```text
+[ ] Raspberry Pi/native Linux configure/build: NOT RUN
+[ ] Native full CTest:                         NOT RUN
+[ ] robobeetle_pi_gateway native build/link:   NOT RUN
+[ ] CLI/help/loopback smoke:                   NOT RUN
+```
+
+The current Windows host has no installed WSL Linux environment, native Linux
+compiler, or container runtime. A diagnostic `CMAKE_SYSTEM_NAME=Linux`
+MinGW attempt configured but is not a native result and stopped at missing
+POSIX headers (`termios.h`, `poll.h`, and `arpa/inet.h`). The Linux/Pi gate
+must be run on Raspberry Pi/ARM Linux against the implementation HEAD above.
+
+### Scope and qualification
+
+```text
+Firmware changed?               NO
+Qt changed?                     NO
+Protocol/LinkCore changed?      NO
+Transport/Session/Runtime?      NO
+application Slice 6 changed?    NO
+dsh/qt-ui touched?              NO
+Slice 6 worktree touched?       NO
+Hardware acceptance?            NOT RUN
+```
+
+No hardware acceptance, PR, push, merge, or Slice 8 work is part of this
+record. External code review remains the next gate; Linux/Pi software evidence
+is still required before hardware qualification.
