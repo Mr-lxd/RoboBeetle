@@ -10,7 +10,10 @@
 #include <QEventLoop>
 #include <QGroupBox>
 #include <QLabel>
+#include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QPushButton>
+#include <QTabWidget>
 #include <QTimer>
 
 #include <cstdio>
@@ -324,13 +327,13 @@ void testMotionPanelLifecycleAndManualArbitration()
     }
     QGroupBox *global = nullptr;
     for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
-        if (box->title() == QStringLiteral("Global")) {
+        if (box->title() == QStringLiteral("Actuator Control")) {
             global = box;
             break;
         }
     }
     expect(global != nullptr,
-           "MainWindow must retain its Global panel");
+           "MainWindow must retain its Actuator Control panel");
     if (global != nullptr) {
         QPushButton *disableAll = buttonWithText(global, QStringLiteral("Disable All"));
         expect(disableAll != nullptr && disableAll->isEnabled(),
@@ -420,6 +423,237 @@ void testGaitBackendPanelLifecycle()
            "UI combo must reflect the ACK-confirmed backend");
 }
 
+QGroupBox *findGroupBox(const QWidget *root, const QString &title)
+{
+    for (QGroupBox *box : root->findChildren<QGroupBox *>()) {
+        if (box->title() == title) {
+            return box;
+        }
+    }
+    return nullptr;
+}
+
+QTabWidget *tabWidgetWithText(const QWidget *root, const QString &tabText)
+{
+    for (QTabWidget *tabs : root->findChildren<QTabWidget *>()) {
+        for (int i = 0; i < tabs->count(); ++i) {
+            if (tabs->tabText(i) == tabText) {
+                return tabs;
+            }
+        }
+    }
+    return nullptr;
+}
+
+void testDashboardLayout()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(&transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::MainWindow window(&controller);
+
+    // Realtime Video placeholder exists.
+    expect(findGroupBox(&window, QStringLiteral("Realtime Video")) != nullptr,
+           "MainWindow must expose a Realtime Video placeholder");
+
+    // Emergency Stop exists and stays disabled in Phase 1.
+    QPushButton *estop = buttonWithText(&window, QStringLiteral("Emergency Stop"));
+    expect(estop != nullptr, "MainWindow must expose an Emergency Stop button");
+    expect(estop != nullptr && !estop->isEnabled(),
+           "Emergency Stop must remain disabled (no Phase 1 message)");
+
+    // Actuator Control exists.
+    expect(findGroupBox(&window, QStringLiteral("Actuator Control")) != nullptr,
+           "MainWindow must expose the Actuator Control panel");
+
+    // All five semantic servo panels exist.
+    const char *servoNames[] = {
+        "FrontRight", "FrontLeft", "Depth", "RearRight", "RearLeft",
+    };
+    int servoPanels = 0;
+    for (const char *name : servoNames) {
+        if (findGroupBox(&window, QString::fromLatin1(name)) != nullptr) {
+            ++servoPanels;
+        }
+    }
+    expect(servoPanels == 5, "MainWindow must expose all five servo panels");
+
+    // Data Plots region exists as an independent tab widget with IMU/Depth/
+    // Actuator placeholder sub-tabs.
+    bool imuPlot = tabWidgetWithText(&window, QStringLiteral("IMU")) != nullptr;
+    bool depthPlot = tabWidgetWithText(&window, QStringLiteral("Depth")) != nullptr;
+    bool actuatorPlot = tabWidgetWithText(&window, QStringLiteral("Actuator")) != nullptr;
+    expect(imuPlot && depthPlot && actuatorPlot,
+           "MainWindow must expose the Data Plots region (IMU/Depth/Actuator)");
+
+    // Log and Protocol Details tabs exist.
+    QTabWidget *logTabs = tabWidgetWithText(&window, QStringLiteral("Log"));
+    QTabWidget *detailsTabs = tabWidgetWithText(&window, QStringLiteral("Protocol Details"));
+    expect(logTabs != nullptr && detailsTabs != nullptr,
+           "MainWindow must expose Log and Protocol Details tabs");
+
+    // ACK status must be owned by the Protocol Details page only, never also
+    // placed in the Protocol/Link summary card. The summary card must not
+    // contain an ACK-state label, and the details page must retain one.
+    QGroupBox *summary = findGroupBox(&window, QStringLiteral("Protocol / Link"));
+    expect(summary != nullptr, "MainWindow must expose the Protocol / Link summary");
+    bool summaryHasAckLabel = false;
+    for (QLabel *label : summary->findChildren<QLabel *>()) {
+        if (label->text() == QStringLiteral("Idle")) {
+            summaryHasAckLabel = true;
+        }
+    }
+    expect(!summaryHasAckLabel,
+           "Protocol/Link summary must not contain an ACK-state label");
+    if (detailsTabs != nullptr) {
+        bool detailsHasAckLabel = false;
+        for (int i = 0; i < detailsTabs->count(); ++i) {
+            for (QLabel *label : detailsTabs->widget(i)->findChildren<QLabel *>()) {
+                if (label->text() == QStringLiteral("Idle")) {
+                    detailsHasAckLabel = true;
+                }
+            }
+        }
+        expect(detailsHasAckLabel,
+               "Protocol Details page must retain the ACK-status label");
+    }
+
+    // Log/Details tab widget keeps its three pages.
+    if (detailsTabs != nullptr) {
+        expect(detailsTabs->count() == 3,
+               "Log/Details tab must keep Log, Telemetry Details, and Protocol Details pages");
+    }
+
+    // A Telemetry Details page exists and hosts the IMU/Depth diagnostics.
+    QTabWidget *telemetryTabs = tabWidgetWithText(&window, QStringLiteral("Telemetry Details"));
+    expect(telemetryTabs != nullptr,
+           "MainWindow must expose a Telemetry Details tab");
+    if (telemetryTabs != nullptr) {
+        bool foundTelemetryPage = false;
+        for (int i = 0; i < telemetryTabs->count(); ++i) {
+            if (telemetryTabs->tabText(i) == QStringLiteral("Telemetry Details")) {
+                foundTelemetryPage = true;
+            }
+        }
+        expect(foundTelemetryPage,
+               "Telemetry Details tab must contain its page");
+    }
+
+    // Diagnostics still flow to the Telemetry Details page after a real
+    // protocol update (no widget loss from re-adding to layouts).
+    controller.connectTransport({QStringLiteral("COM_TEST"), 9600});
+    transport.simulateConnected();
+    if (telemetryTabs != nullptr) {
+        bool imuDiagLive = false;
+        bool depthDiagLive = false;
+        injectImuSnapshot(transport);
+        for (int i = 0; i < telemetryTabs->count(); ++i) {
+            const QWidget *page = telemetryTabs->widget(i);
+            for (const QLabel *label : page->findChildren<QLabel *>()) {
+                if (label->text().contains(QStringLiteral("valid 42"))) {
+                    imuDiagLive = true;
+                }
+            }
+        }
+        injectDepthSnapshot(transport);
+        for (int i = 0; i < telemetryTabs->count(); ++i) {
+            const QWidget *page = telemetryTabs->widget(i);
+            for (const QLabel *label : page->findChildren<QLabel *>()) {
+                if (label->text().contains(QStringLiteral("RX 100"))) {
+                    depthDiagLive = true;
+                }
+            }
+        }
+        expect(imuDiagLive && depthDiagLive,
+               "Telemetry Details page must show live IMU/Depth diagnostics");
+    }
+
+    // Window fits the approved minimum; the dashboard needs no scroll at the
+    // default size.
+    window.resize(1420, 880);
+    const QSize ws = window.size();
+    expect(ws.width() >= 1100 && ws.height() >= 720,
+           "window must fit the approved minimum (1100x720)");
+
+    // Structural one-row check: all five servo cards share the same parent
+    // (the Actuator Control cards layout), i.e. they are siblings in one row.
+    // This avoids pixel coordinates and platform font metrics.
+    const QWidget *cardsParent = nullptr;
+    bool allSameParent = true;
+    for (QGroupBox *g : window.findChildren<QGroupBox *>()) {
+        const QString t = g->title();
+        if (t == QStringLiteral("FrontRight")
+            || t == QStringLiteral("FrontLeft")
+            || t == QStringLiteral("Depth")
+            || t == QStringLiteral("RearRight")
+            || t == QStringLiteral("RearLeft")) {
+            if (cardsParent == nullptr) {
+                cardsParent = g->parentWidget();
+            } else if (g->parentWidget() != cardsParent) {
+                allSameParent = false;
+            }
+        }
+    }
+    expect(allSameParent,
+           "all five servo cards must be siblings in one row");
+
+    // Relative horizontal-clip check: no servo card wider than the window.
+    // A card wider than the window would be horizontally clipped.
+    bool anyClipped = false;
+    for (QGroupBox *g : window.findChildren<QGroupBox *>()) {
+        const QString t = g->title();
+        if (t == QStringLiteral("FrontRight")
+            || t == QStringLiteral("FrontLeft")
+            || t == QStringLiteral("Depth")
+            || t == QStringLiteral("RearRight")
+            || t == QStringLiteral("RearLeft")) {
+            if (g->width() > ws.width()) {
+                anyClipped = true;
+            }
+        }
+    }
+    expect(!anyClipped,
+           "no servo card may be wider than the window (horizontal clip)");
+
+    // Vertical-clipping regression: after showing at the default size and
+    // letting the layout settle, every critical dashboard telemetry label must
+    // actually be laid out at a height at least its required (minimum) height.
+    // This is relative to each widget's own minimumSizeHint(), so it is
+    // independent of font metrics and fixed pixel coordinates.
+    window.show();
+    for (int i = 0; i < 20; ++i) {
+        QApplication::processEvents();
+    }
+    auto checkLabelHeight = [&window](const QString &title) {
+        QGroupBox *box = findGroupBox(&window, title);
+        if (box == nullptr) {
+            return false;
+        }
+        bool ok = true;
+        const auto labels = box->findChildren<QLabel *>();
+        for (const QLabel *label : labels) {
+            if (label->text().isEmpty()) {
+                continue;
+            }
+            const int required = label->minimumSizeHint().height();
+            const int actual = label->height();
+            if (actual > 0 && actual < required) {
+                ok = false;
+            }
+        }
+        return ok;
+    };
+    expect(checkLabelHeight(QStringLiteral("IMU — JY901S")),
+           "IMU card status/metric labels must not be vertically clipped");
+    expect(checkLabelHeight(QStringLiteral("Depth Sensor — ROVMAKER")),
+           "Depth card status/metric labels must not be vertically clipped");
+    expect(checkLabelHeight(QStringLiteral("Protocol / Link")),
+           "Protocol/Link card TX/RX/CRC/Timeout/ACK RTT labels must not be "
+           "vertically clipped");
+    expect(checkLabelHeight(QStringLiteral("Leak Detection")),
+           "Leak card label must not be vertically clipped");
+    window.hide();
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -429,6 +663,7 @@ int main(int argc, char **argv)
     testDepthPanelLifecycle();
     testMotionPanelLifecycleAndManualArbitration();
     testGaitBackendPanelLifecycle();
+    testDashboardLayout();
     if (failures == 0) {
         std::fprintf(stdout, "All MainWindow tests passed\n");
     }

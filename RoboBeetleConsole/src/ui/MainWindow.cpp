@@ -11,11 +11,12 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QSpinBox>
+#include <QTabWidget>
 #include <QVBoxLayout>
 #include <QWidget>
-#include <QSignalBlocker>
 
 #include <array>
 
@@ -73,31 +74,47 @@ QString motionModeText(MotionMode mode)
     return QStringLiteral("UNKNOWN");
 }
 
+// Subtle industrial-console card style: light background, thin border, no
+// gradients or glassmorphism, to keep the surface low-noise.
+void applyCardStyle(QGroupBox *box)
+{
+    box->setStyleSheet(QStringLiteral(
+        "QGroupBox {"
+        "  border: 1px solid #cfd6dd;"
+        "  border-radius: 6px;"
+        "  margin-top: 10px;"
+        "  padding: 8px;"
+        "  background: #ffffff;"
+        "}"
+        "QGroupBox::title {"
+        "  subcontrol-origin: margin;"
+        "  left: 10px;"
+        "  padding: 0 4px;"
+        "  color: #37474f;"
+        "  font-weight: bold;"
+        "}"));
+}
+
 } // namespace
 
 MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     : QMainWindow(parent), controller_(controller)
 {
     Q_ASSERT(controller_ != nullptr);
-    setWindowTitle(QStringLiteral("RoboBeetle Console — My first Qt"));
-    resize(1000, 760);
+    setWindowTitle(QStringLiteral("RoboBeetle Console"));
+    resize(1420, 880);
+    setMinimumSize(1100, 720);
 
     auto *central = new QWidget(this);
     auto *root = new QVBoxLayout(central);
-    root->addWidget(createConnectionPanel());
+    root->setContentsMargins(6, 6, 6, 6);
+    root->setSpacing(8);
 
-    auto *servos = new QGridLayout;
-    const auto &descriptors = servoDescriptorTable();
-    for (int index = 0; index < kServoCount; ++index) {
-        servos->addWidget(createServoPanel(index, descriptors.at(index).id),
-                          index / 2, index % 2);
-    }
-    root->addLayout(servos);
-    root->addWidget(createGlobalPanel());
-    root->addWidget(createMotionPanel());
-    root->addWidget(createImuPanel());
-    root->addWidget(createDepthPanel());
-    root->addWidget(createMonitorPanel(), 1);
+    root->addWidget(createConnectionBar());
+    root->addWidget(createDashboard(), 1);
+    root->addWidget(createActuatorPanel(), 1);
+    root->addWidget(createLowerDashboard(), 1);
+
     setCentralWidget(central);
 
     connect(controller_, &RobotController::serialPortsChanged, this, [this](const QStringList &ports) {
@@ -169,27 +186,44 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     controller_->refreshSerialPorts();
 }
 
-QWidget *MainWindow::createConnectionPanel()
+QWidget *MainWindow::createConnectionBar()
 {
-    auto *box = new QGroupBox(QStringLiteral("Connection"), this);
-    auto *layout = new QGridLayout(box);
-    portCombo_ = new QComboBox(box);
+    auto *bar = new QWidget(this);
+    bar->setFixedHeight(48);
+    auto *layout = new QHBoxLayout(bar);
+    layout->setContentsMargins(6, 4, 6, 4);
+    layout->setSpacing(6);
+
+    auto *title = new QLabel(QStringLiteral("RoboBeetle Console"), bar);
+    title->setStyleSheet(QStringLiteral("font-weight: bold; font-size: 13px; color: #37474f;"));
+    layout->addWidget(title);
+
+    layout->addWidget(new QLabel(QStringLiteral("Serial Port"), bar));
+    portCombo_ = new QComboBox(bar);
     portCombo_->setEditable(true);
-    baudSpin_ = new QSpinBox(box);
+    layout->addWidget(portCombo_);
+
+    layout->addWidget(new QLabel(QStringLiteral("Baud Rate"), bar));
+    baudSpin_ = new QSpinBox(bar);
     baudSpin_->setRange(1200, 3000000);
     baudSpin_->setValue(9600);
-    auto *refresh = new QPushButton(QStringLiteral("Refresh"), box);
-    connectButton_ = new QPushButton(QStringLiteral("Connect"), box);
-    connectionStatus_ = new QLabel(QStringLiteral("Disconnected"), box);
+    layout->addWidget(baudSpin_);
 
-    layout->addWidget(new QLabel(QStringLiteral("Serial port"), box), 0, 0);
-    layout->addWidget(portCombo_, 0, 1);
-    layout->addWidget(new QLabel(QStringLiteral("Baud rate"), box), 0, 2);
-    layout->addWidget(baudSpin_, 0, 3);
-    layout->addWidget(refresh, 0, 4);
-    layout->addWidget(connectButton_, 0, 5);
-    layout->addWidget(new QLabel(QStringLiteral("State"), box), 1, 0);
-    layout->addWidget(connectionStatus_, 1, 1, 1, 5);
+    auto *refresh = new QPushButton(QStringLiteral("Refresh"), bar);
+    connectButton_ = new QPushButton(QStringLiteral("Connect"), bar);
+    layout->addWidget(refresh);
+    layout->addWidget(connectButton_);
+
+    auto *emergencyStop = new QPushButton(QStringLiteral("Emergency Stop"), bar);
+    emergencyStop->setEnabled(false);
+    emergencyStop->setToolTip(QStringLiteral("Protocol V2 has no Emergency Stop message in Phase 1"));
+    layout->addWidget(emergencyStop);
+
+    layout->addStretch();
+    layout->addWidget(new QLabel(QStringLiteral("State"), bar));
+    connectionStatus_ = new QLabel(QStringLiteral("Disconnected"), bar);
+    connectionStatus_->setStyleSheet(QStringLiteral("font-weight: bold;"));
+    layout->addWidget(connectionStatus_);
 
     connect(refresh, &QPushButton::clicked, controller_, &RobotController::refreshSerialPorts);
     connect(connectButton_, &QPushButton::clicked, this, [this] {
@@ -199,7 +233,190 @@ QWidget *MainWindow::createConnectionPanel()
         }
         controller_->connectTransport({portCombo_->currentText().trimmed(), baudSpin_->value()});
     });
+    return bar;
+}
+
+QWidget *MainWindow::createVideoPlaceholder()
+{
+    auto *box = new QGroupBox(QStringLiteral("Realtime Video"), this);
+    applyCardStyle(box);
+    auto *layout = new QVBoxLayout(box);
+    auto *title = new QLabel(QStringLiteral("Waiting for video stream"), box);
+    title->setAlignment(Qt::AlignCenter);
+    title->setStyleSheet(QStringLiteral("font-size: 15px; color: #455a64; font-weight: bold;"));
+    auto *subtitle = new QLabel(QStringLiteral("Video backend not connected"), box);
+    subtitle->setAlignment(Qt::AlignCenter);
+    subtitle->setStyleSheet(QStringLiteral("color: #78909c;"));
+    layout->addStretch();
+    layout->addWidget(title);
+    layout->addWidget(subtitle);
+    layout->addStretch();
     return box;
+}
+
+QWidget *MainWindow::createLeakCard()
+{
+    auto *box = new QGroupBox(QStringLiteral("Leak Detection"), this);
+    applyCardStyle(box);
+    auto *layout = new QHBoxLayout(box);
+    leakDot_ = new QLabel(box);
+    leakDot_->setFixedSize(12, 12);
+    leakDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 6px;"));
+    leakStatus_ = new QLabel(QStringLiteral("Leak: Unknown"), box);
+    leakStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+    layout->addWidget(leakDot_);
+    layout->addWidget(leakStatus_);
+    layout->addStretch();
+    return box;
+}
+
+QWidget *MainWindow::createImuCard()
+{
+    auto *box = new QGroupBox(QStringLiteral("IMU — JY901S"), this);
+    applyCardStyle(box);
+    auto *layout = new QVBoxLayout(box);
+    layout->setContentsMargins(6, 4, 6, 4);
+    layout->setSpacing(2);
+    auto *statusRow = new QHBoxLayout;
+    imuDot_ = new QLabel(box);
+    imuDot_->setFixedSize(10, 10);
+    imuDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
+    imuStatus_ = new QLabel(QStringLiteral("Unknown"), box);
+    imuStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+    statusRow->addWidget(imuDot_);
+    statusRow->addSpacing(4);
+    statusRow->addWidget(imuStatus_);
+    statusRow->addStretch();
+    layout->addLayout(statusRow);
+
+    auto *metricsRow = new QHBoxLayout;
+    metricsRow->setSpacing(2);
+    imuAcc_ = new QLabel(QStringLiteral("--"), box);
+    imuGyro_ = new QLabel(QStringLiteral("--"), box);
+    imuAngle_ = new QLabel(QStringLiteral("--"), box);
+    metricsRow->addWidget(new QLabel(QStringLiteral("Acc"), box));
+    metricsRow->addWidget(imuAcc_);
+    metricsRow->addSpacing(8);
+    metricsRow->addWidget(new QLabel(QStringLiteral("Gyro"), box));
+    metricsRow->addWidget(imuGyro_);
+    metricsRow->addSpacing(8);
+    metricsRow->addWidget(new QLabel(QStringLiteral("Angle"), box));
+    metricsRow->addWidget(imuAngle_);
+    metricsRow->addStretch();
+    layout->addLayout(metricsRow);
+    return box;
+}
+
+QWidget *MainWindow::createDepthCard()
+{
+    auto *box = new QGroupBox(QStringLiteral("Depth Sensor — ROVMAKER"), this);
+    applyCardStyle(box);
+    auto *layout = new QVBoxLayout(box);
+    layout->setContentsMargins(6, 4, 6, 4);
+    layout->setSpacing(2);
+    auto *statusRow = new QHBoxLayout;
+    depthDot_ = new QLabel(box);
+    depthDot_->setFixedSize(10, 10);
+    depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
+    depthStatus_ = new QLabel(QStringLiteral("Unknown"), box);
+    depthStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+    statusRow->addWidget(depthDot_);
+    statusRow->addSpacing(4);
+    statusRow->addWidget(depthStatus_);
+    statusRow->addStretch();
+    layout->addLayout(statusRow);
+
+    auto *metricsRow = new QHBoxLayout;
+    metricsRow->setSpacing(2);
+    depthValue_ = new QLabel(QStringLiteral("--"), box);
+    depthTemperature_ = new QLabel(QStringLiteral("--"), box);
+    depthAge_ = new QLabel(QStringLiteral("--"), box);
+    metricsRow->addWidget(new QLabel(QStringLiteral("Depth"), box));
+    metricsRow->addWidget(depthValue_);
+    metricsRow->addSpacing(8);
+    metricsRow->addWidget(new QLabel(QStringLiteral("Temp"), box));
+    metricsRow->addWidget(depthTemperature_);
+    metricsRow->addSpacing(8);
+    metricsRow->addWidget(new QLabel(QStringLiteral("Age"), box));
+    metricsRow->addWidget(depthAge_);
+    metricsRow->addStretch();
+    layout->addLayout(metricsRow);
+    return box;
+}
+
+QWidget *MainWindow::createProtocolSummaryCard()
+{
+    auto *box = new QGroupBox(QStringLiteral("Protocol / Link"), this);
+    applyCardStyle(box);
+    auto *layout = new QVBoxLayout(box);
+    layout->setContentsMargins(6, 4, 6, 4);
+    layout->setSpacing(2);
+    txCount_ = new QLabel(QStringLiteral("0"), box);
+    rxCount_ = new QLabel(QStringLiteral("0"), box);
+    crcCount_ = new QLabel(QStringLiteral("0"), box);
+    timeoutCount_ = new QLabel(QStringLiteral("0"), box);
+    ackRtt_ = new QLabel(QStringLiteral("—"), box);
+
+    auto *row1 = new QHBoxLayout;
+    row1->setSpacing(2);
+    row1->addWidget(new QLabel(QStringLiteral("TX"), box));
+    row1->addWidget(txCount_);
+    row1->addSpacing(8);
+    row1->addWidget(new QLabel(QStringLiteral("RX"), box));
+    row1->addWidget(rxCount_);
+    row1->addSpacing(8);
+    row1->addWidget(new QLabel(QStringLiteral("CRC"), box));
+    row1->addWidget(crcCount_);
+    row1->addStretch();
+    layout->addLayout(row1);
+
+    auto *row2 = new QHBoxLayout;
+    row2->setSpacing(2);
+    row2->addWidget(new QLabel(QStringLiteral("Timeout"), box));
+    row2->addWidget(timeoutCount_);
+    row2->addSpacing(8);
+    row2->addWidget(new QLabel(QStringLiteral("ACK RTT"), box));
+    row2->addWidget(ackRtt_);
+    row2->addStretch();
+    layout->addLayout(row2);
+    return box;
+}
+
+QWidget *MainWindow::createStatusColumn()
+{
+    auto *column = new QWidget(this);
+    auto *layout = new QVBoxLayout(column);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+    // Use natural (Minimum) vertical size policy so the telemetry cards keep
+    // their readable content height and cannot shrink below their sizeHint().
+    QWidget *leak = createLeakCard();
+    QWidget *imu = createImuCard();
+    QWidget *depth = createDepthCard();
+    QWidget *protocol = createProtocolSummaryCard();
+    leak->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    imu->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    depth->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    protocol->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    layout->addWidget(leak);
+    layout->addWidget(imu);
+    layout->addWidget(depth);
+    layout->addWidget(protocol);
+    // Leftover vertical space is assigned to the bottom stretch, never by
+    // shrinking the telemetry cards below their content height.
+    layout->addStretch(1);
+    return column;
+}
+
+QWidget *MainWindow::createDashboard()
+{
+    auto *dashboard = new QWidget(this);
+    auto *layout = new QHBoxLayout(dashboard);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
+    layout->addWidget(createVideoPlaceholder(), 3);
+    layout->addWidget(createStatusColumn(), 2);
+    return dashboard;
 }
 
 QWidget *MainWindow::createServoPanel(int index, ServoId id)
@@ -211,32 +428,52 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
         ? QStringLiteral("Unknown")
         : QString::fromLatin1(descriptor->displayName);
     auto *box = new QGroupBox(semanticName, this);
-    auto *layout = new QGridLayout(box);
+    applyCardStyle(box);
+    auto *layout = new QVBoxLayout(box);
+    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setSpacing(4);
+
     const QString warningText = descriptor == nullptr || !supported
         ? QStringLiteral("UNSUPPORTED — NO HARDWARE CHANNEL")
         : descriptor->calibrationPending
-            ? QStringLiteral("CALIBRATION PENDING — PWM bring-up only: %1–%2 μs")
+            ? QStringLiteral("PWM bring-up only: %1–%2 μs")
                   .arg(descriptor->commandMinPwmUs)
                   .arg(descriptor->commandMaxPwmUs)
-            : QStringLiteral("PWM command range: %1–%2 μs; angle: %3–%4°")
+            : QStringLiteral("PWM: %1–%2 μs; angle: %3–%4°")
                   .arg(descriptor->commandMinPwmUs)
                   .arg(descriptor->commandMaxPwmUs)
                   .arg(static_cast<double>(descriptor->commandMinAngleCdeg) / 100.0, 0, 'f', 1)
                   .arg(static_cast<double>(descriptor->commandMaxAngleCdeg) / 100.0, 0, 'f', 1);
     auto *warning = new QLabel(warningText, box);
+    warning->setWordWrap(true);
     warning->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
+    layout->addWidget(warning);
 
+    auto *statusRow = new QHBoxLayout;
+    statusLabels_[index] = new QLabel(QStringLiteral("Disconnected"), box);
+    statusLabels_[index]->setStyleSheet(QStringLiteral("font-weight: bold;"));
+    statusRow->addWidget(statusLabels_[index]);
+    statusRow->addStretch();
+    layout->addLayout(statusRow);
+
+    auto *pwmRow = new QHBoxLayout;
     pwmSpins_[index] = new QSpinBox(box);
     pwmSpins_[index]->setRange(descriptor == nullptr ? 0 : descriptor->commandMinPwmUs,
                                descriptor == nullptr ? 0 : descriptor->commandMaxPwmUs);
     pwmSpins_[index]->setValue(descriptor == nullptr ? 0 : descriptor->neutralPwmUs);
     pwmSpins_[index]->setSuffix(QStringLiteral(" μs"));
+    pwmSpins_[index]->setEnabled(supported);
+    pwmRow->addWidget(new QLabel(QStringLiteral("PWM"), box));
+    pwmRow->addWidget(pwmSpins_[index], 1);
+    layout->addLayout(pwmRow);
+
     pwmSliders_[index] = new QSlider(Qt::Horizontal, box);
     pwmSliders_[index]->setRange(descriptor == nullptr ? 0 : descriptor->commandMinPwmUs,
                                  descriptor == nullptr ? 0 : descriptor->commandMaxPwmUs);
     pwmSliders_[index]->setValue(descriptor == nullptr ? 0 : descriptor->neutralPwmUs);
-    pwmSpins_[index]->setEnabled(supported);
     pwmSliders_[index]->setEnabled(supported);
+    layout->addWidget(pwmSliders_[index]);
+
     enableButtons_[index] = new QPushButton(QStringLiteral("Enable PWM"), box);
     enableButtons_[index]->setToolTip(QStringLiteral(
         "Enable PWM drive and hold the calibrated neutral position."));
@@ -251,6 +488,15 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
             "This action reuses the Protocol V2 Neutral command."));
     }
     applyButtons_[index] = new QPushButton(QStringLiteral("Apply PWM"), box);
+
+    auto *actionColumn = new QVBoxLayout;
+    actionColumn->setSpacing(2);
+    actionColumn->addWidget(enableButtons_[index]);
+    actionColumn->addWidget(neutralButtons_[index]);
+    actionColumn->addWidget(applyButtons_[index]);
+    layout->addLayout(actionColumn);
+
+    auto *angleRow = new QHBoxLayout;
     angleSpins_[index] = new QDoubleSpinBox(box);
     angleSpins_[index]->setRange(descriptor == nullptr ? 0.0
                                                       : static_cast<double>(descriptor->commandMinAngleCdeg) / 100.0,
@@ -261,6 +507,10 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     angleSpins_[index]->setValue(0.0);
     angleSpins_[index]->setSuffix(QStringLiteral(" deg"));
     angleSpins_[index]->setEnabled(false);
+    angleRow->addWidget(new QLabel(QStringLiteral("Angle"), box));
+    angleRow->addWidget(angleSpins_[index], 1);
+    layout->addLayout(angleRow);
+
     const bool angleSupported = supported && descriptor != nullptr && descriptor->angleSupported;
     angleButtons_[index] = new QPushButton(
         angleSupported
@@ -274,20 +524,7 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
                   .arg(semanticName)
             : QStringLiteral("%1 has no angle capability; use PWM only while calibration is pending")
                   .arg(semanticName));
-    statusLabels_[index] = new QLabel(QStringLiteral("Disconnected"), box);
-
-    layout->addWidget(warning, 0, 0, 1, 3);
-    layout->addWidget(new QLabel(QStringLiteral("Status"), box), 1, 0);
-    layout->addWidget(statusLabels_[index], 1, 1, 1, 2);
-    layout->addWidget(new QLabel(QStringLiteral("PWM"), box), 2, 0);
-    layout->addWidget(pwmSpins_[index], 2, 1);
-    layout->addWidget(pwmSliders_[index], 3, 0, 1, 3);
-    layout->addWidget(enableButtons_[index], 4, 0);
-    layout->addWidget(neutralButtons_[index], 4, 1);
-    layout->addWidget(applyButtons_[index], 4, 2);
-    layout->addWidget(new QLabel(QStringLiteral("Angle"), box), 5, 0);
-    layout->addWidget(angleSpins_[index], 5, 1);
-    layout->addWidget(angleButtons_[index], 5, 2);
+    layout->addWidget(angleButtons_[index]);
 
     connect(pwmSpins_[index], qOverload<int>(&QSpinBox::valueChanged),
             pwmSliders_[index], &QSlider::setValue);
@@ -321,19 +558,27 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
     return box;
 }
 
-QWidget *MainWindow::createGlobalPanel()
+QWidget *MainWindow::createActuatorPanel()
 {
-    auto *box = new QGroupBox(QStringLiteral("Global"), this);
-    auto *layout = new QHBoxLayout(box);
-    leakStatus_ = new QLabel(QStringLiteral("Leak: Unknown"), box);
+    auto *box = new QGroupBox(QStringLiteral("Actuator Control"), this);
+    applyCardStyle(box);
+    auto *layout = new QVBoxLayout(box);
+    layout->setSpacing(4);
+
+    auto *header = new QHBoxLayout;
+    header->addStretch();
     auto *disableAll = new QPushButton(QStringLiteral("Disable All"), box);
-    auto *emergencyStop = new QPushButton(QStringLiteral("Emergency Stop — Not Implemented"), box);
-    emergencyStop->setEnabled(false);
-    emergencyStop->setToolTip(QStringLiteral("Protocol V2 has no Emergency Stop message in Phase 1"));
-    layout->addWidget(leakStatus_);
-    layout->addWidget(disableAll);
-    layout->addWidget(emergencyStop);
-    layout->addStretch();
+    header->addWidget(disableAll);
+    layout->addLayout(header);
+
+    auto *cards = new QHBoxLayout;
+    cards->setSpacing(6);
+    const auto &descriptors = servoDescriptorTable();
+    for (int index = 0; index < kServoCount; ++index) {
+        cards->addWidget(createServoPanel(index, descriptors.at(index).id), 1);
+    }
+    layout->addLayout(cards);
+
     connect(disableAll, &QPushButton::clicked, this, [this] {
         controller_->disableAll();
         for (int index = 0; index < kServoCount; ++index) {
@@ -346,6 +591,7 @@ QWidget *MainWindow::createGlobalPanel()
 QWidget *MainWindow::createMotionPanel()
 {
     auto *box = new QGroupBox(QStringLiteral("Motion / Gait — Bench"), this);
+    applyCardStyle(box);
     auto *layout = new QGridLayout(box);
     const MotionMode modes[] = {
         MotionMode::Forward,
@@ -432,41 +678,121 @@ QWidget *MainWindow::createMotionPanel()
     return box;
 }
 
+QWidget *MainWindow::createDataPlotsTab()
+{
+    // Independent central Data Plots region. Internally uses placeholder
+    // sub-tabs (IMU | Depth | Actuator). No plotting backend or buffer.
+    auto *tab = new QTabWidget(this);
+    const QString titles[] = {
+        QStringLiteral("IMU"),
+        QStringLiteral("Depth"),
+        QStringLiteral("Actuator"),
+    };
+    for (const QString &title : titles) {
+        auto *placeholder = new QGroupBox(
+            QStringLiteral("%1 Plots").arg(title), this);
+        applyCardStyle(placeholder);
+        auto *inner = new QVBoxLayout(placeholder);
+        auto *label = new QLabel(QStringLiteral("Plot placeholder — no data buffer"), placeholder);
+        label->setAlignment(Qt::AlignCenter);
+        label->setStyleSheet(QStringLiteral("color: #90a4ae;"));
+        inner->addWidget(label);
+        tab->addTab(placeholder, title);
+    }
+    return tab;
+}
+
+QWidget *MainWindow::createLogTab()
+{
+    auto *tab = new QWidget(this);
+    auto *layout = new QVBoxLayout(tab);
+    layout->setContentsMargins(4, 4, 4, 4);
+    log_ = new QPlainTextEdit(tab);
+    log_->setReadOnly(true);
+    log_->setMaximumBlockCount(1000);
+    layout->addWidget(log_);
+    return tab;
+}
+
+QWidget *MainWindow::createTelemetryDetailsTab()
+{
+    auto *tab = new QWidget(this);
+    auto *layout = new QVBoxLayout(tab);
+    layout->setContentsMargins(4, 4, 4, 4);
+    auto *form = new QFormLayout;
+    imuDiagnostics_ = new QLabel(QStringLiteral("--"), tab);
+    imuDiagnostics_->setWordWrap(true);
+    depthDiagnostics_ = new QLabel(QStringLiteral("--"), tab);
+    depthDiagnostics_->setWordWrap(true);
+    form->addRow(QStringLiteral("IMU Diagnostics"), imuDiagnostics_);
+    form->addRow(QStringLiteral("Depth Diagnostics"), depthDiagnostics_);
+    layout->addLayout(form);
+    layout->addStretch();
+    return tab;
+}
+
+QWidget *MainWindow::createProtocolDetailsTab()
+{
+    auto *tab = new QWidget(this);
+    auto *layout = new QVBoxLayout(tab);
+    layout->setContentsMargins(4, 4, 4, 4);
+    auto *form = new QFormLayout;
+    txHex_ = new QLineEdit(tab);
+    rxHex_ = new QLineEdit(tab);
+    txHex_->setReadOnly(true);
+    rxHex_->setReadOnly(true);
+    form->addRow(QStringLiteral("TX Hex"), txHex_);
+    form->addRow(QStringLiteral("RX Hex"), rxHex_);
+    layout->addLayout(form);
+    ackStatus_ = new QLabel(QStringLiteral("Idle"), tab);
+    layout->addWidget(new QLabel(QStringLiteral("ACK status"), tab));
+    layout->addWidget(ackStatus_);
+    layout->addStretch();
+    return tab;
+}
+
+QTabWidget *MainWindow::createLogDetailsTabs()
+{
+    auto *tabs = new QTabWidget(this);
+    tabs->addTab(createLogTab(), QStringLiteral("Log"));
+    tabs->addTab(createTelemetryDetailsTab(), QStringLiteral("Telemetry Details"));
+    tabs->addTab(createProtocolDetailsTab(), QStringLiteral("Protocol Details"));
+    return tabs;
+}
+
+QWidget *MainWindow::createLowerDashboard()
+{
+    // Motion + independent Data Plots + Log/Protocol Details side by side.
+    auto *lower = new QWidget(this);
+    auto *layout = new QHBoxLayout(lower);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
+    layout->addWidget(createMotionPanel());
+    layout->addWidget(createDataPlotsTab(), 1);
+    layout->addWidget(createLogDetailsTabs(), 1);
+    return lower;
+}
+
 void MainWindow::setLeakUiState(LeakState state)
 {
-    if (leakStatus_ == nullptr) {
+    if (leakStatus_ == nullptr || leakDot_ == nullptr) {
         return;
     }
     leakStatus_->setText(leakStateDisplayText(state));
     switch (state) {
     case LeakState::Unknown:
         leakStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+        leakDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 6px;"));
         break;
     case LeakState::Dry:
         leakStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-weight: bold;"));
+        leakDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 6px;"));
         break;
     case LeakState::Wet:
         leakStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-weight: bold;"));
+        leakDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 6px;"));
         break;
     }
-}
-
-QWidget *MainWindow::createImuPanel()
-{
-    auto *box = new QGroupBox(QStringLiteral("IMU — JY901S"), this);
-    auto *form = new QFormLayout(box);
-    imuStatus_ = new QLabel(QStringLiteral("Unknown"), box);
-    imuAcc_ = new QLabel(QStringLiteral("--"), box);
-    imuGyro_ = new QLabel(QStringLiteral("--"), box);
-    imuAngle_ = new QLabel(QStringLiteral("--"), box);
-    imuDiagnostics_ = new QLabel(QStringLiteral("--"), box);
-    imuDiagnostics_->setWordWrap(true);
-    form->addRow(QStringLiteral("Status"), imuStatus_);
-    form->addRow(QStringLiteral("Acc"), imuAcc_);
-    form->addRow(QStringLiteral("Gyro"), imuGyro_);
-    form->addRow(QStringLiteral("Angle"), imuAngle_);
-    form->addRow(QStringLiteral("Diagnostics"), imuDiagnostics_);
-    return box;
 }
 
 void MainWindow::setImuUiState(const ImuMonitorState &state)
@@ -479,15 +805,19 @@ void MainWindow::setImuUiState(const ImuMonitorState &state)
     switch (state.status) {
     case ImuStatus::Unknown:
         imuStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+        imuDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
         break;
     case ImuStatus::Receiving:
         imuStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-weight: bold;"));
+        imuDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 5px;"));
         break;
     case ImuStatus::Stale:
         imuStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
+        imuDot_->setStyleSheet(QStringLiteral("background: #FB8C00; border-radius: 5px;"));
         break;
     case ImuStatus::Error:
         imuStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-weight: bold;"));
+        imuDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 5px;"));
         break;
     }
 
@@ -523,24 +853,6 @@ void MainWindow::setImuUiState(const ImuMonitorState &state)
             .arg(diagnostics.unsupportedFrameCount));
 }
 
-QWidget *MainWindow::createDepthPanel()
-{
-    auto *box = new QGroupBox(QStringLiteral("Depth Sensor — ROVMAKER"), this);
-    auto *form = new QFormLayout(box);
-    depthStatus_ = new QLabel(QStringLiteral("Unknown"), box);
-    depthValue_ = new QLabel(QStringLiteral("--"), box);
-    depthTemperature_ = new QLabel(QStringLiteral("--"), box);
-    depthAge_ = new QLabel(QStringLiteral("--"), box);
-    depthDiagnostics_ = new QLabel(QStringLiteral("--"), box);
-    depthDiagnostics_->setWordWrap(true);
-    form->addRow(QStringLiteral("Status"), depthStatus_);
-    form->addRow(QStringLiteral("Depth"), depthValue_);
-    form->addRow(QStringLiteral("Temperature"), depthTemperature_);
-    form->addRow(QStringLiteral("Sample age"), depthAge_);
-    form->addRow(QStringLiteral("Diagnostics"), depthDiagnostics_);
-    return box;
-}
-
 void MainWindow::setDepthUiState(const DepthMonitorState &state)
 {
     if (depthStatus_ == nullptr) {
@@ -551,15 +863,19 @@ void MainWindow::setDepthUiState(const DepthMonitorState &state)
     switch (state.status) {
     case DepthStatus::Unknown:
         depthStatus_->setStyleSheet(QStringLiteral("color: #666666; font-weight: bold;"));
+        depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
         break;
     case DepthStatus::Receiving:
         depthStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-weight: bold;"));
+        depthDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 5px;"));
         break;
     case DepthStatus::Stale:
         depthStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
+        depthDot_->setStyleSheet(QStringLiteral("background: #FB8C00; border-radius: 5px;"));
         break;
     case DepthStatus::Error:
         depthStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-weight: bold;"));
+        depthDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 5px;"));
         break;
     }
 
@@ -607,49 +923,6 @@ void MainWindow::setDepthUiState(const DepthMonitorState &state)
             .arg(diagnostics.ringOverflowCount)
             .arg(diagnostics.hardRearmFailureCount)
             .arg(diagnostics.uartErrorCount));
-}
-
-QWidget *MainWindow::createMonitorPanel()
-{
-    auto *box = new QGroupBox(QStringLiteral("Protocol Monitor"), this);
-    auto *layout = new QVBoxLayout(box);
-    auto *form = new QFormLayout;
-    txHex_ = new QLineEdit(box);
-    rxHex_ = new QLineEdit(box);
-    txHex_->setReadOnly(true);
-    rxHex_->setReadOnly(true);
-    txCount_ = new QLabel(QStringLiteral("0"), box);
-    rxCount_ = new QLabel(QStringLiteral("0"), box);
-    crcCount_ = new QLabel(QStringLiteral("0"), box);
-    timeoutCount_ = new QLabel(QStringLiteral("0"), box);
-    ackRtt_ = new QLabel(QStringLiteral("—"), box);
-    ackStatus_ = new QLabel(QStringLiteral("Idle"), box);
-    form->addRow(QStringLiteral("TX Hex"), txHex_);
-    form->addRow(QStringLiteral("RX Hex"), rxHex_);
-
-    auto *counts = new QHBoxLayout;
-    counts->addWidget(new QLabel(QStringLiteral("TX packets:"), box));
-    counts->addWidget(txCount_);
-    counts->addWidget(new QLabel(QStringLiteral("RX packets:"), box));
-    counts->addWidget(rxCount_);
-    counts->addWidget(new QLabel(QStringLiteral("CRC errors:"), box));
-    counts->addWidget(crcCount_);
-    counts->addWidget(new QLabel(QStringLiteral("Timeouts:"), box));
-    counts->addWidget(timeoutCount_);
-    counts->addWidget(new QLabel(QStringLiteral("Last ACK RTT:"), box));
-    counts->addWidget(ackRtt_);
-    counts->addStretch();
-
-    log_ = new QPlainTextEdit(box);
-    log_->setReadOnly(true);
-    log_->setMaximumBlockCount(1000);
-    layout->addLayout(form);
-    layout->addLayout(counts);
-    layout->addWidget(new QLabel(QStringLiteral("ACK status"), box));
-    layout->addWidget(ackStatus_);
-    layout->addWidget(new QLabel(QStringLiteral("Event log"), box));
-    layout->addWidget(log_, 1);
-    return box;
 }
 
 void MainWindow::setConnectedUi(bool connected)

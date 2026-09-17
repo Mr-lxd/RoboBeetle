@@ -16,6 +16,8 @@ class QPlainTextEdit;
 class QPushButton;
 class QSlider;
 class QSpinBox;
+class QTabWidget;
+class QWidget;
 
 namespace rb {
 
@@ -29,13 +31,29 @@ protected:
     void closeEvent(QCloseEvent *event) override;
 
 private:
+    // Top connection bar.
+    QWidget *createConnectionBar();
+    // Dashboard (top): video placeholder + status cards.
+    QWidget *createVideoPlaceholder();
+    QWidget *createLeakCard();
+    QWidget *createImuCard();
+    QWidget *createDepthCard();
+    QWidget *createProtocolSummaryCard();
+    QWidget *createStatusColumn();
+    QWidget *createDashboard();
+    // Actuator (full width) + lower dashboard.
     QWidget *createServoPanel(int index, ServoId id);
-    QWidget *createConnectionPanel();
-    QWidget *createGlobalPanel();
+    QWidget *createActuatorPanel();
     QWidget *createMotionPanel();
-    QWidget *createImuPanel();
-    QWidget *createDepthPanel();
-    QWidget *createMonitorPanel();
+    // Lower dashboard: Data Plots (independent) + Log | Telemetry Details |
+// Protocol Details tabs.
+    QWidget *createDataPlotsTab();
+    QWidget *createLogTab();
+    QWidget *createTelemetryDetailsTab();
+    QWidget *createProtocolDetailsTab();
+    QTabWidget *createLogDetailsTabs();
+    QWidget *createLowerDashboard();
+    // Refresh helpers.
     void setConnectedUi(bool connected);
     void refreshServoUi(int index);
     void setAngleUiEnabled(int index, bool enabled);
@@ -48,26 +66,43 @@ private:
     static QString stateText(TransportState state);
 
     RobotController *controller_;
+
+    // Connection bar.
     QComboBox *portCombo_{nullptr};
     QSpinBox *baudSpin_{nullptr};
     QPushButton *connectButton_{nullptr};
     QLabel *connectionStatus_{nullptr};
+
+    // Leak card.
     QLabel *leakStatus_{nullptr};
+    QLabel *leakDot_{nullptr};
+
+    // Motion card.
     std::array<QPushButton *, static_cast<std::size_t>(MotionMode::Count)> motionButtons_{};
     QPushButton *motionStopButton_{nullptr};
     QLabel *motionStatus_{nullptr};
     QComboBox *gaitBackendCombo_{nullptr};
     QLabel *gaitBackendStatus_{nullptr};
+
+    // IMU card.
+    QLabel *imuDot_{nullptr};
     QLabel *imuStatus_{nullptr};
     QLabel *imuAcc_{nullptr};
     QLabel *imuGyro_{nullptr};
     QLabel *imuAngle_{nullptr};
-    QLabel *imuDiagnostics_{nullptr};
+
+    // Depth card.
+    QLabel *depthDot_{nullptr};
     QLabel *depthStatus_{nullptr};
     QLabel *depthValue_{nullptr};
     QLabel *depthTemperature_{nullptr};
     QLabel *depthAge_{nullptr};
+
+    // Telemetry details tab (holds the long IMU/Depth diagnostics text).
+    QLabel *imuDiagnostics_{nullptr};
     QLabel *depthDiagnostics_{nullptr};
+
+    // Servo cards (one per semantic actuator).
     std::array<QSpinBox *, kServoCount> pwmSpins_{};
     std::array<QSlider *, kServoCount> pwmSliders_{};
     std::array<QDoubleSpinBox *, kServoCount> angleSpins_{};
@@ -76,6 +111,8 @@ private:
     std::array<QPushButton *, kServoCount> neutralButtons_{};
     std::array<QPushButton *, kServoCount> applyButtons_{};
     std::array<QLabel *, kServoCount> statusLabels_{};
+
+    // Protocol summary card (dashboard) + protocol details tab.
     QLineEdit *txHex_{nullptr};
     QLineEdit *rxHex_{nullptr};
     QLabel *txCount_{nullptr};
@@ -84,8 +121,9 @@ private:
     QLabel *timeoutCount_{nullptr};
     QLabel *ackRtt_{nullptr};
     QLabel *ackStatus_{nullptr};
+
+    // Log tab.
     QPlainTextEdit *log_{nullptr};
 };
 
 } // namespace rb
-
