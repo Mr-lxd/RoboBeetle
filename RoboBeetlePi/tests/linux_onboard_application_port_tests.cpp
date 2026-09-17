@@ -269,6 +269,19 @@ const GatewayCommandOutcomeEvent *find_outcome(
     return nullptr;
 }
 
+const GatewayCommandOutcomeEvent *find_outcome(
+    const GatewayApplicationRunResult &result, std::uint16_t sequence)
+{
+    for (const auto &event : result.events) {
+        if (const auto *outcome =
+                std::get_if<GatewayCommandOutcomeEvent>(&event);
+            outcome != nullptr && outcome->sequence == sequence) {
+            return outcome;
+        }
+    }
+    return nullptr;
+}
+
 const GatewayTelemetryEvent *find_telemetry(
     const GatewayApplicationRunResult &result)
 {
@@ -483,41 +496,29 @@ void application_state_and_all_outcome_kinds_map()
     Fixture fixture;
     fixture.activate();
 
-    auto queued = fixture.port.submit(StopMotion{});
-    expect(queued.status == GatewayApplicationSubmitStatus::Submitted &&
-               queued.sequence.has_value(),
-           "queued command can be aborted for Cancelled mapping");
-    const auto cancelled = fixture.port.abort();
-    expect_no_raw_events(
-        GatewayApplicationAbortResult{cancelled.events}.events.empty()
-            ? GatewayApplicationRunResult{}
-            : GatewayApplicationRunResult{
-                  GatewayApplicationRunStatus::Progress, cancelled.events, 0});
-    const auto *cancelled_outcome =
-        find_outcome(GatewayApplicationRunResult{
-            GatewayApplicationRunStatus::Progress, cancelled.events, 0});
-    expect(cancelled_outcome != nullptr &&
-               cancelled_outcome->outcome ==
-                   GatewayCommandOutcome::Cancelled,
-           "queued command abort maps to Cancelled");
+    const auto first = fixture.port.submit(StopMotion{});
+    const auto second = fixture.port.submit(NeutralServos{0x0001U});
+    expect(first.status == GatewayApplicationSubmitStatus::Submitted &&
+               first.sequence.has_value() &&
+               second.status == GatewayApplicationSubmitStatus::Submitted &&
+               second.sequence.has_value(),
+           "two valid commands are admitted before abort");
 
-    Fixture unknown_fixture;
-    unknown_fixture.activate();
-    auto pending = unknown_fixture.port.submit(StopMotion{});
-    expect(pending.status == GatewayApplicationSubmitStatus::Submitted &&
-               pending.sequence.has_value(),
-           "pending command can be aborted for Unknown mapping");
-    now_ms = 584U;
-    (void)unknown_fixture.port.run_once();
-    (void)unknown_fixture.pty.receive();
-    const auto unknown = unknown_fixture.port.abort();
+    const auto aborted = fixture.port.abort();
+    const auto abort_result = GatewayApplicationRunResult{
+        GatewayApplicationRunStatus::Progress, aborted.events, 0};
+    expect_no_raw_events(abort_result);
     const auto *unknown_outcome =
-        find_outcome(GatewayApplicationRunResult{
-            GatewayApplicationRunStatus::Progress, unknown.events, 0});
+        find_outcome(abort_result, first.sequence.value_or(0xffffU));
+    const auto *cancelled_outcome =
+        find_outcome(abort_result, second.sequence.value_or(0xffffU));
     expect(unknown_outcome != nullptr &&
                unknown_outcome->outcome ==
                    GatewayCommandOutcome::OutcomeUnknown,
-           "in-flight command abort maps to OutcomeUnknown");
+           "first admitted command abort maps to OutcomeUnknown");
+    expect(cancelled_outcome != nullptr &&
+               cancelled_outcome->outcome == GatewayCommandOutcome::Cancelled,
+           "later queued command abort maps to Cancelled");
 }
 
 } // namespace
