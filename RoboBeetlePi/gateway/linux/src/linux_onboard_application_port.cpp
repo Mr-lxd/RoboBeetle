@@ -88,16 +88,16 @@ int LinuxOnboardApplicationPort::open()
 }
 
 GatewayApplicationSessionState LinuxOnboardApplicationPort::map_session_state(
-    application::session::SessionState state) noexcept
+    session::SessionState state) noexcept
 {
     switch (state) {
-    case application::session::SessionState::ReopenRequired:
+    case session::SessionState::ReopenRequired:
         return GatewayApplicationSessionState::ReopenRequired;
-    case application::session::SessionState::SafetyQuiet:
+    case session::SessionState::SafetyQuiet:
         return GatewayApplicationSessionState::SafetyQuiet;
-    case application::session::SessionState::Resynchronizing:
+    case session::SessionState::Resynchronizing:
         return GatewayApplicationSessionState::Resynchronizing;
-    case application::session::SessionState::Online:
+    case session::SessionState::Online:
         return GatewayApplicationSessionState::Online;
     }
     return GatewayApplicationSessionState::ReopenRequired;

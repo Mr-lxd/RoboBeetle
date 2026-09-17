@@ -42,7 +42,7 @@ private:
     friend struct detail::LinuxOnboardApplicationPortTestAccess;
 
     static GatewayApplicationSessionState
-    map_session_state(application::session::SessionState state) noexcept;
+    map_session_state(session::SessionState state) noexcept;
     static GatewayApplicationLinkState
     map_link_state(link_core::LinkState state) noexcept;
     static GatewayApplicationRunStatus

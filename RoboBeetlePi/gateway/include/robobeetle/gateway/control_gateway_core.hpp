@@ -13,6 +13,7 @@ struct GatewayCoreCallbacks {
     std::function<bool(const GatewayOutbound &)> publish;
     std::function<bool(const CloseSourceSignal &)> close_source;
     std::function<void(const char *)> diagnostic;
+    std::function<GatewayTimeMs()> now_ms;
 };
 
 class ControlGatewayCore final {
@@ -108,6 +109,9 @@ private:
                        GatewayTimeMs owner_now_ms);
     void terminalize_outstanding(GatewayCommandOutcome outcome,
                                  GatewayTimeMs owner_now_ms);
+    [[nodiscard]] GatewayTimeMs grant_now(GatewayTimeMs owner_now_ms) const;
+    void fail_safe_application_invariant(const char *message,
+                                         GatewayTimeMs owner_now_ms);
     void revoke(ControlSourceId source, GatewayStateReason reason,
                 GatewayTimeMs owner_now_ms, bool close_source);
     void abort_once(GatewayTimeMs owner_now_ms);

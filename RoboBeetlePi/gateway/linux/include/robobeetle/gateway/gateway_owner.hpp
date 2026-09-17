@@ -18,6 +18,10 @@
 
 namespace robobeetle::gateway {
 
+namespace detail {
+struct GatewayOwnerTestAccess;
+}
+
 class GatewayOwner final {
 public:
     GatewayOwner(std::string device_path, std::string bind_address,
@@ -39,14 +43,15 @@ public:
     [[nodiscard]] bool started() const noexcept;
 
 private:
+    friend struct detail::GatewayOwnerTestAccess;
+
     static GatewayTimeMs monotonic_now() noexcept;
     static std::size_t remote_payload_size(const RemoteMessage &message) noexcept;
 
     void owner_loop();
     void iteration();
-    void process_connections();
-    void process_source_losses(GatewayTimeMs owner_now_ms);
-    void drain_inbound(GatewayTimeMs owner_now_ms);
+    void drain_bridge_until_quiet_and_check_time(
+        GatewayTimeMs owner_now_ms);
     void notify_owner() noexcept;
     void on_source_connected(ControlSourceId source) noexcept;
     bool enqueue_inbound(const RemoteEnvelope &envelope) noexcept;

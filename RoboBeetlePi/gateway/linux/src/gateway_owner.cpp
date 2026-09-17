@@ -35,15 +35,16 @@ GatewayOwner::GatewayOwner(std::string device_path, std::string bind_address,
                [this](const char *message) { on_diagnostic(message); },
            }),
       core_(application_,
-            GatewayCoreCallbacks{
-                [this](const GatewayOutbound &output) {
-                    return tcp_.publish(output);
+             GatewayCoreCallbacks{
+                 [this](const GatewayOutbound &output) {
+                     return tcp_.publish(output);
                 },
                 [this](const CloseSourceSignal &signal) {
                     return tcp_.close_source(signal);
                 },
-                [this](const char *message) { on_diagnostic(message); },
-            })
+                 [this](const char *message) { on_diagnostic(message); },
+                 [this] { return monotonic_now(); },
+             })
 {
 }
 
@@ -102,11 +103,12 @@ void GatewayOwner::on_source_connected(ControlSourceId source) noexcept
         if (stop_requested_) {
             return;
         }
-        if (pending_connections_.empty()) {
-            pending_connections_.push_back(source);
-        } else if (pending_connections_.back() != source) {
-            on_diagnostic("multiple source registrations pending");
+        if (source == 0U) {
+            on_diagnostic("zero source registration ignored");
+            return;
         }
+        pending_connections_.clear();
+        pending_connections_.push_back(source);
     } catch (...) {
         on_diagnostic("source connection bridge failure");
     }
@@ -171,59 +173,53 @@ void GatewayOwner::on_diagnostic(const char *) noexcept
     // become ServiceError or authority transitions.
 }
 
-void GatewayOwner::process_connections()
+void GatewayOwner::drain_bridge_until_quiet_and_check_time(
+    GatewayTimeMs owner_now_ms)
 {
-    std::deque<ControlSourceId> connections;
-    {
-        std::lock_guard<std::mutex> lock(bridge_mutex_);
-        connections.swap(pending_connections_);
-    }
-    for (const auto source : connections) {
-        // A connection may close before the owner observes its registration.
-        // Do not resurrect that source after its SourceLost edge.
-        if (tcp_.current_source_id() != source) {
-            on_diagnostic("stale source registration ignored");
-            continue;
+    for (;;) {
+        std::deque<ControlSourceId> connections;
+        std::deque<SourceLostSignal> losses;
+        std::deque<RemoteEnvelope> messages;
+        {
+            std::unique_lock<std::mutex> lock(bridge_mutex_);
+            if (pending_connections_.empty() &&
+                pending_source_losses_.empty() && pending_inbound_.empty()) {
+                // The bridge lock defines the lease-evaluation boundary. A
+                // worker callback that commits after this point belongs to the
+                // next owner iteration and cannot be mistaken for stale work.
+                core_.check_time(monotonic_now());
+                return;
+            }
+            connections.swap(pending_connections_);
+            losses.swap(pending_source_losses_);
+            messages.swap(pending_inbound_);
+            pending_inbound_bytes_ = 0U;
         }
-        core_.source_connected(source);
-    }
-}
 
-void GatewayOwner::process_source_losses(GatewayTimeMs owner_now_ms)
-{
-    std::deque<SourceLostSignal> losses;
-    {
-        std::lock_guard<std::mutex> lock(bridge_mutex_);
-        losses.swap(pending_source_losses_);
-    }
-    for (const auto &signal : losses) {
-        core_.source_lost(signal, owner_now_ms);
-    }
-}
-
-void GatewayOwner::drain_inbound(GatewayTimeMs owner_now_ms)
-{
-    std::deque<RemoteEnvelope> messages;
-    {
-        std::lock_guard<std::mutex> lock(bridge_mutex_);
-        messages.swap(pending_inbound_);
-        pending_inbound_bytes_ = 0U;
-    }
-    for (const auto &envelope : messages) {
-        core_.process(envelope, owner_now_ms);
+        // Preserve the safety order for every batch: source loss, live source
+        // registration, then ordinary inbound envelopes.
+        for (const auto &signal : losses) {
+            core_.source_lost(signal, owner_now_ms);
+        }
+        for (const auto source : connections) {
+            // A connection may close before the owner observes its
+            // registration. Do not resurrect that source after its loss edge.
+            if (tcp_.current_source_id() != source) {
+                on_diagnostic("stale source registration ignored");
+                continue;
+            }
+            core_.source_connected(source);
+        }
+        for (const auto &envelope : messages) {
+            core_.process(envelope, owner_now_ms);
+        }
     }
 }
 
 void GatewayOwner::iteration()
 {
     const auto first_now = monotonic_now();
-    process_source_losses(first_now);
-    // Register a live source after the loss edge but before draining its first
-    // envelope. This preserves both immediate reconnect ordering and the
-    // initial Hello that may already be queued by the TCP worker.
-    process_connections();
-    drain_inbound(first_now);
-    core_.check_time(monotonic_now());
+    drain_bridge_until_quiet_and_check_time(first_now);
 
     if (application_.session_state() !=
         GatewayApplicationSessionState::ReopenRequired) {
@@ -232,10 +228,7 @@ void GatewayOwner::iteration()
     }
 
     const auto second_now = monotonic_now();
-    process_source_losses(second_now);
-    process_connections();
-    drain_inbound(second_now);
-    core_.check_time(monotonic_now());
+    drain_bridge_until_quiet_and_check_time(second_now);
 }
 
 void GatewayOwner::owner_loop()

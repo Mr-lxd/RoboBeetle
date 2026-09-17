@@ -46,6 +46,29 @@ void ControlGatewayCore::diagnostic(const char *message)
     }
 }
 
+GatewayTimeMs ControlGatewayCore::grant_now(GatewayTimeMs owner_now_ms) const
+{
+    return callbacks_.now_ms ? callbacks_.now_ms() : owner_now_ms;
+}
+
+void ControlGatewayCore::fail_safe_application_invariant(
+    const char *message, GatewayTimeMs owner_now_ms)
+{
+    diagnostic(message);
+    if (!source_present_) {
+        authority_ = AuthorityState::Unowned;
+        lease_deadline_ms_ = 0U;
+        abort_once(owner_now_ms);
+        terminalize_outstanding(GatewayCommandOutcome::OutcomeUnknown,
+                                owner_now_ms);
+        return;
+    }
+
+    const auto source = current_source_;
+    revoke(source, GatewayStateReason::LinkLost, owner_now_ms, true);
+    source_present_ = false;
+}
+
 void ControlGatewayCore::source_connected(ControlSourceId source)
 {
     if (source == 0U) {
@@ -286,38 +309,59 @@ void ControlGatewayCore::handle_command(const RemoteEnvelope &envelope,
         return;
     }
 
-    auto result = application_.submit(*request.command);
-    auto status = submitted_status(result.status);
-    if (status == CommandSubmittedStatus::Submitted &&
-        !result.sequence.has_value()) {
-        status = CommandSubmittedStatus::TransportRejected;
+    const auto result = application_.submit(*request.command);
+    const auto status = submitted_status(result.status);
+    if (result.status == GatewayApplicationSubmitStatus::Submitted &&
+        (!result.sequence.has_value() ||
+         correlations_.find(*result.sequence) != correlations_.end())) {
+        fail_safe_application_invariant(
+            result.sequence.has_value()
+                ? "application submitted a live sequence twice"
+                : "application submitted without a sequence",
+            owner_now_ms);
+        return;
     }
-    if (status == CommandSubmittedStatus::Submitted &&
-        correlations_.find(*result.sequence) != correlations_.end()) {
-        status = CommandSubmittedStatus::TransportRejected;
+    if (result.status != GatewayApplicationSubmitStatus::Submitted &&
+        result.sequence.has_value()) {
+        fail_safe_application_invariant(
+            "application returned a sequence for a non-submitted command",
+            owner_now_ms);
+        return;
     }
-
-    emit(GatewayOutbound{
-             envelope.source,
-             GatewayMessage{
-                 envelope.message.request_id,
-                 CommandSubmittedMessage{status,
-                                          status == CommandSubmittedStatus::Submitted
-                                              ? result.sequence
-                                              : std::nullopt}}},
-         owner_now_ms);
 
     if (status != CommandSubmittedStatus::Submitted) {
+        emit(GatewayOutbound{
+                 envelope.source,
+                 GatewayMessage{
+                     envelope.message.request_id,
+                     CommandSubmittedMessage{status, std::nullopt}}},
+             owner_now_ms);
         mark_completed(envelope.message.request_id);
         return;
     }
 
     const auto kind = static_cast<RobotCommandKind>(request.command_kind);
     const auto sequence = *result.sequence;
-    correlations_.emplace(
+    const auto correlation_inserted = correlations_.emplace(
         sequence, Correlation{envelope.source, envelope.message.request_id, kind,
                               sequence});
-    request_to_sequence_.emplace(envelope.message.request_id, sequence);
+    const auto request_inserted =
+        request_to_sequence_.emplace(envelope.message.request_id, sequence);
+    if (!correlation_inserted.second || !request_inserted.second) {
+        correlations_.erase(sequence);
+        request_to_sequence_.erase(envelope.message.request_id);
+        fail_safe_application_invariant(
+            "application correlation registration failed", owner_now_ms);
+        return;
+    }
+
+    emit(GatewayOutbound{
+             envelope.source,
+             GatewayMessage{
+                 envelope.message.request_id,
+                 CommandSubmittedMessage{CommandSubmittedStatus::Submitted,
+                                          result.sequence}}},
+         owner_now_ms);
 }
 
 void ControlGatewayCore::handle_payload(const RemoteEnvelope &envelope,
@@ -428,9 +472,10 @@ void ControlGatewayCore::handle_payload(const RemoteEnvelope &envelope,
             return;
         }
 
+        const auto grant_now_ms = grant_now(owner_now_ms);
         authority_ = AuthorityState::Owned;
         abort_called_ = false;
-        lease_deadline_ms_ = owner_now_ms + kLeaseTimeoutMs;
+        lease_deadline_ms_ = grant_now_ms + kLeaseTimeoutMs;
         emit(GatewayOutbound{
                  envelope.source,
                  GatewayMessage{
@@ -623,13 +668,17 @@ void ControlGatewayCore::consume_event(const GatewayApplicationEvent &event,
         return;
     }
     if (const auto *state = std::get_if<GatewayStateLinkEvent>(&event)) {
-        if (authority_ == AuthorityState::Owned &&
-            (state->session_state ==
-                 GatewayApplicationSessionState::ReopenRequired ||
-             state->link_state == GatewayApplicationLinkState::Lost)) {
+        if (authority_ != AuthorityState::Owned || !source_present_) {
+            return;
+        }
+        if (state->session_state ==
+                GatewayApplicationSessionState::ReopenRequired ||
+            state->link_state == GatewayApplicationLinkState::Lost) {
             revoke(current_source_, GatewayStateReason::LinkLost,
                    owner_now_ms, false);
+            return;
         }
+        emit_state(current_source_, GatewayStateReason::None, owner_now_ms);
     }
 }
 

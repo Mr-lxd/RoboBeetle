@@ -475,10 +475,14 @@ struct TcpAdapter::Impl {
     {
         for (;;) {
             pollfd descriptors[3] = {};
+            int polled_client_fd = -1;
+            ControlSourceId polled_source_id = 0U;
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 descriptors[0] = pollfd{listener_fd, POLLIN, 0};
                 descriptors[1] = pollfd{client_fd, POLLIN, 0};
+                polled_client_fd = client_fd;
+                polled_source_id = current_source;
                 if (client_fd >= 0 &&
                     (in_flight.has_value() || !critical.empty() ||
                      std::any_of(telemetry.begin(), telemetry.end(),
@@ -511,19 +515,29 @@ struct TcpAdapter::Impl {
                 }
             }
 
+            bool client_snapshot_is_current = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                client_snapshot_is_current =
+                    polled_client_fd >= 0 && polled_source_id != 0U &&
+                    client_fd == polled_client_fd &&
+                    current_source == polled_source_id;
+            }
+            if (client_snapshot_is_current) {
+                const auto client_revents = descriptors[1].revents;
+                if ((client_revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                    close_current(true, SourceLostReason::Disconnected);
+                } else {
+                    if ((client_revents & POLLOUT) != 0) {
+                        write_client();
+                    }
+                    if ((client_revents & POLLIN) != 0) {
+                        read_client();
+                    }
+                }
+            }
             if ((descriptors[0].revents & POLLIN) != 0) {
                 accept_connections();
-            }
-            if ((descriptors[1].revents &
-                 (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-                close_current(true, SourceLostReason::Disconnected);
-                continue;
-            }
-            if ((descriptors[1].revents & POLLOUT) != 0) {
-                write_client();
-            }
-            if ((descriptors[1].revents & POLLIN) != 0) {
-                read_client();
             }
         }
 
