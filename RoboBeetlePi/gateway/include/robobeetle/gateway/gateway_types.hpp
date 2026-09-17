@@ -278,8 +278,15 @@ enum class ServiceErrorCode {
     DuplicateRequestId = 4,
     NotAuthority = 5,
     AuthorityBusy = 6,
-    InvalidMessagePayload = 7,
-    UnsupportedCommand = 8,
+    AcquireOpenFailed = 7,
+    InvalidMessagePayload = 8,
+    UnsupportedCommand = 9,
+    Reserved10 = 10,
+    LinkUnavailable = 11,
+    InternalFailure = 12,
+    Reserved13 = 13,
+    Reserved14 = 14,
+    Reserved15 = 15,
 };
 
 struct HelloRequest {

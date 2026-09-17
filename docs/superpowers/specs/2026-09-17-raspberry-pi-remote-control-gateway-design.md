@@ -1201,9 +1201,15 @@ Active v1 semantic errors:
 4 DuplicateRequestId
 5 NotAuthority
 6 AuthorityBusy
-7 InvalidMessagePayload
-8 UnsupportedCommand
-9..15 Reserved
+7 AcquireOpenFailed
+8 InvalidMessagePayload
+9 UnsupportedCommand
+10 Reserved10
+11 LinkUnavailable
+12 InternalFailure
+13 Reserved13
+14 Reserved14
+15 Reserved15
 ```
 
 Fatal framing errors never use ServiceError.

@@ -17,6 +17,30 @@ using rbp2_test::concat;
 using rbp2_test::expect;
 using Bytes = std::vector<std::uint8_t>;
 
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::None) == 0U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::NotHello) == 1U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::AlreadyHello) == 2U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::InvalidRequestId) ==
+              3U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::DuplicateRequestId) ==
+              4U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::NotAuthority) == 5U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::AuthorityBusy) == 6U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::AcquireOpenFailed) ==
+              7U);
+static_assert(
+    static_cast<std::uint16_t>(ServiceErrorCode::InvalidMessagePayload) == 8U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::UnsupportedCommand) ==
+              9U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::Reserved10) == 10U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::LinkUnavailable) ==
+              11U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::InternalFailure) ==
+              12U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::Reserved13) == 13U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::Reserved14) == 14U);
+static_assert(static_cast<std::uint16_t>(ServiceErrorCode::Reserved15) == 15U);
+
 constexpr std::size_t header_size = 16U;
 
 std::uint16_t read_le16(const Bytes &data, std::size_t offset)
@@ -389,13 +413,31 @@ void server_message_wire_encodings()
                                 RbrpMessageKind::CommandRequest, 99U}});
     expect(error.status == RbrpEncodeStatus::Ok &&
                payload_of(error).size() == 8U &&
-               payload_of(error)[0] == 5U &&
-               payload_of(error)[1] == 0U &&
+               payload_of(error)[0] == 5U && payload_of(error)[1] == 0U &&
+               read_le16(payload_of(error), 0U) == 5U &&
                payload_of(error)[2] ==
                    static_cast<std::uint8_t>(RbrpMessageKind::CommandRequest) &&
                payload_of(error)[3] == 0U &&
                read_le32(payload_of(error), 4U) == 99U,
-           "ServiceError uses its exact reserved byte and detail");
+           "ServiceError preserves the NotAuthority registry value and detail");
+
+    const auto invalid_payload = encode_gateway_message(GatewayMessage{
+        0U, ServiceErrorMessage{ServiceErrorCode::InvalidMessagePayload,
+                                RbrpMessageKind::Hello, 0U}});
+    const auto unsupported = encode_gateway_message(GatewayMessage{
+        0U, ServiceErrorMessage{ServiceErrorCode::UnsupportedCommand,
+                                RbrpMessageKind::CommandRequest, 0U}});
+    expect(invalid_payload.status == RbrpEncodeStatus::Ok &&
+               payload_of(invalid_payload).size() == 8U &&
+               payload_of(invalid_payload)[0] == 8U &&
+               payload_of(invalid_payload)[1] == 0U &&
+               read_le16(payload_of(invalid_payload), 0U) == 8U &&
+               unsupported.status == RbrpEncodeStatus::Ok &&
+               payload_of(unsupported).size() == 8U &&
+               payload_of(unsupported)[0] == 9U &&
+               payload_of(unsupported)[1] == 0U &&
+               read_le16(payload_of(unsupported), 0U) == 9U,
+           "ServiceError encodes InvalidMessagePayload=8 and UnsupportedCommand=9 in LE");
 }
 
 } // namespace
