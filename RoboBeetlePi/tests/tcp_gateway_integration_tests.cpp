@@ -1436,14 +1436,22 @@ void real_owner_wrong_direction_revokes_authority_without_uart_command()
     const auto server_frame =
         encode_frame(RbrpMessageKind::HelloReply, 92U, Bytes(8U, 0U));
     send_all(fixture.client, server_frame.wire);
-    const auto state = fixture.next_kind(RbrpMessageKind::ControlState);
-    expect(state.request_id == 0U && state.payload.size() == 8U &&
-               state.payload[0] == 0U &&
-               state.payload[3] ==
-                   static_cast<Byte>(GatewayStateReason::RemoteProtocolViolation),
-           "wrong-direction TCP input revokes active authority as a protocol violation");
+    expect(peer_closed(fixture.client),
+           "wrong-direction TCP input closes source A peer");
     expect(fixture.pty.no_command_for(200),
            "wrong-direction TCP input does not synthesize a UART actuator command");
+
+    fixture.disconnect_client();
+    fixture.connect_client();
+    send_remote(fixture.client, RbrpMessageKind::CommandRequest, 100U,
+                Bytes{0x06U});
+    const auto before_hello = fixture.next_kind(RbrpMessageKind::ServiceError);
+    expect(before_hello.request_id == 100U && before_hello.payload.size() == 8U &&
+               le16(before_hello.payload, 0U) ==
+                   static_cast<std::uint16_t>(ServiceErrorCode::NotHello),
+           "replacement source B does not inherit usable authority before Hello");
+
+    fixture.hello_acquire(101U, 102U);
 }
 
 void real_owner_lease_expiry_aborts_without_synthesized_command()
