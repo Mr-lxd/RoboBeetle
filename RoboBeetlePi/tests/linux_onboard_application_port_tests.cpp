@@ -15,6 +15,7 @@
 #include <poll.h>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -72,6 +73,13 @@ GatewayTimeMs gateway_clock()
 {
     return now_ms;
 }
+
+template <typename T, typename Variant>
+struct variant_contains;
+
+template <typename T, typename... Alternatives>
+struct variant_contains<T, std::variant<Alternatives...>>
+    : std::bool_constant<(std::is_same_v<T, Alternatives> || ...)> {};
 
 struct Pty {
     int master{-1};
@@ -287,10 +295,10 @@ const GatewayTelemetryMalformedDiagnostic *find_malformed(
 
 void expect_no_raw_events(const GatewayApplicationRunResult &result)
 {
-    for (const auto &event : result.events) {
-        expect(!std::holds_alternative<link_core::LinkEvent>(event),
-               "neutral application port never exposes raw LinkEvent");
-    }
+    static_assert(
+        !variant_contains<link_core::LinkEvent, GatewayApplicationEvent>::value,
+        "neutral application port must not expose raw LinkEvent");
+    (void)result;
 }
 
 GatewayApplicationRunResult submit_and_ack(
