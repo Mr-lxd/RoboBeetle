@@ -114,6 +114,21 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     )
     target_compile_features(rbp2_gateway_tcp PUBLIC cxx_std_17)
 
+    add_library(rbp2_gateway_owner STATIC
+        gateway/linux/src/gateway_owner.cpp
+    )
+    target_include_directories(rbp2_gateway_owner PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/linux/include
+    )
+    target_link_libraries(rbp2_gateway_owner PUBLIC
+        rbp2_gateway_core
+        rbp2_gateway_linux_application_port
+        rbp2_gateway_tcp
+        Threads::Threads
+    )
+    target_compile_features(rbp2_gateway_owner PUBLIC cxx_std_17)
+
     add_executable(robobeetle_pi_smoke tools/robobeetle_pi_smoke.cpp)
     target_link_libraries(robobeetle_pi_smoke PRIVATE rbp2_onboard_application)
 endif()
