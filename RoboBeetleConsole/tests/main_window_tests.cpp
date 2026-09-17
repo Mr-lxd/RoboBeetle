@@ -58,6 +58,14 @@ void injectDepthSnapshot(rb::FakeTransport &transport)
          rb::DepthSnapshot::encodePayload(snapshot)}));
 }
 
+void injectLeakState(rb::FakeTransport &transport, rb::LeakState state)
+{
+    QByteArray payload;
+    payload.append(static_cast<char>(state));
+    transport.injectBytes(rb::PacketCodec::encodeWire(
+        {rb::MessageType::LeakStatus, 0x6100, payload}));
+}
+
 QGroupBox *imuPanel(rb::MainWindow &window)
 {
     for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
@@ -72,6 +80,16 @@ QGroupBox *depthPanel(rb::MainWindow &window)
 {
     for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
         if (box->title() == QStringLiteral("Depth Sensor — ROVMAKER")) {
+            return box;
+        }
+    }
+    return nullptr;
+}
+
+QGroupBox *leakPanel(rb::MainWindow &window)
+{
+    for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
+        if (box->title() == QStringLiteral("Leak Detection")) {
             return box;
         }
     }
@@ -241,6 +259,36 @@ void testDepthPanelLifecycle()
            "Depth panel must show Stale after the liveness window");
     expect(hasLabelText(panel, QStringLiteral("--")),
            "Depth panel must clear old depth values after becoming stale");
+}
+
+void testLeakPanelLifecycle()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport,
+        rb::RobotControllerConfig::bringUpProvisional());
+    rb::MainWindow window(&controller);
+
+    QGroupBox *panel = leakPanel(window);
+    expect(panel != nullptr,
+           "MainWindow must expose a Leak Detection panel");
+    if (panel == nullptr) {
+        return;
+    }
+
+    expect(hasLabelText(panel, QStringLiteral("Unknown")),
+           "Leak panel must start with Unknown status");
+
+    controller.connectTransport({QStringLiteral("COM_TEST"), 9600});
+    transport.simulateConnected();
+
+    injectLeakState(transport, rb::LeakState::Dry);
+    expect(hasLabelText(panel, QStringLiteral("Dry")),
+           "Leak panel must display Dry for dry telemetry");
+
+    injectLeakState(transport, rb::LeakState::Wet);
+    expect(hasLabelText(panel, QStringLiteral("LEAK DETECTED")),
+           "Leak panel must retain the critical LEAK DETECTED warning");
 }
 
 void testMotionPanelLifecycleAndManualArbitration()
@@ -680,6 +728,7 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
     testImuPanelLifecycle();
     testDepthPanelLifecycle();
+    testLeakPanelLifecycle();
     testMotionPanelLifecycleAndManualArbitration();
     testGaitBackendPanelLifecycle();
     testDashboardLayout();
