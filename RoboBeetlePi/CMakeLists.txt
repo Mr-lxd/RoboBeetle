@@ -94,6 +94,14 @@ if(BUILD_TESTING)
     target_link_libraries(rbp2_rbrp_codec_tests PRIVATE rbp2_rbrp_codec)
     add_test(NAME rbp2_rbrp_codec_tests COMMAND rbp2_rbrp_codec_tests)
 
+    add_executable(rbp2_gateway_core_tests tests/control_gateway_core_tests.cpp)
+    target_include_directories(rbp2_gateway_core_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    )
+    target_compile_features(rbp2_gateway_core_tests PRIVATE cxx_std_17)
+    add_test(NAME rbp2_gateway_core_tests COMMAND rbp2_gateway_core_tests)
+
     add_executable(rbp2_protocol_tests
         tests/protocol_test_main.cpp
         tests/protocol_golden_tests.cpp
@@ -156,6 +164,7 @@ if(BUILD_TESTING)
             ${CMAKE_CXX_COMPILER} DIRECTORY)
         set_tests_properties(
             rbp2_rbrp_codec_tests
+            rbp2_gateway_core_tests
             rbp2_protocol_tests
             rbp2_robot_codec_tests
             PROPERTIES ENVIRONMENT "PATH=${rbp2_test_compiler_bin};$ENV{PATH}"
