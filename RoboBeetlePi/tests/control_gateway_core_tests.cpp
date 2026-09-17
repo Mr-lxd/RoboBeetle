@@ -1018,6 +1018,72 @@ void application_run_result_revoke_policy_is_session_aware()
     }
 }
 
+void application_state_event_revoke_policy_is_session_aware()
+{
+    {
+        FakeGatewayApplicationPort application;
+        OutputSink sink;
+        ControlGatewayCore core(application, sink.callbacks());
+        grant_test_authority(core, 52U);
+        application.session = GatewayApplicationSessionState::SafetyQuiet;
+        application.link = GatewayApplicationLinkState::Active;
+
+        core.consume_application_run_result(
+            GatewayApplicationRunResult{
+                GatewayApplicationRunStatus::Progress,
+                {GatewayStateLinkEvent{
+                    GatewayApplicationSessionState::SafetyQuiet,
+                    GatewayApplicationLinkState::Lost}},
+                0},
+            3U);
+        expect(core.authority_state() == AuthorityState::Owned &&
+                   application.abort_calls == 0U,
+               "SafetyQuiet plus Lost state event does not revoke authority");
+    }
+
+    {
+        FakeGatewayApplicationPort application;
+        OutputSink sink;
+        ControlGatewayCore core(application, sink.callbacks());
+        grant_test_authority(core, 53U);
+        application.session = GatewayApplicationSessionState::SafetyQuiet;
+        application.link = GatewayApplicationLinkState::Active;
+
+        core.consume_application_run_result(
+            GatewayApplicationRunResult{
+                GatewayApplicationRunStatus::Progress,
+                {GatewayStateLinkEvent{
+                    GatewayApplicationSessionState::Resynchronizing,
+                    GatewayApplicationLinkState::Lost}},
+                0},
+            3U);
+        expect(core.authority_state() == AuthorityState::Owned &&
+                   application.abort_calls == 0U,
+               "Resynchronizing plus Lost state event does not revoke authority");
+    }
+
+    {
+        FakeGatewayApplicationPort application;
+        OutputSink sink;
+        ControlGatewayCore core(application, sink.callbacks());
+        grant_test_authority(core, 54U);
+        application.session = GatewayApplicationSessionState::SafetyQuiet;
+        application.link = GatewayApplicationLinkState::Active;
+
+        core.consume_application_run_result(
+            GatewayApplicationRunResult{
+                GatewayApplicationRunStatus::Progress,
+                {GatewayStateLinkEvent{
+                    GatewayApplicationSessionState::Online,
+                    GatewayApplicationLinkState::Lost}},
+                0},
+            3U);
+        expect(core.authority_state() == AuthorityState::Unowned &&
+                   application.abort_calls == 1U,
+               "Online plus Lost state event revokes through one abort");
+    }
+}
+
 void session_link_loss_and_network_failure_use_abort_path()
 {
     FakeGatewayApplicationPort lost_application;
@@ -1094,6 +1160,7 @@ int main()
     impossible_submitted_invariants_fail_safe();
     nonlost_state_changes_are_forwarded_to_current_controller();
     application_run_result_revoke_policy_is_session_aware();
+    application_state_event_revoke_policy_is_session_aware();
     session_link_loss_and_network_failure_use_abort_path();
     shutdown_is_graceful_and_does_not_synthesize_actuator_commands();
 

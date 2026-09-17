@@ -721,7 +721,9 @@ void ControlGatewayCore::consume_event(const GatewayApplicationEvent &event,
         }
         if (state->session_state ==
                 GatewayApplicationSessionState::ReopenRequired ||
-            state->link_state == GatewayApplicationLinkState::Lost) {
+            (state->session_state ==
+                 GatewayApplicationSessionState::Online &&
+             state->link_state == GatewayApplicationLinkState::Lost)) {
             revoke(current_source_, GatewayStateReason::LinkLost,
                    owner_now_ms, false);
             return;
