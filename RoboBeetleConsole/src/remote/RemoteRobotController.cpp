@@ -92,8 +92,15 @@ RemoteRobotController::RemoteRobotController(QObject *parent)
     });
     connect(&session_, &RbrpClientSession::authorityStateChanged,
             this, [this](ControlAuthorityState state, bool active) {
-        if ((wasControlActive_ && !active)
-            || (state == ControlAuthorityState::Unowned && !pending_.isEmpty())) {
+        const bool expectedUserRelease = userReleasePending_
+            && state == ControlAuthorityState::Unowned && !active;
+        if (expectedUserRelease) {
+            failClosedControlState({});
+            userReleasePending_ = false;
+            emit logMessage(QStringLiteral("Remote control released"));
+        } else if ((wasControlActive_ && !active)
+                   || (state == ControlAuthorityState::Unowned
+                       && !pending_.isEmpty())) {
             failClosedControlState(QStringLiteral("remote authority/link lost"));
         }
         wasControlActive_ = active;
@@ -152,7 +159,12 @@ bool RemoteRobotController::acquireControl()
 
 bool RemoteRobotController::releaseControl()
 {
-    return session_.releaseControl();
+    userReleasePending_ = true;
+    const bool released = session_.releaseControl();
+    if (!released) {
+        userReleasePending_ = false;
+    }
+    return released;
 }
 
 bool RemoteRobotController::enableServo(ServoId id)

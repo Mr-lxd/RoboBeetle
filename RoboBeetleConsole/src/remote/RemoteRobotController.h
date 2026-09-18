@@ -134,6 +134,7 @@ private:
     QTimer telemetryTimer_;
     ProtocolMonitor monitor_;
     bool wasControlActive_{false};
+    bool userReleasePending_{false};
 };
 
 } // namespace rb

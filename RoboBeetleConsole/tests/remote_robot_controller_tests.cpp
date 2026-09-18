@@ -9,6 +9,7 @@
 #include <QGroupBox>
 #include <QHostAddress>
 #include <QPushButton>
+#include <QStringList>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
@@ -382,6 +383,53 @@ void testRemoteControllerAndUi()
            "reconnect must not automatically restore Active control");
 }
 
+void testUserReleaseDoesNotReportAuthorityLoss()
+{
+    FakeGatewayPeer gateway;
+    rb::RemoteRobotController controller;
+    QStringList logs;
+    QObject::connect(&controller, &rb::IConsoleController::logMessage,
+                     &controller, [&logs](const QString &message) {
+        logs.push_back(message);
+    });
+
+    rb::ConsoleConnectionConfiguration config;
+    config.endpoint = QStringLiteral("127.0.0.1");
+    config.tcpPort = gateway.port();
+    controller.connectController(config);
+
+    expect(gateway.accept(), "release-log test must connect to fake gateway");
+    completeHello(gateway);
+    expect(pumpUntil([&] { return controller.canAcquireControl(); }),
+           "release-log test must complete Hello");
+    expect(controller.acquireControl(),
+           "release-log test must submit AcquireControl");
+    completeAcquire(gateway);
+    expect(pumpUntil([&] { return controller.isControlActive(); }),
+           "release-log test must reach Active control");
+
+    expect(controller.releaseControl(),
+           "explicit user Release must submit ReleaseControl");
+    expect(gateway.nextFrame(RbrpMessageKind::ReleaseControl).has_value(),
+           "gateway must receive explicit ReleaseControl");
+    expect(controller.authorityState() == rb::ControlAuthorityState::Unowned
+               && !controller.isControlActive(),
+           "explicit Release must clear local authority immediately");
+
+    bool sawRelease = false;
+    bool sawLoss = false;
+    for (const QString &message : logs) {
+        sawRelease = sawRelease
+            || message.contains(QStringLiteral("Remote control released"));
+        sawLoss = sawLoss
+            || message.contains(QStringLiteral("remote authority/link lost"));
+    }
+    expect(sawRelease,
+           "explicit Release must emit a normal release log entry");
+    expect(!sawLoss,
+           "explicit Release must not be reported as authority/link loss");
+}
+
 void testSafetySupersessionIgnoresLateOutcomes()
 {
     FakeGatewayPeer gateway;
@@ -550,6 +598,7 @@ int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
     testRemoteControllerAndUi();
+    testUserReleaseDoesNotReportAuthorityLoss();
     testSafetySupersessionIgnoresLateOutcomes();
     testCommandTimeoutReleasesAuthority();
     if (failures == 0) {
