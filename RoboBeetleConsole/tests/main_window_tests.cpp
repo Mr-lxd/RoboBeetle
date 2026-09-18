@@ -58,6 +58,14 @@ void injectDepthSnapshot(rb::FakeTransport &transport)
          rb::DepthSnapshot::encodePayload(snapshot)}));
 }
 
+void injectLeakState(rb::FakeTransport &transport, rb::LeakState state)
+{
+    QByteArray payload;
+    payload.append(static_cast<char>(state));
+    transport.injectBytes(rb::PacketCodec::encodeWire(
+        {rb::MessageType::LeakStatus, 0x6100, payload}));
+}
+
 QGroupBox *imuPanel(rb::MainWindow &window)
 {
     for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
@@ -72,6 +80,16 @@ QGroupBox *depthPanel(rb::MainWindow &window)
 {
     for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
         if (box->title() == QStringLiteral("Depth Sensor — ROVMAKER")) {
+            return box;
+        }
+    }
+    return nullptr;
+}
+
+QGroupBox *leakPanel(rb::MainWindow &window)
+{
+    for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
+        if (box->title() == QStringLiteral("Leak Detection")) {
             return box;
         }
     }
@@ -171,6 +189,8 @@ void enablePaddles(rb::FakeTransport &transport, rb::RobotController &controller
     }
 }
 
+QGroupBox *findGroupBox(const QWidget *root, const QString &title);
+
 void testImuPanelLifecycle()
 {
     rb::FakeTransport transport;
@@ -241,6 +261,36 @@ void testDepthPanelLifecycle()
            "Depth panel must clear old depth values after becoming stale");
 }
 
+void testLeakPanelLifecycle()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport,
+        rb::RobotControllerConfig::bringUpProvisional());
+    rb::MainWindow window(&controller);
+
+    QGroupBox *panel = leakPanel(window);
+    expect(panel != nullptr,
+           "MainWindow must expose a Leak Detection panel");
+    if (panel == nullptr) {
+        return;
+    }
+
+    expect(hasLabelText(panel, QStringLiteral("Unknown")),
+           "Leak panel must start with Unknown status");
+
+    controller.connectTransport({QStringLiteral("COM_TEST"), 9600});
+    transport.simulateConnected();
+
+    injectLeakState(transport, rb::LeakState::Dry);
+    expect(hasLabelText(panel, QStringLiteral("Dry")),
+           "Leak panel must display Dry for dry telemetry");
+
+    injectLeakState(transport, rb::LeakState::Wet);
+    expect(hasLabelText(panel, QStringLiteral("LEAK DETECTED")),
+           "Leak panel must retain the critical LEAK DETECTED warning");
+}
+
 void testMotionPanelLifecycleAndManualArbitration()
 {
     rb::FakeTransport transport;
@@ -255,6 +305,13 @@ void testMotionPanelLifecycleAndManualArbitration()
     if (panel == nullptr) {
         return;
     }
+
+    // The motion panel splits into two visually distinct subareas: a D-pad-like
+    // Motion Control block and a separate Gait / Vertical block.
+    expect(findGroupBox(panel, QStringLiteral("Motion Control")) != nullptr,
+           "Motion panel must expose a Motion Control subarea");
+    expect(findGroupBox(panel, QStringLiteral("Gait / Vertical")) != nullptr,
+           "Motion panel must expose a Gait / Vertical subarea");
 
     expect(gaitBackendCombo(panel) != nullptr,
            "Motion panel must expose a dedicated gait backend combo");
@@ -461,6 +518,16 @@ void testDashboardLayout()
     expect(estop != nullptr && !estop->isEnabled(),
            "Emergency Stop must remain disabled (no Phase 1 message)");
 
+    // The 2x2 status grid keeps all four compact status cards present.
+    expect(findGroupBox(&window, QStringLiteral("Leak Detection")) != nullptr,
+           "dashboard status grid must keep the Leak Detection card");
+    expect(findGroupBox(&window, QStringLiteral("IMU — JY901S")) != nullptr,
+           "dashboard status grid must keep the IMU card");
+    expect(findGroupBox(&window, QStringLiteral("Depth Sensor — ROVMAKER")) != nullptr,
+           "dashboard status grid must keep the Depth card");
+    expect(findGroupBox(&window, QStringLiteral("Protocol / Link")) != nullptr,
+           "dashboard status grid must keep the Protocol / Link card");
+
     // Actuator Control exists.
     expect(findGroupBox(&window, QStringLiteral("Actuator Control")) != nullptr,
            "MainWindow must expose the Actuator Control panel");
@@ -661,6 +728,7 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
     testImuPanelLifecycle();
     testDepthPanelLifecycle();
+    testLeakPanelLifecycle();
     testMotionPanelLifecycleAndManualArbitration();
     testGaitBackendPanelLifecycle();
     testDashboardLayout();

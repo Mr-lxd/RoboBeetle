@@ -427,7 +427,22 @@ void testDirectHeartbeatLossIgnoresLateEnableAck()
     expect(controller.enableServo(rb::ServoId::Servo1),
            "DirectUart late-ACK setup should send Enable after a heartbeat is in flight");
     const rb::Packet enable = lastPacket(transport);
-    waitForMs(90);
+
+    bool forcedHeartbeatTimeout = false;
+    for (auto it = controller.pending_.begin(); it != controller.pending_.end(); ++it) {
+        if (it->type == rb::MessageType::Heartbeat) {
+            it->sentAtMs = rb::RobotController::nowMs() - config.ackTimeoutMs - 1;
+            forcedHeartbeatTimeout = true;
+            break;
+        }
+    }
+    expect(forcedHeartbeatTimeout,
+           "DirectUart late-ACK setup should have a heartbeat request in flight");
+    controller.checkTimeouts();
+
+    const auto enablePending = controller.pending_.find(enable.sequence);
+    expect(enablePending != controller.pending_.end() && enablePending->cancelled,
+           "DirectUart heartbeat loss must cancel the in-flight Enable before its late ACK");
     expect(!controller.isServoEnabled(rb::ServoId::Servo1),
            "DirectUart heartbeat loss should clear state before a late Enable ACK");
 
@@ -3229,11 +3244,13 @@ void testApc220SelectorEvictionBySafetyDisableClearsLifecycle()
                && lastPacket(transport).type == rb::MessageType::ServoDisable,
            "safety Disable should dispatch after the in-flight command ACK");
     acknowledgeLast(transport);
-    while (controller.queuedCommandCount() > 0) {
+    for (qsizetype index = 0; index < rb::kApc220CommandQueueCapacity - 1; ++index) {
         expect(lastPacket(transport).type == rb::MessageType::ServoEnable,
                "only ordinary filler should remain after the dropped selector");
         acknowledgeLast(transport);
     }
+    expect(controller.queuedCommandCount() == 0 && controller.pending_.isEmpty(),
+           "all ordinary filler should be fully acknowledged before retrying the selector");
 
     expect(controller.setGaitBackend(rb::GaitBackend::SimpleGait),
            "a selector should be requestable again after safety eviction cleanup");
