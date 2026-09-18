@@ -1,0 +1,100 @@
+#pragma once
+
+#if !defined(__linux__)
+#error "TcpAdapter is supported only on Linux"
+#endif
+
+#include "robobeetle/gateway/gateway_types.hpp"
+#include "robobeetle/gateway/rbrp_codec.hpp"
+
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace robobeetle::gateway {
+
+namespace detail {
+
+struct TcpClientPollSnapshot {
+    int fd{-1};
+    ControlSourceId source{0};
+    short revents{0};
+};
+
+[[nodiscard]] constexpr bool tcp_client_poll_snapshot_is_current(
+    const TcpClientPollSnapshot &snapshot, int current_fd,
+    ControlSourceId current_source) noexcept
+{
+    return snapshot.fd >= 0 && snapshot.source != 0U &&
+           snapshot.fd == current_fd && snapshot.source == current_source;
+}
+
+using TcpInboundBatchEnqueue = std::function<bool(const RemoteEnvelope &)>;
+using TcpInboundBatchDiagnostic = std::function<void(const char *)>;
+using TcpInboundBatchClose = std::function<void(SourceLostReason)>;
+
+[[nodiscard]] bool process_tcp_inbound_batch(
+    RbrpDecoder &decoder, std::atomic<std::size_t> &inbound_in_flight,
+    ControlSourceId source, const Byte *data, std::size_t size,
+    const std::function<GatewayTimeMs()> &now_ms,
+    const TcpInboundBatchEnqueue &enqueue,
+    const TcpInboundBatchDiagnostic &diagnostic,
+    const TcpInboundBatchClose &close_current);
+
+} // namespace detail
+
+struct TcpAdapterStats {
+    std::size_t critical_frames_high_water{};
+    std::size_t critical_bytes_high_water{};
+    std::size_t critical_overflow_count{};
+    std::size_t telemetry_replacements{};
+};
+
+struct TcpAdapterCallbacks {
+    std::function<void(ControlSourceId)> source_connected;
+    std::function<bool(const RemoteEnvelope &)> enqueue_inbound;
+    std::function<void(const SourceLostSignal &)> source_lost;
+    std::function<void(const char *)> diagnostic;
+    std::function<GatewayTimeMs()> now_ms;
+};
+
+class TcpAdapter final {
+public:
+    static constexpr std::size_t kMaxInboundMessages = 32U;
+    static constexpr std::size_t kMaxInboundPayloadBytes = 16U * 1024U;
+    static constexpr std::size_t kMaxCriticalFrames = 32U;
+    static constexpr std::size_t kMaxCriticalBytes = 32U * 1024U;
+    static constexpr std::size_t kTelemetrySlotCount = 3U;
+
+    TcpAdapter(std::string bind_address, std::uint16_t port,
+               TcpAdapterCallbacks callbacks);
+    ~TcpAdapter();
+
+    TcpAdapter(const TcpAdapter &) = delete;
+    TcpAdapter &operator=(const TcpAdapter &) = delete;
+    TcpAdapter(TcpAdapter &&) = delete;
+    TcpAdapter &operator=(TcpAdapter &&) = delete;
+
+    int start();
+    void stop() noexcept;
+
+    // Returns false only when the critical owner-to-worker channel cannot
+    // accept the item. Stale source-addressed output is a successful drop.
+    bool publish(const GatewayOutbound &output);
+    bool close_source(const CloseSourceSignal &signal);
+
+    [[nodiscard]] std::uint16_t bound_port() const noexcept;
+    [[nodiscard]] ControlSourceId current_source_id() const noexcept;
+    [[nodiscard]] bool inbound_delivery_in_flight() const noexcept;
+    [[nodiscard]] TcpAdapterStats stats() const noexcept;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+} // namespace robobeetle::gateway

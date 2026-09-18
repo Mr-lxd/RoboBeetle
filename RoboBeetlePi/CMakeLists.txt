@@ -46,8 +46,26 @@ target_include_directories(rbp2_robot_codec PUBLIC
 )
 target_compile_features(rbp2_robot_codec PUBLIC cxx_std_17)
 
+add_library(rbp2_rbrp_codec STATIC
+    gateway/src/rbrp_codec.cpp
+)
+target_include_directories(rbp2_rbrp_codec PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+)
+target_compile_features(rbp2_rbrp_codec PUBLIC cxx_std_17)
+
+add_library(rbp2_gateway_core STATIC
+    gateway/src/control_gateway_core.cpp
+)
+target_include_directories(rbp2_gateway_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+)
+target_compile_features(rbp2_gateway_core PUBLIC cxx_std_17)
+
 # Keep Linux headers and syscalls out of all portable targets.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+
     add_library(rbp2_posix_serial_transport STATIC
         transport/src/posix_serial_transport.cpp
     )
@@ -72,11 +90,71 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(rbp2_onboard_application PUBLIC rbp2_link_runtime rbp2_robot_codec)
     target_compile_features(rbp2_onboard_application PUBLIC cxx_std_17)
 
+    add_library(rbp2_gateway_linux_application_port STATIC
+        gateway/linux/src/linux_onboard_application_port.cpp
+    )
+    target_include_directories(rbp2_gateway_linux_application_port PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/linux/include
+    )
+    target_link_libraries(rbp2_gateway_linux_application_port PUBLIC
+        rbp2_gateway_core rbp2_onboard_application
+    )
+    target_compile_features(rbp2_gateway_linux_application_port PUBLIC cxx_std_17)
+
+    add_library(rbp2_gateway_tcp STATIC
+        gateway/linux/src/tcp_adapter.cpp
+    )
+    target_include_directories(rbp2_gateway_tcp PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/linux/include
+    )
+    target_link_libraries(rbp2_gateway_tcp PUBLIC
+        rbp2_rbrp_codec Threads::Threads
+    )
+    target_compile_features(rbp2_gateway_tcp PUBLIC cxx_std_17)
+
+    add_library(rbp2_gateway_owner STATIC
+        gateway/linux/src/gateway_owner.cpp
+    )
+    target_include_directories(rbp2_gateway_owner PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/linux/include
+    )
+    target_link_libraries(rbp2_gateway_owner PUBLIC
+        rbp2_gateway_core
+        rbp2_gateway_linux_application_port
+        rbp2_gateway_tcp
+        Threads::Threads
+    )
+    target_compile_features(rbp2_gateway_owner PUBLIC cxx_std_17)
+
     add_executable(robobeetle_pi_smoke tools/robobeetle_pi_smoke.cpp)
     target_link_libraries(robobeetle_pi_smoke PRIVATE rbp2_onboard_application)
+
+    add_executable(robobeetle_pi_gateway tools/robobeetle_pi_gateway.cpp)
+    target_link_libraries(robobeetle_pi_gateway PRIVATE rbp2_gateway_owner)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(rbp2_rbrp_codec_tests tests/rbrp_codec_tests.cpp)
+    target_include_directories(rbp2_rbrp_codec_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    )
+    target_compile_features(rbp2_rbrp_codec_tests PRIVATE cxx_std_17)
+    target_link_libraries(rbp2_rbrp_codec_tests PRIVATE rbp2_rbrp_codec)
+    add_test(NAME rbp2_rbrp_codec_tests COMMAND rbp2_rbrp_codec_tests)
+
+    add_executable(rbp2_gateway_core_tests tests/control_gateway_core_tests.cpp)
+    target_include_directories(rbp2_gateway_core_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    )
+    target_compile_features(rbp2_gateway_core_tests PRIVATE cxx_std_17)
+    target_link_libraries(rbp2_gateway_core_tests PRIVATE rbp2_gateway_core)
+    add_test(NAME rbp2_gateway_core_tests COMMAND rbp2_gateway_core_tests)
+
     add_executable(rbp2_protocol_tests
         tests/protocol_test_main.cpp
         tests/protocol_golden_tests.cpp
@@ -129,5 +207,56 @@ if(BUILD_TESTING)
         target_link_libraries(rbp2_onboard_application_tests PRIVATE rbp2_onboard_application)
         add_test(NAME rbp2_onboard_application_tests COMMAND rbp2_onboard_application_tests)
         set_tests_properties(rbp2_onboard_application_tests PROPERTIES TIMEOUT 15)
+
+        add_executable(rbp2_gateway_linux_application_port_tests
+            tests/linux_onboard_application_port_tests.cpp
+        )
+        target_include_directories(rbp2_gateway_linux_application_port_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/gateway/linux/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/application/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/runtime/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/session/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/link_core/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/transport/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/protocol/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        )
+        target_compile_features(rbp2_gateway_linux_application_port_tests PRIVATE cxx_std_17)
+        target_link_libraries(rbp2_gateway_linux_application_port_tests
+            PRIVATE rbp2_gateway_linux_application_port)
+        add_test(NAME rbp2_gateway_linux_application_port_tests
+            COMMAND rbp2_gateway_linux_application_port_tests)
+        set_tests_properties(rbp2_gateway_linux_application_port_tests PROPERTIES TIMEOUT 20)
+
+        add_executable(rbp2_tcp_gateway_integration_tests
+            tests/tcp_gateway_integration_tests.cpp
+        )
+        target_include_directories(rbp2_tcp_gateway_integration_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/gateway/linux/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        )
+        target_compile_features(rbp2_tcp_gateway_integration_tests PRIVATE cxx_std_17)
+        target_link_libraries(rbp2_tcp_gateway_integration_tests
+            PRIVATE rbp2_gateway_tcp rbp2_gateway_owner)
+        add_test(NAME rbp2_tcp_gateway_integration_tests
+            COMMAND rbp2_tcp_gateway_integration_tests)
+        set_tests_properties(rbp2_tcp_gateway_integration_tests PROPERTIES TIMEOUT 20)
+    endif()
+
+    # MinGW test executables need the runtime beside the selected compiler
+    # first in the child-process PATH. This is test-process setup only; no
+    # runtime DLLs are copied into the repository or product targets.
+    if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        get_filename_component(rbp2_test_compiler_bin
+            ${CMAKE_CXX_COMPILER} DIRECTORY)
+        set_tests_properties(
+            rbp2_rbrp_codec_tests
+            rbp2_gateway_core_tests
+            rbp2_protocol_tests
+            rbp2_robot_codec_tests
+            PROPERTIES ENVIRONMENT "PATH=${rbp2_test_compiler_bin};$ENV{PATH}"
+        )
     endif()
 endif()
