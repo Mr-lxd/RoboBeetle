@@ -4,16 +4,22 @@
 #include "robot/RobotController.h"
 #include "transport/FakeTransport.h"
 #include "ui/MainWindow.h"
+#include "vision/VisionClient.h"
+#include "vision/VideoView.h"
 
 #include <QApplication>
 #include <QComboBox>
 #include <QEventLoop>
 #include <QGroupBox>
+#include <QHostAddress>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QTabWidget>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTimer>
 
 #include <cstdio>
@@ -502,6 +508,68 @@ QTabWidget *tabWidgetWithText(const QWidget *root, const QString &tabText)
     return nullptr;
 }
 
+void testVisionConnectionIsIndependentFromControlTransport()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionClient visionClient;
+    rb::MainWindow window(&controller, &visionClient);
+
+    QGroupBox *panel = findGroupBox(&window, QStringLiteral("Realtime Video"));
+    expect(panel != nullptr, "Vision integration must retain Realtime Video card");
+    if (panel == nullptr) {
+        return;
+    }
+
+    auto *host = panel->findChild<QLineEdit *>(QStringLiteral("visionHost"));
+    auto *port = panel->findChild<QSpinBox *>(QStringLiteral("visionPort"));
+    auto *view = panel->findChild<rb::vision::VideoView *>(
+        QStringLiteral("videoView"));
+    QPushButton *connectVideo =
+        buttonWithText(panel, QStringLiteral("Connect Video"));
+    expect(host != nullptr && port != nullptr && view != nullptr
+               && connectVideo != nullptr,
+           "Realtime Video card exposes independent host/port/client controls");
+    if (host == nullptr || port == nullptr || connectVideo == nullptr) {
+        return;
+    }
+
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "Vision isolation test server must listen");
+    if (!server.isListening()) {
+        return;
+    }
+
+    host->setText(QStringLiteral("127.0.0.1"));
+    port->setValue(server.serverPort());
+    expect(transport.writes().isEmpty(),
+           "control transport is quiet before Vision connect");
+
+    connectVideo->click();
+    for (int i = 0; i < 20 && !server.hasPendingConnections(); ++i) {
+        waitForMs(10);
+    }
+    expect(server.hasPendingConnections(),
+           "Vision Connect reaches dedicated Vision server");
+    QTcpSocket *peer = server.nextPendingConnection();
+
+    for (int i = 0; i < 20
+         && !hasLabelText(panel, QStringLiteral("Connected")); ++i) {
+        waitForMs(10);
+    }
+    expect(hasLabelText(panel, QStringLiteral("Connected")),
+           "Vision card reports its own connected state");
+    expect(transport.writes().isEmpty(),
+           "Vision connect must not emit any robot-control transport bytes");
+
+    window.close();
+    if (peer != nullptr) {
+        peer->deleteLater();
+    }
+}
+
 void testDashboardLayout()
 {
     rb::FakeTransport transport;
@@ -731,6 +799,7 @@ int main(int argc, char **argv)
     testLeakPanelLifecycle();
     testMotionPanelLifecycleAndManualArbitration();
     testGaitBackendPanelLifecycle();
+    testVisionConnectionIsIndependentFromControlTransport();
     testDashboardLayout();
     if (failures == 0) {
         std::fprintf(stdout, "All MainWindow tests passed\n");

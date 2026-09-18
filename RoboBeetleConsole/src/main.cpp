@@ -3,6 +3,7 @@
 #include "robot/RobotController.h"
 #include "transport/SerialTransport.h"
 #include "ui/MainWindow.h"
+#include "vision/VisionClient.h"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -32,7 +33,8 @@ int main(int argc, char *argv[])
         controller = std::make_unique<rb::RemoteRobotController>();
     }
 
-    rb::MainWindow window(controller.get());
+    rb::vision::VisionClient visionClient;
+    rb::MainWindow window(controller.get(), &visionClient);
     window.show();
     return application.exec();
 }

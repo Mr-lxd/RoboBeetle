@@ -1,6 +1,8 @@
 #include "ui/MainWindow.h"
 
 #include "robot/ServoDescriptor.h"
+#include "vision/VideoView.h"
+#include "vision/VisionClient.h"
 
 #include <QCloseEvent>
 #include <QComboBox>
@@ -222,8 +224,10 @@ void addSectionHeader(QVBoxLayout *layout,
 
 } // namespace
 
-MainWindow::MainWindow(IConsoleController *controller, QWidget *parent)
-    : QMainWindow(parent), controller_(controller)
+MainWindow::MainWindow(IConsoleController *controller,
+                       vision::VisionClient *visionClient,
+                       QWidget *parent)
+    : QMainWindow(parent), controller_(controller), visionClient_(visionClient)
 {
     Q_ASSERT(controller_ != nullptr);
     setWindowTitle(QStringLiteral("RoboBeetle Console"));
@@ -505,41 +509,131 @@ QWidget *MainWindow::createVideoPlaceholder()
     applyDashboardCardStyle(box);
     auto *layout = new QVBoxLayout(box);
     layout->setContentsMargins(10, 9, 10, 10);
-    layout->setSpacing(8);
+    layout->setSpacing(7);
     addDashboardCardHeader(
         layout, box, QStringLiteral("Realtime Video"));
 
-    auto *stage = new QWidget(box);
-    stage->setObjectName(QStringLiteral("videoEmptyStage"));
-    stage->setStyleSheet(QStringLiteral(
-        "#videoEmptyStage {"
-        "  background: #F7FAFC;"
-        "  border: 1px solid #E1E9F0;"
-        "  border-radius: 6px;"
-        "}"
-    ));
+    auto *controls = new QHBoxLayout;
+    controls->setContentsMargins(0, 0, 0, 0);
+    controls->setSpacing(5);
 
-    auto *stageLayout = new QVBoxLayout(stage);
-    stageLayout->setContentsMargins(16, 16, 16, 16);
-    stageLayout->setSpacing(5);
-    auto *title = new QLabel(QStringLiteral("Waiting for video stream"), stage);
-    title->setAlignment(Qt::AlignCenter);
-    title->setStyleSheet(QStringLiteral(
-        "font-size: 15px;"
-        "font-weight: 700;"
-        "color: #294B63;"
-    ));
-    auto *subtitle = new QLabel(QStringLiteral("Video backend not connected"), stage);
-    subtitle->setAlignment(Qt::AlignCenter);
-    subtitle->setStyleSheet(QStringLiteral(
-        "font-size: 11px;"
-        "color: #7B8F9D;"
-    ));
-    stageLayout->addStretch();
-    stageLayout->addWidget(title);
-    stageLayout->addWidget(subtitle);
-    stageLayout->addStretch();
-    layout->addWidget(stage, 1);
+    visionHost_ = new QLineEdit(QStringLiteral("192.168.10.2"), box);
+    visionHost_->setObjectName(QStringLiteral("visionHost"));
+    visionHost_->setPlaceholderText(QStringLiteral("Vision host"));
+    visionHost_->setMaximumWidth(145);
+    controls->addWidget(new QLabel(QStringLiteral("Host"), box));
+    controls->addWidget(visionHost_);
+
+    visionPort_ = new QSpinBox(box);
+    visionPort_->setObjectName(QStringLiteral("visionPort"));
+    visionPort_->setRange(1, 65535);
+    visionPort_->setValue(47010);
+    visionPort_->setMaximumWidth(82);
+    controls->addWidget(new QLabel(QStringLiteral("Port"), box));
+    controls->addWidget(visionPort_);
+
+    visionConnectButton_ = new QPushButton(QStringLiteral("Connect Video"), box);
+    visionConnectButton_->setObjectName(QStringLiteral("visionConnectButton"));
+    controls->addWidget(visionConnectButton_);
+    controls->addStretch();
+
+    visionState_ = new QLabel(
+        visionClient_ != nullptr ? QStringLiteral("Disconnected")
+                                 : QStringLiteral("Unavailable"),
+        box);
+    visionState_->setObjectName(QStringLiteral("visionState"));
+    visionState_->setStyleSheet(QStringLiteral("font-weight: 600; color: #566B79;"));
+    controls->addWidget(visionState_);
+    layout->addLayout(controls);
+
+    videoView_ = new vision::VideoView(box);
+    videoView_->setObjectName(QStringLiteral("videoView"));
+    videoView_->setStyleSheet(QStringLiteral(
+        "#videoView { background: #101820; border: 1px solid #D5E0E8; "
+        "border-radius: 6px; }"));
+    layout->addWidget(videoView_, 1);
+
+    visionDiagnostics_ = new QLabel(
+        QStringLiteral("RX -- FPS | Display -- FPS | Frame --"), box);
+    visionDiagnostics_->setObjectName(QStringLiteral("visionDiagnostics"));
+    visionDiagnostics_->setStyleSheet(
+        QStringLiteral("font-size: 10px; color: #7B8F9D;"));
+    layout->addWidget(visionDiagnostics_);
+
+    const bool available = visionClient_ != nullptr;
+    visionHost_->setEnabled(available);
+    visionPort_->setEnabled(available);
+    visionConnectButton_->setEnabled(available);
+
+    if (!available) {
+        return box;
+    }
+
+    connect(visionConnectButton_, &QPushButton::clicked, this, [this] {
+        if (visionClient_->state() == vision::VisionConnectionState::Connected
+            || visionClient_->state() == vision::VisionConnectionState::Connecting) {
+            visionClient_->disconnectFromHost();
+            return;
+        }
+        visionClient_->connectToHost(
+            visionHost_->text().trimmed(),
+            static_cast<quint16>(visionPort_->value()));
+    });
+
+    connect(visionClient_, &vision::VisionClient::connectionStateChanged,
+            this, [this](vision::VisionConnectionState state) {
+        QString text = QStringLiteral("Disconnected");
+        QString buttonText = QStringLiteral("Connect Video");
+        switch (state) {
+        case vision::VisionConnectionState::Disconnected:
+            break;
+        case vision::VisionConnectionState::Connecting:
+            text = QStringLiteral("Connecting");
+            buttonText = QStringLiteral("Disconnect Video");
+            break;
+        case vision::VisionConnectionState::Connected:
+            text = QStringLiteral("Connected");
+            buttonText = QStringLiteral("Disconnect Video");
+            break;
+        case vision::VisionConnectionState::Error:
+            text = QStringLiteral("Error");
+            break;
+        }
+        visionState_->setText(text);
+        visionConnectButton_->setText(buttonText);
+        if (state != vision::VisionConnectionState::Connected) {
+            videoView_->clearFrame();
+        }
+    });
+
+    connect(visionClient_, &vision::VisionClient::frameReady,
+            this, [this](const QImage &image, quint64 frameId, quint64) {
+        videoView_->setFrame(image, frameId);
+    });
+
+    connect(visionClient_, &vision::VisionClient::diagnosticsChanged,
+            this, [this](double receivedFps, quint64 lastFrameId,
+                         quint64 totalWireFrames, quint64 replacedWireFrames,
+                         quint64 jpegDecodeErrors) {
+        visionDiagnostics_->setText(
+            QStringLiteral("RX %1 FPS | Display %2 FPS | Frame %3 | Wire %4 | "
+                           "RX replaced %5 | JPEG drop %6 | UI replaced %7")
+                .arg(receivedFps, 0, 'f', 1)
+                .arg(videoView_->displayedFps(), 0, 'f', 1)
+                .arg(lastFrameId)
+                .arg(totalWireFrames)
+                .arg(replacedWireFrames)
+                .arg(jpegDecodeErrors)
+                .arg(videoView_->replacedPendingFrames()));
+    });
+
+    connect(visionClient_, &vision::VisionClient::logMessage,
+            this, &MainWindow::appendLog);
+    connect(visionClient_, &vision::VisionClient::protocolError,
+            this, [this](const QString &message) {
+        appendLog(QStringLiteral("Vision: %1").arg(message));
+    });
+
     return box;
 }
 
@@ -1694,6 +1788,9 @@ QString MainWindow::stateText(TransportState state)
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     appendLog(QStringLiteral("Application close requested"));
+    if (visionClient_ != nullptr) {
+        visionClient_->shutdown();
+    }
     controller_->shutdown();
     event->accept();
 }
