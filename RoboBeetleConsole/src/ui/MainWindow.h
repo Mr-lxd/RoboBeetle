@@ -1,6 +1,6 @@
 #pragma once
 
-#include "robot/RobotController.h"
+#include "controller/IConsoleController.h"
 
 #include <QMainWindow>
 
@@ -25,7 +25,7 @@ class MainWindow final : public QMainWindow {
     Q_OBJECT
 
 public:
-    explicit MainWindow(RobotController *controller, QWidget *parent = nullptr);
+    explicit MainWindow(IConsoleController *controller, QWidget *parent = nullptr);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -62,16 +62,20 @@ private:
     void setDepthUiState(const DepthMonitorState &state);
     void refreshMotionUi();
     void refreshGaitBackendUi();
+    void refreshAuthorityUi();
     void appendLog(const QString &message);
     static QString stateText(TransportState state);
 
-    RobotController *controller_;
+    IConsoleController *controller_;
 
     // Connection bar.
     QComboBox *portCombo_{nullptr};
     QSpinBox *baudSpin_{nullptr};
     QPushButton *connectButton_{nullptr};
+    QPushButton *acquireButton_{nullptr};
+    QPushButton *releaseButton_{nullptr};
     QLabel *connectionStatus_{nullptr};
+    QLabel *authorityStatus_{nullptr};
 
     // Leak card.
     QLabel *leakStatus_{nullptr};
