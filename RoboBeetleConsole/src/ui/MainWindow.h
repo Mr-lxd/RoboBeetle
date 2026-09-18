@@ -21,11 +21,18 @@ class QWidget;
 
 namespace rb {
 
+namespace vision {
+class VideoView;
+class VisionClient;
+}
+
 class MainWindow final : public QMainWindow {
     Q_OBJECT
 
 public:
-    explicit MainWindow(IConsoleController *controller, QWidget *parent = nullptr);
+    explicit MainWindow(IConsoleController *controller,
+                        vision::VisionClient *visionClient = nullptr,
+                        QWidget *parent = nullptr);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -67,6 +74,15 @@ private:
     static QString stateText(TransportState state);
 
     IConsoleController *controller_;
+    vision::VisionClient *visionClient_{nullptr};
+
+    // Vision card.
+    QLineEdit *visionHost_{nullptr};
+    QSpinBox *visionPort_{nullptr};
+    QPushButton *visionConnectButton_{nullptr};
+    QLabel *visionState_{nullptr};
+    QLabel *visionDiagnostics_{nullptr};
+    vision::VideoView *videoView_{nullptr};
 
     // Connection bar.
     QComboBox *portCombo_{nullptr};

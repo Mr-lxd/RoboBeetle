@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.2 REQUIRED COMPONENTS Core Widgets Network SerialPort)
+find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Network SerialPort)
 
 add_library(RoboBeetleCore
     src/controller/IConsoleController.h
@@ -27,6 +27,14 @@ add_library(RoboBeetleCore
     src/remote/RbrpClientSession.cpp
     src/remote/RemoteRobotController.h
     src/remote/RemoteRobotController.cpp
+    src/vision/VisionProtocol.h
+    src/vision/VisionProtocol.cpp
+    src/vision/VisionStreamDecoder.h
+    src/vision/VisionStreamDecoder.cpp
+    src/vision/VisionFrameDecoder.h
+    src/vision/VisionFrameDecoder.cpp
+    src/vision/VisionClient.h
+    src/vision/VisionClient.cpp
     ../RoboBeetlePi/gateway/src/rbrp_codec.cpp
     src/robot/RobotCommand.h
     src/robot/LeakStatus.h
@@ -48,12 +56,14 @@ target_include_directories(RoboBeetleCore PUBLIC
     src
     ../RoboBeetlePi/gateway/include
 )
-target_link_libraries(RoboBeetleCore PUBLIC Qt6::Core Qt6::Network Qt6::SerialPort)
+target_link_libraries(RoboBeetleCore PUBLIC Qt6::Core Qt6::Gui Qt6::Network Qt6::SerialPort)
 
 add_executable(RoboBeetleConsole
     src/main.cpp
     src/ui/MainWindow.h
     src/ui/MainWindow.cpp
+    src/vision/VideoView.h
+    src/vision/VideoView.cpp
 )
 
 target_link_libraries(RoboBeetleConsole PRIVATE RoboBeetleCore Qt6::Widgets)
@@ -63,6 +73,31 @@ if(BUILD_TESTING)
     add_executable(protocol_tests tests/protocol_tests.cpp)
     target_link_libraries(protocol_tests PRIVATE RoboBeetleCore)
     add_test(NAME protocol_tests COMMAND protocol_tests)
+
+    add_executable(vision_protocol_tests tests/vision_protocol_tests.cpp)
+    target_link_libraries(vision_protocol_tests PRIVATE RoboBeetleCore)
+    add_test(NAME vision_protocol_tests COMMAND vision_protocol_tests)
+
+    add_executable(vision_stream_decoder_tests tests/vision_stream_decoder_tests.cpp)
+    target_link_libraries(vision_stream_decoder_tests PRIVATE RoboBeetleCore)
+    add_test(NAME vision_stream_decoder_tests COMMAND vision_stream_decoder_tests)
+
+    add_executable(vision_frame_decoder_tests tests/vision_frame_decoder_tests.cpp)
+    target_link_libraries(vision_frame_decoder_tests PRIVATE RoboBeetleCore)
+    add_test(NAME vision_frame_decoder_tests COMMAND vision_frame_decoder_tests)
+
+    add_executable(vision_client_tests tests/vision_client_tests.cpp)
+    target_link_libraries(vision_client_tests PRIVATE RoboBeetleCore Qt6::Widgets)
+    add_test(NAME vision_client_tests COMMAND vision_client_tests)
+
+    add_executable(video_view_tests
+        tests/video_view_tests.cpp
+        src/vision/VideoView.h
+        src/vision/VideoView.cpp
+    )
+    target_include_directories(video_view_tests PRIVATE src)
+    target_link_libraries(video_view_tests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+    add_test(NAME video_view_tests COMMAND video_view_tests)
 
     add_executable(robot_controller_tests tests/robot_controller_tests.cpp)
     target_link_libraries(robot_controller_tests PRIVATE RoboBeetleCore)
@@ -84,6 +119,8 @@ if(BUILD_TESTING)
         tests/main_window_tests.cpp
         src/ui/MainWindow.h
         src/ui/MainWindow.cpp
+        src/vision/VideoView.h
+        src/vision/VideoView.cpp
     )
     target_link_libraries(main_window_tests PRIVATE RoboBeetleCore Qt6::Widgets)
     add_test(NAME main_window_tests COMMAND main_window_tests)
@@ -98,6 +135,8 @@ if(BUILD_TESTING)
         tests/remote_robot_controller_tests.cpp
         src/ui/MainWindow.h
         src/ui/MainWindow.cpp
+        src/vision/VideoView.h
+        src/vision/VideoView.cpp
     )
     target_link_libraries(remote_robot_controller_tests PRIVATE RoboBeetleCore Qt6::Widgets)
     add_test(NAME remote_robot_controller_tests COMMAND remote_robot_controller_tests)
