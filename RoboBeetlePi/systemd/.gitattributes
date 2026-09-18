@@ -1,0 +1,4 @@
+*.sh text eol=lf
+*.service.in text eol=lf
+*.default text eol=lf
+README.md text eol=lf
