@@ -22,6 +22,13 @@ namespace detail {
 struct GatewayOwnerTestAccess;
 }
 
+struct GatewayOwnerStats {
+    std::size_t inbound_messages_high_water{};
+    std::size_t inbound_payload_bytes_high_water{};
+    std::size_t inbound_overflow_count{};
+    TcpAdapterStats tcp{};
+};
+
 class GatewayOwner final {
 public:
     GatewayOwner(std::string device_path, std::string bind_address,
@@ -41,6 +48,7 @@ public:
 
     [[nodiscard]] std::uint16_t bound_port() const noexcept;
     [[nodiscard]] bool started() const noexcept;
+    [[nodiscard]] GatewayOwnerStats stats() const noexcept;
 
 private:
     friend struct detail::GatewayOwnerTestAccess;
@@ -64,6 +72,9 @@ private:
     std::deque<SourceLostSignal> pending_source_losses_;
     std::deque<RemoteEnvelope> pending_inbound_;
     std::size_t pending_inbound_bytes_{0};
+    std::size_t inbound_messages_high_water_{0};
+    std::size_t inbound_payload_bytes_high_water_{0};
+    std::size_t inbound_overflow_count_{0};
     bool stop_requested_{false};
     bool started_{false};
     bool shutdown_consumed_{false};

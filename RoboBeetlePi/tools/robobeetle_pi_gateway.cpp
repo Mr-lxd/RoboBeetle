@@ -151,5 +151,21 @@ int main(int argc, char **argv)
     }
 
     owner.stop();
+    const auto stats = owner.stats();
+    std::cout << "GatewayStats:\n"
+              << "inbound_messages_high_water="
+              << stats.inbound_messages_high_water << '\n'
+              << "inbound_payload_bytes_high_water="
+              << stats.inbound_payload_bytes_high_water << '\n'
+              << "inbound_overflow_count="
+              << stats.inbound_overflow_count << '\n'
+              << "critical_frames_high_water="
+              << stats.tcp.critical_frames_high_water << '\n'
+              << "critical_bytes_high_water="
+              << stats.tcp.critical_bytes_high_water << '\n'
+              << "critical_overflow_count="
+              << stats.tcp.critical_overflow_count << '\n'
+              << "telemetry_replacements="
+              << stats.tcp.telemetry_replacements << '\n';
     return EXIT_SUCCESS;
 }

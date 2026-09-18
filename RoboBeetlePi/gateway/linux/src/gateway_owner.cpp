@@ -119,15 +119,23 @@ void GatewayOwner::on_source_connected(ControlSourceId source) noexcept
 bool GatewayOwner::enqueue_inbound(const RemoteEnvelope &envelope) noexcept
 {
     try {
+        const auto payload_size = remote_payload_size(envelope.message);
         std::lock_guard<std::mutex> lock(bridge_mutex_);
-        if (stop_requested_ ||
-            pending_inbound_.size() >= kMaxInboundMessages ||
-            pending_inbound_bytes_ + remote_payload_size(envelope.message) >
-                kMaxInboundPayloadBytes) {
+        if (stop_requested_) {
             return false;
         }
-        pending_inbound_bytes_ += remote_payload_size(envelope.message);
+        if (pending_inbound_.size() >= kMaxInboundMessages ||
+            pending_inbound_bytes_ + payload_size >
+                kMaxInboundPayloadBytes) {
+            ++inbound_overflow_count_;
+            return false;
+        }
+        pending_inbound_bytes_ += payload_size;
         pending_inbound_.push_back(envelope);
+        inbound_messages_high_water_ = std::max(
+            inbound_messages_high_water_, pending_inbound_.size());
+        inbound_payload_bytes_high_water_ = std::max(
+            inbound_payload_bytes_high_water_, pending_inbound_bytes_);
     } catch (...) {
         return false;
     }
@@ -293,6 +301,9 @@ int GatewayOwner::start()
         }
         stop_requested_ = false;
         shutdown_consumed_ = false;
+        inbound_messages_high_water_ = 0U;
+        inbound_payload_bytes_high_water_ = 0U;
+        inbound_overflow_count_ = 0U;
         started_ = true;
     }
 
@@ -358,6 +369,20 @@ bool GatewayOwner::started() const noexcept
 {
     std::lock_guard<std::mutex> lock(bridge_mutex_);
     return started_;
+}
+
+GatewayOwnerStats GatewayOwner::stats() const noexcept
+{
+    GatewayOwnerStats result;
+    {
+        std::lock_guard<std::mutex> lock(bridge_mutex_);
+        result.inbound_messages_high_water = inbound_messages_high_water_;
+        result.inbound_payload_bytes_high_water =
+            inbound_payload_bytes_high_water_;
+        result.inbound_overflow_count = inbound_overflow_count_;
+    }
+    result.tcp = tcp_.stats();
+    return result;
 }
 
 } // namespace robobeetle::gateway

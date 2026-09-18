@@ -36,6 +36,18 @@ struct GatewayOwnerTestAccess {
         owner.on_source_connected(source);
     }
 
+    static bool enqueue_inbound(
+        GatewayOwner &owner, const RemoteEnvelope &envelope)
+    {
+        return owner.enqueue_inbound(envelope);
+    }
+
+    static void request_stop(GatewayOwner &owner)
+    {
+        std::lock_guard<std::mutex> lock(owner.bridge_mutex_);
+        owner.stop_requested_ = true;
+    }
+
     static std::vector<ControlSourceId>
     pending_connections(const GatewayOwner &owner)
     {
@@ -672,7 +684,7 @@ void coalesced_recv_batch_shares_one_trusted_timestamp()
 
 }
 
-void newest_source_registration_replaces_pending_older_generation()
+void newest_source_registration_and_owner_inbound_stats()
 {
     GatewayOwner owner("/unused", "127.0.0.1", 0U);
     detail::GatewayOwnerTestAccess::queue_connection(owner, 70U);
@@ -681,6 +693,30 @@ void newest_source_registration_replaces_pending_older_generation()
         detail::GatewayOwnerTestAccess::pending_connections(owner);
     expect(pending.size() == 1U && pending.front() == 71U,
            "a newer source registration coalesces the older pending generation");
+
+    const RemoteEnvelope envelope{
+        1U, 1U, RemoteMessage{
+                    RbrpMessageKind::Hello, 1U, HelloRequest{0U}}};
+    for (std::size_t i = 0U; i < 32U; ++i) {
+        expect(detail::GatewayOwnerTestAccess::enqueue_inbound(owner, envelope),
+               "owner admits inbound message within frozen bound");
+    }
+    expect(!detail::GatewayOwnerTestAccess::enqueue_inbound(owner, envelope),
+           "owner rejects the 33rd inbound message");
+
+    const auto stats = owner.stats();
+    expect(stats.inbound_messages_high_water == 32U,
+           "owner records 32-message inbound high-water");
+    expect(stats.inbound_payload_bytes_high_water == 64U,
+           "owner records inbound payload-byte high-water");
+    expect(stats.inbound_overflow_count == 1U,
+           "owner records one capacity overflow");
+
+    detail::GatewayOwnerTestAccess::request_stop(owner);
+    expect(!detail::GatewayOwnerTestAccess::enqueue_inbound(owner, envelope),
+           "owner rejects inbound after stop request");
+    expect(owner.stats().inbound_overflow_count == 1U,
+           "stop-request rejection does not count as capacity overflow");
 }
 
 void stale_close_and_old_telemetry_never_affect_new_source()
@@ -757,6 +793,12 @@ void critical_bound_partial_telemetry_and_shutdown_contract()
 
     CallbackState callbacks;
     TcpAdapter adapter("127.0.0.1", 0U, callbacks.callbacks());
+    const auto initial_stats = adapter.stats();
+    expect(initial_stats.critical_frames_high_water == 0U &&
+               initial_stats.critical_bytes_high_water == 0U &&
+               initial_stats.critical_overflow_count == 0U &&
+               initial_stats.telemetry_replacements == 0U,
+           "TCP adapter stats start at zero");
     expect(adapter.start() == 0, "TCP adapter starts for bounded output test");
     const int client = connect_loopback(adapter.bound_port());
     expect(callbacks.wait_for([&callbacks] {
@@ -796,6 +838,29 @@ void critical_bound_partial_telemetry_and_shutdown_contract()
             expect(false, "critical output eventually reports bounded exhaustion");
         }
     }
+
+    for (std::uint16_t seq = 9U; seq < 2000U; ++seq) {
+        expect(adapter.publish(
+                   GatewayOutbound{source, GatewayMessage{
+                                              0U,
+                                              GatewayLeakTelemetry{
+                                                  seq, LeakState::Dry}}}),
+               "telemetry burst remains publishable");
+    }
+
+    const auto stats = adapter.stats();
+    expect(stats.critical_overflow_count >= 1U,
+           "critical capacity rejection increments overflow stats");
+    expect(stats.critical_frames_high_water > 0U &&
+               stats.critical_frames_high_water <=
+                   TcpAdapter::kMaxCriticalFrames,
+           "critical frame high-water stays within frozen bound");
+    expect(stats.critical_bytes_high_water > 0U &&
+               stats.critical_bytes_high_water <=
+                   TcpAdapter::kMaxCriticalBytes,
+           "critical byte high-water stays within frozen bound");
+    expect(stats.telemetry_replacements > 0U,
+           "same-kind telemetry burst records latest-value replacement");
 
     ::shutdown(client, SHUT_RDWR);
     ::close(client);
@@ -1656,7 +1721,7 @@ int main()
         stale_poll_revents_are_rejected_by_generation();
         inbound_delivery_barrier_preserves_timely_heartbeat();
         coalesced_recv_batch_shares_one_trusted_timestamp();
-        newest_source_registration_replaces_pending_older_generation();
+        newest_source_registration_and_owner_inbound_stats();
         stale_close_and_old_telemetry_never_affect_new_source();
         inbound_queue_exhaustion_is_source_loss();
         critical_bound_partial_telemetry_and_shutdown_contract();

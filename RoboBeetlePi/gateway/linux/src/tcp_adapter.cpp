@@ -156,6 +156,7 @@ struct TcpAdapter::Impl {
 
     std::deque<PendingFrame> critical;
     std::size_t critical_bytes{0};
+    TcpAdapterStats stats{};
     std::array<std::optional<PendingFrame>,
                TcpAdapter::kTelemetrySlotCount>
         telemetry;
@@ -635,6 +636,7 @@ int TcpAdapter::start()
         if (impl.started) {
             return EALREADY;
         }
+        impl.stats = {};
     }
 
     const int listener_error = impl.open_listener();
@@ -714,15 +716,25 @@ bool TcpAdapter::publish(const GatewayOutbound &output)
             if (pending.telemetry) {
                 pending.telemetry_slot =
                     telemetry_slot(output.message.payload);
+                if (impl.telemetry[pending.telemetry_slot].has_value()) {
+                    ++impl.stats.telemetry_replacements;
+                }
                 impl.telemetry[pending.telemetry_slot] = std::move(pending);
             } else {
                 if (impl.critical.size() >= TcpAdapter::kMaxCriticalFrames ||
                     impl.critical_bytes + encoded.wire.size() >
                         TcpAdapter::kMaxCriticalBytes) {
+                    ++impl.stats.critical_overflow_count;
                     return false;
                 }
                 impl.critical_bytes += encoded.wire.size();
                 impl.critical.push_back(std::move(pending));
+                impl.stats.critical_frames_high_water = std::max(
+                    impl.stats.critical_frames_high_water,
+                    impl.critical.size());
+                impl.stats.critical_bytes_high_water = std::max(
+                    impl.stats.critical_bytes_high_water,
+                    impl.critical_bytes);
             }
         }
     }
@@ -764,6 +776,12 @@ ControlSourceId TcpAdapter::current_source_id() const noexcept
 bool TcpAdapter::inbound_delivery_in_flight() const noexcept
 {
     return impl_->inbound_deliveries_in_flight.load() != 0U;
+}
+
+TcpAdapterStats TcpAdapter::stats() const noexcept
+{
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->stats;
 }
 
 } // namespace robobeetle::gateway

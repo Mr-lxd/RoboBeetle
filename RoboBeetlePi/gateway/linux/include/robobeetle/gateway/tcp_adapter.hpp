@@ -47,6 +47,13 @@ using TcpInboundBatchClose = std::function<void(SourceLostReason)>;
 
 } // namespace detail
 
+struct TcpAdapterStats {
+    std::size_t critical_frames_high_water{};
+    std::size_t critical_bytes_high_water{};
+    std::size_t critical_overflow_count{};
+    std::size_t telemetry_replacements{};
+};
+
 struct TcpAdapterCallbacks {
     std::function<void(ControlSourceId)> source_connected;
     std::function<bool(const RemoteEnvelope &)> enqueue_inbound;
@@ -83,6 +90,7 @@ public:
     [[nodiscard]] std::uint16_t bound_port() const noexcept;
     [[nodiscard]] ControlSourceId current_source_id() const noexcept;
     [[nodiscard]] bool inbound_delivery_in_flight() const noexcept;
+    [[nodiscard]] TcpAdapterStats stats() const noexcept;
 
 private:
     struct Impl;
