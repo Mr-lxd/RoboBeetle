@@ -1,0 +1,21 @@
+[Unit]
+Description=RoboBeetle Pi RBRP gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@ROBOBEETLE_USER@
+EnvironmentFile=/etc/default/robobeetle-pi-gateway
+ExecStart=/usr/local/bin/robobeetle_pi_gateway --device ${ROBOBEETLE_DEVICE} --bind ${ROBOBEETLE_BIND} --port ${ROBOBEETLE_PORT}
+Restart=on-failure
+RestartSec=2s
+KillSignal=SIGTERM
+TimeoutStopSec=10s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

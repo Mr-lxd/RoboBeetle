@@ -1,0 +1,8 @@
+# RoboBeetle Pi gateway runtime configuration.
+#
+# RBRP v1 has no authentication or TLS. 0.0.0.0 is appropriate only on a
+# trusted engineering network. Set ROBOBEETLE_BIND to a specific Pi IPv4
+# address when interface-restricted listening is preferred.
+ROBOBEETLE_DEVICE=/dev/serial0
+ROBOBEETLE_BIND=0.0.0.0
+ROBOBEETLE_PORT=47000
