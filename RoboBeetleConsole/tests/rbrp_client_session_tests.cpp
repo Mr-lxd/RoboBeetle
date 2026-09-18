@@ -207,6 +207,44 @@ void testHandshakeHeartbeatCommandAndReconnect()
     expect(heartbeat.has_value(),
            "Owned session must send the frozen 250-ms ControlHeartbeat");
 
+    expect(session.releaseControl(),
+           "explicit ReleaseControl must immediately fail closed locally");
+    const auto release = gateway.nextFrame(RbrpMessageKind::ReleaseControl);
+    expect(release.has_value(), "gateway must receive ReleaseControl");
+    expect(session.authorityState() == rb::ControlAuthorityState::Unowned
+               && !session.isControlActive(),
+           "local Release must immediately clear Owned/Active state");
+
+    gateway.send(GatewayMessage{
+        0U, ControlStateMessage{
+                AuthorityState::Owned,
+                GatewayApplicationSessionState::Online,
+                GatewayApplicationLinkState::Active,
+                GatewayStateReason::Acquired, 900U}});
+    QCoreApplication::processEvents();
+    expect(session.authorityState() == rb::ControlAuthorityState::Unowned
+               && !session.isControlActive(),
+           "stale Owned ControlState after local Release must not resurrect authority");
+    expect(!gateway.nextFrame(RbrpMessageKind::ControlHeartbeat, 350).has_value(),
+           "stale Owned ControlState after local Release must not restart heartbeat");
+
+    expect(session.acquireControl(),
+           "explicit Acquire must be able to start a new authority generation");
+    const auto reacquire = gateway.nextFrame(RbrpMessageKind::AcquireControl);
+    expect(reacquire.has_value(), "gateway must receive explicit re-Acquire");
+    if (!reacquire.has_value()) {
+        return;
+    }
+    gateway.send(GatewayMessage{
+        reacquire->request_id,
+        AcquireReply{AcquireResult::Granted, AuthorityState::Owned,
+                     GatewayApplicationSessionState::Online,
+                     GatewayApplicationLinkState::Active, 1000U, 0U}});
+    expect(waitUntil([&] {
+        return session.authorityState() == rb::ControlAuthorityState::Owned
+            && session.isControlActive();
+    }), "matching AcquireReply must end the local Release fence");
+
     QByteArray enablePayload;
     enablePayload.append(char(0x01));
     enablePayload.append(char(0x00));

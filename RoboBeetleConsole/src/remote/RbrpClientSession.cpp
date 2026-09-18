@@ -207,6 +207,7 @@ bool RbrpClientSession::releaseControl()
     heartbeatTimer_.stop();
     requestTimeoutTimer_.stop();
     acquireRequestId_.reset();
+    localReleaseFence_ = true;
     setAuthorityState(ControlAuthorityState::Unowned, false);
     setSessionState(helloComplete_ ? RemoteSessionState::ReadyUnowned
                                    : RemoteSessionState::HelloPending);
@@ -418,6 +419,7 @@ bool RbrpClientSession::handleAcquireReply(const RbrpFrame &frame)
         return true;
     }
 
+    localReleaseFence_ = false;
     const bool active =
         session == static_cast<quint8>(
                        robobeetle::gateway::GatewayApplicationSessionState::Online)
@@ -446,6 +448,14 @@ bool RbrpClientSession::handleControlState(const RbrpFrame &frame)
                       robobeetle::gateway::GatewayApplicationLinkState::Lost)) {
         failProtocol(QStringLiteral("ControlState contains invalid enum value"));
         return false;
+    }
+
+    if (localReleaseFence_
+        && authority == static_cast<quint8>(
+                            robobeetle::gateway::AuthorityState::Owned)) {
+        emit logMessage(QStringLiteral(
+            "Ignoring stale Owned ControlState after local Release"));
+        return true;
     }
 
     if (authority != static_cast<quint8>(
@@ -526,6 +536,7 @@ void RbrpClientSession::resetProtocolState()
     helloComplete_ = false;
     helloRequestId_.reset();
     acquireRequestId_.reset();
+    localReleaseFence_ = false;
     heartbeatIntervalMs_ = 250U;
     leaseTimeoutMs_ = 1000U;
     setAuthorityState(ControlAuthorityState::Unowned, false);

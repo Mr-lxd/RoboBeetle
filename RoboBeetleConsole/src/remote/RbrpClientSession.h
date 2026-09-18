@@ -85,6 +85,7 @@ private:
     ControlAuthorityState authorityState_{ControlAuthorityState::Unowned};
     bool controlActive_{false};
     bool helloComplete_{false};
+    bool localReleaseFence_{false};
     quint16 heartbeatIntervalMs_{250};
     quint16 leaseTimeoutMs_{1000};
     quint32 nextRequestId_{1};
