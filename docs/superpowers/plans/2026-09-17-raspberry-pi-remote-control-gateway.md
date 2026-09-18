@@ -1489,3 +1489,104 @@ application Slice 6 changed?   NO
 dsh/qt-ui touched?              NO
 Slice 6 worktree touched?       NO
 ```
+
+## 21. Final hardware acceptance and PR handoff record (2026-09-18)
+
+Acceptance-tested implementation / observability head:
+
+```text
+2f332cb75fda643a2f6f24e752b3cfac6005470b
+base: 9bc66130467ebb4810d49c2a509c81f838855c6e
+```
+
+Final software regression evidence:
+
+```text
+Windows fresh portable configure/build: PASS
+Windows portable CTest:              4/4 PASS
+Raspberry Pi native configure/build: PASS
+Raspberry Pi full CTest:             10/10 PASS
+rbp2_tcp_gateway_integration_tests:  PASS (13.44 s rerun)
+External code review:                BLOCKER 0 / SHOULD FIX 0
+```
+
+Hardware gates:
+
+- Gate A PASS: real TCP/RBRP v1 link reached Owned + Online + Active and
+  forwarded real Leak/IMU/Depth telemetry; ReleaseControl returned Unowned.
+- Gate B PASS: Servo 0 only, mask 0x0001, Enable -> +10.00 deg -> Neutral ->
+  Disable, with Submitted/Accepted outcomes and physical motion verified.
+- Gate C PASS: with an actuator active, the laptop-to-Pi network was physically
+  broken. Physical safe action was observed and Servo 0 lost holding force.
+  Exact network-loss-to-safe-state latency was not instrumented.
+- Gate D PASS: the same Pi gateway process survived the network break; reconnect
+  required a new source, Hello, explicit Acquire, and a fresh command. No old
+  +10 deg command replayed, and STM32 sequence continuity was observed from the
+  pre-break actuator sequence 120 to the post-reconnect sequence 3427.
+- Gate E PASS: CPG Forward ran for 10 s with ControlHeartbeat, command ACK
+  traffic, Leak, IMU, and Depth telemetry. Physical observation reported no
+  abnormal stop/stutter and Stop returned safely before Disable.
+
+Gate E client evidence:
+
+```text
+control_heartbeats_tx=333
+command_submitted=14
+command_outcomes=14
+client_command_max_inflight=1
+telemetry_leak=172
+telemetry_imu=86
+telemetry_depth=86
+telemetry_unique_sequences=344
+telemetry_sequence_range=3578..3921
+telemetry_internal_range_gaps=0
+telemetry_duplicates=0
+telemetry_decode_errors=0
+service_errors=0
+armed_state_departures=0
+```
+Gate E gateway-local observability evidence:
+
+```text
+inbound_messages_high_water=3 / 32
+inbound_payload_bytes_high_water=3 / 16384
+inbound_overflow_count=0
+critical_frames_high_water=2 / 32
+critical_bytes_high_water=52 / 32768
+critical_overflow_count=0
+telemetry_replacements=0
+```
+
+Empirical qualification notes:
+
+- critical and inbound queue sizing had substantial margin under the Gate E load;
+- the 250 ms remote heartbeat / 1000 ms lease remained stable under load;
+- 16-bit sequence wrap behavior is covered by the protocol regression suite,
+  including `test_heartbeat_schedule_and_wrap()`;
+- physical network-loss safe action was verified, but exact elapsed latency was
+  not instrumented and no numeric timing claim is made.
+
+Final scope boundary remains unchanged: no Qt, Firmware, Protocol V2, LinkCore,
+Transport, Session, Runtime, or Slice 6 application behavior changes; no raw
+PWM or raw Protocol V2 remote passthrough; no queue-capacity/scheduling,
+authority/lease, or motion-semantic changes. RBRP v1 has no authentication or
+TLS and is restricted to a trusted engineering LAN.
+
+Final PR gate status after this record:
+
+```text
+Design Frozen              PASS
+Implementation             PASS
+Windows Portable Gate      PASS
+Linux/Pi Native Gate       PASS
+External Code Review       PASS
+Hardware Gate A            PASS
+Hardware Gate B            PASS
+Hardware Gate C            PASS
+Hardware Gate D            PASS
+Hardware Gate E            PASS
+Final Documentation        PASS
+```
+
+This record authorizes PR-level final review only. It does not authorize a
+merge, rebase, amend, force push, or Slice 8 work.
