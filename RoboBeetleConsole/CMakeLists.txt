@@ -7,9 +7,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.2 REQUIRED COMPONENTS Core Widgets SerialPort)
+find_package(Qt6 6.2 REQUIRED COMPONENTS Core Widgets Network SerialPort)
 
 add_library(RoboBeetleCore
+    src/controller/IConsoleController.h
     src/protocol/Crc16.h
     src/protocol/Crc16.cpp
     src/protocol/Packet.h
@@ -22,6 +23,11 @@ add_library(RoboBeetleCore
     src/transport/FakeTransport.cpp
     src/transport/SerialTransport.h
     src/transport/SerialTransport.cpp
+    src/remote/RbrpClientSession.h
+    src/remote/RbrpClientSession.cpp
+    src/remote/RemoteRobotController.h
+    src/remote/RemoteRobotController.cpp
+    ../RoboBeetlePi/gateway/src/rbrp_codec.cpp
     src/robot/RobotCommand.h
     src/robot/LeakStatus.h
     src/robot/ImuSnapshot.h
@@ -38,8 +44,11 @@ add_library(RoboBeetleCore
     src/robot/RobotController.cpp
 )
 
-target_include_directories(RoboBeetleCore PUBLIC src)
-target_link_libraries(RoboBeetleCore PUBLIC Qt6::Core Qt6::SerialPort)
+target_include_directories(RoboBeetleCore PUBLIC
+    src
+    ../RoboBeetlePi/gateway/include
+)
+target_link_libraries(RoboBeetleCore PUBLIC Qt6::Core Qt6::Network Qt6::SerialPort)
 
 add_executable(RoboBeetleConsole
     src/main.cpp
@@ -78,4 +87,18 @@ if(BUILD_TESTING)
     )
     target_link_libraries(main_window_tests PRIVATE RoboBeetleCore Qt6::Widgets)
     add_test(NAME main_window_tests COMMAND main_window_tests)
+
+    add_executable(rbrp_client_session_tests
+        tests/rbrp_client_session_tests.cpp
+    )
+    target_link_libraries(rbrp_client_session_tests PRIVATE RoboBeetleCore)
+    add_test(NAME rbrp_client_session_tests COMMAND rbrp_client_session_tests)
+
+    add_executable(remote_robot_controller_tests
+        tests/remote_robot_controller_tests.cpp
+        src/ui/MainWindow.h
+        src/ui/MainWindow.cpp
+    )
+    target_link_libraries(remote_robot_controller_tests PRIVATE RoboBeetleCore Qt6::Widgets)
+    add_test(NAME remote_robot_controller_tests COMMAND remote_robot_controller_tests)
 endif()

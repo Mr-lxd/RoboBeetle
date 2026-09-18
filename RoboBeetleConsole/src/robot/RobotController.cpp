@@ -95,7 +95,7 @@ RobotController::RobotController(ITransport *transport,
                                  RobotControllerConfig config,
                                  PortDiscovery portDiscovery,
                                  QObject *parent)
-    : QObject(parent),
+    : IConsoleController(parent),
       transport_(transport),
       config_(config),
       portDiscovery_(std::move(portDiscovery)),
@@ -124,6 +124,8 @@ RobotController::RobotController(ITransport *transport,
         }
     });
     connect(transport_, &ITransport::bytesReceived, this, &RobotController::processIncoming);
+    connect(&imuMonitor_, &ImuMonitor::changed, this, &IConsoleController::imuStateChanged);
+    connect(&depthMonitor_, &DepthMonitor::changed, this, &IConsoleController::depthStateChanged);
     connect(transport_, &ITransport::errorOccurred, this, [this](const QString &message) {
         emit logMessage(QStringLiteral("Transport error: %1").arg(message));
         if (config_.linkProfile != LinkProfile::Apc220HalfDuplex) {
@@ -194,6 +196,8 @@ RobotController::RobotController(ITransport *transport,
             }
             if (state_ == state) {
                 emit connectionStateChanged(state);
+                emit controlAvailabilityChanged();
+                emit authorityStateChanged(authorityState(), isControlActive());
             }
         }
     });
@@ -202,6 +206,17 @@ RobotController::RobotController(ITransport *transport,
 void RobotController::refreshSerialPorts()
 {
     emit serialPortsChanged(portDiscovery_ ? portDiscovery_() : QStringList{});
+}
+
+void RobotController::connectController(
+    const ConsoleConnectionConfiguration &configuration)
+{
+    connectTransport({configuration.endpoint, configuration.baudRate});
+}
+
+void RobotController::disconnectController()
+{
+    disconnectTransport();
 }
 
 void RobotController::connectTransport(const TransportConfiguration &configuration)

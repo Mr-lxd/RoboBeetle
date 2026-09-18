@@ -1,0 +1,935 @@
+#include "remote/RemoteRobotController.h"
+
+#include "robot/DepthSnapshot.h"
+#include "robot/ImuSnapshot.h"
+
+#include <QByteArrayView>
+#include <QDateTime>
+
+#include <cstdint>
+
+namespace rb {
+namespace {
+
+constexpr qint64 kRemoteCommandTimeoutMs = 2000;
+
+quint16 readLe16(QByteArrayView payload, qsizetype offset)
+{
+    return static_cast<quint16>(
+        static_cast<quint8>(payload[offset])
+        | (static_cast<quint16>(static_cast<quint8>(payload[offset + 1])) << 8U));
+}
+
+quint32 readLe32(QByteArrayView payload, qsizetype offset)
+{
+    return static_cast<quint32>(static_cast<quint8>(payload[offset]))
+        | (static_cast<quint32>(static_cast<quint8>(payload[offset + 1])) << 8U)
+        | (static_cast<quint32>(static_cast<quint8>(payload[offset + 2])) << 16U)
+        | (static_cast<quint32>(static_cast<quint8>(payload[offset + 3])) << 24U);
+}
+
+void appendLe16(QByteArray &payload, quint16 value)
+{
+    payload.append(static_cast<char>(value & 0xffU));
+    payload.append(static_cast<char>((value >> 8U) & 0xffU));
+}
+
+QString commandKindText(robobeetle::gateway::RobotCommandKind kind)
+{
+    using Kind = robobeetle::gateway::RobotCommandKind;
+    switch (kind) {
+    case Kind::EnableServos: return QStringLiteral("EnableServos");
+    case Kind::DisableServos: return QStringLiteral("DisableServos");
+    case Kind::SetServoAngle: return QStringLiteral("SetServoAngle");
+    case Kind::NeutralServos: return QStringLiteral("NeutralServos");
+    case Kind::StartMotion: return QStringLiteral("StartMotion");
+    case Kind::StopMotion: return QStringLiteral("StopMotion");
+    case Kind::SetGaitBackend: return QStringLiteral("SetGaitBackend");
+    }
+    return QStringLiteral("UnknownCommand");
+}
+
+} // namespace
+
+RemoteRobotController::RemoteRobotController(QObject *parent)
+    : IConsoleController(parent),
+      session_(this)
+{
+    motionStopTimer_.setSingleShot(true);
+    motionModeTransitionTimer_.setSingleShot(true);
+    telemetryTimer_.setInterval(500);
+
+    connect(&motionStopTimer_, &QTimer::timeout, this, [this] {
+        if (motionState_ == MotionState::Stopping) {
+            setMotionState(MotionState::Stopped, MotionMode::Stop);
+        }
+    });
+    connect(&motionModeTransitionTimer_, &QTimer::timeout, this, [this] {
+        if (motionState_ == MotionState::Running) {
+            emit motionStateChanged(motionState_, motionMode_);
+        }
+    });
+    connect(&telemetryTimer_, &QTimer::timeout,
+            this, &RemoteRobotController::refreshTelemetryStaleness);
+    telemetryTimer_.start();
+
+    connect(&session_, &RbrpClientSession::connectionStateChanged,
+            this, [this](TransportState state) {
+        emit connectionStateChanged(state);
+        if (state == TransportState::Closing
+            || state == TransportState::Disconnected
+            || state == TransportState::Error) {
+            failClosedControlState(
+                state == TransportState::Error
+                    ? QStringLiteral("remote transport error")
+                    : QStringLiteral("remote transport closed"));
+            resetTelemetry();
+        }
+    });
+    connect(&session_, &RbrpClientSession::sessionStateChanged,
+            this, [this](RemoteSessionState) {
+        emit controlAvailabilityChanged();
+    });
+    connect(&session_, &RbrpClientSession::authorityStateChanged,
+            this, [this](ControlAuthorityState state, bool active) {
+        const bool expectedUserRelease = userReleasePending_
+            && state == ControlAuthorityState::Unowned && !active;
+        if (expectedUserRelease) {
+            failClosedControlState({});
+            userReleasePending_ = false;
+            emit logMessage(QStringLiteral("Remote control released"));
+        } else if ((wasControlActive_ && !active)
+                   || (state == ControlAuthorityState::Unowned
+                       && !pending_.isEmpty())) {
+            failClosedControlState(QStringLiteral("remote authority/link lost"));
+        }
+        wasControlActive_ = active;
+        emit controlAvailabilityChanged();
+        emit authorityStateChanged(state, active);
+        updateMonitor(authorityText(state, active));
+    });
+    connect(&session_, &RbrpClientSession::frameSent,
+            this, &RemoteRobotController::noteTxFrame);
+    connect(&session_, &RbrpClientSession::frameReceived,
+            this, [this](quint8 kind, quint32 requestId,
+                         const QByteArray &payload) {
+        noteRxFrame(kind, requestId, payload);
+        handleFrame(kind, requestId, payload);
+    });
+    connect(&session_, &RbrpClientSession::protocolError,
+            this, [this](const QString &message) {
+        ++monitor_.timeoutCount;
+        updateMonitor(QStringLiteral("RBRP error"));
+        emit logMessage(message);
+    });
+    connect(&session_, &RbrpClientSession::logMessage,
+            this, &RemoteRobotController::logMessage);
+
+    updateMonitor(QStringLiteral("Disconnected"));
+}
+
+void RemoteRobotController::refreshSerialPorts()
+{
+    emit serialPortsChanged({});
+}
+
+void RemoteRobotController::connectController(
+    const ConsoleConnectionConfiguration &configuration)
+{
+    session_.connectToHost(configuration.endpoint, configuration.tcpPort);
+}
+
+void RemoteRobotController::disconnectController()
+{
+    session_.disconnectFromHost();
+}
+
+void RemoteRobotController::shutdown()
+{
+    if (session_.authorityState() == ControlAuthorityState::Owned) {
+        (void)session_.releaseControl();
+    }
+    session_.disconnectFromHost();
+}
+
+bool RemoteRobotController::acquireControl()
+{
+    return session_.acquireControl();
+}
+
+bool RemoteRobotController::releaseControl()
+{
+    userReleasePending_ = true;
+    const bool released = session_.releaseControl();
+    if (!released) {
+        userReleasePending_ = false;
+    }
+    return released;
+}
+
+bool RemoteRobotController::enableServo(ServoId id)
+{
+    if (!isControlActive() || !isServoSupported(id) || isMotionActive()) {
+        return false;
+    }
+    const quint16 mask = servoMask(id);
+    if ((enabledMask_ & mask) != 0U) {
+        return true;
+    }
+
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::EnableServos;
+    pending.servoMask = mask;
+    return submitCommand(pending.kind, maskPayload(mask), pending).has_value();
+}
+
+bool RemoteRobotController::disableServo(ServoId id)
+{
+    if (!isControlActive() || !isServoSupported(id)) {
+        return false;
+    }
+    const quint16 mask = servoMask(id);
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::DisableServos;
+    pending.servoMask = mask;
+    const auto requestId = submitCommand(pending.kind, maskPayload(mask), pending);
+    if (!requestId.has_value()) {
+        return false;
+    }
+    supersedePendingForDisable(mask);
+    setDisablePendingMask(static_cast<quint16>(disablePendingMask_ | mask));
+    return true;
+}
+
+bool RemoteRobotController::disableAll()
+{
+    if (!isControlActive()) {
+        return false;
+    }
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::DisableServos;
+    pending.servoMask = SupportedServoMask;
+    const auto requestId =
+        submitCommand(pending.kind, maskPayload(SupportedServoMask), pending);
+    if (!requestId.has_value()) {
+        return false;
+    }
+    supersedePendingForDisable(SupportedServoMask);
+    setDisablePendingMask(SupportedServoMask);
+    return true;
+}
+
+bool RemoteRobotController::setServoPwm(ServoId id, quint16 pulseUs)
+{
+    Q_UNUSED(id);
+    Q_UNUSED(pulseUs);
+    emit logMessage(QStringLiteral(
+        "Raw PWM is unavailable in RBRP remote mode; use angle/neutral commands"));
+    return false;
+}
+
+bool RemoteRobotController::setServoAngle(ServoId id, qint16 angleCentidegrees)
+{
+    if (!isControlActive() || !isServoSupported(id) || !isServoEnabled(id)
+        || isServoDisablePending(id) || isMotionActive()) {
+        return false;
+    }
+
+    QByteArray payload;
+    payload.append(static_cast<char>(id));
+    appendLe16(payload, static_cast<quint16>(angleCentidegrees));
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::SetServoAngle;
+    pending.servoMask = servoMask(id);
+    return submitCommand(pending.kind, payload, pending).has_value();
+}
+
+bool RemoteRobotController::neutralServo(ServoId id)
+{
+    if (!isControlActive() || !isServoSupported(id) || !isServoEnabled(id)
+        || isServoDisablePending(id) || isMotionActive()) {
+        return false;
+    }
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::NeutralServos;
+    pending.servoMask = servoMask(id);
+    return submitCommand(pending.kind, maskPayload(pending.servoMask), pending)
+        .has_value();
+}
+
+bool RemoteRobotController::startMotion(MotionMode mode)
+{
+    if (!isMotionReady(mode) || mode == MotionMode::Backward
+        || mode == MotionMode::Stop || mode == MotionMode::Count) {
+        return false;
+    }
+    QByteArray payload(1, static_cast<char>(mode));
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::StartMotion;
+    pending.motionMode = mode;
+    return submitCommand(pending.kind, payload, pending).has_value();
+}
+
+bool RemoteRobotController::stopMotion()
+{
+    if (!isControlActive()) {
+        return false;
+    }
+    for (auto it = pending_.cbegin(); it != pending_.cend(); ++it) {
+        if (!it->superseded
+            && it->kind == robobeetle::gateway::RobotCommandKind::StopMotion) {
+            return true;
+        }
+    }
+    if (!isMotionActive()) {
+        return false;
+    }
+
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::StopMotion;
+    const auto requestId = submitCommand(pending.kind, {}, pending);
+    if (!requestId.has_value()) {
+        return false;
+    }
+    supersedePendingMotionStarts();
+    motionModeTransitionTimer_.stop();
+    return true;
+}
+
+bool RemoteRobotController::setGaitBackend(GaitBackend backend)
+{
+    if (!isControlActive() || !isValidGaitBackend(backend)
+        || pendingGaitBackend_.has_value()) {
+        return false;
+    }
+    QByteArray payload(1, static_cast<char>(backend));
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::SetGaitBackend;
+    pending.gaitBackend = backend;
+    const auto requestId = submitCommand(pending.kind, payload, pending);
+    if (!requestId.has_value()) {
+        return false;
+    }
+    pendingGaitBackend_ = backend;
+    emit gaitBackendStateChanged();
+    return true;
+}
+
+bool RemoteRobotController::isServoSupported(ServoId id) const
+{
+    const quint8 raw = static_cast<quint8>(id);
+    return raw < kServoCount && (SupportedServoMask & servoMask(id)) != 0U;
+}
+
+bool RemoteRobotController::isServoEnabled(ServoId id) const
+{
+    return isServoSupported(id) && (enabledMask_ & servoMask(id)) != 0U;
+}
+
+bool RemoteRobotController::isServoDisablePending(ServoId id) const
+{
+    return isServoSupported(id) && (disablePendingMask_ & servoMask(id)) != 0U;
+}
+
+bool RemoteRobotController::isMotionActive() const
+{
+    if (motionState_ == MotionState::Running
+        || motionState_ == MotionState::Stopping) {
+        return true;
+    }
+    for (auto it = pending_.cbegin(); it != pending_.cend(); ++it) {
+        if (!it->superseded
+            && (it->kind == robobeetle::gateway::RobotCommandKind::StartMotion
+                || it->kind == robobeetle::gateway::RobotCommandKind::StopMotion)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool RemoteRobotController::isMotionReady(MotionMode mode) const
+{
+    if (!isControlActive() || mode == MotionMode::Stop
+        || mode == MotionMode::Backward || mode == MotionMode::Count
+        || motionState_ == MotionState::Stopping
+        || motionState_ == MotionState::Faulted
+        || motionModeTransitionTimer_.isActive()) {
+        return false;
+    }
+    for (auto it = pending_.cbegin(); it != pending_.cend(); ++it) {
+        if (!it->superseded
+            && (it->kind == robobeetle::gateway::RobotCommandKind::StartMotion
+                || it->kind == robobeetle::gateway::RobotCommandKind::StopMotion)) {
+            return false;
+        }
+    }
+    const quint16 required = motionRequiredServoMask(mode);
+    return (enabledMask_ & required) == required
+        && (disablePendingMask_ & required) == 0U;
+}
+
+std::optional<quint32> RemoteRobotController::submitCommand(
+    robobeetle::gateway::RobotCommandKind kind,
+    const QByteArray &payload, PendingCommand pending)
+{
+    const auto requestId =
+        session_.sendCommand(static_cast<quint8>(kind), payload);
+    if (!requestId.has_value()) {
+        emit logMessage(QStringLiteral("Command %1 rejected locally: remote control is not Active")
+                            .arg(commandKindText(kind)));
+        return std::nullopt;
+    }
+    pending.sentAtMs = nowMs();
+    pending_[*requestId] = pending;
+    updateMonitor(QStringLiteral("%1 sent").arg(commandKindText(kind)));
+    return requestId;
+}
+
+void RemoteRobotController::handleFrame(quint8 rawKind, quint32 requestId,
+                                        const QByteArray &payload)
+{
+    using Kind = robobeetle::gateway::RbrpMessageKind;
+    const auto kind = static_cast<Kind>(rawKind);
+    switch (kind) {
+    case Kind::HelloReply:
+        updateMonitor(QStringLiteral("RBRP ready; control unowned"));
+        break;
+    case Kind::AcquireReply:
+        updateMonitor(authorityText(authorityState(), isControlActive()));
+        break;
+    case Kind::ControlState:
+        updateMonitor(authorityText(authorityState(), isControlActive()));
+        break;
+    case Kind::CommandSubmitted:
+        handleCommandSubmitted(requestId, payload);
+        break;
+    case Kind::CommandOutcome:
+        handleCommandOutcome(requestId, payload);
+        break;
+    case Kind::LeakTelemetry:
+        handleLeakTelemetry(payload);
+        break;
+    case Kind::ImuTelemetry:
+        handleImuTelemetry(payload);
+        break;
+    case Kind::DepthTelemetry:
+        handleDepthTelemetry(payload);
+        break;
+    case Kind::ServiceError:
+        handleServiceError(requestId, payload);
+        break;
+    default:
+        break;
+    }
+}
+
+void RemoteRobotController::handleCommandSubmitted(
+    quint32 requestId, const QByteArray &payload)
+{
+    auto it = pending_.find(requestId);
+    if (it == pending_.end()) {
+        emit logMessage(QStringLiteral(
+            "Ignoring CommandSubmitted for non-current request %1").arg(requestId));
+        return;
+    }
+
+    const quint8 status = static_cast<quint8>(payload[0]);
+    const quint8 hasSequence = static_cast<quint8>(payload[1]);
+    if (status > static_cast<quint8>(
+                     robobeetle::gateway::CommandSubmittedStatus::TransportRejected)) {
+        failClosedControlState(QStringLiteral(
+            "invalid CommandSubmitted status from gateway"));
+        session_.disconnectFromHost();
+        return;
+    }
+    if (status == static_cast<quint8>(
+                      robobeetle::gateway::CommandSubmittedStatus::Submitted)) {
+        if (hasSequence != 1U) {
+            failClosedControlState(QStringLiteral(
+                "malformed CommandSubmitted from gateway"));
+            session_.disconnectFromHost();
+            return;
+        }
+        it->submittedSequence = readLe16(QByteArrayView(payload), 2);
+        updateMonitor(QStringLiteral("%1 submitted")
+                          .arg(commandKindText(it->kind)));
+        return;
+    }
+
+    if (hasSequence != 0U) {
+        failClosedControlState(QStringLiteral(
+            "malformed rejected CommandSubmitted from gateway"));
+        session_.disconnectFromHost();
+        return;
+    }
+
+    terminalizePending(
+        requestId,
+        QStringLiteral("%1 not submitted (status %2)")
+            .arg(commandKindText(it->kind)).arg(status));
+}
+
+void RemoteRobotController::handleCommandOutcome(
+    quint32 requestId, const QByteArray &payload)
+{
+    auto it = pending_.find(requestId);
+    if (it == pending_.end()) {
+        emit logMessage(QStringLiteral(
+            "Ignoring stale CommandOutcome for request %1").arg(requestId));
+        return;
+    }
+
+    const quint8 outcome = static_cast<quint8>(payload[0]);
+    const auto kind = static_cast<robobeetle::gateway::RobotCommandKind>(
+        static_cast<quint8>(payload[1]));
+    const quint16 sequence = readLe16(QByteArrayView(payload), 2);
+    if (kind != it->kind
+        || !it->submittedSequence.has_value()
+        || sequence != *it->submittedSequence
+        || outcome > static_cast<quint8>(
+                         robobeetle::gateway::GatewayCommandOutcome::Cancelled)) {
+        failClosedControlState(QStringLiteral(
+            "uncorrelated or malformed CommandOutcome"));
+        session_.disconnectFromHost();
+        return;
+    }
+
+    const PendingCommand pending = *it;
+    const qint64 rtt = nowMs() - pending.sentAtMs;
+    monitor_.lastAckRttMs = rtt >= 0 ? rtt : -1;
+    pending_.erase(it);
+
+    if (pending.superseded) {
+        updateMonitor(QStringLiteral("%1 superseded outcome ignored")
+                          .arg(commandKindText(pending.kind)));
+        emit logMessage(QStringLiteral(
+            "Ignored late outcome for superseded %1 request %2")
+                            .arg(commandKindText(pending.kind))
+                            .arg(requestId));
+        return;
+    }
+
+    if (outcome == static_cast<quint8>(
+                       robobeetle::gateway::GatewayCommandOutcome::Accepted)) {
+        applyAcceptedCommand(pending);
+        updateMonitor(QStringLiteral("%1 accepted")
+                          .arg(commandKindText(pending.kind)));
+        return;
+    }
+
+    if (pending.servoMask != 0U
+        && pending.kind == robobeetle::gateway::RobotCommandKind::DisableServos) {
+        setDisablePendingMask(static_cast<quint16>(
+            disablePendingMask_ & ~pending.servoMask));
+    }
+    if (pending.gaitBackend.has_value()) {
+        pendingGaitBackend_.reset();
+        emit gaitBackendStateChanged();
+    }
+
+    const bool uncertain =
+        outcome == static_cast<quint8>(
+                       robobeetle::gateway::GatewayCommandOutcome::OutcomeUnknown)
+        || outcome == static_cast<quint8>(
+                         robobeetle::gateway::GatewayCommandOutcome::Cancelled);
+    if (uncertain) {
+        if (!session_.releaseControl()) {
+            failClosedControlState(QStringLiteral(
+                "command outcome became uncertain"));
+        }
+    } else if (pending.kind
+                   == robobeetle::gateway::RobotCommandKind::StopMotion
+               && isMotionActive()) {
+        setMotionState(MotionState::Faulted, MotionMode::Stop);
+    }
+    updateMonitor(QStringLiteral("%1 outcome=%2 result=%3")
+                      .arg(commandKindText(pending.kind))
+                      .arg(outcome)
+                      .arg(static_cast<quint8>(payload[4])));
+}
+
+void RemoteRobotController::handleLeakTelemetry(const QByteArray &payload)
+{
+    const quint8 raw = static_cast<quint8>(payload[2]);
+    if (raw > static_cast<quint8>(LeakState::Wet)) {
+        setLeakState(LeakState::Unknown);
+        emit logMessage(QStringLiteral("Invalid LeakTelemetry state"));
+        return;
+    }
+    lastLeakTelemetryAtMs_ = nowMs();
+    setLeakState(static_cast<LeakState>(raw));
+}
+
+void RemoteRobotController::handleImuTelemetry(const QByteArray &payload)
+{
+    QString detail;
+    const auto snapshot =
+        ImuSnapshot::decodePayload(QByteArrayView(payload).sliced(2), &detail);
+    if (!snapshot.has_value()) {
+        imuState_.status = ImuStatus::Error;
+        imuState_.snapshot.reset();
+        imuState_.lastReceivedAtMs = -1;
+        imuState_.error = detail;
+        emit imuStateChanged();
+        return;
+    }
+    imuState_.status = ImuStatus::Receiving;
+    imuState_.snapshot = snapshot;
+    imuState_.lastReceivedAtMs = nowMs();
+    imuState_.error.clear();
+    emit imuStateChanged();
+}
+
+void RemoteRobotController::handleDepthTelemetry(const QByteArray &payload)
+{
+    QString detail;
+    const auto snapshot =
+        DepthSnapshot::decodePayload(QByteArrayView(payload).sliced(2), &detail);
+    if (!snapshot.has_value()) {
+        depthState_.status = DepthStatus::Error;
+        depthState_.snapshot.reset();
+        depthState_.lastReceivedAtMs = -1;
+        depthState_.error = detail;
+        emit depthStateChanged();
+        return;
+    }
+
+    const bool current = snapshot->depthValid()
+        && snapshot->sampleAgeMs != DepthSnapshot::UnknownSampleAgeMs;
+    depthState_.status = current ? DepthStatus::Receiving : DepthStatus::Stale;
+    depthState_.snapshot = snapshot;
+    depthState_.lastReceivedAtMs = nowMs();
+    depthState_.error = current
+        ? QString{}
+        : QStringLiteral("Depth sensor sample is stale or unavailable");
+    emit depthStateChanged();
+}
+
+void RemoteRobotController::handleServiceError(
+    quint32 requestId, const QByteArray &payload)
+{
+    const quint16 code = readLe16(payload, 0);
+    const quint8 related = static_cast<quint8>(payload[2]);
+    const quint32 detail = readLe32(payload, 4);
+    emit logMessage(QStringLiteral(
+        "Gateway ServiceError request=%1 code=%2 related=0x%3 detail=%4")
+                        .arg(requestId).arg(code)
+                        .arg(related, 2, 16, QLatin1Char('0')).arg(detail));
+    terminalizePending(requestId,
+                       QStringLiteral("service error %1").arg(code));
+    updateMonitor(QStringLiteral("ServiceError %1").arg(code));
+}
+
+void RemoteRobotController::applyAcceptedCommand(
+    const PendingCommand &pending)
+{
+    using Kind = robobeetle::gateway::RobotCommandKind;
+    switch (pending.kind) {
+    case Kind::EnableServos:
+        setEnabledMask(static_cast<quint16>(
+            enabledMask_ | pending.servoMask));
+        break;
+    case Kind::DisableServos:
+        setDisablePendingMask(static_cast<quint16>(
+            disablePendingMask_ & ~pending.servoMask));
+        setEnabledMask(static_cast<quint16>(
+            enabledMask_ & ~pending.servoMask));
+        if (isMotionActive()
+            && (motionRequiredServoMask(motionMode_) & pending.servoMask) != 0U) {
+            setMotionState(MotionState::Faulted, MotionMode::Stop);
+        }
+        break;
+    case Kind::SetServoAngle:
+    case Kind::NeutralServos:
+        break;
+    case Kind::StartMotion:
+        if (pending.motionMode.has_value()) {
+            const bool isModeTransition =
+                motionState_ == MotionState::Running
+                && motionMode_ != *pending.motionMode;
+            if (isModeTransition) {
+                motionModeTransitionTimer_.start(kMotionTransitionDurationMs);
+            } else {
+                motionModeTransitionTimer_.stop();
+            }
+            setMotionState(MotionState::Running, *pending.motionMode);
+        }
+        break;
+    case Kind::StopMotion:
+        setMotionState(MotionState::Stopping, MotionMode::Stop);
+        motionStopTimer_.start(kMotionTransitionDurationMs);
+        break;
+    case Kind::SetGaitBackend:
+        if (pending.gaitBackend.has_value()) {
+            confirmedGaitBackend_ = pending.gaitBackend;
+        }
+        pendingGaitBackend_.reset();
+        emit gaitBackendStateChanged();
+        break;
+    }
+}
+
+void RemoteRobotController::terminalizePending(
+    quint32 requestId, const QString &status)
+{
+    auto it = pending_.find(requestId);
+    if (it == pending_.end()) {
+        return;
+    }
+    const PendingCommand pending = *it;
+    pending_.erase(it);
+    if (pending.superseded) {
+        emit logMessage(QStringLiteral("%1 (superseded)").arg(status));
+        return;
+    }
+    if (pending.kind == robobeetle::gateway::RobotCommandKind::DisableServos) {
+        setDisablePendingMask(static_cast<quint16>(
+            disablePendingMask_ & ~pending.servoMask));
+    }
+    if (pending.gaitBackend.has_value()) {
+        pendingGaitBackend_.reset();
+        emit gaitBackendStateChanged();
+    }
+    if (pending.kind == robobeetle::gateway::RobotCommandKind::StopMotion
+        && isMotionActive()) {
+        setMotionState(MotionState::Faulted, MotionMode::Stop);
+    }
+    emit logMessage(status);
+}
+
+void RemoteRobotController::supersedePendingMotionStarts()
+{
+    for (auto it = pending_.begin(); it != pending_.end(); ++it) {
+        if (it->kind == robobeetle::gateway::RobotCommandKind::StartMotion) {
+            it->superseded = true;
+        }
+    }
+}
+
+void RemoteRobotController::supersedePendingForDisable(quint16 affectedMask)
+{
+    for (auto it = pending_.begin(); it != pending_.end(); ++it) {
+        bool affected = false;
+        switch (it->kind) {
+        case robobeetle::gateway::RobotCommandKind::EnableServos:
+            affected = (it->servoMask & affectedMask) != 0U;
+            break;
+        case robobeetle::gateway::RobotCommandKind::StartMotion:
+            affected = it->motionMode.has_value()
+                && (motionRequiredServoMask(*it->motionMode) & affectedMask) != 0U;
+            break;
+        case robobeetle::gateway::RobotCommandKind::StopMotion:
+            affected = (affectedMask & SupportedServoMask) != 0U;
+            break;
+        default:
+            break;
+        }
+        if (affected) {
+            it->superseded = true;
+        }
+    }
+}
+
+void RemoteRobotController::failClosedControlState(const QString &reason)
+{
+    const bool hadMotion = isMotionActive();
+    motionStopTimer_.stop();
+    motionModeTransitionTimer_.stop();
+    pending_.clear();
+    setDisablePendingMask(0U);
+    setEnabledMask(0U);
+    if (pendingGaitBackend_.has_value() || confirmedGaitBackend_.has_value()) {
+        pendingGaitBackend_.reset();
+        confirmedGaitBackend_.reset();
+        emit gaitBackendStateChanged();
+    }
+    if (hadMotion) {
+        setMotionState(MotionState::Faulted, MotionMode::Stop);
+    } else if (motionState_ != MotionState::Stopped
+               || motionMode_ != MotionMode::Stop) {
+        setMotionState(MotionState::Stopped, MotionMode::Stop);
+    }
+    if (!reason.isEmpty()) {
+        emit logMessage(QStringLiteral("Fail-closed: %1").arg(reason));
+    }
+}
+
+void RemoteRobotController::resetTelemetry()
+{
+    lastLeakTelemetryAtMs_ = -1;
+    setLeakState(LeakState::Unknown);
+
+    const bool imuChanged = imuState_.status != ImuStatus::Unknown
+        || imuState_.snapshot.has_value()
+        || imuState_.lastReceivedAtMs >= 0
+        || !imuState_.error.isEmpty();
+    imuState_ = {};
+    if (imuChanged) {
+        emit imuStateChanged();
+    }
+
+    const bool depthChanged = depthState_.status != DepthStatus::Unknown
+        || depthState_.snapshot.has_value()
+        || depthState_.lastReceivedAtMs >= 0
+        || !depthState_.error.isEmpty();
+    depthState_ = {};
+    if (depthChanged) {
+        emit depthStateChanged();
+    }
+}
+
+void RemoteRobotController::refreshTelemetryStaleness()
+{
+    const qint64 now = nowMs();
+    for (auto it = pending_.cbegin(); it != pending_.cend(); ++it) {
+        if (it->sentAtMs >= 0 && now - it->sentAtMs >= kRemoteCommandTimeoutMs) {
+            ++monitor_.timeoutCount;
+            updateMonitor(QStringLiteral("Remote command outcome timeout"));
+            emit logMessage(QStringLiteral(
+                "Command request %1 became uncertain after %2 ms; releasing authority")
+                                .arg(it.key()).arg(kRemoteCommandTimeoutMs));
+            if (!session_.releaseControl()) {
+                session_.disconnectFromHost();
+            }
+            return;
+        }
+    }
+
+    if (lastLeakTelemetryAtMs_ >= 0
+        && now - lastLeakTelemetryAtMs_ >= 1500) {
+        lastLeakTelemetryAtMs_ = -1;
+        setLeakState(LeakState::Unknown);
+    }
+    if (imuState_.status == ImuStatus::Receiving
+        && imuState_.lastReceivedAtMs >= 0
+        && now - imuState_.lastReceivedAtMs >= ImuMonitor::StaleTimeoutMs) {
+        imuState_.status = ImuStatus::Stale;
+        imuState_.snapshot.reset();
+        imuState_.error =
+            QStringLiteral("No ImuSnapshot received within the stale window");
+        emit imuStateChanged();
+    }
+
+    if (depthState_.status == DepthStatus::Receiving
+        && depthState_.lastReceivedAtMs >= 0
+        && now - depthState_.lastReceivedAtMs >= DepthMonitor::StaleTimeoutMs) {
+        depthState_.status = DepthStatus::Stale;
+        depthState_.snapshot.reset();
+        depthState_.error =
+            QStringLiteral("No DepthSnapshot received within the stale window");
+        emit depthStateChanged();
+    }
+}
+
+void RemoteRobotController::setEnabledMask(quint16 mask)
+{
+    mask = static_cast<quint16>(mask & SupportedServoMask);
+    const quint16 changed = static_cast<quint16>(enabledMask_ ^ mask);
+    enabledMask_ = mask;
+    for (int index = 0; index < kServoCount; ++index) {
+        const quint16 bit = static_cast<quint16>(1U << index);
+        if ((changed & bit) != 0U) {
+            emit servoStateChanged(index, (enabledMask_ & bit) != 0U);
+        }
+    }
+}
+
+void RemoteRobotController::setDisablePendingMask(quint16 mask)
+{
+    mask = static_cast<quint16>(mask & SupportedServoMask);
+    const quint16 changed =
+        static_cast<quint16>(disablePendingMask_ ^ mask);
+    disablePendingMask_ = mask;
+    for (int index = 0; index < kServoCount; ++index) {
+        const quint16 bit = static_cast<quint16>(1U << index);
+        if ((changed & bit) != 0U) {
+            emit servoDisablePendingChanged(
+                index, (disablePendingMask_ & bit) != 0U);
+        }
+    }
+}
+
+void RemoteRobotController::setLeakState(LeakState state)
+{
+    if (leakState_ == state) {
+        return;
+    }
+    leakState_ = state;
+    emit leakStateChanged(leakState_);
+}
+
+void RemoteRobotController::setMotionState(
+    MotionState state, MotionMode mode)
+{
+    if (motionState_ == state && motionMode_ == mode) {
+        return;
+    }
+    motionState_ = state;
+    motionMode_ = mode;
+    emit motionStateChanged(motionState_, motionMode_);
+}
+
+void RemoteRobotController::updateMonitor(const QString &status)
+{
+    if (!status.isEmpty()) {
+        monitor_.ackStatus = status;
+    }
+    emit protocolMonitorChanged(monitor_);
+}
+
+void RemoteRobotController::noteTxFrame(const QByteArray &wire)
+{
+    ++monitor_.txPacketCount;
+    emit txHexChanged(QString::fromLatin1(wire.toHex(' ').toUpper()));
+    updateMonitor();
+}
+
+void RemoteRobotController::noteRxFrame(
+    quint8 kind, quint32 requestId, const QByteArray &payload)
+{
+    ++monitor_.rxPacketCount;
+    robobeetle::gateway::Bytes bytes;
+    bytes.reserve(static_cast<std::size_t>(payload.size()));
+    for (char value : payload) {
+        bytes.push_back(static_cast<quint8>(value));
+    }
+    const auto encoded = robobeetle::gateway::encode_frame(
+        static_cast<robobeetle::gateway::RbrpMessageKind>(kind),
+        requestId, bytes);
+    if (encoded.status == robobeetle::gateway::RbrpEncodeStatus::Ok) {
+        const QByteArray wire(
+            reinterpret_cast<const char *>(encoded.wire.data()),
+            static_cast<qsizetype>(encoded.wire.size()));
+        emit rxHexChanged(QString::fromLatin1(wire.toHex(' ').toUpper()));
+    }
+    updateMonitor();
+}
+
+QByteArray RemoteRobotController::maskPayload(quint16 mask)
+{
+    QByteArray payload;
+    appendLe16(payload, mask);
+    return payload;
+}
+
+qint64 RemoteRobotController::nowMs()
+{
+    return QDateTime::currentMSecsSinceEpoch();
+}
+
+QString RemoteRobotController::authorityText(
+    ControlAuthorityState state, bool active)
+{
+    switch (state) {
+    case ControlAuthorityState::Unowned:
+        return QStringLiteral("Remote Unowned");
+    case ControlAuthorityState::Acquiring:
+        return QStringLiteral("Remote Acquiring");
+    case ControlAuthorityState::Owned:
+        return active ? QStringLiteral("Remote Owned / Active")
+                      : QStringLiteral("Remote Owned / Link not Active");
+    }
+    return QStringLiteral("Remote Unknown");
+}
+
+} // namespace rb

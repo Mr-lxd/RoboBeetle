@@ -101,6 +101,7 @@ struct CallbackState {
                 ++diagnostics;
                 changed.notify_all();
             },
+            {},
         };
     }
 
@@ -486,6 +487,7 @@ void inbound_delivery_barrier_preserves_timely_heartbeat()
             },
             [](const SourceLostSignal &) {},
             [](const char *) {},
+            {},
         });
     expect(adapter.start() == 0,
            "TCP adapter starts for deterministic ingress barrier coverage");

@@ -1,5 +1,7 @@
 #include "ui/MainWindow.h"
 
+#include "robot/ServoDescriptor.h"
+
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -220,7 +222,7 @@ void addSectionHeader(QVBoxLayout *layout,
 
 } // namespace
 
-MainWindow::MainWindow(RobotController *controller, QWidget *parent)
+MainWindow::MainWindow(IConsoleController *controller, QWidget *parent)
     : QMainWindow(parent), controller_(controller)
 {
     Q_ASSERT(controller_ != nullptr);
@@ -281,7 +283,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
         "QPlainTextEdit { background: #fbfcfd; border: 1px solid #c4ccd4; "
         "  border-radius: 4px; color: #37474f; }"));
 
-    connect(controller_, &RobotController::serialPortsChanged, this, [this](const QStringList &ports) {
+    connect(controller_, &IConsoleController::serialPortsChanged, this, [this](const QStringList &ports) {
         const QString current = portCombo_->currentText();
         portCombo_->clear();
         portCombo_->addItems(ports);
@@ -290,11 +292,25 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
         }
         portCombo_->setCurrentText(current);
     });
-    connect(controller_, &RobotController::connectionStateChanged, this, [this](TransportState state) {
+    connect(controller_, &IConsoleController::connectionStateChanged, this, [this](TransportState state) {
         connectionStatus_->setText(stateText(state));
         setConnectedUi(state == TransportState::Connected);
+        refreshAuthorityUi();
     });
-    connect(controller_, &RobotController::servoStateChanged, this, [this](int index, bool enabled) {
+    connect(controller_, &IConsoleController::controlAvailabilityChanged,
+            this, [this] {
+                refreshAuthorityUi();
+            });
+    connect(controller_, &IConsoleController::authorityStateChanged,
+            this, [this](ControlAuthorityState, bool) {
+                refreshAuthorityUi();
+                for (int index = 0; index < kServoCount; ++index) {
+                    refreshServoUi(index);
+                }
+                refreshMotionUi();
+                refreshGaitBackendUi();
+            });
+    connect(controller_, &IConsoleController::servoStateChanged, this, [this](int index, bool enabled) {
         if (index < 0 || index >= kServoCount) {
             return;
         }
@@ -302,7 +318,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
         refreshServoUi(index);
         refreshMotionUi();
     });
-    connect(controller_, &RobotController::servoDisablePendingChanged,
+    connect(controller_, &IConsoleController::servoDisablePendingChanged,
             this, [this](int index, bool) {
         if (index < 0 || index >= kServoCount) {
             return;
@@ -310,26 +326,26 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
         refreshServoUi(index);
         refreshMotionUi();
     });
-    connect(controller_, &RobotController::motionStateChanged,
+    connect(controller_, &IConsoleController::motionStateChanged,
             this, [this](MotionState, MotionMode) {
                 refreshMotionUi();
                 for (int index = 0; index < kServoCount; ++index) {
                     refreshServoUi(index);
                 }
             });
-    connect(controller_, &RobotController::gaitBackendStateChanged,
+    connect(controller_, &IConsoleController::gaitBackendStateChanged,
             this, &MainWindow::refreshGaitBackendUi);
-    connect(controller_, &RobotController::leakStateChanged,
+    connect(controller_, &IConsoleController::leakStateChanged,
             this, &MainWindow::setLeakUiState);
-    connect(controller_->imuMonitor(), &ImuMonitor::changed, this, [this] {
+    connect(controller_, &IConsoleController::imuStateChanged, this, [this] {
         setImuUiState(controller_->imuState());
     });
-    connect(controller_->depthMonitor(), &DepthMonitor::changed, this, [this] {
+    connect(controller_, &IConsoleController::depthStateChanged, this, [this] {
         setDepthUiState(controller_->depthState());
     });
-    connect(controller_, &RobotController::txHexChanged, txHex_, &QLineEdit::setText);
-    connect(controller_, &RobotController::rxHexChanged, rxHex_, &QLineEdit::setText);
-    connect(controller_, &RobotController::protocolMonitorChanged, this, [this](const ProtocolMonitor &monitor) {
+    connect(controller_, &IConsoleController::txHexChanged, txHex_, &QLineEdit::setText);
+    connect(controller_, &IConsoleController::rxHexChanged, rxHex_, &QLineEdit::setText);
+    connect(controller_, &IConsoleController::protocolMonitorChanged, this, [this](const ProtocolMonitor &monitor) {
         txCount_->setText(QString::number(monitor.txPacketCount));
         rxCount_->setText(QString::number(monitor.rxPacketCount));
         crcCount_->setText(QString::number(monitor.crcErrorCount));
@@ -339,7 +355,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
                              : QStringLiteral("%1 ms").arg(monitor.lastAckRttMs));
         ackStatus_->setText(monitor.ackStatus);
     });
-    connect(controller_, &RobotController::logMessage, this, &MainWindow::appendLog);
+    connect(controller_, &IConsoleController::logMessage, this, &MainWindow::appendLog);
 
     setConnectedUi(false);
     setLeakUiState(controller_->leakState());
@@ -347,6 +363,7 @@ MainWindow::MainWindow(RobotController *controller, QWidget *parent)
     setDepthUiState(controller_->depthState());
     refreshMotionUi();
     refreshGaitBackendUi();
+    refreshAuthorityUi();
     controller_->refreshSerialPorts();
 }
 
@@ -377,15 +394,32 @@ QWidget *MainWindow::createConnectionBar()
 
     layout->addSpacing(6);
 
-    layout->addWidget(new QLabel(QStringLiteral("Serial Port"), bar));
+    const bool remote =
+        controller_->backendKind() == ConsoleBackendKind::RemoteRbrp;
+    layout->addWidget(new QLabel(
+        remote ? QStringLiteral("Pi Host")
+               : QStringLiteral("Serial Port"),
+        bar));
     portCombo_ = new QComboBox(bar);
     portCombo_->setEditable(true);
+    if (remote && portCombo_->lineEdit() != nullptr) {
+        portCombo_->lineEdit()->setPlaceholderText(
+            QStringLiteral("Pi IP / hostname"));
+    }
     layout->addWidget(portCombo_);
 
-    layout->addWidget(new QLabel(QStringLiteral("Baud Rate"), bar));
+    layout->addWidget(new QLabel(
+        remote ? QStringLiteral("TCP Port")
+               : QStringLiteral("Baud Rate"),
+        bar));
     baudSpin_ = new QSpinBox(bar);
-    baudSpin_->setRange(1200, 3000000);
-    baudSpin_->setValue(9600);
+    if (remote) {
+        baudSpin_->setRange(1, 65535);
+        baudSpin_->setValue(47000);
+    } else {
+        baudSpin_->setRange(1200, 3000000);
+        baudSpin_->setValue(9600);
+    }
     layout->addWidget(baudSpin_);
 
     // Secondary action: Refresh.
@@ -406,8 +440,16 @@ QWidget *MainWindow::createConnectionBar()
         "QPushButton:pressed { background: #11519b; }"
         "QPushButton:disabled { background: #9eb6cf; color: #e6edf3; "
         "  border-color: #8aa6c0; }"));
+    refresh->setVisible(!remote);
     layout->addWidget(refresh);
     layout->addWidget(connectButton_);
+
+    acquireButton_ = new QPushButton(QStringLiteral("Acquire"), bar);
+    releaseButton_ = new QPushButton(QStringLiteral("Release"), bar);
+    acquireButton_->setVisible(remote);
+    releaseButton_->setVisible(remote);
+    layout->addWidget(acquireButton_);
+    layout->addWidget(releaseButton_);
 
     // Danger action: Emergency Stop.
     auto *emergencyStop = new QPushButton(QStringLiteral("Emergency Stop"), bar);
@@ -428,15 +470,32 @@ QWidget *MainWindow::createConnectionBar()
     connectionStatus_ = new QLabel(QStringLiteral("Disconnected"), bar);
     connectionStatus_->setStyleSheet(QStringLiteral("font-weight: 700; color: #263238;"));
     layout->addWidget(connectionStatus_);
+    authorityStatus_ = new QLabel(remote ? QStringLiteral("Unowned")
+                                         : QStringLiteral("Direct"), bar);
+    authorityStatus_->setStyleSheet(
+        QStringLiteral("font-weight: 700; color: #455A64;"));
+    layout->addWidget(authorityStatus_);
 
-    connect(refresh, &QPushButton::clicked, controller_, &RobotController::refreshSerialPorts);
+    connect(refresh, &QPushButton::clicked,
+            controller_, &IConsoleController::refreshSerialPorts);
     connect(connectButton_, &QPushButton::clicked, this, [this] {
         if (controller_->isConnected()) {
-            controller_->disconnectTransport();
+            controller_->disconnectController();
             return;
         }
-        controller_->connectTransport({portCombo_->currentText().trimmed(), baudSpin_->value()});
+        ConsoleConnectionConfiguration configuration;
+        configuration.endpoint = portCombo_->currentText().trimmed();
+        if (controller_->backendKind() == ConsoleBackendKind::RemoteRbrp) {
+            configuration.tcpPort = static_cast<quint16>(baudSpin_->value());
+        } else {
+            configuration.baudRate = baudSpin_->value();
+        }
+        controller_->connectController(configuration);
     });
+    connect(acquireButton_, &QPushButton::clicked,
+            controller_, &IConsoleController::acquireControl);
+    connect(releaseButton_, &QPushButton::clicked,
+            controller_, &IConsoleController::releaseControl);
     return bar;
 }
 
@@ -815,6 +874,13 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
             "This action reuses the Protocol V2 Neutral command."));
     }
     applyButtons_[index] = new QPushButton(QStringLiteral("Apply PWM"), box);
+    if (!controller_->supportsRawPwm()) {
+        pwmSpins_[index]->setEnabled(false);
+        pwmSliders_[index]->setEnabled(false);
+        applyButtons_[index]->setEnabled(false);
+        applyButtons_[index]->setToolTip(
+            QStringLiteral("Raw PWM is available only in Direct/APC maintenance mode."));
+    }
 
     for (QPushButton *button : {enableButtons_[index], neutralButtons_[index], applyButtons_[index]}) {
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -846,7 +912,7 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
         controller_->setServoPwm(id, static_cast<quint16>(pwmSpins_[index]->value()));
     });
     connect(angleButtons_[index], &QPushButton::clicked, this, [this, id, index] {
-        if (!controller_->isConnected() || !controller_->isServoSupported(id)
+        if (!controller_->isControlActive() || !controller_->isServoSupported(id)
             || !controller_->isServoEnabled(id)
             || controller_->isServoDisablePending(id)
             || servoDescriptor(id) == nullptr
@@ -1424,6 +1490,7 @@ void MainWindow::setConnectedUi(bool connected)
     }
     refreshMotionUi();
     refreshGaitBackendUi();
+    refreshAuthorityUi();
 }
 
 void MainWindow::refreshServoUi(int index)
@@ -1437,6 +1504,7 @@ void MainWindow::refreshServoUi(int index)
     }
     const ServoId id = descriptor->id;
     const bool connected = controller_->isConnected();
+    const bool active = controller_->isControlActive();
     const bool supported = controller_->isServoSupported(id);
     const bool enabled = controller_->isServoEnabled(id);
     const bool pendingDisable = controller_->isServoDisablePending(id);
@@ -1449,14 +1517,17 @@ void MainWindow::refreshServoUi(int index)
                                                 "Release PWM: stop PWM drive without sending Neutral; the servo is no longer actively held.")
                                           : QStringLiteral(
                                                 "Enable PWM drive and hold the calibrated neutral position."));
-    enableButtons_[index]->setEnabled(connected && supported && !motionActive);
-    neutralButtons_[index]->setEnabled(connected && supported && enabled
+    enableButtons_[index]->setEnabled(active && supported && !motionActive);
+    neutralButtons_[index]->setEnabled(active && supported && enabled
                                        && !pendingDisable && !motionActive);
-    applyButtons_[index]->setEnabled(connected && supported && enabled
-                                     && !pendingDisable && !motionActive);
+    applyButtons_[index]->setEnabled(
+        active && controller_->supportsRawPwm() && supported && enabled
+        && !pendingDisable && !motionActive);
     QString statusColor = QStringLiteral("#6F7F8B");
     if (!connected) {
         statusLabels_[index]->setText(QStringLiteral("Disconnected"));
+    } else if (!active) {
+        statusLabels_[index]->setText(QStringLiteral("No control authority"));
     } else if (!supported) {
         statusLabels_[index]->setText(QStringLiteral("Unsupported"));
     } else if (pendingDisable) {
@@ -1489,7 +1560,7 @@ void MainWindow::setAngleUiEnabled(int index, bool enabled)
         return;
     }
     const ServoId id = descriptor->id;
-    const bool actionable = enabled && controller_->isConnected()
+    const bool actionable = enabled && controller_->isControlActive()
         && controller_->isServoSupported(id) && descriptor->angleSupported
         && !descriptor->calibrationPending && controller_->isServoEnabled(id)
         && !controller_->isServoDisablePending(id)
@@ -1521,7 +1592,7 @@ void MainWindow::refreshMotionUi()
         break;
     }
 
-    const bool connected = controller_->isConnected();
+    const bool connected = controller_->isControlActive();
     const bool transitioning = controller_->isMotionTransitioning();
     for (int index = 0; index < static_cast<int>(motionButtons_.size()); ++index) {
         QPushButton *button = motionButtons_[static_cast<std::size_t>(index)];
@@ -1546,7 +1617,7 @@ void MainWindow::refreshGaitBackendUi()
         return;
     }
 
-    const bool connected = controller_->isConnected();
+    const bool connected = controller_->isControlActive();
     const bool pending = controller_->isGaitBackendChangePending();
     const std::optional<GaitBackend> displayBackend = pending
         ? controller_->requestedGaitBackend()
@@ -1566,6 +1637,41 @@ void MainWindow::refreshGaitBackendUi()
     gaitBackendCombo_->setCurrentIndex(displayIndex);
     gaitBackendCombo_->setEnabled(connected && !pending);
     gaitBackendStatus_->setText(connected ? status : QStringLiteral("Unknown"));
+}
+
+void MainWindow::refreshAuthorityUi()
+{
+    if (authorityStatus_ == nullptr || acquireButton_ == nullptr
+        || releaseButton_ == nullptr) {
+        return;
+    }
+
+    if (controller_->backendKind() == ConsoleBackendKind::DirectSerial) {
+        authorityStatus_->setText(QStringLiteral("Direct/APC"));
+        acquireButton_->setEnabled(false);
+        releaseButton_->setEnabled(false);
+        return;
+    }
+
+    QString text;
+    switch (controller_->authorityState()) {
+    case ControlAuthorityState::Unowned:
+        text = QStringLiteral("Unowned");
+        break;
+    case ControlAuthorityState::Acquiring:
+        text = QStringLiteral("Acquiring");
+        break;
+    case ControlAuthorityState::Owned:
+        text = controller_->isControlActive()
+            ? QStringLiteral("Owned + Active")
+            : QStringLiteral("Owned / Waiting Link");
+        break;
+    }
+    authorityStatus_->setText(text);
+    acquireButton_->setEnabled(controller_->canAcquireControl());
+    releaseButton_->setEnabled(
+        controller_->isConnected()
+        && controller_->authorityState() == ControlAuthorityState::Owned);
 }
 
 void MainWindow::appendLog(const QString &message)

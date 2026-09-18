@@ -1,5 +1,6 @@
 #pragma once
 
+#include "controller/IConsoleController.h"
 #include "protocol/StreamDecoder.h"
 #include "robot/DepthMonitor.h"
 #include "robot/LeakStatus.h"
@@ -48,21 +49,12 @@ struct RobotControllerConfig {
     static RobotControllerConfig apc220Provisional();
 };
 
-struct ProtocolMonitor {
-    quint64 txPacketCount{0};
-    quint64 rxPacketCount{0};
-    quint64 crcErrorCount{0};
-    quint64 timeoutCount{0};
-    qint64 lastAckRttMs{-1};
-    QString ackStatus{QStringLiteral("Idle")};
-};
-
 struct MotionRequest {
     MotionMode mode{MotionMode::Stop};
     MotionAction action{MotionAction::Stop};
 };
 
-class RobotController final : public QObject {
+class RobotController final : public IConsoleController {
     Q_OBJECT
 
 public:
@@ -73,36 +65,52 @@ public:
                              PortDiscovery portDiscovery = {},
                              QObject *parent = nullptr);
 
-    void refreshSerialPorts();
+    [[nodiscard]] ConsoleBackendKind backendKind() const noexcept override
+    {
+        return ConsoleBackendKind::DirectSerial;
+    }
+    void refreshSerialPorts() override;
+    void connectController(const ConsoleConnectionConfiguration &configuration) override;
+    void disconnectController() override;
     void connectTransport(const TransportConfiguration &configuration);
     void disconnectTransport();
-    void shutdown();
+    void shutdown() override;
 
-    bool enableServo(ServoId id);
-    bool disableServo(ServoId id);
-    bool disableAll();
-    bool setServoPwm(ServoId id, quint16 pulseUs);
-    bool setServoAngle(ServoId id, qint16 angleCentidegrees);
-    bool neutralServo(ServoId id);
-    bool startMotion(MotionMode mode);
-    bool stopMotion();
-    bool setGaitBackend(GaitBackend backend);
+    [[nodiscard]] bool canAcquireControl() const override { return false; }
+    bool acquireControl() override { return isConnected(); }
+    bool releaseControl() override { return false; }
+    bool enableServo(ServoId id) override;
+    bool disableServo(ServoId id) override;
+    bool disableAll() override;
+    bool setServoPwm(ServoId id, quint16 pulseUs) override;
+    bool setServoAngle(ServoId id, qint16 angleCentidegrees) override;
+    bool neutralServo(ServoId id) override;
+    bool startMotion(MotionMode mode) override;
+    bool stopMotion() override;
+    bool setGaitBackend(GaitBackend backend) override;
 
-    [[nodiscard]] bool isConnected() const { return state_ == TransportState::Connected; }
-    [[nodiscard]] bool isServoSupported(ServoId id) const;
-    [[nodiscard]] bool isServoEnabled(ServoId id) const;
-    [[nodiscard]] bool isServoDisablePending(ServoId id) const;
-    [[nodiscard]] LeakState leakState() const { return leakState_; }
-    [[nodiscard]] const ImuMonitorState &imuState() const { return imuMonitor_.state(); }
+    [[nodiscard]] bool isConnected() const override { return state_ == TransportState::Connected; }
+    [[nodiscard]] bool isControlActive() const override { return isConnected(); }
+    [[nodiscard]] ControlAuthorityState authorityState() const override
+    {
+        return isConnected() ? ControlAuthorityState::Owned
+                             : ControlAuthorityState::Unowned;
+    }
+    [[nodiscard]] bool supportsRawPwm() const noexcept override { return true; }
+    [[nodiscard]] bool isServoSupported(ServoId id) const override;
+    [[nodiscard]] bool isServoEnabled(ServoId id) const override;
+    [[nodiscard]] bool isServoDisablePending(ServoId id) const override;
+    [[nodiscard]] LeakState leakState() const override { return leakState_; }
+    [[nodiscard]] const ImuMonitorState &imuState() const override { return imuMonitor_.state(); }
     [[nodiscard]] ImuMonitor *imuMonitor() { return &imuMonitor_; }
     [[nodiscard]] const ImuMonitor *imuMonitor() const { return &imuMonitor_; }
-    [[nodiscard]] const DepthMonitorState &depthState() const { return depthMonitor_.state(); }
+    [[nodiscard]] const DepthMonitorState &depthState() const override { return depthMonitor_.state(); }
     [[nodiscard]] DepthMonitor *depthMonitor() { return &depthMonitor_; }
     [[nodiscard]] const DepthMonitor *depthMonitor() const { return &depthMonitor_; }
     [[nodiscard]] RobotControllerConfig config() const { return config_; }
-    [[nodiscard]] ProtocolMonitor monitor() const { return monitor_; }
-    [[nodiscard]] MotionState motionState() const { return motionState_; }
-    [[nodiscard]] MotionMode motionMode() const { return motionMode_; }
+    [[nodiscard]] ProtocolMonitor monitor() const override { return monitor_; }
+    [[nodiscard]] MotionState motionState() const override { return motionState_; }
+    [[nodiscard]] MotionMode motionMode() const override { return motionMode_; }
     [[nodiscard]] std::optional<GaitBackend> confirmedGaitBackend() const
     {
         return confirmedGaitBackend_;
@@ -111,13 +119,13 @@ public:
     {
         return pendingGaitBackend_;
     }
-    [[nodiscard]] bool isGaitBackendChangePending() const
+    [[nodiscard]] bool isGaitBackendChangePending() const override
     {
         return pendingGaitBackend_.has_value();
     }
-    [[nodiscard]] bool isMotionActive() const;
-    [[nodiscard]] bool isMotionReady(MotionMode mode) const;
-    [[nodiscard]] bool isMotionTransitioning() const
+    [[nodiscard]] bool isMotionActive() const override;
+    [[nodiscard]] bool isMotionReady(MotionMode mode) const override;
+    [[nodiscard]] bool isMotionTransitioning() const override
     {
         return motionModeTransitionTimer_.isActive();
     }
@@ -126,19 +134,6 @@ public:
         return commandQueue_.size() + priorityCommandQueue_.size()
             + motionStopCommandQueue_.size();
     }
-
-signals:
-    void serialPortsChanged(const QStringList &ports);
-    void connectionStateChanged(rb::TransportState state);
-    void servoStateChanged(int servoIndex, bool enabled);
-    void servoDisablePendingChanged(int servoIndex, bool pending);
-    void leakStateChanged(rb::LeakState state);
-    void motionStateChanged(rb::MotionState state, rb::MotionMode mode);
-    void gaitBackendStateChanged();
-    void protocolMonitorChanged(const rb::ProtocolMonitor &monitor);
-    void txHexChanged(const QString &hex);
-    void rxHexChanged(const QString &hex);
-    void logMessage(const QString &message);
 
 private:
     struct PendingRequest {
@@ -248,8 +243,3 @@ private:
 };
 
 } // namespace rb
-
-Q_DECLARE_METATYPE(rb::ProtocolMonitor)
-Q_DECLARE_METATYPE(rb::MotionState)
-Q_DECLARE_METATYPE(rb::MotionMode)
-Q_DECLARE_METATYPE(rb::GaitBackend)
