@@ -1,0 +1,21 @@
+[Unit]
+Description=RoboBeetle Raspberry Pi remote-control gateway
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+SupplementaryGroups=dialout
+Environment=ROBOBEETLE_DEVICE=/dev/serial0
+Environment=ROBOBEETLE_BIND=0.0.0.0
+Environment=ROBOBEETLE_PORT=47000
+EnvironmentFile=-/etc/default/robobeetle-pi-gateway
+ExecStartPre=/usr/bin/test -c ${ROBOBEETLE_DEVICE}
+ExecStart=/usr/local/bin/robobeetle_pi_gateway --device ${ROBOBEETLE_DEVICE} --bind ${ROBOBEETLE_BIND} --port ${ROBOBEETLE_PORT}
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

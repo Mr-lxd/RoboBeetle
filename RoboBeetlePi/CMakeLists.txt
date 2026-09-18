@@ -134,6 +134,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
     add_executable(robobeetle_pi_gateway tools/robobeetle_pi_gateway.cpp)
     target_link_libraries(robobeetle_pi_gateway PRIVATE rbp2_gateway_owner)
+    install(TARGETS robobeetle_pi_gateway RUNTIME DESTINATION bin)
 endif()
 
 if(BUILD_TESTING)
