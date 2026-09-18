@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QHostAddress>
+#include <QNetworkProxy>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
@@ -141,6 +142,11 @@ private:
 
 void testHandshakeHeartbeatCommandAndReconnect()
 {
+    const QNetworkProxy previousProxy = QNetworkProxy::applicationProxy();
+    QNetworkProxy::setApplicationProxy(QNetworkProxy(
+        QNetworkProxy::HttpCachingProxy,
+        QStringLiteral("127.0.0.1"), 9));
+
     FakeGateway gateway;
     rb::RbrpClientSession session;
 
@@ -254,6 +260,7 @@ void testHandshakeHeartbeatCommandAndReconnect()
 
     session.disconnectFromHost();
     waitUntil([&] { return !session.isConnected(); });
+    QNetworkProxy::setApplicationProxy(previousProxy);
 }
 
 } // namespace

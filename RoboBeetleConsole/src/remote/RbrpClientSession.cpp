@@ -1,6 +1,7 @@
 #include "remote/RbrpClientSession.h"
 
 #include <QAbstractSocket>
+#include <QNetworkProxy>
 
 #include <algorithm>
 #include <cstdint>
@@ -55,6 +56,11 @@ bool gatewayKindIsServerToClient(robobeetle::gateway::RbrpMessageKind kind)
 RbrpClientSession::RbrpClientSession(QObject *parent)
     : QObject(parent)
 {
+    // The robot gateway is a direct LAN endpoint. Do not inherit desktop/system
+    // proxy settings (for example an HTTP caching proxy), which are invalid for
+    // a raw QTcpSocket connection and can prevent the TCP handshake entirely.
+    socket_.setProxy(QNetworkProxy::NoProxy);
+
     heartbeatTimer_.setTimerType(Qt::PreciseTimer);
     heartbeatTimer_.setInterval(250);
     requestTimeoutTimer_.setSingleShot(true);
