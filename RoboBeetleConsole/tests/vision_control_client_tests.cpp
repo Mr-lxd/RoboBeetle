@@ -398,6 +398,64 @@ void legacyStatusResetsInferenceAfterActionPreservesIt()
            "action response without inference preserves existing diagnostics");
     actionPeer->deleteLater();
 
+    client.startRecording();
+    QTcpSocket *startPeer = acceptClient(server);
+    expect(startPeer != nullptr, "recording start action request connects");
+    if (startPeer == nullptr) {
+        client.shutdown();
+        return;
+    }
+    const QByteArray startRequest = readRequest(startPeer);
+    expect(
+        startRequest.startsWith(
+            "POST /api/v1/vision/recording/start HTTP/1.1"),
+        "recording start action uses the expected control path");
+    sendJson(
+        startPeer,
+        200,
+        QByteArrayLiteral(
+            "{\"ok\":true,\"capture\":{\"state\":\"recording\","
+            "\"recording\":true}}"));
+    expect(
+        waitUntil([&client] {
+            return client.status().state == QStringLiteral("recording");
+        }),
+        "recording start action succeeds without inference payload");
+    expect(client.status().inferenceState == QStringLiteral("running")
+               && client.status().haveInferenceLatestFrame
+               && client.status().inferenceLatestFrameId == 7U,
+           "recording start without inference preserves existing diagnostics");
+    startPeer->deleteLater();
+
+    client.stopRecording();
+    QTcpSocket *stopPeer = acceptClient(server);
+    expect(stopPeer != nullptr, "recording stop action request connects");
+    if (stopPeer == nullptr) {
+        client.shutdown();
+        return;
+    }
+    const QByteArray stopRequest = readRequest(stopPeer);
+    expect(
+        stopRequest.startsWith(
+            "POST /api/v1/vision/recording/stop HTTP/1.1"),
+        "recording stop action uses the expected control path");
+    sendJson(
+        stopPeer,
+        200,
+        QByteArrayLiteral(
+            "{\"ok\":true,\"capture\":{\"state\":\"idle\","
+            "\"recording\":false}}"));
+    expect(
+        waitUntil([&client] {
+            return client.status().state == QStringLiteral("idle");
+        }),
+        "recording stop action succeeds without inference payload");
+    expect(client.status().inferenceState == QStringLiteral("running")
+               && client.status().haveInferenceLatestFrame
+               && client.status().inferenceLatestFrameId == 7U,
+           "recording stop without inference preserves existing diagnostics");
+    stopPeer->deleteLater();
+
     client.refreshStatus();
     QTcpSocket *legacyPeer = acceptClient(server);
     expect(legacyPeer != nullptr, "legacy status request connects");
