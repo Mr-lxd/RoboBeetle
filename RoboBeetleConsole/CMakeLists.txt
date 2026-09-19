@@ -35,6 +35,8 @@ add_library(RoboBeetleCore
     src/vision/VisionFrameDecoder.cpp
     src/vision/VisionClient.h
     src/vision/VisionClient.cpp
+    src/vision/VisionControlClient.h
+    src/vision/VisionControlClient.cpp
     ../RoboBeetlePi/gateway/src/rbrp_codec.cpp
     src/robot/RobotCommand.h
     src/robot/LeakStatus.h
@@ -89,6 +91,12 @@ if(BUILD_TESTING)
     add_executable(vision_client_tests tests/vision_client_tests.cpp)
     target_link_libraries(vision_client_tests PRIVATE RoboBeetleCore Qt6::Widgets)
     add_test(NAME vision_client_tests COMMAND vision_client_tests)
+
+    add_executable(vision_control_client_tests
+        tests/vision_control_client_tests.cpp
+    )
+    target_link_libraries(vision_control_client_tests PRIVATE RoboBeetleCore)
+    add_test(NAME vision_control_client_tests COMMAND vision_control_client_tests)
 
     add_executable(video_view_tests
         tests/video_view_tests.cpp

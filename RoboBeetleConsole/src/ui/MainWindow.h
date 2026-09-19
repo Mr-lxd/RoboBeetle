@@ -24,15 +24,18 @@ namespace rb {
 namespace vision {
 class VideoView;
 class VisionClient;
+class VisionControlClient;
 }
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
 
 public:
-    explicit MainWindow(IConsoleController *controller,
-                        vision::VisionClient *visionClient = nullptr,
-                        QWidget *parent = nullptr);
+    explicit MainWindow(
+        IConsoleController *controller,
+        vision::VisionClient *visionClient = nullptr,
+        vision::VisionControlClient *visionControlClient = nullptr,
+        QWidget *parent = nullptr);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -75,6 +78,7 @@ private:
 
     IConsoleController *controller_;
     vision::VisionClient *visionClient_{nullptr};
+    vision::VisionControlClient *visionControlClient_{nullptr};
 
     // Vision card.
     QLineEdit *visionHost_{nullptr};
@@ -83,6 +87,11 @@ private:
     QLabel *visionState_{nullptr};
     QLabel *visionDiagnostics_{nullptr};
     vision::VideoView *videoView_{nullptr};
+    QPushButton *snapshotButton_{nullptr};
+    QPushButton *startRecordingButton_{nullptr};
+    QPushButton *stopRecordingButton_{nullptr};
+    QLabel *captureState_{nullptr};
+    QLabel *captureDiagnostics_{nullptr};
 
     // Connection bar.
     QComboBox *portCombo_{nullptr};

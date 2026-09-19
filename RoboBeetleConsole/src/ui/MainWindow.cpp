@@ -3,6 +3,7 @@
 #include "robot/ServoDescriptor.h"
 #include "vision/VideoView.h"
 #include "vision/VisionClient.h"
+#include "vision/VisionControlClient.h"
 
 #include <QCloseEvent>
 #include <QComboBox>
@@ -224,10 +225,15 @@ void addSectionHeader(QVBoxLayout *layout,
 
 } // namespace
 
-MainWindow::MainWindow(IConsoleController *controller,
-                       vision::VisionClient *visionClient,
-                       QWidget *parent)
-    : QMainWindow(parent), controller_(controller), visionClient_(visionClient)
+MainWindow::MainWindow(
+    IConsoleController *controller,
+    vision::VisionClient *visionClient,
+    vision::VisionControlClient *visionControlClient,
+    QWidget *parent)
+    : QMainWindow(parent),
+      controller_(controller),
+      visionClient_(visionClient),
+      visionControlClient_(visionControlClient)
 {
     Q_ASSERT(controller_ != nullptr);
     setWindowTitle(QStringLiteral("RoboBeetle Console"));
@@ -560,10 +566,53 @@ QWidget *MainWindow::createVideoPlaceholder()
         QStringLiteral("font-size: 10px; color: #7B8F9D;"));
     layout->addWidget(visionDiagnostics_);
 
+    auto *captureControls = new QHBoxLayout;
+    captureControls->setContentsMargins(0, 0, 0, 0);
+    captureControls->setSpacing(5);
+
+    snapshotButton_ = new QPushButton(QStringLiteral("Snapshot"), box);
+    snapshotButton_->setObjectName(QStringLiteral("snapshotButton"));
+    startRecordingButton_ =
+        new QPushButton(QStringLiteral("Start Recording"), box);
+    startRecordingButton_->setObjectName(
+        QStringLiteral("startRecordingButton"));
+    stopRecordingButton_ =
+        new QPushButton(QStringLiteral("Stop Recording"), box);
+    stopRecordingButton_->setObjectName(
+        QStringLiteral("stopRecordingButton"));
+    captureState_ = new QLabel(
+        visionControlClient_ != nullptr
+            ? QStringLiteral("Capture Disconnected")
+            : QStringLiteral("Capture Unavailable"),
+        box);
+    captureState_->setObjectName(QStringLiteral("captureState"));
+    captureState_->setStyleSheet(
+        QStringLiteral("font-weight: 600; color: #566B79;"));
+
+    captureControls->addWidget(snapshotButton_);
+    captureControls->addWidget(startRecordingButton_);
+    captureControls->addWidget(stopRecordingButton_);
+    captureControls->addStretch();
+    captureControls->addWidget(captureState_);
+    layout->addLayout(captureControls);
+
+    captureDiagnostics_ = new QLabel(
+        QStringLiteral(
+            "Session -- | Recorded 0 | Snapshots 0 | Queue 0 MiB | Free -- GiB"),
+        box);
+    captureDiagnostics_->setObjectName(
+        QStringLiteral("captureDiagnostics"));
+    captureDiagnostics_->setStyleSheet(
+        QStringLiteral("font-size: 10px; color: #7B8F9D;"));
+    layout->addWidget(captureDiagnostics_);
+
     const bool available = visionClient_ != nullptr;
     visionHost_->setEnabled(available);
     visionPort_->setEnabled(available);
     visionConnectButton_->setEnabled(available);
+    snapshotButton_->setEnabled(false);
+    startRecordingButton_->setEnabled(false);
+    stopRecordingButton_->setEnabled(false);
 
     if (!available) {
         return box;
@@ -572,8 +621,22 @@ QWidget *MainWindow::createVideoPlaceholder()
     connect(visionConnectButton_, &QPushButton::clicked, this, [this] {
         if (visionClient_->state() == vision::VisionConnectionState::Connected
             || visionClient_->state() == vision::VisionConnectionState::Connecting) {
+            // Disconnecting RBVS does not stop capture control. This preserves
+            // access to Stop Recording if the video path is unavailable.
             visionClient_->disconnectFromHost();
             return;
+        }
+        if (visionControlClient_ != nullptr) {
+            if (!visionControlClient_->setEndpoint(
+                    visionHost_->text().trimmed(),
+                    visionControlClient_->port())) {
+                captureState_->setText(QStringLiteral("Capture Busy"));
+                appendLog(QStringLiteral(
+                    "Vision capture: wait for the active action before changing host"));
+                return;
+            }
+            captureState_->setText(QStringLiteral("Capture Connecting"));
+            visionControlClient_->startPolling();
         }
         visionClient_->connectToHost(
             visionHost_->text().trimmed(),
@@ -601,7 +664,10 @@ QWidget *MainWindow::createVideoPlaceholder()
         }
         visionState_->setText(text);
         visionConnectButton_->setText(buttonText);
-        if (state != vision::VisionConnectionState::Connected) {
+
+        const bool videoConnected =
+            state == vision::VisionConnectionState::Connected;
+        if (!videoConnected) {
             videoView_->clearFrame();
         }
     });
@@ -633,6 +699,86 @@ QWidget *MainWindow::createVideoPlaceholder()
             this, [this](const QString &message) {
         appendLog(QStringLiteral("Vision: %1").arg(message));
     });
+
+    if (visionControlClient_ != nullptr) {
+        connect(snapshotButton_, &QPushButton::clicked,
+                visionControlClient_,
+                &vision::VisionControlClient::requestSnapshot);
+        connect(startRecordingButton_, &QPushButton::clicked,
+                visionControlClient_,
+                &vision::VisionControlClient::startRecording);
+        connect(stopRecordingButton_, &QPushButton::clicked,
+                visionControlClient_,
+                &vision::VisionControlClient::stopRecording);
+
+        connect(
+            visionControlClient_,
+            &vision::VisionControlClient::statusChanged,
+            this,
+            [this](vision::VisionCaptureStatus status) {
+            // Capture control is deliberately independent from
+            // RBVS. A recording must remain stoppable even if video drops.
+            const bool usable = status.cameraRunning;
+            captureState_->setText(
+                status.recording
+                    ? QStringLiteral("Recording")
+                    : QStringLiteral("Capture %1").arg(status.state));
+            snapshotButton_->setEnabled(usable);
+            startRecordingButton_->setEnabled(
+                usable && !status.recording
+                && status.state != QStringLiteral("stopping"));
+            stopRecordingButton_->setEnabled(
+                usable && status.recording);
+
+            const double queueMiB =
+                static_cast<double>(status.queueBytes)
+                / (1024.0 * 1024.0);
+            const double maxQueueMiB =
+                static_cast<double>(status.maxQueueBytes)
+                / (1024.0 * 1024.0);
+            const QString freeText = status.haveFreeDisk
+                ? QString::number(
+                      static_cast<double>(status.freeDiskBytes)
+                          / (1024.0 * 1024.0 * 1024.0),
+                      'f',
+                      1)
+                : QStringLiteral("--");
+            captureDiagnostics_->setText(
+                QStringLiteral(
+                    "Session %1 | Recorded %2 | Snapshots %3 | "
+                    "Queue %4/%5 MiB | Free %6 GiB")
+                    .arg(
+                        status.sessionId.isEmpty()
+                            ? QStringLiteral("--")
+                            : status.sessionId)
+                    .arg(status.recordedFrames)
+                    .arg(status.snapshotCount)
+                    .arg(queueMiB, 0, 'f', 1)
+                    .arg(maxQueueMiB, 0, 'f', 0)
+                    .arg(freeText));
+            if (!status.lastError.isEmpty()) {
+                captureState_->setText(QStringLiteral("Capture Error"));
+            }
+        });
+
+        connect(
+            visionControlClient_,
+            &vision::VisionControlClient::actionSucceeded,
+            this,
+            [this](const QString &action) {
+            appendLog(
+                QStringLiteral("Vision capture: %1 succeeded").arg(action));
+        });
+        connect(
+            visionControlClient_,
+            &vision::VisionControlClient::errorOccurred,
+            this,
+            [this](const QString &message) {
+            captureState_->setText(QStringLiteral("Capture Error"));
+            appendLog(
+                QStringLiteral("Vision capture: %1").arg(message));
+        });
+    }
 
     return box;
 }
@@ -1788,6 +1934,17 @@ QString MainWindow::stateText(TransportState state)
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     appendLog(QStringLiteral("Application close requested"));
+    if (visionControlClient_ != nullptr
+        && visionControlClient_->actionInFlight()) {
+        captureState_->setText(QStringLiteral("Capture Busy"));
+        appendLog(QStringLiteral(
+            "Vision capture: application close deferred until the active action completes"));
+        event->ignore();
+        return;
+    }
+    if (visionControlClient_ != nullptr) {
+        visionControlClient_->shutdown();
+    }
     if (visionClient_ != nullptr) {
         visionClient_->shutdown();
     }
