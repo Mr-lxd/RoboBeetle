@@ -220,6 +220,214 @@ void actionQueuesBehindStatusPollInsteadOfFailing()
     client.shutdown();
 }
 
+void statusParsesRunningInferenceDiagnostics()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "inference status fake server must listen");
+
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+
+    client.refreshStatus();
+    QTcpSocket *peer = acceptClient(server);
+    expect(peer != nullptr, "inference status request connects");
+    if (peer == nullptr) {
+        return;
+    }
+    readRequest(peer);
+    sendJson(
+        peer,
+        200,
+        QByteArrayLiteral(
+            "{\"ok\":true,\"inference\":{"
+            "\"state\":\"running\","
+            "\"artifact_name\":\"beetle.onnx\","
+            "\"model_sha256\":\"abc123\","
+            "\"confidence_threshold\":0.75,"
+            "\"latest_frame_id\":0,"
+            "\"capture_timestamp_ns\":123456789,"
+            "\"processed_frames\":12,"
+            "\"skipped_frames\":3,"
+            "\"inference_fps\":8.5,"
+            "\"latency_ms\":4.25,"
+            "\"detection_count\":2,"
+            "\"last_error\":null}}"));
+
+    expect(
+        waitUntil([&client] {
+            return client.status().inferenceState == QStringLiteral("running");
+        }),
+        "running inference status is applied");
+    const VisionCaptureStatus seen = client.status();
+    expect(seen.inferenceArtifactName == QStringLiteral("beetle.onnx"),
+           "inference artifact name is parsed");
+    expect(seen.inferenceModelSha256 == QStringLiteral("abc123"),
+           "inference model hash is parsed");
+    expect(seen.haveInferenceConfidenceThreshold
+               && seen.inferenceConfidenceThreshold == 0.75,
+           "inference confidence threshold is parsed");
+    expect(seen.haveInferenceLatestFrame && seen.inferenceLatestFrameId == 0U,
+           "inference frame id zero remains valid");
+    expect(seen.haveInferenceCaptureTimestampNs
+               && seen.inferenceCaptureTimestampNs == 123456789ULL,
+           "inference capture timestamp is parsed");
+    expect(seen.haveInferenceProcessedFrames
+               && seen.inferenceProcessedFrames == 12U
+               && seen.haveInferenceSkippedFrames
+               && seen.inferenceSkippedFrames == 3U,
+           "inference frame counters are parsed");
+    expect(seen.haveInferenceFps && seen.inferenceFps == 8.5
+               && seen.haveInferenceLatencyMs && seen.inferenceLatencyMs == 4.25,
+           "inference rate and latency are parsed");
+    expect(seen.haveInferenceDetectionCount
+               && seen.inferenceDetectionCount == 2U,
+           "inference detection count is parsed");
+    expect(seen.inferenceLastError.isEmpty(),
+           "null inference last error stays absent");
+
+    peer->deleteLater();
+    client.shutdown();
+}
+
+void failedInferencePreservesNullFlagsAndNumericZero()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "failed inference fake server must listen");
+
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+
+    client.refreshStatus();
+    QTcpSocket *peer = acceptClient(server);
+    expect(peer != nullptr, "failed inference status request connects");
+    if (peer == nullptr) {
+        return;
+    }
+    readRequest(peer);
+    sendJson(
+        peer,
+        200,
+        QByteArrayLiteral(
+            "{\"ok\":true,\"inference\":{"
+            "\"state\":\"failed\","
+            "\"artifact_name\":null,\"model_sha256\":null,"
+            "\"confidence_threshold\":null,"
+            "\"latest_frame_id\":0,"
+            "\"capture_timestamp_ns\":null,"
+            "\"processed_frames\":null,\"skipped_frames\":null,"
+            "\"inference_fps\":null,\"latency_ms\":null,"
+            "\"detection_count\":null,"
+            "\"last_error\":\"model load failed\"}}"));
+
+    expect(
+        waitUntil([&client] {
+            return client.status().inferenceState == QStringLiteral("failed");
+        }),
+        "failed inference state is applied");
+    const VisionCaptureStatus seen = client.status();
+    expect(!seen.haveInferenceConfidenceThreshold
+               && !seen.haveInferenceCaptureTimestampNs
+               && !seen.haveInferenceProcessedFrames
+               && !seen.haveInferenceSkippedFrames
+               && !seen.haveInferenceFps
+               && !seen.haveInferenceLatencyMs
+               && !seen.haveInferenceDetectionCount,
+           "null inference numeric fields remain absent");
+    expect(seen.haveInferenceLatestFrame && seen.inferenceLatestFrameId == 0U,
+           "failed inference frame id zero remains present");
+    expect(seen.inferenceLastError == QStringLiteral("model load failed"),
+           "failed inference error is parsed");
+
+    peer->deleteLater();
+    client.shutdown();
+}
+
+void legacyStatusResetsInferenceAfterActionPreservesIt()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "legacy inference fake server must listen");
+
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+
+    client.refreshStatus();
+    QTcpSocket *statusPeer = acceptClient(server);
+    expect(statusPeer != nullptr, "initial inference status request connects");
+    if (statusPeer == nullptr) {
+        return;
+    }
+    readRequest(statusPeer);
+    sendJson(
+        statusPeer,
+        200,
+        QByteArrayLiteral(
+            "{\"ok\":true,\"inference\":{\"state\":\"running\","
+            "\"latest_frame_id\":7,\"processed_frames\":11}}"));
+    expect(
+        waitUntil([&client] {
+            return client.status().inferenceState == QStringLiteral("running");
+        }),
+        "initial inference status becomes running");
+    statusPeer->deleteLater();
+
+    client.requestSnapshot();
+    QTcpSocket *actionPeer = acceptClient(server);
+    expect(actionPeer != nullptr, "snapshot action request connects");
+    if (actionPeer == nullptr) {
+        client.shutdown();
+        return;
+    }
+    readRequest(actionPeer);
+    sendJson(
+        actionPeer,
+        200,
+        QByteArrayLiteral(
+            "{\"ok\":true,\"capture\":{\"state\":\"idle\","
+            "\"snapshot_count\":1}}"));
+    expect(
+        waitUntil([&client] {
+            return client.status().snapshotCount == 1U;
+        }),
+        "snapshot action succeeds without inference payload");
+    expect(client.status().inferenceState == QStringLiteral("running")
+               && client.status().haveInferenceLatestFrame
+               && client.status().inferenceLatestFrameId == 7U,
+           "action response without inference preserves existing diagnostics");
+    actionPeer->deleteLater();
+
+    client.refreshStatus();
+    QTcpSocket *legacyPeer = acceptClient(server);
+    expect(legacyPeer != nullptr, "legacy status request connects");
+    if (legacyPeer != nullptr) {
+        readRequest(legacyPeer);
+        sendJson(
+            legacyPeer,
+            200,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"capture\":{\"state\":\"idle\","
+                "\"snapshot_count\":2}}"));
+        expect(
+            waitUntil([&client] {
+                return client.status().snapshotCount == 2U;
+            }),
+            "legacy status response is applied");
+        const VisionCaptureStatus seen = client.status();
+        expect(seen.inferenceState == QStringLiteral("disabled"),
+               "legacy status disables inference");
+        expect(!seen.haveInferenceLatestFrame
+                   && !seen.haveInferenceProcessedFrames
+                   && seen.inferenceLatestFrameId == 0U
+                   && seen.inferenceProcessedFrames == 0U,
+               "legacy status restores disabled inference defaults");
+        legacyPeer->deleteLater();
+    }
+
+    client.shutdown();
+}
+
 void actionPathsAndErrorsAreSurfaced()
 {
     QTcpServer server;
@@ -529,6 +737,9 @@ int main(int argc, char **argv)
     QCoreApplication app(argc, argv);
     statusBypassesProxyAndParsesJson();
     actionQueuesBehindStatusPollInsteadOfFailing();
+    statusParsesRunningInferenceDiagnostics();
+    failedInferencePreservesNullFlagsAndNumericZero();
+    legacyStatusResetsInferenceAfterActionPreservesIt();
     actionPathsAndErrorsAreSurfaced();
     endpointChangeCancelsOldPendingAction();
     activeActionBlocksEndpointChangeUntilResult();

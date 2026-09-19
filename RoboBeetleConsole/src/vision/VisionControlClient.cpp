@@ -232,7 +232,7 @@ void VisionControlClient::handleFinished(
         return;
     }
 
-    applyPayload(object);
+    applyPayload(object, kind);
     if (kind != RequestKind::Status) {
         const QString action = actionName(kind);
         emit actionSucceeded(action);
@@ -257,7 +257,9 @@ void VisionControlClient::dispatchPendingAction()
     issue(kind, path, post);
 }
 
-void VisionControlClient::applyPayload(const QJsonObject &object)
+void VisionControlClient::applyPayload(
+    const QJsonObject &object,
+    RequestKind kind)
 {
     const QJsonObject camera =
         object.value(QStringLiteral("camera")).toObject();
@@ -304,7 +306,99 @@ void VisionControlClient::applyPayload(const QJsonObject &object)
         status_.lastError =
             capture.value(QStringLiteral("last_error")).toString();
     }
+
+    const QJsonValue inferenceValue =
+        object.value(QStringLiteral("inference"));
+    if (kind == RequestKind::Status && !inferenceValue.isObject()) {
+        resetInferenceDiagnostics();
+    } else if (inferenceValue.isObject()) {
+        resetInferenceDiagnostics();
+        const QJsonObject inference = inferenceValue.toObject();
+        status_.inferenceState =
+            inference.value(QStringLiteral("state")).toString(
+                QStringLiteral("disabled"));
+        status_.inferenceArtifactName =
+            inference.value(QStringLiteral("artifact_name")).toString();
+        status_.inferenceModelSha256 =
+            inference.value(QStringLiteral("model_sha256")).toString();
+
+        const auto readOptionalDouble = [&inference](
+                                            const QString &name,
+                                            bool &have,
+                                            double &value) {
+            const QJsonValue field = inference.value(name);
+            have = !field.isNull() && !field.isUndefined();
+            value = have ? field.toDouble() : 0.0;
+        };
+        const auto readOptionalUInt64 = [&inference](
+                                            const QString &name,
+                                            bool &have,
+                                            quint64 &value) {
+            const QJsonValue field = inference.value(name);
+            have = !field.isNull() && !field.isUndefined();
+            value = have ? static_cast<quint64>(field.toInteger()) : 0U;
+        };
+
+        readOptionalDouble(
+            QStringLiteral("confidence_threshold"),
+            status_.haveInferenceConfidenceThreshold,
+            status_.inferenceConfidenceThreshold);
+        readOptionalUInt64(
+            QStringLiteral("latest_frame_id"),
+            status_.haveInferenceLatestFrame,
+            status_.inferenceLatestFrameId);
+        readOptionalUInt64(
+            QStringLiteral("capture_timestamp_ns"),
+            status_.haveInferenceCaptureTimestampNs,
+            status_.inferenceCaptureTimestampNs);
+        readOptionalUInt64(
+            QStringLiteral("processed_frames"),
+            status_.haveInferenceProcessedFrames,
+            status_.inferenceProcessedFrames);
+        readOptionalUInt64(
+            QStringLiteral("skipped_frames"),
+            status_.haveInferenceSkippedFrames,
+            status_.inferenceSkippedFrames);
+        readOptionalDouble(
+            QStringLiteral("inference_fps"),
+            status_.haveInferenceFps,
+            status_.inferenceFps);
+        readOptionalDouble(
+            QStringLiteral("latency_ms"),
+            status_.haveInferenceLatencyMs,
+            status_.inferenceLatencyMs);
+        readOptionalUInt64(
+            QStringLiteral("detection_count"),
+            status_.haveInferenceDetectionCount,
+            status_.inferenceDetectionCount);
+        status_.inferenceLastError =
+            inference.value(QStringLiteral("last_error")).toString();
+    }
     emit statusChanged(status_);
+}
+
+void VisionControlClient::resetInferenceDiagnostics()
+{
+    status_.inferenceState = QStringLiteral("disabled");
+    status_.inferenceArtifactName.clear();
+    status_.inferenceModelSha256.clear();
+    status_.haveInferenceConfidenceThreshold = false;
+    status_.inferenceConfidenceThreshold = 0.0;
+    status_.haveInferenceLatestFrame = false;
+    status_.inferenceLatestFrameId = 0;
+    status_.haveInferenceCaptureTimestampNs = false;
+    status_.inferenceCaptureTimestampNs = 0;
+    status_.haveInferenceProcessedFrames = false;
+    status_.inferenceProcessedFrames = 0;
+    status_.haveInferenceSkippedFrames = false;
+    status_.inferenceSkippedFrames = 0;
+    status_.haveInferenceFps = false;
+    status_.inferenceFps = 0.0;
+    status_.haveInferenceLatencyMs = false;
+    status_.inferenceLatencyMs = 0.0;
+    status_.haveInferenceDetectionCount = false;
+    status_.inferenceDetectionCount = 0;
+    status_.inferenceLastError.clear();
 }
 
 QUrl VisionControlClient::endpointUrl(const QString &path) const

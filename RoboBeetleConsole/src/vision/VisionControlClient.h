@@ -27,6 +27,26 @@ struct VisionCaptureStatus {
     bool haveFreeDisk{false};
     quint64 freeDiskBytes{0};
     QString lastError;
+    QString inferenceState{QStringLiteral("disabled")};
+    QString inferenceArtifactName;
+    QString inferenceModelSha256;
+    bool haveInferenceConfidenceThreshold{false};
+    double inferenceConfidenceThreshold{0.0};
+    bool haveInferenceLatestFrame{false};
+    quint64 inferenceLatestFrameId{0};
+    bool haveInferenceCaptureTimestampNs{false};
+    quint64 inferenceCaptureTimestampNs{0};
+    bool haveInferenceProcessedFrames{false};
+    quint64 inferenceProcessedFrames{0};
+    bool haveInferenceSkippedFrames{false};
+    quint64 inferenceSkippedFrames{0};
+    bool haveInferenceFps{false};
+    double inferenceFps{0.0};
+    bool haveInferenceLatencyMs{false};
+    double inferenceLatencyMs{0.0};
+    bool haveInferenceDetectionCount{false};
+    quint64 inferenceDetectionCount{0};
+    QString inferenceLastError;
 };
 
 class VisionControlClient final : public QObject {
@@ -74,7 +94,8 @@ private:
         RequestKind kind,
         quint64 endpointGeneration);
     void dispatchPendingAction();
-    void applyPayload(const QJsonObject &object);
+    void applyPayload(const QJsonObject &object, RequestKind kind);
+    void resetInferenceDiagnostics();
     [[nodiscard]] QUrl endpointUrl(const QString &path) const;
     [[nodiscard]] static QString actionName(RequestKind kind);
 
