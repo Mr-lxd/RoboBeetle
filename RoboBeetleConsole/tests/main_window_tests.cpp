@@ -5,6 +5,7 @@
 #include "transport/FakeTransport.h"
 #include "ui/MainWindow.h"
 #include "vision/VisionClient.h"
+#include "vision/VisionControlClient.h"
 #include "vision/VideoView.h"
 
 #include <QApplication>
@@ -177,6 +178,30 @@ void waitForMs(int milliseconds)
     QEventLoop loop;
     QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
     loop.exec();
+}
+
+QByteArray readHttpRequest(QTcpSocket *socket)
+{
+    QByteArray request;
+    for (int i = 0; i < 50 && !request.contains("\r\n\r\n"); ++i) {
+        if (socket->bytesAvailable() > 0) {
+            request += socket->readAll();
+        }
+        waitForMs(5);
+    }
+    return request;
+}
+
+void sendHttpJson(QTcpSocket *socket, const QByteArray &body)
+{
+    const QByteArray response =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: " + QByteArray::number(body.size())
+        + "\r\nConnection: close\r\n\r\n" + body;
+    socket->write(response);
+    socket->flush();
+    socket->disconnectFromHost();
 }
 
 void enablePaddles(rb::FakeTransport &transport, rb::RobotController &controller)
@@ -570,6 +595,302 @@ void testVisionConnectionIsIndependentFromControlTransport()
     }
 }
 
+void testVisionCaptureControlsAreIndependentFromRobotTransport()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionClient visionClient;
+    rb::vision::VisionControlClient controlClient;
+
+    QTcpServer controlServer;
+    expect(controlServer.listen(QHostAddress::LocalHost, 0),
+           "Vision capture fake HTTP server must listen");
+    if (!controlServer.isListening()) {
+        return;
+    }
+    controlClient.setEndpoint(
+        QStringLiteral("127.0.0.1"),
+        controlServer.serverPort());
+
+    rb::MainWindow window(&controller, &visionClient, &controlClient);
+    QGroupBox *panel = findGroupBox(&window, QStringLiteral("Realtime Video"));
+    expect(panel != nullptr, "capture integration retains Realtime Video card");
+    if (panel == nullptr) {
+        return;
+    }
+
+    auto *host = panel->findChild<QLineEdit *>(QStringLiteral("visionHost"));
+    auto *port = panel->findChild<QSpinBox *>(QStringLiteral("visionPort"));
+    auto *snapshot =
+        panel->findChild<QPushButton *>(QStringLiteral("snapshotButton"));
+    auto *startRecording =
+        panel->findChild<QPushButton *>(QStringLiteral("startRecordingButton"));
+    auto *stopRecording =
+        panel->findChild<QPushButton *>(QStringLiteral("stopRecordingButton"));
+    auto *captureDiagnostics =
+        panel->findChild<QLabel *>(QStringLiteral("captureDiagnostics"));
+    QPushButton *connectVideo =
+        buttonWithText(panel, QStringLiteral("Connect Video"));
+    expect(host != nullptr && port != nullptr && snapshot != nullptr
+               && startRecording != nullptr && stopRecording != nullptr
+               && captureDiagnostics != nullptr && connectVideo != nullptr,
+           "capture UI exposes the frozen controls");
+    if (host == nullptr || port == nullptr || snapshot == nullptr
+        || startRecording == nullptr || stopRecording == nullptr
+        || captureDiagnostics == nullptr || connectVideo == nullptr) {
+        return;
+    }
+
+    expect(!snapshot->isEnabled() && !startRecording->isEnabled()
+               && !stopRecording->isEnabled(),
+           "capture actions start disabled before Vision connection");
+
+    QTcpServer videoServer;
+    expect(videoServer.listen(QHostAddress::LocalHost, 0),
+           "capture integration fake RBVS server must listen");
+    if (!videoServer.isListening()) {
+        return;
+    }
+
+    host->setText(QStringLiteral("127.0.0.1"));
+    port->setValue(videoServer.serverPort());
+    connectVideo->click();
+
+    for (int i = 0; i < 50 && !videoServer.hasPendingConnections(); ++i) {
+        waitForMs(5);
+    }
+    expect(videoServer.hasPendingConnections(),
+           "video connection reaches independent RBVS endpoint");
+    QTcpSocket *videoPeer = videoServer.nextPendingConnection();
+
+    for (int i = 0; i < 50 && !controlServer.hasPendingConnections(); ++i) {
+        waitForMs(5);
+    }
+    expect(controlServer.hasPendingConnections(),
+           "video connection starts independent capture status polling");
+    QTcpSocket *statusPeer = controlServer.nextPendingConnection();
+    if (statusPeer != nullptr) {
+        const QByteArray request = readHttpRequest(statusPeer);
+        expect(
+            request.startsWith("GET /api/v1/vision/status HTTP/1.1"),
+            "capture status uses HTTP control plane, not RBVS or RBRP");
+        sendHttpJson(
+            statusPeer,
+            QByteArrayLiteral(
+                "{\"ok\":true,"
+                "\"camera\":{\"running\":true,\"latest_frame_id\":12},"
+                "\"capture\":{\"state\":\"idle\",\"recording\":false,"
+                "\"session_id\":null,\"segment\":null,"
+                "\"recorded_frames\":0,\"snapshot_count\":0,"
+                "\"queue_bytes\":0,\"max_queue_bytes\":67108864,"
+                "\"last_error\":null}}"));
+    }
+
+    for (int i = 0; i < 50 && !snapshot->isEnabled(); ++i) {
+        waitForMs(5);
+    }
+    expect(snapshot->isEnabled() && startRecording->isEnabled()
+               && !stopRecording->isEnabled(),
+           "capture status enables idle snapshot/start actions");
+    expect(transport.writes().isEmpty(),
+           "capture status polling emits no robot-control bytes");
+
+    snapshot->click();
+    for (int i = 0; i < 50 && !controlServer.hasPendingConnections(); ++i) {
+        waitForMs(5);
+    }
+    expect(controlServer.hasPendingConnections(),
+           "Snapshot button reaches capture HTTP endpoint");
+    QTcpSocket *snapshotPeer = controlServer.nextPendingConnection();
+    if (snapshotPeer != nullptr) {
+        const QByteArray request = readHttpRequest(snapshotPeer);
+        expect(
+            request.startsWith("POST /api/v1/vision/snapshot HTTP/1.1"),
+            "Snapshot button uses the dedicated capture action path");
+        sendHttpJson(
+            snapshotPeer,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"capture\":{\"state\":\"idle\","
+                "\"recording\":false,\"session_id\":\"capture-test-001\","
+                "\"segment\":null,\"recorded_frames\":0,"
+                "\"snapshot_count\":1,\"queue_bytes\":0,"
+                "\"max_queue_bytes\":67108864,\"last_error\":null}}"));
+    }
+
+    for (int i = 0; i < 50
+         && !captureDiagnostics->text().contains(QStringLiteral("Snapshots 1"));
+         ++i) {
+        waitForMs(5);
+    }
+    expect(captureDiagnostics->text().contains(QStringLiteral("Snapshots 1")),
+           "capture action response updates UI diagnostics");
+    expect(transport.writes().isEmpty(),
+           "Snapshot action emits no robot-control bytes");
+
+    // Keep this integration test deterministic; action responses themselves
+    // still update status, so periodic polling is not needed below.
+    controlClient.stopPolling();
+
+    startRecording->click();
+    for (int i = 0; i < 50 && !controlServer.hasPendingConnections(); ++i) {
+        waitForMs(5);
+    }
+    expect(controlServer.hasPendingConnections(),
+           "Start Recording reaches capture HTTP endpoint");
+    QTcpSocket *startPeer = controlServer.nextPendingConnection();
+    if (startPeer != nullptr) {
+        const QByteArray request = readHttpRequest(startPeer);
+        expect(
+            request.startsWith(
+                "POST /api/v1/vision/recording/start HTTP/1.1"),
+            "Start Recording uses dedicated capture action path");
+        sendHttpJson(
+            startPeer,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"capture\":{\"state\":\"recording\","
+                "\"recording\":true,\"session_id\":\"capture-test-001\","
+                "\"segment\":\"raw.avi\",\"recorded_frames\":5,"
+                "\"snapshot_count\":1,\"queue_bytes\":0,"
+                "\"max_queue_bytes\":67108864,"
+                "\"free_disk_bytes\":1073741824,"
+                "\"last_error\":null}}"));
+    }
+    for (int i = 0; i < 50 && !stopRecording->isEnabled(); ++i) {
+        waitForMs(5);
+    }
+    expect(stopRecording->isEnabled() && !startRecording->isEnabled(),
+           "recording status enables Stop and disables Start");
+
+    // Drop RBVS only. Capture control must remain usable so a recording can
+    // always be stopped even when the realtime video path fails.
+    connectVideo->click();
+    for (int i = 0; i < 50
+         && !hasLabelText(panel, QStringLiteral("Disconnected")); ++i) {
+        waitForMs(5);
+    }
+    expect(stopRecording->isEnabled(),
+           "Stop Recording remains enabled after RBVS disconnect");
+    expect(transport.writes().isEmpty(),
+           "RBVS disconnect while recording emits no robot-control bytes");
+
+    stopRecording->click();
+    for (int i = 0; i < 50 && !controlServer.hasPendingConnections(); ++i) {
+        waitForMs(5);
+    }
+    expect(controlServer.hasPendingConnections(),
+           "Stop Recording remains reachable without RBVS");
+    QTcpSocket *stopPeer = controlServer.nextPendingConnection();
+    if (stopPeer != nullptr) {
+        const QByteArray request = readHttpRequest(stopPeer);
+        expect(
+            request.startsWith(
+                "POST /api/v1/vision/recording/stop HTTP/1.1"),
+            "Stop Recording uses dedicated capture action path");
+        sendHttpJson(
+            stopPeer,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"capture\":{\"state\":\"idle\","
+                "\"recording\":false,\"session_id\":\"capture-test-001\","
+                "\"segment\":null,\"recorded_frames\":8,"
+                "\"snapshot_count\":1,\"queue_bytes\":0,"
+                "\"max_queue_bytes\":67108864,"
+                "\"free_disk_bytes\":1073741824,"
+                "\"last_error\":null}}"));
+    }
+    for (int i = 0; i < 50 && stopRecording->isEnabled(); ++i) {
+        waitForMs(5);
+    }
+    expect(!stopRecording->isEnabled() && startRecording->isEnabled(),
+           "Stop response returns capture UI to idle");
+    expect(transport.writes().isEmpty(),
+           "capture start/stop emits no robot-control bytes");
+
+    window.close();
+    if (statusPeer != nullptr) {
+        statusPeer->deleteLater();
+    }
+    if (snapshotPeer != nullptr) {
+        snapshotPeer->deleteLater();
+    }
+    if (startPeer != nullptr) {
+        startPeer->deleteLater();
+    }
+    if (stopPeer != nullptr) {
+        stopPeer->deleteLater();
+    }
+    if (videoPeer != nullptr) {
+        videoPeer->deleteLater();
+    }
+}
+
+void testVisionCaptureActionDefersWindowClose()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionClient visionClient;
+    rb::vision::VisionControlClient controlClient;
+
+    QTcpServer controlServer;
+    expect(controlServer.listen(QHostAddress::LocalHost, 0),
+           "close-guard capture server must listen");
+    if (!controlServer.isListening()) {
+        return;
+    }
+    controlClient.setEndpoint(
+        QStringLiteral("127.0.0.1"),
+        controlServer.serverPort());
+
+    rb::MainWindow window(&controller, &visionClient, &controlClient);
+    window.show();
+    waitForMs(20);
+
+    controlClient.startRecording();
+    for (int i = 0; i < 50 && !controlServer.hasPendingConnections(); ++i) {
+        waitForMs(5);
+    }
+    expect(controlServer.hasPendingConnections(),
+           "close-guard Start Recording reaches capture endpoint");
+    QTcpSocket *peer = controlServer.nextPendingConnection();
+    if (peer == nullptr) {
+        return;
+    }
+    const QByteArray request = readHttpRequest(peer);
+    expect(
+        request.startsWith(
+            "POST /api/v1/vision/recording/start HTTP/1.1"),
+        "close-guard request is recording/start");
+    expect(controlClient.actionInFlight(),
+           "MainWindow sees capture action in flight");
+
+    expect(!window.close(),
+           "MainWindow close is deferred while capture action is unresolved");
+    expect(window.isVisible(),
+           "deferred close leaves the application window open");
+    expect(controlClient.actionInFlight(),
+           "deferred close does not abort the active capture action");
+
+    sendHttpJson(
+        peer,
+        QByteArrayLiteral(
+            "{\"ok\":true,\"capture\":{\"state\":\"recording\","
+            "\"recording\":true,\"recorded_frames\":0,"
+            "\"snapshot_count\":0,\"queue_bytes\":0,"
+            "\"max_queue_bytes\":67108864,"
+            "\"free_disk_bytes\":1073741824,\"last_error\":null}}"));
+    for (int i = 0; i < 50 && controlClient.actionInFlight(); ++i) {
+        waitForMs(5);
+    }
+    expect(!controlClient.actionInFlight(),
+           "capture action obtains a definite result before close");
+
+    expect(window.close(),
+           "MainWindow closes after the capture action completes");
+
+    peer->deleteLater();
+}
+
 void testDashboardLayout()
 {
     rb::FakeTransport transport;
@@ -800,6 +1121,8 @@ int main(int argc, char **argv)
     testMotionPanelLifecycleAndManualArbitration();
     testGaitBackendPanelLifecycle();
     testVisionConnectionIsIndependentFromControlTransport();
+    testVisionCaptureControlsAreIndependentFromRobotTransport();
+    testVisionCaptureActionDefersWindowClose();
     testDashboardLayout();
     if (failures == 0) {
         std::fprintf(stdout, "All MainWindow tests passed\n");

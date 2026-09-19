@@ -4,6 +4,7 @@
 #include "transport/SerialTransport.h"
 #include "ui/MainWindow.h"
 #include "vision/VisionClient.h"
+#include "vision/VisionControlClient.h"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -34,7 +35,11 @@ int main(int argc, char *argv[])
     }
 
     rb::vision::VisionClient visionClient;
-    rb::MainWindow window(controller.get(), &visionClient);
+    rb::vision::VisionControlClient visionControlClient;
+    rb::MainWindow window(
+        controller.get(),
+        &visionClient,
+        &visionControlClient);
     window.show();
     return application.exec();
 }
