@@ -891,6 +891,155 @@ void testVisionCaptureActionDefersWindowClose()
     peer->deleteLater();
 }
 
+void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionClient visionClient;
+    rb::vision::VisionControlClient controlClient;
+
+    QTcpServer controlServer;
+    QTcpServer videoServer;
+    expect(controlServer.listen(QHostAddress::LocalHost, 0),
+           "inference diagnostics control server must listen");
+    expect(videoServer.listen(QHostAddress::LocalHost, 0),
+           "inference diagnostics video server must listen");
+    if (!controlServer.isListening() || !videoServer.isListening()) {
+        return;
+    }
+    controlClient.setEndpoint(
+        QStringLiteral("127.0.0.1"), controlServer.serverPort());
+
+    rb::MainWindow window(&controller, &visionClient, &controlClient);
+    QGroupBox *panel = findGroupBox(&window, QStringLiteral("Realtime Video"));
+    expect(panel != nullptr, "inference diagnostics retain the Realtime Video card");
+    if (panel == nullptr) {
+        return;
+    }
+
+    auto *host = panel->findChild<QLineEdit *>(QStringLiteral("visionHost"));
+    auto *port = panel->findChild<QSpinBox *>(QStringLiteral("visionPort"));
+    auto *state = panel->findChild<QLabel *>(QStringLiteral("inferenceState"));
+    auto *diagnostics =
+        panel->findChild<QLabel *>(QStringLiteral("inferenceDiagnostics"));
+    QPushButton *connectVideo =
+        buttonWithText(panel, QStringLiteral("Connect Video"));
+    expect(host != nullptr && port != nullptr && state != nullptr
+               && diagnostics != nullptr && connectVideo != nullptr,
+           "Realtime Video card exposes inference state and diagnostics labels");
+    if (host == nullptr || port == nullptr || state == nullptr
+        || diagnostics == nullptr || connectVideo == nullptr) {
+        return;
+    }
+
+    expect(state->text() == QStringLiteral("Inference Disabled"),
+           "inference state starts disabled before status reception");
+
+    host->setText(QStringLiteral("127.0.0.1"));
+    port->setValue(videoServer.serverPort());
+    connectVideo->click();
+    for (int i = 0; i < 50 && !controlServer.hasPendingConnections(); ++i) {
+        waitForMs(5);
+    }
+    expect(controlServer.hasPendingConnections(),
+           "inference diagnostics use the existing status polling endpoint");
+    QTcpSocket *statusPeer = controlServer.nextPendingConnection();
+    QTcpSocket *videoPeer = nullptr;
+    for (int i = 0; i < 50 && !videoServer.hasPendingConnections(); ++i) {
+        waitForMs(5);
+    }
+    if (videoServer.hasPendingConnections()) {
+        videoPeer = videoServer.nextPendingConnection();
+    }
+    if (statusPeer == nullptr) {
+        return;
+    }
+
+    expect(readHttpRequest(statusPeer).startsWith(
+               "GET /api/v1/vision/status HTTP/1.1"),
+           "inference diagnostics use the existing GET status request");
+    sendHttpJson(
+        statusPeer,
+        QByteArrayLiteral(
+            "{\"ok\":true,\"camera\":{\"running\":true,"
+            "\"latest_frame_id\":12},\"capture\":{\"state\":\"idle\","
+            "\"recording\":false,\"last_error\":null},"
+            "\"inference\":{\"state\":\"running\","
+            "\"artifact_name\":\"lab_pool_d2_seed42_e20.onnx\","
+            "\"model_sha256\":\"abc123\",\"latest_frame_id\":0,"
+            "\"skipped_frames\":0,\"inference_fps\":0.0,"
+            "\"latency_ms\":0.0,\"detection_count\":0}}"));
+    for (int i = 0; i < 50 && state->text() != QStringLiteral("Inference RUNNING");
+         ++i) {
+        waitForMs(5);
+    }
+    expect(state->text() == QStringLiteral("Inference RUNNING"),
+           "running inference status is rendered in the state label");
+    expect(diagnostics->text().contains(QStringLiteral("Artifact: lab_pool_d2_seed42_e20.onnx"))
+               && diagnostics->text().contains(QStringLiteral("SHA-256: abc123"))
+               && diagnostics->text().contains(QStringLiteral("FPS: 0.0"))
+               && diagnostics->text().contains(QStringLiteral("Latency ms: 0.0"))
+               && diagnostics->text().contains(QStringLiteral("Latest Frame ID: 0"))
+               && diagnostics->text().contains(QStringLiteral("Detections: 0"))
+               && diagnostics->text().contains(QStringLiteral("Skipped: 0")),
+           "running inference diagnostics preserve validated identity and zero values");
+    expect(transport.writes().isEmpty(),
+           "inference status updates emit no robot-control transport writes");
+
+    controlClient.stopPolling();
+    statusPeer->deleteLater();
+
+    const auto applyInferenceStatus = [&](const QByteArray &inference) {
+        controlClient.refreshStatus();
+        for (int i = 0; i < 50 && !controlServer.hasPendingConnections(); ++i) {
+            waitForMs(5);
+        }
+        expect(controlServer.hasPendingConnections(),
+               "inference state changes use the existing status request");
+        QTcpSocket *peer = controlServer.nextPendingConnection();
+        if (peer == nullptr) {
+            return;
+        }
+        readHttpRequest(peer);
+        sendHttpJson(
+            peer,
+            QByteArrayLiteral("{\"ok\":true,\"inference\":")
+                + inference + QByteArrayLiteral("}"));
+        for (int i = 0; i < 50 && controlClient.requestInFlight(); ++i) {
+            waitForMs(5);
+        }
+        peer->deleteLater();
+    };
+
+    applyInferenceStatus(QByteArrayLiteral("{\"state\":\"starting\"}"));
+    expect(state->text() == QStringLiteral("Inference STARTING"),
+           "starting inference status is rendered in the state label");
+
+    applyInferenceStatus(
+        QByteArrayLiteral(
+            "{\"state\":\"failed\",\"last_error\":\"model load failed\"}"));
+    expect(state->text() == QStringLiteral("Inference Error")
+               && diagnostics->text().contains(
+                   QStringLiteral("Last error: model load failed")),
+           "failed inference status renders a short last error");
+
+    applyInferenceStatus(QByteArrayLiteral("{\"state\":\"unsupported\"}"));
+    expect(state->text() == QStringLiteral("Inference Unavailable")
+               && diagnostics->text().contains(QStringLiteral("FPS: --"))
+               && diagnostics->text().contains(QStringLiteral("Latest Frame ID: --"))
+               && diagnostics->text().contains(QStringLiteral("Detections: --"))
+               && diagnostics->text().contains(QStringLiteral("Skipped: --")),
+           "unsupported inference status renders unavailable diagnostics");
+    expect(transport.writes().isEmpty(),
+           "inference state changes emit no robot-control transport writes");
+
+    if (videoPeer != nullptr) {
+        videoPeer->deleteLater();
+    }
+    window.close();
+}
+
 void testDashboardLayout()
 {
     rb::FakeTransport transport;
@@ -1123,6 +1272,7 @@ int main(int argc, char **argv)
     testVisionConnectionIsIndependentFromControlTransport();
     testVisionCaptureControlsAreIndependentFromRobotTransport();
     testVisionCaptureActionDefersWindowClose();
+    testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites();
     testDashboardLayout();
     if (failures == 0) {
         std::fprintf(stdout, "All MainWindow tests passed\n");

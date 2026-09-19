@@ -64,6 +64,76 @@ QString formatTemperature(qint16 temperatureCentiC)
         .arg(static_cast<double>(temperatureCentiC) / 100.0, 0, 'f', 2);
 }
 
+QString inferenceStateText(const QString &state)
+{
+    const QString normalized = state.trimmed().toLower();
+    if (normalized == QStringLiteral("disabled")) {
+        return QStringLiteral("Inference Disabled");
+    }
+    if (normalized == QStringLiteral("starting")) {
+        return QStringLiteral("Inference STARTING");
+    }
+    if (normalized == QStringLiteral("running")) {
+        return QStringLiteral("Inference RUNNING");
+    }
+    if (normalized == QStringLiteral("failed")
+        || normalized == QStringLiteral("error")) {
+        return QStringLiteral("Inference Error");
+    }
+    return QStringLiteral("Inference Unavailable");
+}
+
+QString optionalInferenceFrameId(bool haveValue, quint64 value)
+{
+    return haveValue ? QString::number(value) : QStringLiteral("--");
+}
+
+QString optionalInferenceDouble(bool haveValue, double value)
+{
+    return haveValue
+        ? QString::number(value, 'f', 1)
+        : QStringLiteral("--");
+}
+
+QString inferenceDiagnosticsText(const vision::VisionCaptureStatus &status)
+{
+    const QString artifact = status.inferenceArtifactName.isEmpty()
+        ? QStringLiteral("--")
+        : status.inferenceArtifactName;
+    const QString sha256 = status.inferenceModelSha256.isEmpty()
+        ? QStringLiteral("--")
+        : status.inferenceModelSha256;
+
+    QString text = QStringLiteral("Artifact: %1 | SHA-256: %2")
+        .arg(artifact)
+        .arg(sha256);
+    text += QStringLiteral("\nFPS: %1 | Latency ms: %2")
+        .arg(optionalInferenceDouble(
+            status.haveInferenceFps, status.inferenceFps))
+        .arg(optionalInferenceDouble(
+            status.haveInferenceLatencyMs, status.inferenceLatencyMs));
+    text += QStringLiteral("\nLatest Frame ID: %1 | Detections: %2 | Skipped: %3")
+        .arg(optionalInferenceFrameId(
+            status.haveInferenceLatestFrame, status.inferenceLatestFrameId))
+        .arg(optionalInferenceFrameId(
+            status.haveInferenceDetectionCount,
+            status.inferenceDetectionCount))
+        .arg(optionalInferenceFrameId(
+            status.haveInferenceSkippedFrames, status.inferenceSkippedFrames));
+
+    if (status.inferenceState.trimmed().toLower() == QStringLiteral("failed")
+        || status.inferenceState.trimmed().toLower() == QStringLiteral("error")) {
+        QString error = status.inferenceLastError.simplified();
+        if (error.isEmpty()) {
+            error = QStringLiteral("--");
+        } else if (error.size() > 120) {
+            error = error.left(117) + QStringLiteral("...");
+        }
+        text += QStringLiteral("\nLast error: %1").arg(error);
+    }
+    return text;
+}
+
 QString motionModeText(MotionMode mode)
 {
     switch (mode) {
@@ -566,6 +636,32 @@ QWidget *MainWindow::createVideoPlaceholder()
         QStringLiteral("font-size: 10px; color: #7B8F9D;"));
     layout->addWidget(visionDiagnostics_);
 
+    const bool inferenceAvailable = visionControlClient_ != nullptr;
+    inferenceState_ = new QLabel(
+        inferenceAvailable
+            ? inferenceStateText(visionControlClient_->status().inferenceState)
+            : QStringLiteral("Inference Unavailable"),
+        box);
+    inferenceState_->setObjectName(QStringLiteral("inferenceState"));
+    inferenceState_->setStyleSheet(
+        QStringLiteral("font-weight: 600; color: #566B79;"));
+    layout->addWidget(inferenceState_);
+
+    inferenceDiagnostics_ = new QLabel(
+        inferenceAvailable
+            ? inferenceDiagnosticsText(visionControlClient_->status())
+            : QStringLiteral(
+                "Artifact: -- | SHA-256: --\n"
+                "FPS: -- | Latency ms: --\n"
+                "Latest Frame ID: -- | Detections: -- | Skipped: --"),
+        box);
+    inferenceDiagnostics_->setObjectName(
+        QStringLiteral("inferenceDiagnostics"));
+    inferenceDiagnostics_->setWordWrap(true);
+    inferenceDiagnostics_->setStyleSheet(
+        QStringLiteral("font-size: 10px; color: #7B8F9D;"));
+    layout->addWidget(inferenceDiagnostics_);
+
     auto *captureControls = new QHBoxLayout;
     captureControls->setContentsMargins(0, 0, 0, 0);
     captureControls->setSpacing(5);
@@ -718,6 +814,9 @@ QWidget *MainWindow::createVideoPlaceholder()
             [this](vision::VisionCaptureStatus status) {
             // Capture control is deliberately independent from
             // RBVS. A recording must remain stoppable even if video drops.
+            inferenceState_->setText(inferenceStateText(status.inferenceState));
+            inferenceDiagnostics_->setText(inferenceDiagnosticsText(status));
+
             const bool usable = status.cameraRunning;
             captureState_->setText(
                 status.recording
