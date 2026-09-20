@@ -62,18 +62,102 @@ QByteArray readRequest(QTcpSocket *socket)
     return request;
 }
 
-void sendJson(QTcpSocket *socket, int status, const QByteArray &body)
+void waitForMs(int timeoutMs)
 {
-    const QByteArray statusText =
-        status == 200 ? QByteArrayLiteral("OK") : QByteArrayLiteral("Conflict");
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(2);
+    }
+}
+
+QByteArray readRequestWithBody(QTcpSocket *socket, int bodyBytes)
+{
+    QByteArray request = readRequest(socket);
+    const qsizetype headerEnd = request.indexOf("\r\n\r\n");
+    if (headerEnd < 0) {
+        return request;
+    }
+    waitUntil([&] {
+        if (request.size() < headerEnd + 4 + bodyBytes
+            && socket->bytesAvailable() > 0) {
+            request += socket->readAll();
+        }
+        return request.size() >= headerEnd + 4 + bodyBytes;
+    });
+    return request;
+}
+
+QByteArray statusReason(int status)
+{
+    switch (status) {
+    case 200: return QByteArrayLiteral("OK");
+    case 202: return QByteArrayLiteral("Accepted");
+    case 301: return QByteArrayLiteral("Moved Permanently");
+    case 302: return QByteArrayLiteral("Found");
+    case 400: return QByteArrayLiteral("Bad Request");
+    case 409: return QByteArrayLiteral("Conflict");
+    case 500: return QByteArrayLiteral("Internal Server Error");
+    default: return QByteArrayLiteral("Response");
+    }
+}
+
+void sendResponse(
+    QTcpSocket *socket,
+    int status,
+    const QByteArray &body,
+    const QByteArray &extraHeaders = {})
+{
     QByteArray response =
-        "HTTP/1.1 " + QByteArray::number(status) + " " + statusText + "\r\n"
+        "HTTP/1.1 " + QByteArray::number(status) + " " + statusReason(status) + "\r\n"
         "Content-Type: application/json\r\n"
         "Content-Length: " + QByteArray::number(body.size()) + "\r\n"
-        "Connection: close\r\n\r\n" + body;
+        + extraHeaders
+        + "Connection: close\r\n\r\n" + body;
     socket->write(response);
     socket->flush();
+    socket->waitForBytesWritten(100);
     socket->disconnectFromHost();
+}
+
+void sendJson(QTcpSocket *socket, int status, const QByteArray &body)
+{
+    sendResponse(socket, status, body);
+}
+
+QByteArray statusBody(
+    const QByteArray &inference,
+    bool cameraRunning = true,
+    bool recording = false)
+{
+    QByteArray body = QByteArrayLiteral(
+        "{\"ok\":true,\"camera\":{\"running\":");
+    body += cameraRunning ? QByteArrayLiteral("true") : QByteArrayLiteral("false");
+    body += QByteArrayLiteral(
+        ",\"latest_frame_id\":0},\"capture\":{\"state\":\"");
+    body += recording ? QByteArrayLiteral("recording") : QByteArrayLiteral("idle");
+    body += recording
+        ? QByteArrayLiteral("\",\"recording\":true,\"recorded_frames\":0}")
+        : QByteArrayLiteral("\",\"recording\":false,\"recorded_frames\":0}");
+    body += QByteArrayLiteral(",\"inference\":");
+    body += inference;
+    body += QByteArrayLiteral("}");
+    return body;
+}
+
+QByteArray configuredInference(
+    const QByteArray &state,
+    const QByteArray &operation = QByteArrayLiteral("null"))
+{
+    return QByteArrayLiteral(
+        "{\"configured\":true,\"control_supported\":true,\"operation\":")
+        + operation
+        + QByteArrayLiteral(",\"state\":")
+        + state
+        + QByteArrayLiteral(
+              ",\"artifact_name\":null,\"model_sha256\":null,"
+              "\"last_error\":null}");
 }
 
 void statusBypassesProxyAndParsesJson()
@@ -788,6 +872,1297 @@ void stopRecordingAllowsLongerServerFinalization()
     client.shutdown();
 }
 
+void configured_disabled_status_parses_capabilities_and_null_operation()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "configured status server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+
+    client.refreshStatus();
+    QTcpSocket *peer = acceptClient(server);
+    expect(peer != nullptr, "configured status request connects");
+    if (peer == nullptr) {
+        return;
+    }
+    readRequest(peer);
+    sendJson(
+        peer,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+
+    expect(waitUntil([&client] {
+        return client.status().haveInferenceStatus;
+    }), "configured inference object is received");
+    const VisionCaptureStatus seen = client.status();
+    expect(seen.haveCameraStatus && seen.haveCaptureStatus,
+           "camera and capture presence flags are strict");
+    expect(seen.haveInferenceState
+               && seen.inferenceState == QStringLiteral("disabled"),
+           "disabled worker state is parsed");
+    expect(seen.inferenceConfigured.has_value()
+               && *seen.inferenceConfigured,
+           "configured capability is parsed as a bool");
+    expect(seen.inferenceControlSupported.has_value()
+               && *seen.inferenceControlSupported,
+           "control_supported capability is parsed as a bool");
+    expect(seen.inferenceOperationValid && seen.inferenceOperation.isEmpty(),
+           "JSON null operation is valid idle metadata");
+    expect(client.hasFreshStatus(), "successful GET is fresh");
+
+    peer->deleteLater();
+    client.shutdown();
+}
+
+void strict_capability_and_operation_impostors_fail_closed()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "strict metadata server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    QString failureCode;
+    QObject::connect(
+        &client,
+        &VisionControlClient::requestFailed,
+        [&failureCode](const QString &, const QString &code,
+                       const QString &, bool) { failureCode = code; });
+
+    client.refreshStatus();
+    QTcpSocket *peer = acceptClient(server);
+    expect(peer != nullptr, "strict metadata request connects");
+    if (peer == nullptr) {
+        return;
+    }
+    readRequest(peer);
+    sendJson(
+        peer,
+        200,
+        statusBody(QByteArrayLiteral(
+            "{\"configured\":1,\"control_supported\":\"true\","
+            "\"state\":\"running\",\"last_error\":null}")));
+    expect(waitUntil([&client] {
+        return client.status().haveInferenceStatus;
+    }), "impostor status is received");
+    const VisionCaptureStatus first = client.status();
+    expect(!first.inferenceConfigured.has_value()
+               && !first.inferenceControlSupported.has_value()
+               && !first.inferenceOperationValid,
+           "numeric/string capability impostors remain absent");
+    client.startInference();
+    expect(failureCode == QStringLiteral("inference_unavailable"),
+           "impostor capabilities fail closed without a POST");
+    expect(!server.hasPendingConnections(),
+           "impostor capabilities do not create an action request");
+    peer->deleteLater();
+
+    client.refreshStatus();
+    peer = acceptClient(server);
+    expect(peer != nullptr, "unknown operation request connects");
+    if (peer != nullptr) {
+        readRequest(peer);
+        sendJson(
+            peer,
+            200,
+            statusBody(QByteArrayLiteral(
+                "{\"configured\":true,\"control_supported\":true,"
+                "\"operation\":\"idle\",\"state\":\"running\","
+                "\"last_error\":null}")));
+        expect(waitUntil([&client] {
+            return client.status().inferenceOperationValid == false;
+        }), "unknown operation stays invalid");
+        peer->deleteLater();
+    }
+    client.shutdown();
+}
+
+void legacy_status_is_readable_but_manual_actions_are_unavailable()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "legacy status server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    QString failureCode;
+    QObject::connect(
+        &client,
+        &VisionControlClient::requestFailed,
+        [&failureCode](const QString &, const QString &code,
+                       const QString &, bool) { failureCode = code; });
+
+    client.refreshStatus();
+    QTcpSocket *peer = acceptClient(server);
+    expect(peer != nullptr, "legacy status request connects");
+    if (peer == nullptr) {
+        return;
+    }
+    readRequest(peer);
+    sendJson(
+        peer,
+        200,
+        QByteArrayLiteral(
+            "{\"ok\":true,\"camera\":{\"running\":true},"
+            "\"capture\":{\"state\":\"idle\",\"recording\":false}}"));
+    expect(waitUntil([&client] {
+        return client.hasFreshStatus();
+    }), "legacy status remains readable");
+    expect(!client.status().haveInferenceStatus
+               && client.status().inferenceState == QStringLiteral("disabled"),
+           "legacy status resets inference presence without proving Disabled");
+
+    client.startInference();
+    expect(failureCode == QStringLiteral("inference_unavailable"),
+           "legacy status cannot enable manual inference");
+    expect(!server.hasPendingConnections(),
+           "legacy start sends no unsupported inference POST");
+    peer->deleteLater();
+    client.shutdown();
+}
+
+void capture_post_preserves_inference_metadata_and_freshness()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "capture compatibility server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+
+    client.refreshStatus();
+    QTcpSocket *statusPeer = acceptClient(server);
+    expect(statusPeer != nullptr, "initial inference status connects");
+    if (statusPeer == nullptr) {
+        return;
+    }
+    readRequest(statusPeer);
+    sendJson(
+        statusPeer,
+        200,
+        statusBody(QByteArrayLiteral(
+            "{\"configured\":true,\"control_supported\":true,"
+            "\"operation\":null,\"state\":\"running\","
+            "\"artifact_name\":\"beetle.onnx\","
+            "\"model_sha256\":\"abc\",\"last_error\":null}")));
+    expect(waitUntil([&client] {
+        return client.status().inferenceState == QStringLiteral("running");
+    }), "initial running inference status arrives");
+    statusPeer->deleteLater();
+
+    client.requestSnapshot();
+    QTcpSocket *actionPeer = acceptClient(server);
+    expect(actionPeer != nullptr, "capture action connects");
+    if (actionPeer == nullptr) {
+        client.shutdown();
+        return;
+    }
+    readRequest(actionPeer);
+    sendJson(
+        actionPeer,
+        200,
+        QByteArrayLiteral(
+            "{\"ok\":true,\"capture\":{\"state\":\"idle\","
+            "\"recording\":false,\"snapshot_count\":1},"
+            "\"inference\":{\"state\":\"disabled\"}}"));
+    expect(waitUntil([&client] {
+        return client.status().snapshotCount == 1U;
+    }), "capture action response is applied");
+    expect(client.status().inferenceState == QStringLiteral("running")
+               && client.status().inferenceArtifactName == QStringLiteral("beetle.onnx")
+               && client.hasFreshStatus(),
+           "capture POST cannot replace or renew the last inference GET");
+    actionPeer->deleteLater();
+    client.shutdown();
+}
+
+void zero_metrics_and_full_sha_are_preserved()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "zero-metric server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    client.refreshStatus();
+    QTcpSocket *peer = acceptClient(server);
+    expect(peer != nullptr, "zero-metric status connects");
+    if (peer == nullptr) {
+        return;
+    }
+    readRequest(peer);
+    sendJson(
+        peer,
+        200,
+        statusBody(QByteArrayLiteral(
+            "{\"configured\":true,\"control_supported\":true,"
+            "\"operation\":null,\"state\":\"running\","
+            "\"artifact_name\":\"beetle.onnx\","
+            "\"model_sha256\":\"012345678901234567890123456789012345678901234567890123456789abcd\","
+            "\"confidence_threshold\":0,\"latest_frame_id\":0,"
+            "\"capture_timestamp_ns\":0,\"processed_frames\":0,"
+            "\"skipped_frames\":0,\"inference_fps\":0,\"latency_ms\":0,"
+            "\"detection_count\":0,\"last_error\":null}")));
+    expect(waitUntil([&client] {
+        return client.status().haveInferenceStatus;
+    }), "zero-metric status arrives");
+    const auto seen = client.status();
+    expect(seen.inferenceModelSha256.size() == 64,
+           "complete model SHA is retained");
+    expect(seen.haveInferenceConfidenceThreshold
+               && seen.inferenceConfidenceThreshold == 0.0
+               && seen.haveInferenceLatestFrame
+               && seen.inferenceLatestFrameId == 0U
+               && seen.haveInferenceProcessedFrames
+               && seen.inferenceProcessedFrames == 0U
+               && seen.haveInferenceDetectionCount
+               && seen.inferenceDetectionCount == 0U,
+           "zero metrics remain present rather than becoming absent");
+    peer->deleteLater();
+    client.shutdown();
+}
+
+void manual_start_and_stop_use_exact_paths_body_and_injected_port()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "manual action server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+
+    client.refreshStatus();
+    QTcpSocket *statusPeer = acceptClient(server);
+    expect(statusPeer != nullptr, "manual action initial status connects");
+    if (statusPeer == nullptr) {
+        return;
+    }
+    readRequest(statusPeer);
+    sendJson(
+        statusPeer,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "manual action status is fresh");
+    statusPeer->deleteLater();
+
+    client.startInference();
+    QTcpSocket *startPeer = acceptClient(server);
+    expect(startPeer != nullptr, "manual Start reaches injected HTTP port");
+    if (startPeer == nullptr) {
+        client.shutdown();
+        return;
+    }
+    const QByteArray startRequest = readRequestWithBody(startPeer, 2);
+    expect(startRequest.startsWith(
+               "POST /api/v1/vision/inference/start HTTP/1.1"),
+           "Start uses the exact inference/start path");
+    expect(startRequest.contains("Content-Type: application/json")
+               && startRequest.endsWith("{}"),
+           "Start sends JSON empty object body and content type");
+    sendJson(
+        startPeer,
+        202,
+        QByteArrayLiteral(
+            "{\"ok\":true,\"action\":\"inference/start\","
+            "\"outcome\":\"accepted\"}"));
+    startPeer->deleteLater();
+
+    QTcpSocket *startRefreshPeer = acceptClient(server);
+    expect(startRefreshPeer != nullptr,
+           "accepted Start schedules one authoritative GET");
+    if (startRefreshPeer != nullptr) {
+        expect(readRequest(startRefreshPeer).startsWith(
+                   "GET /api/v1/vision/status HTTP/1.1"),
+               "Start reconciliation uses GET status");
+        sendJson(
+            startRefreshPeer,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"running\""))));
+        startRefreshPeer->deleteLater();
+    }
+    expect(waitUntil([&client] {
+        return client.status().inferenceState == QStringLiteral("running")
+            && !client.inferenceReconcilePending();
+    }), "Start does not claim running until GET confirms it");
+
+    client.stopInference();
+    QTcpSocket *stopPeer = acceptClient(server);
+    expect(stopPeer != nullptr, "manual Stop reaches injected HTTP port");
+    if (stopPeer != nullptr) {
+        const QByteArray stopRequest = readRequestWithBody(stopPeer, 2);
+        expect(stopRequest.startsWith(
+                   "POST /api/v1/vision/inference/stop HTTP/1.1"),
+               "Stop uses the exact inference/stop path");
+        expect(stopRequest.contains("Content-Type: application/json")
+                   && stopRequest.endsWith("{}"),
+               "Stop sends JSON empty object body and content type");
+        sendJson(
+            stopPeer,
+            202,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"action\":\"inference/stop\","
+                "\"outcome\":\"accepted\"}"));
+        stopPeer->deleteLater();
+    }
+    QTcpSocket *stopRefreshPeer = acceptClient(server);
+    expect(stopRefreshPeer != nullptr,
+           "accepted Stop schedules one authoritative GET");
+    if (stopRefreshPeer != nullptr) {
+        readRequest(stopRefreshPeer);
+        sendJson(
+            stopRefreshPeer,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+        stopRefreshPeer->deleteLater();
+    }
+    expect(waitUntil([&client] {
+        return client.status().inferenceState == QStringLiteral("disabled")
+            && !client.inferenceReconcilePending();
+    }), "Stop is confirmed only by a disabled idle GET");
+    client.shutdown();
+}
+
+void retry_and_clear_error_send_one_post_each()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "retry server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+
+    client.refreshStatus();
+    QTcpSocket *initial = acceptClient(server);
+    expect(initial != nullptr, "failed status connects");
+    if (initial == nullptr) {
+        return;
+    }
+    readRequest(initial);
+    sendJson(
+        initial,
+        200,
+        statusBody(QByteArrayLiteral(
+            "{\"configured\":true,\"control_supported\":true,"
+            "\"operation\":null,\"state\":\"failed\","
+            "\"last_error\":\"model load failed\"}")));
+    expect(waitUntil([&client] {
+        return client.status().inferenceState == QStringLiteral("failed");
+    }), "failed status enables retry path");
+    initial->deleteLater();
+
+    client.startInference();
+    QTcpSocket *retry = acceptClient(server);
+    expect(retry != nullptr, "Retry uses a Start request");
+    if (retry != nullptr) {
+        expect(readRequestWithBody(retry, 2).startsWith(
+                   "POST /api/v1/vision/inference/start HTTP/1.1"),
+               "Retry sends exactly the Start path");
+        sendJson(
+            retry,
+            202,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"action\":\"inference/start\","
+                "\"outcome\":\"accepted\"}"));
+        retry->deleteLater();
+    }
+    QTcpSocket *retryRefresh = acceptClient(server);
+    if (retryRefresh != nullptr) {
+        readRequest(retryRefresh);
+        sendJson(
+            retryRefresh,
+            200,
+            statusBody(QByteArrayLiteral(
+                "{\"configured\":true,\"control_supported\":true,"
+                "\"operation\":null,\"state\":\"failed\","
+                "\"last_error\":\"retry failed\"}")));
+        retryRefresh->deleteLater();
+    }
+    expect(waitUntil([&client] { return !client.inferenceReconcilePending(); }),
+           "retry reconciliation completes before Clear Error");
+    expect(!server.hasPendingConnections(),
+           "Retry does not create an automatic second Start or Stop");
+
+    client.stopInference();
+    QTcpSocket *clear = acceptClient(server);
+    expect(clear != nullptr, "Clear Error uses a Stop request");
+    if (clear != nullptr) {
+        expect(readRequestWithBody(clear, 2).startsWith(
+                   "POST /api/v1/vision/inference/stop HTTP/1.1"),
+               "Clear Error sends exactly the Stop path");
+        sendJson(
+            clear,
+            202,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"action\":\"inference/stop\","
+                "\"outcome\":\"accepted\"}"));
+        clear->deleteLater();
+    }
+    QTcpSocket *clearRefresh = acceptClient(server);
+    if (clearRefresh != nullptr) {
+        readRequest(clearRefresh);
+        sendJson(
+            clearRefresh,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+        clearRefresh->deleteLater();
+    }
+    expect(!server.hasPendingConnections(),
+           "Clear Error does not create an automatic second Stop");
+    client.shutdown();
+}
+
+void inference_ack_preserves_state_and_reconciles_once()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "ACK reconciliation server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    client.refreshStatus();
+    QTcpSocket *initial = acceptClient(server);
+    expect(initial != nullptr, "ACK initial status connects");
+    if (initial == nullptr) {
+        return;
+    }
+    readRequest(initial);
+    sendJson(
+        initial,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"running\""))));
+    expect(waitUntil([&client] {
+        return client.status().inferenceState == QStringLiteral("running");
+    }), "ACK test starts from running state");
+    initial->deleteLater();
+
+    QString acknowledgedOutcome;
+    QObject::connect(
+        &client,
+        &VisionControlClient::inferenceActionAcknowledged,
+        [&acknowledgedOutcome](const QString &, const QString &outcome) {
+            acknowledgedOutcome = outcome;
+        });
+    client.startInference();
+    QTcpSocket *action = acceptClient(server);
+    expect(action != nullptr, "duplicate Start connects");
+    if (action == nullptr) {
+        client.shutdown();
+        return;
+    }
+    readRequestWithBody(action, 2);
+    sendJson(
+        action,
+        200,
+        QByteArrayLiteral(
+            "{\"ok\":true,\"action\":\"inference/start\","
+            "\"outcome\":\"already_running\","
+            "\"inference\":{\"state\":\"disabled\"}}"));
+    expect(waitUntil([&acknowledgedOutcome] {
+        return !acknowledgedOutcome.isEmpty();
+    }), "duplicate ACK is processed");
+    expect(client.status().inferenceState == QStringLiteral("running"),
+           "ACK fake status fields cannot replace the last GET state");
+    expect(client.inferenceReconcilePending(),
+           "terminal ACK marks reconciliation before signal delivery");
+    expect(acknowledgedOutcome == QStringLiteral("already_running"),
+           "duplicate ACK emits typed outcome");
+    action->deleteLater();
+
+    QTcpSocket *refresh = acceptClient(server);
+    expect(refresh != nullptr, "duplicate ACK schedules one GET");
+    if (refresh != nullptr) {
+        readRequest(refresh);
+        sendJson(
+            refresh,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"running\""))));
+        refresh->deleteLater();
+    }
+    expect(waitUntil([&client] {
+        return !client.inferenceReconcilePending();
+    }), "one reconciliation GET resolves the ACK");
+    expect(!server.hasPendingConnections(),
+           "one inference ACK does not create a GET loop");
+    client.shutdown();
+}
+
+void malformed_or_fake_inference_ack_cannot_change_state()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "malformed ACK server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    client.refreshStatus();
+    QTcpSocket *initial = acceptClient(server);
+    expect(initial != nullptr, "malformed ACK initial status connects");
+    if (initial == nullptr) {
+        return;
+    }
+    readRequest(initial);
+    sendJson(
+        initial,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "malformed ACK starts from fresh disabled status");
+    initial->deleteLater();
+
+    QString failureCode;
+    bool uncertain = false;
+    QObject::connect(
+        &client,
+        &VisionControlClient::requestFailed,
+        [&failureCode, &uncertain](const QString &, const QString &code,
+                                   const QString &, bool outcomeUncertain) {
+            failureCode = code;
+            uncertain = outcomeUncertain;
+        });
+    client.startInference();
+    QTcpSocket *action = acceptClient(server);
+    expect(action != nullptr, "malformed ACK action connects");
+    if (action != nullptr) {
+        readRequestWithBody(action, 2);
+        sendJson(
+            action,
+            202,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"action\":\"inference/stop\","
+                "\"outcome\":\"accepted\","
+                "\"inference\":{\"state\":\"running\"}}"));
+        action->deleteLater();
+    }
+    expect(waitUntil([&failureCode] { return !failureCode.isEmpty(); }),
+           "malformed ACK is processed");
+    expect(failureCode == QStringLiteral("invalid_response") && uncertain,
+           "wrong ACK action is an uncertain invalid response");
+    expect(client.status().inferenceState == QStringLiteral("disabled"),
+           "malformed ACK cannot claim Running");
+
+    QTcpSocket *refresh = acceptClient(server);
+    expect(refresh != nullptr, "malformed ACK still reconciles once");
+    if (refresh != nullptr) {
+        readRequest(refresh);
+        sendJson(
+            refresh,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+        refresh->deleteLater();
+    }
+    client.shutdown();
+}
+
+void inference_error_preserves_code_message_and_capture_state()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "inference error server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    client.refreshStatus();
+    QTcpSocket *initial = acceptClient(server);
+    expect(initial != nullptr, "inference error initial status connects");
+    if (initial == nullptr) {
+        return;
+    }
+    readRequest(initial);
+    sendJson(
+        initial,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "inference error starts from fresh status");
+    initial->deleteLater();
+
+    QString errorCode;
+    QString errorMessage;
+    bool uncertain = true;
+    QObject::connect(
+        &client,
+        &VisionControlClient::requestFailed,
+        [&errorCode, &errorMessage, &uncertain](const QString &, const QString &code,
+                                                const QString &message, bool value) {
+            errorCode = code;
+            errorMessage = message;
+            uncertain = value;
+        });
+    client.startInference();
+    QTcpSocket *action = acceptClient(server);
+    expect(action != nullptr, "inference error action connects");
+    if (action != nullptr) {
+        readRequestWithBody(action, 2);
+        sendJson(
+            action,
+            409,
+            QByteArrayLiteral(
+                "{\"ok\":false,\"error\":\"inference_busy\","
+                "\"message\":\"inference is stopping\"}"));
+        action->deleteLater();
+    }
+    expect(waitUntil([&errorCode] { return !errorCode.isEmpty(); }),
+           "inference application error is processed");
+    expect(errorCode == QStringLiteral("inference_busy")
+               && errorMessage == QStringLiteral("inference is stopping")
+               && !uncertain,
+           "valid application error preserves code/message and certainty");
+    expect(client.status().state == QStringLiteral("idle")
+               && client.status().inferenceState == QStringLiteral("disabled"),
+           "inference error does not overwrite capture state");
+
+    QTcpSocket *refresh = acceptClient(server);
+    expect(refresh != nullptr, "valid inference error still reconciles once");
+    if (refresh != nullptr) {
+        readRequest(refresh);
+        sendJson(
+            refresh,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+        refresh->deleteLater();
+    }
+    client.shutdown();
+}
+
+void second_mutation_is_rejected_while_one_is_active_or_queued()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "mutation admission server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    client.refreshStatus();
+    QTcpSocket *initial = acceptClient(server);
+    expect(initial != nullptr, "mutation admission initial status connects");
+    if (initial == nullptr) {
+        return;
+    }
+    readRequest(initial);
+    sendJson(
+        initial,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "mutation admission starts from fresh status");
+    initial->deleteLater();
+
+    QString failureCode;
+    QObject::connect(
+        &client,
+        &VisionControlClient::requestFailed,
+        [&failureCode](const QString &, const QString &code,
+                       const QString &, bool) { failureCode = code; });
+
+    client.startInference();
+    QTcpSocket *active = acceptClient(server);
+    expect(active != nullptr, "first mutation becomes active");
+    client.stopInference();
+    expect(failureCode == QStringLiteral("action_busy"),
+           "second mutation is rejected while POST is active");
+    expect(!server.hasPendingConnections(),
+           "active mutation rejection does not create a second POST");
+    if (active != nullptr) {
+        readRequestWithBody(active, 2);
+        sendJson(
+            active,
+            202,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"action\":\"inference/start\","
+                "\"outcome\":\"accepted\"}"));
+        active->deleteLater();
+    }
+    QTcpSocket *activeRefresh = acceptClient(server);
+    if (activeRefresh != nullptr) {
+        readRequest(activeRefresh);
+        sendJson(
+            activeRefresh,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+        activeRefresh->deleteLater();
+    }
+    waitUntil([&client] { return !client.inferenceReconcilePending(); });
+
+    client.refreshStatus();
+    QTcpSocket *status = acceptClient(server);
+    expect(status != nullptr, "queued mutation status connects");
+    if (status != nullptr) {
+        readRequest(status);
+        client.startInference();
+        expect(client.actionBusy(), "one mutation is queued behind GET");
+        client.stopInference();
+        expect(failureCode == QStringLiteral("action_busy"),
+               "second mutation is rejected while one is queued");
+        sendJson(
+            status,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+        status->deleteLater();
+    }
+    QTcpSocket *queued = acceptClient(server);
+    expect(queued != nullptr, "the single queued mutation dispatches once");
+    if (queued != nullptr) {
+        expect(readRequestWithBody(queued, 2).startsWith(
+                   "POST /api/v1/vision/inference/start HTTP/1.1"),
+               "queued mutation preserves its original kind");
+        sendJson(
+            queued,
+            202,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"action\":\"inference/start\","
+                "\"outcome\":\"accepted\"}"));
+        queued->deleteLater();
+    }
+    QTcpSocket *queuedRefresh = acceptClient(server);
+    if (queuedRefresh != nullptr) {
+        readRequest(queuedRefresh);
+        sendJson(
+            queuedRefresh,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+        queuedRefresh->deleteLater();
+    }
+    client.shutdown();
+}
+
+void failed_get_cancels_queued_action_and_revalidates_capability()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "failed GET admission server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    client.refreshStatus();
+    QTcpSocket *initial = acceptClient(server);
+    expect(initial != nullptr, "failed GET initial status connects");
+    if (initial == nullptr) {
+        return;
+    }
+    readRequest(initial);
+    sendJson(
+        initial,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "failed GET test starts from fresh status");
+    initial->deleteLater();
+
+    QString failedAction;
+    QObject::connect(
+        &client,
+        &VisionControlClient::requestFailed,
+        [&failedAction](const QString &action, const QString &,
+                        const QString &, bool) { failedAction = action; });
+    client.refreshStatus();
+    QTcpSocket *failedStatus = acceptClient(server);
+    expect(failedStatus != nullptr, "queued action GET connects");
+    if (failedStatus != nullptr) {
+        readRequest(failedStatus);
+        client.startInference();
+        expect(client.actionBusy(), "Start queues behind normal GET");
+        sendJson(
+            failedStatus,
+            500,
+            QByteArrayLiteral(
+                "{\"ok\":false,\"error\":\"internal_error\","
+                "\"message\":\"status unavailable\"}"));
+        failedStatus->deleteLater();
+    }
+    expect(waitUntil([&failedAction] {
+        return !failedAction.isEmpty();
+    }), "failed GET explicitly cancels queued action");
+    expect(failedAction == QStringLiteral("inference/start"),
+           "failed GET reports the canceled queued action");
+    expect(!server.hasPendingConnections(),
+           "failed GET does not execute canceled mutation");
+
+    client.refreshStatus();
+    QTcpSocket *unavailable = acceptClient(server);
+    expect(unavailable != nullptr, "capability revalidation GET connects");
+    if (unavailable != nullptr) {
+        readRequest(unavailable);
+        client.startInference();
+        sendJson(
+            unavailable,
+            200,
+            statusBody(QByteArrayLiteral(
+                "{\"configured\":false,\"control_supported\":true,"
+                "\"operation\":null,\"state\":\"disabled\"}")));
+        unavailable->deleteLater();
+    }
+    expect(waitUntil([&client] {
+        return !client.actionBusy();
+    }), "queued action is revalidated after successful GET");
+    expect(!server.hasPendingConnections(),
+           "unconfigured capability prevents queued POST dispatch");
+    client.shutdown();
+}
+
+void reply_finalization_has_no_reentrant_idle_gap()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "reentrancy server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    client.refreshStatus();
+    QTcpSocket *initial = acceptClient(server);
+    expect(initial != nullptr, "reentrancy initial status connects");
+    if (initial == nullptr) {
+        return;
+    }
+    readRequest(initial);
+    sendJson(
+        initial,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "reentrancy starts from fresh status");
+    initial->deleteLater();
+
+    QString failureCode;
+    QObject::connect(
+        &client,
+        &VisionControlClient::requestFailed,
+        [&failureCode](const QString &, const QString &code,
+                       const QString &, bool) { failureCode = code; });
+    QObject::connect(
+        &client,
+        &VisionControlClient::inferenceActionAcknowledged,
+        [&client](const QString &, const QString &) { client.stopInference(); });
+
+    client.startInference();
+    QTcpSocket *action = acceptClient(server);
+    expect(action != nullptr, "reentrancy action connects");
+    if (action != nullptr) {
+        readRequestWithBody(action, 2);
+        sendJson(
+            action,
+            202,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"action\":\"inference/start\","
+                "\"outcome\":\"accepted\"}"));
+        action->deleteLater();
+    }
+    expect(waitUntil([&failureCode] { return !failureCode.isEmpty(); }),
+           "reentrant ACK is processed");
+    expect(failureCode == QStringLiteral("inference_reconcile_pending"),
+           "reentrant slot cannot create a POST during finalization");
+    expect(!server.hasPendingConnections(),
+           "reentrant ACK handling has no transient idle request gap");
+    QTcpSocket *refresh = acceptClient(server);
+    if (refresh != nullptr) {
+        readRequest(refresh);
+        sendJson(
+            refresh,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+        refresh->deleteLater();
+    }
+    client.shutdown();
+}
+
+void ambiguous_inference_post_is_uncertain_without_auto_retry()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "ambiguous POST server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    client.refreshStatus();
+    QTcpSocket *initial = acceptClient(server);
+    expect(initial != nullptr, "ambiguous POST initial status connects");
+    if (initial == nullptr) {
+        return;
+    }
+    readRequest(initial);
+    sendJson(
+        initial,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "ambiguous POST starts from fresh status");
+    initial->deleteLater();
+
+    bool uncertain = false;
+    QString code;
+    QObject::connect(
+        &client,
+        &VisionControlClient::requestFailed,
+        [&uncertain, &code](const QString &, const QString &value,
+                            const QString &, bool outcomeUncertain) {
+            code = value;
+            uncertain = outcomeUncertain;
+        });
+    client.startInference();
+    QTcpSocket *action = acceptClient(server);
+    expect(action != nullptr, "ambiguous POST reaches server");
+    if (action != nullptr) {
+        readRequestWithBody(action, 2);
+        action->abort();
+        action->deleteLater();
+    }
+    expect(waitUntil([&code] { return !code.isEmpty(); }),
+           "transport failure retires the sent POST");
+    expect(uncertain, "transport failure is outcome-uncertain");
+    QTcpSocket *refresh = acceptClient(server);
+    expect(refresh != nullptr, "ambiguous POST schedules one status refresh");
+    if (refresh != nullptr) {
+        readRequest(refresh);
+        sendJson(
+            refresh,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+        refresh->deleteLater();
+    }
+    expect(!server.hasPendingConnections(),
+           "ambiguous POST is never automatically retried");
+    client.shutdown();
+}
+
+void freshness_expires_and_capture_post_does_not_renew_it()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "freshness server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    client.refreshStatus();
+    QTcpSocket *status = acceptClient(server);
+    expect(status != nullptr, "freshness status connects");
+    if (status == nullptr) {
+        return;
+    }
+    readRequest(status);
+    sendJson(
+        status,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"running\""))));
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "freshness starts after successful GET");
+    status->deleteLater();
+
+    client.requestSnapshot();
+    QTcpSocket *capture = acceptClient(server);
+    expect(capture != nullptr, "freshness capture POST connects");
+    if (capture != nullptr) {
+        readRequestWithBody(capture, 2);
+        sendJson(
+            capture,
+            200,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"capture\":{\"state\":\"idle\","
+                "\"recording\":false}}"));
+        capture->deleteLater();
+    }
+    expect(waitUntil([&client] { return !client.hasFreshStatus(); }, 4200),
+           "capture POST does not renew inference freshness");
+    client.shutdown();
+}
+
+void failed_get_disables_actions_until_refresh_recovers()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "failed status server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    client.refreshStatus();
+    QTcpSocket *initial = acceptClient(server);
+    expect(initial != nullptr, "failed status initial GET connects");
+    if (initial == nullptr) {
+        return;
+    }
+    readRequest(initial);
+    sendJson(
+        initial,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "failed status starts from fresh sample");
+    initial->deleteLater();
+
+    client.refreshStatus();
+    QTcpSocket *failed = acceptClient(server);
+    expect(failed != nullptr, "failed refresh connects");
+    if (failed != nullptr) {
+        readRequest(failed);
+        sendJson(
+            failed,
+            500,
+            QByteArrayLiteral(
+                "{\"ok\":false,\"error\":\"internal_error\","
+                "\"message\":\"status unavailable\"}"));
+        failed->deleteLater();
+    }
+    expect(waitUntil([&client] { return !client.hasFreshStatus(); }),
+           "failed GET invalidates freshness");
+    client.startInference();
+    expect(!server.hasPendingConnections(),
+           "stale status disables Start without a POST");
+
+    client.refreshStatus();
+    QTcpSocket *recovered = acceptClient(server);
+    expect(recovered != nullptr, "manual Refresh Status reaches endpoint");
+    if (recovered != nullptr) {
+        readRequest(recovered);
+        sendJson(
+            recovered,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+    }
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "manual Refresh recovers fresh status");
+    if (recovered != nullptr) {
+        recovered->deleteLater();
+    }
+    client.shutdown();
+}
+
+void inference_actions_wait_for_reconciliation_get()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "reconciliation admission server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    client.refreshStatus();
+    QTcpSocket *initial = acceptClient(server);
+    expect(initial != nullptr, "reconciliation initial GET connects");
+    if (initial == nullptr) {
+        return;
+    }
+    readRequest(initial);
+    sendJson(
+        initial,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "reconciliation starts from fresh status");
+    initial->deleteLater();
+
+    QString failureCode;
+    QObject::connect(
+        &client,
+        &VisionControlClient::requestFailed,
+        [&failureCode](const QString &, const QString &code,
+                       const QString &, bool) { failureCode = code; });
+    client.startInference();
+    QTcpSocket *start = acceptClient(server);
+    expect(start != nullptr, "reconciliation Start connects");
+    if (start != nullptr) {
+        readRequestWithBody(start, 2);
+        sendJson(
+            start,
+            202,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"action\":\"inference/start\","
+                "\"outcome\":\"accepted\"}"));
+        start->deleteLater();
+    }
+    expect(waitUntil([&client] { return client.inferenceReconcilePending(); }),
+           "reconciliation flag is set before the next action");
+    client.stopInference();
+    expect(failureCode == QStringLiteral("inference_reconcile_pending"),
+           "new inference action is blocked until reconciliation GET");
+    expect(!server.hasPendingConnections(),
+           "blocked action does not create a second POST");
+
+    QTcpSocket *refresh = acceptClient(server);
+    expect(refresh != nullptr, "reconciliation GET connects");
+    if (refresh != nullptr) {
+        readRequest(refresh);
+        sendJson(
+            refresh,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"running\""))));
+        refresh->deleteLater();
+    }
+    expect(waitUntil([&client] { return !client.inferenceReconcilePending(); }),
+           "reconciliation GET completes before next mutation");
+    client.stopInference();
+    QTcpSocket *stop = acceptClient(server);
+    expect(stop != nullptr, "Stop becomes available after reconciliation");
+    if (stop != nullptr) {
+        readRequestWithBody(stop, 2);
+        sendJson(
+            stop,
+            202,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"action\":\"inference/stop\","
+                "\"outcome\":\"accepted\"}"));
+        stop->deleteLater();
+    }
+    QTcpSocket *stopRefresh = acceptClient(server);
+    if (stopRefresh != nullptr) {
+        readRequest(stopRefresh);
+        sendJson(
+            stopRefresh,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+        stopRefresh->deleteLater();
+    }
+    client.shutdown();
+}
+
+void sent_post_blocks_low_level_endpoint_change()
+{
+    QTcpServer serverA;
+    QTcpServer serverB;
+    expect(serverA.listen(QHostAddress::LocalHost, 0),
+           "active inference endpoint A must listen");
+    expect(serverB.listen(QHostAddress::LocalHost, 0),
+           "active inference endpoint B must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), serverA.serverPort());
+    client.refreshStatus();
+    QTcpSocket *initial = acceptClient(serverA);
+    expect(initial != nullptr, "active endpoint initial GET connects");
+    if (initial == nullptr) {
+        return;
+    }
+    readRequest(initial);
+    sendJson(
+        initial,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "active endpoint starts from fresh status");
+    initial->deleteLater();
+
+    client.startInference();
+    QTcpSocket *action = acceptClient(serverA);
+    expect(action != nullptr, "active inference POST reaches endpoint A");
+    const quint16 oldPort = client.port();
+    expect(!client.setEndpoint(QStringLiteral("127.0.0.1"), serverB.serverPort()),
+           "sent inference POST blocks low-level endpoint change");
+    expect(client.port() == oldPort,
+           "blocked endpoint change keeps the old committed endpoint");
+    expect(!serverB.hasPendingConnections(),
+           "blocked endpoint change sends no request to endpoint B");
+    if (action != nullptr) {
+        readRequestWithBody(action, 2);
+        sendJson(
+            action,
+            202,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"action\":\"inference/start\","
+                "\"outcome\":\"accepted\"}"));
+        action->deleteLater();
+    }
+    QTcpSocket *refresh = acceptClient(serverA);
+    if (refresh != nullptr) {
+        readRequest(refresh);
+        sendJson(
+            refresh,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+        refresh->deleteLater();
+    }
+    client.shutdown();
+}
+
+void endpoint_switch_cancels_get_and_stale_reply_cannot_cross_generation()
+{
+    QTcpServer serverA;
+    QTcpServer serverB;
+    expect(serverA.listen(QHostAddress::LocalHost, 0),
+           "generation endpoint A must listen");
+    expect(serverB.listen(QHostAddress::LocalHost, 0),
+           "generation endpoint B must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), serverA.serverPort());
+    bool staleApplied = false;
+    QObject::connect(
+        &client,
+        &VisionControlClient::statusChanged,
+        [&staleApplied](VisionCaptureStatus status) {
+            if (status.haveLatestFrame && status.latestFrameId == 111U) {
+                staleApplied = true;
+            }
+        });
+    client.refreshStatus();
+    QTcpSocket *peerA = acceptClient(serverA);
+    expect(peerA != nullptr, "old generation GET connects");
+    if (peerA == nullptr) {
+        return;
+    }
+    readRequest(peerA);
+    client.startInference();
+    expect(client.setEndpoint(QStringLiteral("127.0.0.1"), serverB.serverPort()),
+           "GET plus queued action permits low-level endpoint switch");
+    expect(!client.actionBusy(),
+           "endpoint switch cancels the queued action explicitly");
+    sendJson(
+        peerA,
+        200,
+        QByteArrayLiteral(
+            "{\"ok\":true,\"camera\":{\"running\":true,"
+            "\"latest_frame_id\":111},\"capture\":{"
+            "\"state\":\"idle\",\"recording\":false}}"));
+    waitForMs(100);
+    expect(!staleApplied, "stale old-generation reply cannot mutate status");
+    expect(!serverB.hasPendingConnections(),
+           "queued action is never moved to the new endpoint");
+    peerA->deleteLater();
+    client.shutdown();
+}
+
+void redirect_is_rejected_without_following_or_resending()
+{
+    QTcpServer server;
+    QTcpServer redirected;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "redirect source server must listen");
+    expect(redirected.listen(QHostAddress::LocalHost, 0),
+           "redirect destination server must listen");
+    VisionControlClient client;
+    client.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    client.refreshStatus();
+    QTcpSocket *initial = acceptClient(server);
+    expect(initial != nullptr, "redirect initial status connects");
+    if (initial == nullptr) {
+        return;
+    }
+    readRequest(initial);
+    sendJson(
+        initial,
+        200,
+        statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "redirect starts from fresh status");
+    initial->deleteLater();
+
+    QString failureCode;
+    QObject::connect(
+        &client,
+        &VisionControlClient::requestFailed,
+        [&failureCode](const QString &, const QString &code,
+                       const QString &, bool) { failureCode = code; });
+    client.startInference();
+    QTcpSocket *action = acceptClient(server);
+    expect(action != nullptr, "redirect action reaches source endpoint");
+    if (action != nullptr) {
+        readRequestWithBody(action, 2);
+        const QByteArray location =
+            "Location: http://127.0.0.1:" + QByteArray::number(redirected.serverPort()) + "/other\r\n";
+        sendResponse(
+            action,
+            302,
+            QByteArrayLiteral("{}"),
+            location);
+        action->deleteLater();
+    }
+    expect(waitUntil([&failureCode] { return !failureCode.isEmpty(); }),
+           "redirect response is surfaced as a request failure");
+    expect(failureCode == QStringLiteral("redirect_rejected"),
+           "redirect is classified explicitly");
+    expect(!redirected.hasPendingConnections(),
+           "redirected inference POST is never sent");
+    QTcpSocket *refresh = acceptClient(server);
+    if (refresh != nullptr) {
+        readRequest(refresh);
+        sendJson(
+            refresh,
+            200,
+            statusBody(configuredInference(QByteArrayLiteral("\"disabled\""))));
+        refresh->deleteLater();
+    }
+    client.shutdown();
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -802,5 +2177,25 @@ int main(int argc, char **argv)
     endpointChangeCancelsOldPendingAction();
     activeActionBlocksEndpointChangeUntilResult();
     stopRecordingAllowsLongerServerFinalization();
+    configured_disabled_status_parses_capabilities_and_null_operation();
+    strict_capability_and_operation_impostors_fail_closed();
+    legacy_status_is_readable_but_manual_actions_are_unavailable();
+    capture_post_preserves_inference_metadata_and_freshness();
+    zero_metrics_and_full_sha_are_preserved();
+    manual_start_and_stop_use_exact_paths_body_and_injected_port();
+    retry_and_clear_error_send_one_post_each();
+    inference_ack_preserves_state_and_reconciles_once();
+    malformed_or_fake_inference_ack_cannot_change_state();
+    inference_error_preserves_code_message_and_capture_state();
+    second_mutation_is_rejected_while_one_is_active_or_queued();
+    failed_get_cancels_queued_action_and_revalidates_capability();
+    reply_finalization_has_no_reentrant_idle_gap();
+    ambiguous_inference_post_is_uncertain_without_auto_retry();
+    freshness_expires_and_capture_post_does_not_renew_it();
+    failed_get_disables_actions_until_refresh_recovers();
+    inference_actions_wait_for_reconciliation_get();
+    sent_post_blocks_low_level_endpoint_change();
+    endpoint_switch_cancels_get_and_stale_reply_cannot_cross_generation();
+    redirect_is_rejected_without_following_or_resending();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

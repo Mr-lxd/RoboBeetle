@@ -275,6 +275,33 @@ void malformedHeaderMovesClientToError()
     peer->deleteLater();
 }
 
+void endpointBusyTracksRawSocketActivity()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "endpoint activity server must listen");
+    VisionClient client;
+    bool busySeen = false;
+    bool idleSeen = false;
+    QObject::connect(&client, &VisionClient::endpointActivityChanged,
+                     [&busySeen, &idleSeen](bool busy) {
+        if (busy) busySeen = true;
+        else idleSeen = true;
+    });
+    expect(!client.endpointBusy(), "unconnected Vision endpoint is idle");
+    client.connectToHost(QStringLiteral("127.0.0.1"), server.serverPort());
+    QTcpSocket *peer = acceptClient(server);
+    expect(peer != nullptr, "endpoint activity connection reaches fake server");
+    expect(waitUntil([&client, &busySeen] {
+        return busySeen && client.endpointBusy();
+    }), "endpoint activity reports Connecting/Connected as busy");
+    client.disconnectFromHost();
+    expect(waitUntil([&client, &idleSeen] {
+        return idleSeen && !client.endpointBusy();
+    }), "endpoint activity reports disconnected as idle");
+    if (peer != nullptr) peer->deleteLater();
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -285,5 +312,6 @@ int main(int argc, char **argv)
     reconnectResetsSequenceSession();
     partialFrameInactivityMovesClientToError();
     malformedHeaderMovesClientToError();
+    endpointBusyTracksRawSocketActivity();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

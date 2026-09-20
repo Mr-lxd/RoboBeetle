@@ -35,6 +35,10 @@ public:
     {
         return state_ == VisionConnectionState::Connected;
     }
+    [[nodiscard]] bool endpointBusy() const noexcept
+    {
+        return socket_.state() != QAbstractSocket::UnconnectedState;
+    }
     [[nodiscard]] double receivedFps() const noexcept { return receivedFps_; }
     [[nodiscard]] quint64 lastFrameId() const noexcept { return lastFrameId_; }
     [[nodiscard]] quint64 totalWireFrames() const noexcept { return totalWireFrames_; }
@@ -42,6 +46,7 @@ public:
 
 signals:
     void connectionStateChanged(rb::vision::VisionConnectionState state);
+    void endpointActivityChanged(bool busy);
     void frameReady(const QImage &image,
                     quint64 frameId,
                     quint64 captureTimestampNs);
@@ -75,6 +80,7 @@ private:
     quint64 replacedWireFrames_{0};
     bool haveFrame_{false};
     bool userDisconnect_{false};
+    bool endpointBusy_{false};
 };
 
 } // namespace rb::vision

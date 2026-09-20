@@ -18,6 +18,7 @@ class QSlider;
 class QSpinBox;
 class QTabWidget;
 class QWidget;
+class QEvent;
 
 namespace rb {
 
@@ -39,6 +40,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     // Top connection bar.
@@ -73,6 +75,14 @@ private:
     void refreshMotionUi();
     void refreshGaitBackendUi();
     void refreshAuthorityUi();
+    void refreshVisionUi();
+    void refreshCaptureUi();
+    void refreshInferenceUi();
+    void refreshPiHostUi();
+    void applyPiHost();
+    [[nodiscard]] bool hasRemoteVisionWorkThatMayContinue() const;
+    [[nodiscard]] bool hostCandidateValid(const QString &candidate) const;
+    [[nodiscard]] bool hostDirty() const;
     void appendLog(const QString &message);
     static QString stateText(TransportState state);
 
@@ -81,13 +91,24 @@ private:
     vision::VisionControlClient *visionControlClient_{nullptr};
 
     // Vision card.
-    QLineEdit *visionHost_{nullptr};
+    QLineEdit *piHost_{nullptr};
+    QPushButton *applyPiHostButton_{nullptr};
+    QLabel *piHostHint_{nullptr};
+    QString committedPiHost_;
+    bool updatingEndpoints_{false};
+    bool visionOutcomeUncertain_{false};
+    TransportState transportState_{TransportState::Disconnected};
     QSpinBox *visionPort_{nullptr};
     QPushButton *visionConnectButton_{nullptr};
     QLabel *visionState_{nullptr};
     QLabel *visionDiagnostics_{nullptr};
     QLabel *inferenceState_{nullptr};
     QLabel *inferenceDiagnostics_{nullptr};
+    QPushButton *startInferenceButton_{nullptr};
+    QPushButton *stopInferenceButton_{nullptr};
+    QPushButton *visionRefreshStatusButton_{nullptr};
+    QLabel *visionControlState_{nullptr};
+    QLabel *visionControlMessage_{nullptr};
     vision::VideoView *videoView_{nullptr};
     QPushButton *snapshotButton_{nullptr};
     QPushButton *startRecordingButton_{nullptr};
@@ -96,8 +117,9 @@ private:
     QLabel *captureDiagnostics_{nullptr};
 
     // Connection bar.
-    QComboBox *portCombo_{nullptr};
-    QSpinBox *baudSpin_{nullptr};
+    QComboBox *serialPortCombo_{nullptr};
+    QSpinBox *serialBaud_{nullptr};
+    QSpinBox *robotTcpPort_{nullptr};
     QPushButton *connectButton_{nullptr};
     QPushButton *acquireButton_{nullptr};
     QPushButton *releaseButton_{nullptr};

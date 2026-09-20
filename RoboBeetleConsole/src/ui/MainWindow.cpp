@@ -4,24 +4,31 @@
 #include "vision/VideoView.h"
 #include "vision/VisionClient.h"
 #include "vision/VisionControlClient.h"
+#include "vision/InferenceUiState.h"
 
 #include <QCloseEvent>
+#include <QAbstractSpinBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHostAddress>
+#include <QKeyEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QMessageBox>
+#include <QRegularExpression>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QUrl>
 
 #include <array>
 
@@ -132,6 +139,46 @@ QString inferenceDiagnosticsText(const vision::VisionCaptureStatus &status)
         text += QStringLiteral("\nLast error: %1").arg(error);
     }
     return text;
+}
+
+QString normalizedHostCandidate(const QString &candidate)
+{
+    const QString value = candidate.trimmed();
+    QHostAddress address;
+    if (address.setAddress(value)) {
+        return address.toString();
+    }
+    return value.toLower();
+}
+
+bool validHostSyntax(const QString &candidate)
+{
+    const QString value = candidate.trimmed();
+    if (value.isEmpty()) {
+        return false;
+    }
+    for (const QChar character : value) {
+        if (character.isSpace()) {
+            return false;
+        }
+    }
+    if (value.contains(QStringLiteral("://"))
+        || value.contains(QChar('/'))
+        || value.contains(QChar('?'))
+        || value.contains(QChar('#'))
+        || value.contains(QChar('@'))) {
+        return false;
+    }
+    QHostAddress address;
+    if (address.setAddress(value)) {
+        return true;
+    }
+    if (value.contains(QChar(':'))) {
+        return false;
+    }
+    static const QRegularExpression hostnamePattern(
+        QStringLiteral(R"(^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$)"));
+    return hostnamePattern.match(value).hasMatch();
 }
 
 QString motionModeText(MotionMode mode)
@@ -306,6 +353,15 @@ MainWindow::MainWindow(
       visionControlClient_(visionControlClient)
 {
     Q_ASSERT(controller_ != nullptr);
+    committedPiHost_ = visionControlClient_ != nullptr
+        && !visionControlClient_->host().trimmed().isEmpty()
+        ? visionControlClient_->host().trimmed()
+        : QStringLiteral("192.168.10.2");
+    if (visionControlClient_ != nullptr && visionControlClient_->host().isEmpty()) {
+        // This is a local endpoint initialization only; it does not issue IO.
+        visionControlClient_->setEndpoint(
+            committedPiHost_, visionControlClient_->port());
+    }
     setWindowTitle(QStringLiteral("RoboBeetle Console"));
     resize(1420, 880);
     setMinimumSize(1100, 720);
@@ -364,18 +420,23 @@ MainWindow::MainWindow(
         "  border-radius: 4px; color: #37474f; }"));
 
     connect(controller_, &IConsoleController::serialPortsChanged, this, [this](const QStringList &ports) {
-        const QString current = portCombo_->currentText();
-        portCombo_->clear();
-        portCombo_->addItems(ports);
-        if (!current.isEmpty() && portCombo_->findText(current) < 0) {
-            portCombo_->addItem(current);
+        if (serialPortCombo_ == nullptr) {
+            return;
         }
-        portCombo_->setCurrentText(current);
+        const QString current = serialPortCombo_->currentText();
+        serialPortCombo_->clear();
+        serialPortCombo_->addItems(ports);
+        if (!current.isEmpty() && serialPortCombo_->findText(current) < 0) {
+            serialPortCombo_->addItem(current);
+        }
+        serialPortCombo_->setCurrentText(current);
     });
     connect(controller_, &IConsoleController::connectionStateChanged, this, [this](TransportState state) {
+        transportState_ = state;
         connectionStatus_->setText(stateText(state));
         setConnectedUi(state == TransportState::Connected);
         refreshAuthorityUi();
+        refreshPiHostUi();
     });
     connect(controller_, &IConsoleController::controlAvailabilityChanged,
             this, [this] {
@@ -476,34 +537,60 @@ QWidget *MainWindow::createConnectionBar()
 
     const bool remote =
         controller_->backendKind() == ConsoleBackendKind::RemoteRbrp;
-    layout->addWidget(new QLabel(
-        remote ? QStringLiteral("Pi Host")
-               : QStringLiteral("Serial Port"),
-        bar));
-    portCombo_ = new QComboBox(bar);
-    portCombo_->setEditable(true);
-    if (remote && portCombo_->lineEdit() != nullptr) {
-        portCombo_->lineEdit()->setPlaceholderText(
-            QStringLiteral("Pi IP / hostname"));
-    }
-    layout->addWidget(portCombo_);
+    layout->addWidget(new QLabel(QStringLiteral("Pi Host"), bar));
+    piHost_ = new QLineEdit(committedPiHost_, bar);
+    piHost_->setObjectName(QStringLiteral("piHost"));
+    piHost_->setPlaceholderText(QStringLiteral("Pi IP / hostname"));
+    piHost_->setMinimumWidth(190);
+    piHost_->installEventFilter(this);
+    layout->addWidget(piHost_);
+    applyPiHostButton_ = new QPushButton(QStringLiteral("Apply Host"), bar);
+    applyPiHostButton_->setObjectName(QStringLiteral("applyPiHostButton"));
+    layout->addWidget(applyPiHostButton_);
+    piHostHint_ = new QLabel(bar);
+    piHostHint_->setObjectName(QStringLiteral("piHostHint"));
+    piHostHint_->setStyleSheet(QStringLiteral("font-size: 10px; color: #7B8F9D;"));
+    piHostHint_->setVisible(false);
+    layout->addWidget(piHostHint_);
 
-    layout->addWidget(new QLabel(
-        remote ? QStringLiteral("TCP Port")
-               : QStringLiteral("Baud Rate"),
-        bar));
-    baudSpin_ = new QSpinBox(bar);
     if (remote) {
-        baudSpin_->setRange(1, 65535);
-        baudSpin_->setValue(47000);
+        layout->addWidget(new QLabel(QStringLiteral("Robot TCP"), bar));
+        robotTcpPort_ = new QSpinBox(bar);
+        robotTcpPort_->setObjectName(QStringLiteral("robotTcpPort"));
+        robotTcpPort_->setRange(1, 65535);
+        robotTcpPort_->setValue(47000);
+        robotTcpPort_->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        robotTcpPort_->setKeyboardTracking(false);
+        layout->addWidget(robotTcpPort_);
     } else {
-        baudSpin_->setRange(1200, 3000000);
-        baudSpin_->setValue(9600);
+        layout->addWidget(new QLabel(QStringLiteral("Serial Port"), bar));
+        serialPortCombo_ = new QComboBox(bar);
+        serialPortCombo_->setObjectName(QStringLiteral("serialPortCombo"));
+        serialPortCombo_->setEditable(true);
+        layout->addWidget(serialPortCombo_);
     }
-    layout->addWidget(baudSpin_);
+    layout->addWidget(new QLabel(remote ? QStringLiteral("Vision Port")
+                                        : QStringLiteral("Baud Rate"), bar));
+    if (!remote) {
+        serialBaud_ = new QSpinBox(bar);
+        serialBaud_->setObjectName(QStringLiteral("serialBaud"));
+        serialBaud_->setRange(1200, 3000000);
+        serialBaud_->setValue(9600);
+        serialBaud_->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        serialBaud_->setKeyboardTracking(false);
+        layout->addWidget(serialBaud_);
+    }
+    visionPort_ = new QSpinBox(bar);
+    visionPort_->setObjectName(QStringLiteral("visionPort"));
+    visionPort_->setRange(1, 65535);
+    visionPort_->setValue(47010);
+    visionPort_->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    visionPort_->setKeyboardTracking(false);
+    layout->addWidget(visionPort_);
 
     // Secondary action: Refresh.
     auto *refresh = new QPushButton(QStringLiteral("Refresh"), bar);
+    refresh->setObjectName(QStringLiteral("serialRefreshButton"));
     refresh->setStyleSheet(QStringLiteral(
         "QPushButton { background: #ffffff; border: 1px solid #90a4ae; "
         "  border-radius: 5px; padding: 6px 14px; color: #455a64; }"
@@ -512,6 +599,7 @@ QWidget *MainWindow::createConnectionBar()
 
     // Primary action: Connect.
     connectButton_ = new QPushButton(QStringLiteral("Connect"), bar);
+    connectButton_->setObjectName(QStringLiteral("connectRobotButton"));
     connectButton_->setStyleSheet(QStringLiteral(
         "QPushButton { background: #1976D2; border: 1px solid #1565c0; "
         "  border-radius: 5px; padding: 6px 16px; color: #ffffff; "
@@ -558,17 +646,25 @@ QWidget *MainWindow::createConnectionBar()
 
     connect(refresh, &QPushButton::clicked,
             controller_, &IConsoleController::refreshSerialPorts);
+    connect(applyPiHostButton_, &QPushButton::clicked,
+            this, &MainWindow::applyPiHost);
+    connect(piHost_, &QLineEdit::returnPressed,
+            this, &MainWindow::applyPiHost);
+    connect(piHost_, &QLineEdit::textChanged,
+            this, &MainWindow::refreshPiHostUi);
     connect(connectButton_, &QPushButton::clicked, this, [this] {
         if (controller_->isConnected()) {
             controller_->disconnectController();
             return;
         }
         ConsoleConnectionConfiguration configuration;
-        configuration.endpoint = portCombo_->currentText().trimmed();
+        configuration.endpoint = controller_->backendKind() == ConsoleBackendKind::RemoteRbrp
+            ? committedPiHost_
+            : serialPortCombo_->currentText().trimmed();
         if (controller_->backendKind() == ConsoleBackendKind::RemoteRbrp) {
-            configuration.tcpPort = static_cast<quint16>(baudSpin_->value());
+            configuration.tcpPort = static_cast<quint16>(robotTcpPort_->value());
         } else {
-            configuration.baudRate = baudSpin_->value();
+            configuration.baudRate = serialBaud_->value();
         }
         controller_->connectController(configuration);
     });
@@ -593,24 +689,18 @@ QWidget *MainWindow::createVideoPlaceholder()
     controls->setContentsMargins(0, 0, 0, 0);
     controls->setSpacing(5);
 
-    visionHost_ = new QLineEdit(QStringLiteral("192.168.10.2"), box);
-    visionHost_->setObjectName(QStringLiteral("visionHost"));
-    visionHost_->setPlaceholderText(QStringLiteral("Vision host"));
-    visionHost_->setMaximumWidth(145);
-    controls->addWidget(new QLabel(QStringLiteral("Host"), box));
-    controls->addWidget(visionHost_);
-
-    visionPort_ = new QSpinBox(box);
-    visionPort_->setObjectName(QStringLiteral("visionPort"));
-    visionPort_->setRange(1, 65535);
-    visionPort_->setValue(47010);
-    visionPort_->setMaximumWidth(82);
-    controls->addWidget(new QLabel(QStringLiteral("Port"), box));
-    controls->addWidget(visionPort_);
-
     visionConnectButton_ = new QPushButton(QStringLiteral("Connect Video"), box);
     visionConnectButton_->setObjectName(QStringLiteral("visionConnectButton"));
     controls->addWidget(visionConnectButton_);
+    visionRefreshStatusButton_ = new QPushButton(QStringLiteral("Refresh Status"), box);
+    visionRefreshStatusButton_->setObjectName(QStringLiteral("visionRefreshStatusButton"));
+    visionRefreshStatusButton_->setToolTip(
+        QStringLiteral("Refresh HTTP status from the committed endpoint http://%1:%2")
+            .arg(committedPiHost_)
+            .arg(visionControlClient_ != nullptr
+                     ? visionControlClient_->port()
+                     : vision::kVisionControlDefaultPort));
+    controls->addWidget(visionRefreshStatusButton_);
     controls->addStretch();
 
     visionState_ = new QLabel(
@@ -662,6 +752,28 @@ QWidget *MainWindow::createVideoPlaceholder()
         QStringLiteral("font-size: 10px; color: #7B8F9D;"));
     layout->addWidget(inferenceDiagnostics_);
 
+    auto *inferenceControls = new QHBoxLayout;
+    inferenceControls->setContentsMargins(0, 0, 0, 0);
+    inferenceControls->setSpacing(5);
+    startInferenceButton_ = new QPushButton(QStringLiteral("Start Inference"), box);
+    startInferenceButton_->setObjectName(QStringLiteral("startInferenceButton"));
+    stopInferenceButton_ = new QPushButton(QStringLiteral("Stop Inference"), box);
+    stopInferenceButton_->setObjectName(QStringLiteral("stopInferenceButton"));
+    inferenceControls->addWidget(startInferenceButton_);
+    inferenceControls->addWidget(stopInferenceButton_);
+    inferenceControls->addStretch();
+    visionControlState_ = new QLabel(QStringLiteral("Unavailable"), box);
+    visionControlState_->setObjectName(QStringLiteral("visionControlState"));
+    visionControlState_->setStyleSheet(QStringLiteral("font-weight: 600; color: #566B79;"));
+    inferenceControls->addWidget(visionControlState_);
+    layout->addLayout(inferenceControls);
+    visionControlMessage_ = new QLabel(QStringLiteral(""), box);
+    visionControlMessage_->setObjectName(QStringLiteral("visionControlMessage"));
+    visionControlMessage_->setWordWrap(true);
+    visionControlMessage_->setToolTip(QStringLiteral("Vision control acknowledgements and errors"));
+    visionControlMessage_->setStyleSheet(QStringLiteral("font-size: 10px; color: #7B8F9D;"));
+    layout->addWidget(visionControlMessage_);
+
     auto *captureControls = new QHBoxLayout;
     captureControls->setContentsMargins(0, 0, 0, 0);
     captureControls->setSpacing(5);
@@ -703,17 +815,15 @@ QWidget *MainWindow::createVideoPlaceholder()
     layout->addWidget(captureDiagnostics_);
 
     const bool available = visionClient_ != nullptr;
-    visionHost_->setEnabled(available);
-    visionPort_->setEnabled(available);
     visionConnectButton_->setEnabled(available);
+    visionRefreshStatusButton_->setEnabled(visionControlClient_ != nullptr);
     snapshotButton_->setEnabled(false);
     startRecordingButton_->setEnabled(false);
     stopRecordingButton_->setEnabled(false);
+    startInferenceButton_->setEnabled(false);
+    stopInferenceButton_->setEnabled(false);
 
-    if (!available) {
-        return box;
-    }
-
+    if (available) {
     connect(visionConnectButton_, &QPushButton::clicked, this, [this] {
         if (visionClient_->state() == vision::VisionConnectionState::Connected
             || visionClient_->state() == vision::VisionConnectionState::Connecting) {
@@ -724,9 +834,9 @@ QWidget *MainWindow::createVideoPlaceholder()
         }
         if (visionControlClient_ != nullptr) {
             if (!visionControlClient_->setEndpoint(
-                    visionHost_->text().trimmed(),
+                    committedPiHost_,
                     visionControlClient_->port())) {
-                captureState_->setText(QStringLiteral("Capture Busy"));
+                visionControlMessage_->setText(QStringLiteral("Vision action busy; wait before changing endpoint"));
                 appendLog(QStringLiteral(
                     "Vision capture: wait for the active action before changing host"));
                 return;
@@ -735,7 +845,7 @@ QWidget *MainWindow::createVideoPlaceholder()
             visionControlClient_->startPolling();
         }
         visionClient_->connectToHost(
-            visionHost_->text().trimmed(),
+            committedPiHost_,
             static_cast<quint16>(visionPort_->value()));
     });
 
@@ -794,7 +904,8 @@ QWidget *MainWindow::createVideoPlaceholder()
     connect(visionClient_, &vision::VisionClient::protocolError,
             this, [this](const QString &message) {
         appendLog(QStringLiteral("Vision: %1").arg(message));
-    });
+            });
+    }
 
     if (visionControlClient_ != nullptr) {
         connect(snapshotButton_, &QPushButton::clicked,
@@ -806,38 +917,55 @@ QWidget *MainWindow::createVideoPlaceholder()
         connect(stopRecordingButton_, &QPushButton::clicked,
                 visionControlClient_,
                 &vision::VisionControlClient::stopRecording);
+        connect(startInferenceButton_, &QPushButton::clicked,
+                visionControlClient_,
+                &vision::VisionControlClient::startInference);
+        connect(stopInferenceButton_, &QPushButton::clicked,
+                visionControlClient_,
+                &vision::VisionControlClient::stopInference);
+        connect(visionRefreshStatusButton_, &QPushButton::clicked, this, [this] {
+            if (visionControlClient_ == nullptr || !hostCandidateValid(committedPiHost_)) {
+                return;
+            }
+            visionControlClient_->setEndpoint(
+                committedPiHost_, visionControlClient_->port());
+            visionControlClient_->startPolling();
+        });
 
         connect(
             visionControlClient_,
             &vision::VisionControlClient::statusChanged,
             this,
             [this](vision::VisionCaptureStatus status) {
-            // Capture control is deliberately independent from
-            // RBVS. A recording must remain stoppable even if video drops.
-            inferenceState_->setText(inferenceStateText(status.inferenceState));
-            inferenceDiagnostics_->setText(inferenceDiagnosticsText(status));
-
-            const bool usable = status.cameraRunning;
+            Q_UNUSED(status);
+            refreshVisionUi();
+            /* Capture control is deliberately independent from RBVS. */
+            const vision::VisionCaptureStatus current = visionControlClient_->status();
+            const bool usable = visionControlClient_->hasFreshStatus()
+                && current.haveCameraStatus && current.haveCaptureStatus
+                && current.cameraRunning;
             captureState_->setText(
-                status.recording
+                current.recording
                     ? QStringLiteral("Recording")
-                    : QStringLiteral("Capture %1").arg(status.state));
-            snapshotButton_->setEnabled(usable);
+                    : QStringLiteral("Capture %1").arg(current.state));
+            const bool busy = visionControlClient_->actionBusy();
+            snapshotButton_->setEnabled(usable && !busy && !hostDirty());
             startRecordingButton_->setEnabled(
-                usable && !status.recording
-                && status.state != QStringLiteral("stopping"));
+                usable && !busy && !current.recording
+                && current.state != QStringLiteral("stopping") && !hostDirty());
             stopRecordingButton_->setEnabled(
-                usable && status.recording);
+                visionControlClient_->hasFreshStatus() && current.haveCaptureStatus
+                && !busy && current.recording);
 
             const double queueMiB =
-                static_cast<double>(status.queueBytes)
+                static_cast<double>(current.queueBytes)
                 / (1024.0 * 1024.0);
             const double maxQueueMiB =
-                static_cast<double>(status.maxQueueBytes)
+                static_cast<double>(current.maxQueueBytes)
                 / (1024.0 * 1024.0);
-            const QString freeText = status.haveFreeDisk
+            const QString freeText = current.haveFreeDisk
                 ? QString::number(
-                      static_cast<double>(status.freeDiskBytes)
+                      static_cast<double>(current.freeDiskBytes)
                           / (1024.0 * 1024.0 * 1024.0),
                       'f',
                       1)
@@ -847,17 +975,14 @@ QWidget *MainWindow::createVideoPlaceholder()
                     "Session %1 | Recorded %2 | Snapshots %3 | "
                     "Queue %4/%5 MiB | Free %6 GiB")
                     .arg(
-                        status.sessionId.isEmpty()
+                        current.sessionId.isEmpty()
                             ? QStringLiteral("--")
-                            : status.sessionId)
-                    .arg(status.recordedFrames)
-                    .arg(status.snapshotCount)
+                            : current.sessionId)
+                    .arg(current.recordedFrames)
+                    .arg(current.snapshotCount)
                     .arg(queueMiB, 0, 'f', 1)
                     .arg(maxQueueMiB, 0, 'f', 0)
                     .arg(freeText));
-            if (!status.lastError.isEmpty()) {
-                captureState_->setText(QStringLiteral("Capture Error"));
-            }
         });
 
         connect(
@@ -873,11 +998,48 @@ QWidget *MainWindow::createVideoPlaceholder()
             &vision::VisionControlClient::errorOccurred,
             this,
             [this](const QString &message) {
-            captureState_->setText(QStringLiteral("Capture Error"));
-            appendLog(
-                QStringLiteral("Vision capture: %1").arg(message));
+            if (visionControlMessage_ != nullptr) {
+                visionControlMessage_->setText(message);
+                visionControlMessage_->setToolTip(message);
+            }
+        });
+        connect(visionControlClient_, &vision::VisionControlClient::requestStateChanged,
+                this, &MainWindow::refreshVisionUi);
+        connect(visionControlClient_,
+                &vision::VisionControlClient::authoritativeStatusRefreshed,
+                this,
+                [this] {
+            visionOutcomeUncertain_ = false;
+            refreshVisionUi();
+            refreshPiHostUi();
+        });
+        connect(visionControlClient_, &vision::VisionControlClient::inferenceActionAcknowledged,
+                this, [this](const QString &action, const QString &outcome) {
+            visionOutcomeUncertain_ = false;
+            visionControlMessage_->setText(
+                QStringLiteral("%1 accepted; confirming status").arg(action));
+            visionControlMessage_->setToolTip(outcome);
+            refreshVisionUi();
+        });
+        connect(visionControlClient_, &vision::VisionControlClient::requestFailed,
+                this, [this](const QString &action, const QString &code,
+                             const QString &message, bool uncertain) {
+            visionOutcomeUncertain_ = uncertain;
+            visionControlMessage_->setText(
+                QStringLiteral("%1: %2").arg(action, message));
+            visionControlMessage_->setToolTip(
+                QStringLiteral("%1 (%2)").arg(message, code));
+            appendLog(QStringLiteral("Vision %1 [%2]: %3").arg(action, code, message));
+            refreshVisionUi();
         });
     }
+
+    if (visionClient_ != nullptr) {
+        connect(visionClient_, &vision::VisionClient::endpointActivityChanged,
+                this, &MainWindow::refreshPiHostUi);
+    }
+    refreshVisionUi();
+    refreshPiHostUi();
 
     return box;
 }
@@ -1822,8 +1984,15 @@ void MainWindow::setDepthUiState(const DepthMonitorState &state)
 void MainWindow::setConnectedUi(bool connected)
 {
     connectButton_->setText(connected ? QStringLiteral("Disconnect") : QStringLiteral("Connect"));
-    portCombo_->setEnabled(!connected);
-    baudSpin_->setEnabled(!connected);
+    if (serialPortCombo_ != nullptr) {
+        serialPortCombo_->setEnabled(!connected);
+    }
+    if (serialBaud_ != nullptr) {
+        serialBaud_->setEnabled(!connected);
+    }
+    if (robotTcpPort_ != nullptr) {
+        robotTcpPort_->setEnabled(!connected);
+    }
     for (int index = 0; index < kServoCount; ++index) {
         refreshServoUi(index);
     }
@@ -2018,6 +2187,215 @@ void MainWindow::appendLog(const QString &message)
     log_->appendPlainText(message);
 }
 
+bool MainWindow::hostDirty() const
+{
+    return piHost_ != nullptr
+        && normalizedHostCandidate(piHost_->text()) != committedPiHost_;
+}
+
+bool MainWindow::hasRemoteVisionWorkThatMayContinue() const
+{
+    if (visionControlClient_ == nullptr) {
+        return false;
+    }
+    const auto status = visionControlClient_->status();
+    return visionControlClient_->inferenceReconcilePending()
+        || status.recording
+        || status.state == QStringLiteral("stopping")
+        || status.inferenceState == QStringLiteral("running")
+        || status.inferenceState == QStringLiteral("starting")
+        || status.inferenceOperation == QStringLiteral("stopping")
+        || status.inferenceOperation == QStringLiteral("retrying")
+        || visionOutcomeUncertain_
+        || (visionControlClient_->isPolling() && !visionControlClient_->hasFreshStatus());
+}
+
+bool MainWindow::hostCandidateValid(const QString &candidate) const
+{
+    return validHostSyntax(candidate);
+}
+
+void MainWindow::refreshPiHostUi()
+{
+    if (piHost_ == nullptr) {
+        return;
+    }
+    const bool dirty = hostDirty();
+    const bool remoteBusy = controller_->backendKind() == ConsoleBackendKind::RemoteRbrp
+        && (transportState_ == TransportState::Opening
+            || transportState_ == TransportState::Connected
+            || transportState_ == TransportState::Closing);
+    const bool socketBusy = visionClient_ != nullptr && visionClient_->endpointBusy();
+    const bool controlBusy = visionControlClient_ != nullptr
+        && visionControlClient_->actionBusy();
+    const bool safe = !remoteBusy && !socketBusy && !controlBusy && !updatingEndpoints_;
+    applyPiHostButton_->setEnabled(dirty && hostCandidateValid(piHost_->text()) && safe);
+    piHostHint_->setVisible(dirty);
+    piHostHint_->setText(
+        QStringLiteral("Active Pi: %1 | Host edit not applied").arg(committedPiHost_));
+    if (visionRefreshStatusButton_ != nullptr) {
+        visionRefreshStatusButton_->setEnabled(
+            visionControlClient_ != nullptr && !dirty);
+        visionRefreshStatusButton_->setToolTip(
+            QStringLiteral("Refresh HTTP status from the committed endpoint http://%1:%2")
+                .arg(committedPiHost_)
+                .arg(visionControlClient_ != nullptr
+                         ? visionControlClient_->port()
+                         : vision::kVisionControlDefaultPort));
+    }
+    if (visionConnectButton_ != nullptr) {
+        visionConnectButton_->setEnabled(visionClient_ != nullptr && !dirty);
+    }
+    if (connectButton_ != nullptr) {
+        // Keep an existing Disconnect available while a candidate is dirty,
+        // but do not start a new Robot connection against either host value.
+        connectButton_->setEnabled(controller_->isConnected() || !dirty);
+    }
+    if (visionControlClient_ != nullptr) {
+        refreshInferenceUi();
+        refreshCaptureUi();
+    }
+}
+
+void MainWindow::applyPiHost()
+{
+    if (piHost_ == nullptr) {
+        return;
+    }
+    const QString candidate = normalizedHostCandidate(piHost_->text());
+    if (!hostCandidateValid(candidate)) {
+        visionControlMessage_->setText(QStringLiteral("Invalid Pi Host"));
+        return;
+    }
+    if (candidate == committedPiHost_) {
+        piHost_->setText(committedPiHost_);
+        refreshPiHostUi();
+        return;
+    }
+    const bool remoteBusy = controller_->backendKind() == ConsoleBackendKind::RemoteRbrp
+        && (transportState_ == TransportState::Opening
+            || transportState_ == TransportState::Connected
+            || transportState_ == TransportState::Closing);
+    const bool socketBusy = visionClient_ != nullptr && visionClient_->endpointBusy();
+    const bool controlBusy = visionControlClient_ != nullptr
+        && visionControlClient_->actionBusy();
+    if (remoteBusy || socketBusy || controlBusy) {
+        visionControlMessage_->setText(QStringLiteral("Pi Host is busy; wait for the active endpoint"));
+        refreshPiHostUi();
+        return;
+    }
+    if (hasRemoteVisionWorkThatMayContinue()) {
+        const QString oldCommittedHost = committedPiHost_;
+        updatingEndpoints_ = true;
+        const auto answer = QMessageBox::question(
+            this,
+            QStringLiteral("Switch Pi Host"),
+            QStringLiteral("Switch monitoring from %1 to %2? This does not stop inference or recording on %1.")
+                .arg(committedPiHost_, candidate),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        updatingEndpoints_ = false;
+        const bool remoteBusyAfter = controller_->backendKind() == ConsoleBackendKind::RemoteRbrp
+            && (transportState_ == TransportState::Opening
+                || transportState_ == TransportState::Connected
+                || transportState_ == TransportState::Closing);
+        const bool socketBusyAfter = visionClient_ != nullptr && visionClient_->endpointBusy();
+        const bool controlBusyAfter = visionControlClient_ != nullptr
+            && visionControlClient_->actionBusy();
+        const bool candidateChanged = normalizedHostCandidate(piHost_->text()) != candidate;
+        if (answer != QMessageBox::Yes || candidateChanged || committedPiHost_ != oldCommittedHost
+            || remoteBusyAfter || socketBusyAfter || controlBusyAfter || !hostDirty()) {
+            piHost_->setText(committedPiHost_);
+            refreshPiHostUi();
+            return;
+        }
+    }
+    if (visionControlClient_ != nullptr
+        && !visionControlClient_->setEndpoint(candidate, visionControlClient_->port())) {
+        piHost_->setText(committedPiHost_);
+        refreshPiHostUi();
+        return;
+    }
+    updatingEndpoints_ = true;
+    committedPiHost_ = candidate;
+    piHost_->setText(committedPiHost_);
+    // An explicit host-switch acknowledgement also acknowledges any prior
+    // ambiguous POST outcome; the new endpoint is a fresh operator choice.
+    visionOutcomeUncertain_ = false;
+    updatingEndpoints_ = false;
+    refreshPiHostUi();
+}
+
+void MainWindow::refreshVisionUi()
+{
+    refreshInferenceUi();
+    refreshCaptureUi();
+}
+
+void MainWindow::refreshInferenceUi()
+{
+    if (inferenceState_ == nullptr || visionControlClient_ == nullptr) {
+        return;
+    }
+    const auto ui = vision::makeInferenceUiState(
+        visionControlClient_->status(),
+        visionControlClient_->hasFreshStatus(),
+        visionControlClient_->actionBusy(),
+        visionControlClient_->inferenceReconcilePending());
+    inferenceState_->setText(ui.stateText);
+    startInferenceButton_->setText(ui.startText);
+    stopInferenceButton_->setText(ui.stopText);
+    startInferenceButton_->setEnabled(ui.startEnabled && !hostDirty());
+    stopInferenceButton_->setEnabled(ui.stopEnabled);
+    auto displayStatus = visionControlClient_->status();
+    if (!ui.showActiveMetrics) {
+        displayStatus.haveInferenceFps = false;
+        displayStatus.haveInferenceLatencyMs = false;
+        displayStatus.haveInferenceDetectionCount = false;
+        displayStatus.haveInferenceLatestFrame = false;
+        displayStatus.haveInferenceSkippedFrames = false;
+    }
+    inferenceDiagnostics_->setText(inferenceDiagnosticsText(displayStatus));
+    if (!visionControlClient_->hasFreshStatus()) {
+        visionControlState_->setText(QStringLiteral("Stale"));
+    } else if (!visionControlClient_->status().haveInferenceStatus) {
+        visionControlState_->setText(QStringLiteral("Unavailable"));
+    } else {
+        visionControlState_->setText(QStringLiteral("Reachable"));
+    }
+}
+
+void MainWindow::refreshCaptureUi()
+{
+    if (visionControlClient_ == nullptr || captureState_ == nullptr) {
+        return;
+    }
+    const auto status = visionControlClient_->status();
+    const bool fresh = visionControlClient_->hasFreshStatus();
+    const bool busy = visionControlClient_->actionBusy();
+    const bool usable = fresh && status.haveCameraStatus && status.haveCaptureStatus
+        && status.cameraRunning;
+    snapshotButton_->setEnabled(usable && !busy && !hostDirty());
+    startRecordingButton_->setEnabled(
+        usable && !busy && !status.recording
+        && status.state != QStringLiteral("stopping") && !hostDirty());
+    stopRecordingButton_->setEnabled(
+        fresh && status.haveCaptureStatus && status.recording && !busy);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == piHost_ && event->type() == QEvent::KeyPress) {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->key() == Qt::Key_Escape) {
+            piHost_->setText(committedPiHost_);
+            refreshPiHostUi();
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
 QString MainWindow::stateText(TransportState state)
 {
     switch (state) {
@@ -2034,12 +2412,30 @@ void MainWindow::closeEvent(QCloseEvent *event)
 {
     appendLog(QStringLiteral("Application close requested"));
     if (visionControlClient_ != nullptr
-        && visionControlClient_->actionInFlight()) {
-        captureState_->setText(QStringLiteral("Capture Busy"));
+        && visionControlClient_->actionBusy()) {
+        visionControlMessage_->setText(QStringLiteral("Vision action busy; close deferred"));
         appendLog(QStringLiteral(
-            "Vision capture: application close deferred until the active action completes"));
+            "Vision control: application close deferred until the active action completes"));
         event->ignore();
         return;
+    }
+    if (visionControlClient_ != nullptr) {
+        if (hasRemoteVisionWorkThatMayContinue()) {
+            const auto answer = QMessageBox::question(
+                this,
+                QStringLiteral("Close RoboBeetle Console"),
+                QStringLiteral("Vision work may continue on the committed Pi host. Close without sending Stop?"),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No);
+            if (answer != QMessageBox::Yes) {
+                event->ignore();
+                return;
+            }
+            if (visionControlClient_->actionBusy()) {
+                event->ignore();
+                return;
+            }
+        }
     }
     if (visionControlClient_ != nullptr) {
         visionControlClient_->shutdown();

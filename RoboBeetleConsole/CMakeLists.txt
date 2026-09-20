@@ -37,6 +37,8 @@ add_library(RoboBeetleCore
     src/vision/VisionClient.cpp
     src/vision/VisionControlClient.h
     src/vision/VisionControlClient.cpp
+    src/vision/InferenceUiState.h
+    src/vision/InferenceUiState.cpp
     ../RoboBeetlePi/gateway/src/rbrp_codec.cpp
     src/robot/RobotCommand.h
     src/robot/LeakStatus.h
@@ -98,6 +100,12 @@ if(BUILD_TESTING)
     target_link_libraries(vision_control_client_tests PRIVATE RoboBeetleCore)
     add_test(NAME vision_control_client_tests COMMAND vision_control_client_tests)
 
+    add_executable(inference_ui_state_tests
+        tests/inference_ui_state_tests.cpp
+    )
+    target_link_libraries(inference_ui_state_tests PRIVATE RoboBeetleCore)
+    add_test(NAME inference_ui_state_tests COMMAND inference_ui_state_tests)
+
     add_executable(video_view_tests
         tests/video_view_tests.cpp
         src/vision/VideoView.h
@@ -132,6 +140,16 @@ if(BUILD_TESTING)
     )
     target_link_libraries(main_window_tests PRIVATE RoboBeetleCore Qt6::Widgets)
     add_test(NAME main_window_tests COMMAND main_window_tests)
+
+    add_executable(main_window_inference_controls_tests
+        tests/main_window_inference_controls_tests.cpp
+        src/ui/MainWindow.h
+        src/ui/MainWindow.cpp
+        src/vision/VideoView.h
+        src/vision/VideoView.cpp
+    )
+    target_link_libraries(main_window_inference_controls_tests PRIVATE RoboBeetleCore Qt6::Widgets)
+    add_test(NAME main_window_inference_controls_tests COMMAND main_window_inference_controls_tests)
 
     add_executable(rbrp_client_session_tests
         tests/rbrp_client_session_tests.cpp
