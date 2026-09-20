@@ -40,6 +40,15 @@ VisionClient::VisionClient(QObject *parent)
         setState(VisionConnectionState::Connected);
         emit logMessage(QStringLiteral("Vision stream connected"));
     });
+    connect(&socket_, &QTcpSocket::stateChanged, this,
+            [this](QAbstractSocket::SocketState) {
+                const bool busy = endpointBusy();
+                if (busy == endpointBusy_) {
+                    return;
+                }
+                endpointBusy_ = busy;
+                emit endpointActivityChanged(busy);
+            });
     connect(&socket_, &QTcpSocket::readyRead,
             this, &VisionClient::handleReadyRead);
     connect(&socket_, &QTcpSocket::disconnected,

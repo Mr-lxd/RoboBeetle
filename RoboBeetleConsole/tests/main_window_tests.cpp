@@ -2,6 +2,7 @@
 #include "robot/DepthSnapshot.h"
 #include "robot/ImuSnapshot.h"
 #include "robot/RobotController.h"
+#include "remote/RemoteRobotController.h"
 #include "transport/FakeTransport.h"
 #include "ui/MainWindow.h"
 #include "vision/VisionClient.h"
@@ -9,12 +10,16 @@
 #include "vision/VideoView.h"
 
 #include <QApplication>
+#include <QAbstractSpinBox>
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QGroupBox>
 #include <QHostAddress>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
@@ -24,6 +29,7 @@
 #include <QTimer>
 
 #include <cstdio>
+#include <functional>
 
 namespace {
 
@@ -178,6 +184,38 @@ void waitForMs(int milliseconds)
     QEventLoop loop;
     QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
     loop.exec();
+}
+
+bool waitUntil(const std::function<bool()> &predicate, int timeoutMs = 2000)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        if (predicate()) {
+            return true;
+        }
+        waitForMs(2);
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    return predicate();
+}
+
+void answerNextMessageBox(QMessageBox::StandardButton button)
+{
+    QTimer::singleShot(50, [button] {
+        for (QWidget *widget : QApplication::topLevelWidgets()) {
+            auto *box = qobject_cast<QMessageBox *>(widget);
+            if (box != nullptr) {
+                if (auto *push = box->button(button)) {
+                    push->click();
+                } else {
+                    box->done(static_cast<int>(button));
+                }
+                return;
+            }
+        }
+    });
 }
 
 QByteArray readHttpRequest(QTcpSocket *socket)
@@ -547,8 +585,8 @@ void testVisionConnectionIsIndependentFromControlTransport()
         return;
     }
 
-    auto *host = panel->findChild<QLineEdit *>(QStringLiteral("visionHost"));
-    auto *port = panel->findChild<QSpinBox *>(QStringLiteral("visionPort"));
+    auto *host = window.findChild<QLineEdit *>(QStringLiteral("piHost"));
+    auto *port = window.findChild<QSpinBox *>(QStringLiteral("visionPort"));
     auto *view = panel->findChild<rb::vision::VideoView *>(
         QStringLiteral("videoView"));
     QPushButton *connectVideo =
@@ -569,6 +607,9 @@ void testVisionConnectionIsIndependentFromControlTransport()
 
     host->setText(QStringLiteral("127.0.0.1"));
     port->setValue(server.serverPort());
+    if (auto *apply = window.findChild<QPushButton *>(QStringLiteral("applyPiHostButton"))) {
+        apply->click();
+    }
     expect(transport.writes().isEmpty(),
            "control transport is quiet before Vision connect");
 
@@ -620,8 +661,8 @@ void testVisionCaptureControlsAreIndependentFromRobotTransport()
         return;
     }
 
-    auto *host = panel->findChild<QLineEdit *>(QStringLiteral("visionHost"));
-    auto *port = panel->findChild<QSpinBox *>(QStringLiteral("visionPort"));
+    auto *host = window.findChild<QLineEdit *>(QStringLiteral("piHost"));
+    auto *port = window.findChild<QSpinBox *>(QStringLiteral("visionPort"));
     auto *snapshot =
         panel->findChild<QPushButton *>(QStringLiteral("snapshotButton"));
     auto *startRecording =
@@ -801,6 +842,9 @@ void testVisionCaptureControlsAreIndependentFromRobotTransport()
     for (int i = 0; i < 50 && stopRecording->isEnabled(); ++i) {
         waitForMs(5);
     }
+    for (int i = 0; i < 50 && controlClient.actionBusy(); ++i) {
+        waitForMs(5);
+    }
     expect(!stopRecording->isEnabled() && startRecording->isEnabled(),
            "Stop response returns capture UI to idle");
     expect(transport.writes().isEmpty(),
@@ -882,9 +926,13 @@ void testVisionCaptureActionDefersWindowClose()
     for (int i = 0; i < 50 && controlClient.actionInFlight(); ++i) {
         waitForMs(5);
     }
+    for (int i = 0; i < 50 && controlClient.actionBusy(); ++i) {
+        waitForMs(5);
+    }
     expect(!controlClient.actionInFlight(),
            "capture action obtains a definite result before close");
 
+    answerNextMessageBox(QMessageBox::Yes);
     expect(window.close(),
            "MainWindow closes after the capture action completes");
 
@@ -921,8 +969,8 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
         return;
     }
 
-    auto *host = panel->findChild<QLineEdit *>(QStringLiteral("visionHost"));
-    auto *port = panel->findChild<QSpinBox *>(QStringLiteral("visionPort"));
+    auto *host = window.findChild<QLineEdit *>(QStringLiteral("piHost"));
+    auto *port = window.findChild<QSpinBox *>(QStringLiteral("visionPort"));
     auto *state = panel->findChild<QLabel *>(QStringLiteral("inferenceState"));
     auto *diagnostics =
         panel->findChild<QLabel *>(QStringLiteral("inferenceDiagnostics"));
@@ -936,8 +984,8 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
         return;
     }
 
-    expect(state->text() == QStringLiteral("Inference Disabled"),
-           "inference state starts disabled before status reception");
+    expect(state->text() == QStringLiteral("Inference Unknown"),
+           "inference state starts unknown before status reception");
 
     host->setText(QStringLiteral("127.0.0.1"));
     port->setValue(videoServer.serverPort());
@@ -973,11 +1021,11 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
             "\"model_sha256\":\"3dea74511bf2aabbccddeeff00112233445566778899aabbccddeeff00112233\",\"latest_frame_id\":0,"
             "\"skipped_frames\":0,\"inference_fps\":0.0,"
             "\"latency_ms\":0.0,\"detection_count\":0}}"));
-    for (int i = 0; i < 50 && state->text() != QStringLiteral("Inference RUNNING");
+    for (int i = 0; i < 50 && state->text() != QStringLiteral("Inference Running");
          ++i) {
         waitForMs(5);
     }
-    expect(state->text() == QStringLiteral("Inference RUNNING"),
+    expect(state->text() == QStringLiteral("Inference Running"),
            "running inference status is rendered in the state label");
     const QString shaLabel = QStringLiteral("SHA-256: ");
     const int shaStart = diagnostics->text().indexOf(shaLabel);
@@ -1028,7 +1076,7 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
     };
 
     applyInferenceStatus(QByteArrayLiteral("{\"state\":\"starting\"}"));
-    expect(state->text() == QStringLiteral("Inference STARTING"),
+    expect(state->text() == QStringLiteral("Inference Starting"),
            "starting inference status is rendered in the state label");
 
     applyInferenceStatus(
@@ -1053,6 +1101,393 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
         videoPeer->deleteLater();
     }
     window.close();
+}
+
+void testTask02SharedHostWidgetsAndHttpOnlyControls()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionControlClient controlClient;
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "Task 02 HTTP-only server must listen");
+    controlClient.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+
+    rb::MainWindow window(&controller, nullptr, &controlClient);
+    auto *host = window.findChild<QLineEdit *>(QStringLiteral("piHost"));
+    auto *apply = window.findChild<QPushButton *>(QStringLiteral("applyPiHostButton"));
+    auto *refresh = window.findChild<QPushButton *>(QStringLiteral("visionRefreshStatusButton"));
+    auto *visionPort = window.findChild<QSpinBox *>(QStringLiteral("visionPort"));
+    auto *start = window.findChild<QPushButton *>(QStringLiteral("startInferenceButton"));
+    auto *stop = window.findChild<QPushButton *>(QStringLiteral("stopInferenceButton"));
+    auto *connectRobot = window.findChild<QPushButton *>(QStringLiteral("connectRobotButton"));
+    expect(host != nullptr && apply != nullptr && refresh != nullptr
+               && visionPort != nullptr && start != nullptr && stop != nullptr
+               && connectRobot != nullptr,
+           "Task 02 exposes one shared Host and HTTP/inference controls");
+    expect(refresh != nullptr
+               && refresh->toolTip().contains(QString::number(server.serverPort())),
+           "Refresh Status identifies the injected nonstandard HTTP endpoint");
+    window.resize(1420, 880);
+    window.show();
+    waitForMs(10);
+    expect(host != nullptr && host->isVisible()
+               && refresh != nullptr && refresh->isVisible()
+               && start != nullptr && start->isVisible()
+               && stop != nullptr && stop->isVisible(),
+           "Task 02 Host, Refresh, and inference buttons are reachable at normal size");
+    window.hide();
+    expect(window.findChild<QLineEdit *>(QStringLiteral("visionHost")) == nullptr,
+           "Task 02 removes the per-card visionHost editor");
+    if (host != nullptr && apply != nullptr) {
+        expect(host->text() == QStringLiteral("127.0.0.1"),
+               "injected control endpoint seeds the committed shared Host");
+        host->setText(QStringLiteral(" 127.0.0.2 "));
+        expect(apply->isEnabled(), "Apply Host enables for a changed candidate");
+        apply->click();
+        expect(host->text() == QStringLiteral("127.0.0.2"),
+               "Apply Host commits the normalized candidate");
+         host->setText(QStringLiteral("127.0.0.2 other"));
+         expect(!refresh->isEnabled() && !start->isEnabled() && !connectRobot->isEnabled(),
+                "dirty Host disables new monitoring/inference actions");
+        host->setFocus();
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(host, &escape);
+        expect(host->text() == QStringLiteral("127.0.0.2"),
+               "Escape restores the committed Host");
+        for (const QString &invalid : {QStringLiteral("http://127.0.0.3"),
+                                       QStringLiteral("127.0.0.3:47011"),
+                                       QStringLiteral("bad host")}) {
+            host->setText(invalid);
+            expect(!apply->isEnabled(),
+                   "invalid Host syntax cannot be applied or retarget an endpoint");
+        }
+        host->setText(QStringLiteral("LOCALHOST"));
+        expect(apply->isEnabled(), "valid hostname candidate enables Apply Host");
+        apply->click();
+        expect(host->text() == QStringLiteral("localhost"),
+               "hostname commit normalizes case consistently");
+    }
+    expect(visionPort->buttonSymbols() == QAbstractSpinBox::NoButtons,
+           "HTTP/video port uses a compact no-arrow spin box");
+    expect(transport.writes().isEmpty(),
+           "constructing HTTP-only controls emits no robot-control writes");
+    window.close();
+}
+
+void testTask02RefreshAndInferenceUseOnlyCommittedHost()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionControlClient controlClient;
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "Task 02 refresh server must listen");
+    controlClient.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    rb::MainWindow window(&controller, nullptr, &controlClient);
+    auto *refresh = window.findChild<QPushButton *>(QStringLiteral("visionRefreshStatusButton"));
+    auto *start = window.findChild<QPushButton *>(QStringLiteral("startInferenceButton"));
+    auto *state = window.findChild<QLabel *>(QStringLiteral("inferenceState"));
+    auto *controlState = window.findChild<QLabel *>(QStringLiteral("visionControlState"));
+    expect(refresh != nullptr && start != nullptr && state != nullptr && controlState != nullptr,
+           "HTTP-only refresh and inference widgets exist without VisionClient");
+    if (refresh == nullptr || start == nullptr) {
+        return;
+    }
+    refresh->click();
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "Refresh Status reaches the HTTP control endpoint without Robot/RBVS");
+    QTcpSocket *statusPeer = server.nextPendingConnection();
+    if (statusPeer != nullptr) {
+        expect(readHttpRequest(statusPeer).startsWith(
+                   "GET /api/v1/vision/status HTTP/1.1"),
+               "Refresh Status uses the authoritative GET status path");
+        sendHttpJson(
+            statusPeer,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"camera\":{\"running\":true},"
+                "\"capture\":{\"state\":\"idle\",\"recording\":false},"
+                "\"inference\":{\"configured\":true,"
+                "\"control_supported\":true,\"operation\":null,"
+                "\"state\":\"disabled\"}}"));
+    }
+    expect(waitUntil([&controlClient] { return controlClient.hasFreshStatus(); }),
+           "HTTP-only status becomes fresh");
+    expect(start->isEnabled(), "confirmed disabled inference enables Start");
+    start->click();
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "Start Inference reaches HTTP without a Robot connection");
+    QTcpSocket *actionPeer = server.nextPendingConnection();
+    if (actionPeer != nullptr) {
+        expect(readHttpRequest(actionPeer).startsWith(
+                   "POST /api/v1/vision/inference/start HTTP/1.1"),
+               "Start Inference uses the frozen endpoint");
+        sendHttpJson(
+            actionPeer,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"action\":\"inference/start\","
+                "\"outcome\":\"accepted\"}"));
+    }
+    QTcpSocket *refreshPeer = nullptr;
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "Start ACK schedules one authoritative reconciliation GET");
+    if (server.hasPendingConnections()) {
+        refreshPeer = server.nextPendingConnection();
+        readHttpRequest(refreshPeer);
+        sendHttpJson(
+            refreshPeer,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"camera\":{\"running\":true},"
+                "\"capture\":{\"state\":\"idle\",\"recording\":false},"
+                "\"inference\":{\"configured\":true,"
+                "\"control_supported\":true,\"operation\":null,"
+                "\"state\":\"running\"}}"));
+    }
+    expect(waitUntil([&] { return state->text() == QStringLiteral("Inference Running"); }),
+           "UI state is updated only by reconciled GET status");
+    expect(controlState->text().contains(QStringLiteral("Reachable")),
+           "vision control reachability is separate from capture state");
+    auto *host = window.findChild<QLineEdit *>(QStringLiteral("piHost"));
+    auto *stop = window.findChild<QPushButton *>(QStringLiteral("stopInferenceButton"));
+    expect(host != nullptr && stop != nullptr,
+           "running HTTP-only status exposes committed-host Stop access");
+    if (host != nullptr && stop != nullptr) {
+        host->setText(QStringLiteral("127.0.0.2"));
+        expect(!start->isEnabled() && !refresh->isEnabled() && stop->isEnabled(),
+               "dirty Host disables new actions but keeps committed Stop available");
+        host->setText(QStringLiteral("127.0.0.1"));
+    }
+    expect(transport.writes().isEmpty(),
+           "HTTP-only inference controls emit no Robot writes");
+    answerNextMessageBox(QMessageBox::Yes);
+    window.close();
+    if (statusPeer != nullptr) statusPeer->deleteLater();
+    if (actionPeer != nullptr) actionPeer->deleteLater();
+    if (refreshPeer != nullptr) refreshPeer->deleteLater();
+}
+
+void testTask02CaptureAndInferenceErrorsStaySeparated()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionControlClient controlClient;
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "Task 02 error server must listen");
+    controlClient.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    rb::MainWindow window(&controller, nullptr, &controlClient);
+    auto *refresh = window.findChild<QPushButton *>(QStringLiteral("visionRefreshStatusButton"));
+    auto *message = window.findChild<QLabel *>(QStringLiteral("visionControlMessage"));
+    auto *captureState = window.findChild<QLabel *>(QStringLiteral("captureState"));
+    expect(refresh != nullptr && message != nullptr && captureState != nullptr,
+           "Task 02 separates control message from Capture state");
+    if (refresh == nullptr) {
+        return;
+    }
+    refresh->click();
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "error test refresh connects");
+    QTcpSocket *peer = server.nextPendingConnection();
+    if (peer != nullptr) {
+        readHttpRequest(peer);
+        sendHttpJson(
+            peer,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"camera\":{\"running\":true},"
+                "\"capture\":{\"state\":\"idle\",\"recording\":false},"
+                "\"inference\":{\"configured\":true,"
+                "\"control_supported\":true,\"operation\":null,"
+                "\"state\":\"disabled\"}}"));
+    }
+    expect(waitUntil([&controlClient] { return controlClient.hasFreshStatus(); }),
+           "error test status is fresh");
+    auto *start = window.findChild<QPushButton *>(QStringLiteral("startInferenceButton"));
+    if (start != nullptr) {
+        start->click();
+    }
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "error test Start connects");
+    QTcpSocket *action = server.nextPendingConnection();
+    if (action != nullptr) {
+        readHttpRequest(action);
+        sendHttpJson(action,
+                     QByteArrayLiteral(
+                         "{\"ok\":false,\"error\":\"inference_busy\","
+                         "\"message\":\"worker is stopping\"}"));
+    }
+    expect(waitUntil([message] {
+        return message != nullptr
+            && message->text().contains(QStringLiteral("worker is stopping"));
+    }), "typed inference error is shown in the Vision control message");
+    expect(captureState->text() != QStringLiteral("Capture Error"),
+           "inference error does not become Capture Error");
+    answerNextMessageBox(QMessageBox::Yes);
+    window.close();
+    if (peer != nullptr) peer->deleteLater();
+    if (action != nullptr) action->deleteLater();
+}
+
+void testTask02ApplyHostBlocksQueuedMutation()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionControlClient controlClient;
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "queued-host server must listen");
+    controlClient.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    rb::MainWindow window(&controller, nullptr, &controlClient);
+    auto *refresh = window.findChild<QPushButton *>(QStringLiteral("visionRefreshStatusButton"));
+    auto *apply = window.findChild<QPushButton *>(QStringLiteral("applyPiHostButton"));
+    auto *host = window.findChild<QLineEdit *>(QStringLiteral("piHost"));
+    expect(refresh != nullptr && apply != nullptr && host != nullptr,
+           "queued-host test exposes Apply and committed Host widgets");
+    if (refresh == nullptr || apply == nullptr || host == nullptr) {
+        return;
+    }
+
+    refresh->click();
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "queued-host initial refresh connects");
+    QTcpSocket *initial = server.nextPendingConnection();
+    if (initial != nullptr) {
+        readHttpRequest(initial);
+        sendHttpJson(initial,
+                     QByteArrayLiteral(
+                         "{\"ok\":true,\"camera\":{\"running\":true},"
+                         "\"capture\":{\"state\":\"idle\",\"recording\":false},"
+                         "\"inference\":{\"configured\":true,"
+                         "\"control_supported\":true,\"operation\":null,"
+                         "\"state\":\"disabled\"}}"));
+    }
+    expect(waitUntil([&controlClient] { return controlClient.hasFreshStatus(); }),
+           "queued-host initial status is fresh");
+
+    controlClient.refreshStatus();
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "queued-host second GET is active");
+    QTcpSocket *pendingStatus = server.nextPendingConnection();
+    if (pendingStatus != nullptr) {
+        readHttpRequest(pendingStatus);
+    }
+    controlClient.startInference();
+    expect(controlClient.actionBusy(),
+           "inference mutation is queued behind the active GET");
+
+    host->setText(QStringLiteral("127.0.0.2"));
+    expect(!apply->isEnabled() && controlClient.host() == QStringLiteral("127.0.0.1"),
+           "UI Apply Host blocks queued mutation without retargeting the client");
+
+    if (pendingStatus != nullptr) {
+        sendHttpJson(pendingStatus,
+                     QByteArrayLiteral(
+                         "{\"ok\":true,\"camera\":{\"running\":true},"
+                         "\"capture\":{\"state\":\"idle\",\"recording\":false},"
+                         "\"inference\":{\"configured\":true,"
+                         "\"control_supported\":true,\"operation\":null,"
+                         "\"state\":\"disabled\"}}"));
+    }
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "queued-host mutation dispatches only after GET completion");
+    QTcpSocket *action = server.nextPendingConnection();
+    if (action != nullptr) {
+        expect(readHttpRequest(action).startsWith(
+                   "POST /api/v1/vision/inference/start HTTP/1.1"),
+               "queued-host mutation retains its original committed endpoint");
+        sendHttpJson(action,
+                     QByteArrayLiteral(
+                         "{\"ok\":true,\"action\":\"inference/start\","
+                         "\"outcome\":\"accepted\"}"));
+    }
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "queued-host mutation schedules reconciliation GET");
+    QTcpSocket *reconcile = server.nextPendingConnection();
+    if (reconcile != nullptr) {
+        readHttpRequest(reconcile);
+        sendHttpJson(reconcile,
+                     QByteArrayLiteral(
+                         "{\"ok\":true,\"camera\":{\"running\":true},"
+                         "\"capture\":{\"state\":\"idle\",\"recording\":false},"
+                         "\"inference\":{\"configured\":true,"
+                         "\"control_supported\":true,\"operation\":null,"
+                         "\"state\":\"running\"}}"));
+    }
+    expect(waitUntil([&controlClient] { return !controlClient.actionBusy(); }),
+           "queued-host action retires after reconciliation");
+    expect(controlClient.host() == QStringLiteral("127.0.0.1"),
+           "queued-host completion never changes the committed endpoint");
+    answerNextMessageBox(QMessageBox::Yes);
+    window.close();
+    for (QTcpSocket *peer : {initial, pendingStatus, action, reconcile}) {
+        if (peer != nullptr) {
+            peer->deleteLater();
+        }
+    }
+}
+
+void testTask02CloseNeverImplicitlyStopsRemoteWork()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionControlClient controlClient;
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "Task 02 close server must listen");
+    controlClient.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    rb::MainWindow window(&controller, nullptr, &controlClient);
+    auto *refresh = window.findChild<QPushButton *>(QStringLiteral("visionRefreshStatusButton"));
+    if (refresh != nullptr) {
+        refresh->click();
+        expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+               "close test refresh connects");
+        QTcpSocket *peer = server.nextPendingConnection();
+        if (peer != nullptr) {
+            readHttpRequest(peer);
+            sendHttpJson(peer,
+                         QByteArrayLiteral(
+                             "{\"ok\":true,\"camera\":{\"running\":true},"
+                             "\"capture\":{\"state\":\"recording\",\"recording\":true},"
+                             "\"inference\":{\"configured\":true,"
+                             "\"control_supported\":true,\"operation\":null,"
+                             "\"state\":\"running\"}}"));
+            peer->deleteLater();
+        }
+        waitUntil([&controlClient] { return controlClient.hasFreshStatus(); });
+    }
+    answerNextMessageBox(QMessageBox::Yes);
+    window.close();
+    expect(!server.hasPendingConnections(),
+           "closing does not create an implicit inference/stop or recording/stop POST");
+    expect(transport.writes().isEmpty(),
+           "closing Vision work does not create Robot-control writes");
+}
+
+void testTask02RemoteAndDirectEndpointWidgetsStayDistinct()
+{
+    rb::RemoteRobotController remote;
+    rb::MainWindow remoteWindow(&remote);
+    expect(remoteWindow.findChild<QLineEdit *>(QStringLiteral("piHost")) != nullptr,
+           "Remote mode retains the shared Pi Host editor");
+    expect(remoteWindow.findChild<QSpinBox *>(QStringLiteral("robotTcpPort")) != nullptr,
+           "Remote mode exposes a dedicated Robot TCP port");
+    expect(remoteWindow.findChild<QComboBox *>(QStringLiteral("serialPortCombo")) == nullptr,
+           "Remote mode does not replace Pi Host with a serial combo");
+    remoteWindow.close();
+
+    rb::FakeTransport transport;
+    rb::RobotController direct(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::MainWindow directWindow(&direct);
+    expect(directWindow.findChild<QComboBox *>(QStringLiteral("serialPortCombo")) != nullptr,
+           "Direct mode exposes a dedicated serial port combo");
+    expect(directWindow.findChild<QSpinBox *>(QStringLiteral("robotTcpPort")) == nullptr,
+           "Direct mode has no remote Robot TCP editor");
+    directWindow.close();
 }
 
 void testDashboardLayout()
@@ -1279,6 +1714,14 @@ void testDashboardLayout()
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
+#ifdef RB_MAIN_WINDOW_TASK02_ONLY
+    testTask02SharedHostWidgetsAndHttpOnlyControls();
+    testTask02RefreshAndInferenceUseOnlyCommittedHost();
+    testTask02CaptureAndInferenceErrorsStaySeparated();
+    testTask02ApplyHostBlocksQueuedMutation();
+    testTask02CloseNeverImplicitlyStopsRemoteWork();
+    testTask02RemoteAndDirectEndpointWidgetsStayDistinct();
+#else
     testImuPanelLifecycle();
     testDepthPanelLifecycle();
     testLeakPanelLifecycle();
@@ -1288,7 +1731,15 @@ int main(int argc, char **argv)
     testVisionCaptureControlsAreIndependentFromRobotTransport();
     testVisionCaptureActionDefersWindowClose();
     testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites();
+    testTask02SharedHostWidgetsAndHttpOnlyControls();
+    testTask02RefreshAndInferenceUseOnlyCommittedHost();
+    testTask02CaptureAndInferenceErrorsStaySeparated();
+    testTask02ApplyHostBlocksQueuedMutation();
+    testTask02CloseNeverImplicitlyStopsRemoteWork();
+    testTask02RemoteAndDirectEndpointWidgetsStayDistinct();
     testDashboardLayout();
+#endif
+    std::fflush(stderr);
     if (failures == 0) {
         std::fprintf(stdout, "All MainWindow tests passed\n");
     }
