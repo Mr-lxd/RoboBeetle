@@ -86,6 +86,8 @@ private:
     QPushButton *visionConnectButton_{nullptr};
     QLabel *visionState_{nullptr};
     QLabel *visionDiagnostics_{nullptr};
+    QLabel *inferenceState_{nullptr};
+    QLabel *inferenceDiagnostics_{nullptr};
     vision::VideoView *videoView_{nullptr};
     QPushButton *snapshotButton_{nullptr};
     QPushButton *startRecordingButton_{nullptr};
