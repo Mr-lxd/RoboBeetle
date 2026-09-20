@@ -102,7 +102,7 @@ QString inferenceDiagnosticsText(const vision::VisionCaptureStatus &status)
         : status.inferenceArtifactName;
     const QString sha256 = status.inferenceModelSha256.isEmpty()
         ? QStringLiteral("--")
-        : status.inferenceModelSha256;
+        : status.inferenceModelSha256.left(12);
 
     QString text = QStringLiteral("Artifact: %1 | SHA-256: %2")
         .arg(artifact)

@@ -893,6 +893,9 @@ void testVisionCaptureActionDefersWindowClose()
 
 void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
 {
+    const QString fullSha = QStringLiteral(
+        "3dea74511bf2aabbccddeeff00112233445566778899aabbccddeeff00112233");
+
     rb::FakeTransport transport;
     rb::RobotController controller(
         &transport, rb::RobotControllerConfig::bringUpProvisional());
@@ -967,7 +970,7 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
             "\"recording\":false,\"last_error\":null},"
             "\"inference\":{\"state\":\"running\","
             "\"artifact_name\":\"lab_pool_d2_seed42_e20.onnx\","
-            "\"model_sha256\":\"abc123\",\"latest_frame_id\":0,"
+            "\"model_sha256\":\"3dea74511bf2aabbccddeeff00112233445566778899aabbccddeeff00112233\",\"latest_frame_id\":0,"
             "\"skipped_frames\":0,\"inference_fps\":0.0,"
             "\"latency_ms\":0.0,\"detection_count\":0}}"));
     for (int i = 0; i < 50 && state->text() != QStringLiteral("Inference RUNNING");
@@ -976,8 +979,20 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
     }
     expect(state->text() == QStringLiteral("Inference RUNNING"),
            "running inference status is rendered in the state label");
+    const QString shaLabel = QStringLiteral("SHA-256: ");
+    const int shaStart = diagnostics->text().indexOf(shaLabel);
+    const int shaEnd = diagnostics->text().indexOf(QStringLiteral("\nFPS:"), shaStart);
+    const QString displayedSha =
+        shaStart >= 0 && shaEnd > shaStart
+        ? diagnostics->text().mid(
+              shaStart + shaLabel.size(), shaEnd - shaStart - shaLabel.size())
+        : QString();
+    expect(controlClient.status().inferenceModelSha256 == fullSha
+               && controlClient.status().inferenceModelSha256.size() == 64,
+           "parsed inference status retains the complete model SHA-256");
     expect(diagnostics->text().contains(QStringLiteral("Artifact: lab_pool_d2_seed42_e20.onnx"))
-               && diagnostics->text().contains(QStringLiteral("SHA-256: abc123"))
+               && displayedSha == fullSha.left(12)
+               && !diagnostics->text().contains(fullSha)
                && diagnostics->text().contains(QStringLiteral("FPS: 0.0"))
                && diagnostics->text().contains(QStringLiteral("Latency ms: 0.0"))
                && diagnostics->text().contains(QStringLiteral("Latest Frame ID: 0"))
