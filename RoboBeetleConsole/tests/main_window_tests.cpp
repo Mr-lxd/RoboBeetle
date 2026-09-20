@@ -93,7 +93,7 @@ QGroupBox *imuPanel(rb::MainWindow &window)
 QGroupBox *depthPanel(rb::MainWindow &window)
 {
     for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
-        if (box->title() == QStringLiteral("Depth Sensor — ROVMAKER")) {
+        if (box->title() == QStringLiteral("Depth Sensor")) {
             return box;
         }
     }
@@ -324,7 +324,7 @@ void testDepthPanelLifecycle()
     rb::MainWindow window(&controller);
 
     QGroupBox *panel = depthPanel(window);
-    expect(panel != nullptr, "MainWindow must expose a Depth Sensor — ROVMAKER panel");
+    expect(panel != nullptr, "MainWindow must expose a Depth Sensor panel");
     if (panel == nullptr) {
         return;
     }
@@ -411,7 +411,7 @@ void testMotionPanelLifecycleAndManualArbitration()
     QPushButton *turnRightButton = buttonWithText(panel, QStringLiteral("Turn Right"));
     QPushButton *ascendButton = buttonWithText(panel, QStringLiteral("Ascend"));
     QPushButton *descendButton = buttonWithText(panel, QStringLiteral("Descend"));
-    QPushButton *stopButton = buttonWithText(panel, QStringLiteral("Stop"));
+    QPushButton *stopButton = window.findChild<QPushButton *>(QStringLiteral("motionStopButton"));
     expect(forwardButton != nullptr && backwardButton != nullptr
                && turnLeftButton != nullptr && turnRightButton != nullptr
                && ascendButton != nullptr && descendButton != nullptr
@@ -424,7 +424,7 @@ void testMotionPanelLifecycleAndManualArbitration()
         return;
     }
 
-    expect(hasLabelText(panel, QStringLiteral("Stopped")),
+    expect(hasLabelText(&window, QStringLiteral("Stopped")),
            "Motion panel must start with Stopped status");
     expect(!forwardButton->isEnabled() && !turnLeftButton->isEnabled()
                && !turnRightButton->isEnabled() && !ascendButton->isEnabled()
@@ -452,11 +452,12 @@ void testMotionPanelLifecycleAndManualArbitration()
     acknowledgeLast(transport);
     expect(controller.motionState() == rb::MotionState::Running,
            "direct Forward button should reach Running after ACK");
-    expect(hasLabelText(panel, QStringLiteral("Running — Forward")),
+    expect(hasLabelText(&window, QStringLiteral("Running — Forward")),
            "Motion panel should display the running mode");
     expect(forwardButton->isCheckable()
-               && forwardButton->styleSheet().contains(QStringLiteral(":checked")),
-           "Motion buttons must provide an explicit checked highlight style");
+               && forwardButton->property("consoleActionRole").toString()
+                      == QStringLiteral("secondary"),
+           "Motion buttons must use the shared secondary action role");
     expect(forwardButton->isChecked()
                && !turnLeftButton->isChecked()
                && !turnRightButton->isChecked()
@@ -482,26 +483,48 @@ void testMotionPanelLifecycleAndManualArbitration()
     expect(global != nullptr,
            "MainWindow must retain its Actuator Control panel");
     if (global != nullptr) {
-        QPushButton *disableAll = buttonWithText(global, QStringLiteral("Disable All"));
+        QPushButton *disableAll = window.findChild<QPushButton *>(QStringLiteral("disableAllButton"));
         expect(disableAll != nullptr && disableAll->isEnabled(),
                "Disable All must remain available during Motion");
     }
 
+    const qsizetype writesBeforeMotionStop = transport.writes().size();
     stopButton->click();
+    expect(transport.writes().size() == writesBeforeMotionStop + 1,
+           "persistent Motion Stop invokes exactly one controller command");
     acknowledgeLast(transport);
     expect(controller.motionState() == rb::MotionState::Stopping,
            "Motion panel should display the acceptance-time Stopping state");
-    expect(hasLabelText(panel, QStringLiteral("Stopping")),
+    expect(hasLabelText(&window, QStringLiteral("Stopping")),
            "Motion panel should show Stopping during the provisional ramp");
     waitForMs(rb::kMotionTransitionDurationMs + 50);
     expect(controller.motionState() == rb::MotionState::Stopped,
            "Motion panel should settle at Stopped after the provisional duration");
-    expect(hasLabelText(panel, QStringLiteral("Stopped")),
+    expect(hasLabelText(&window, QStringLiteral("Stopped")),
            "Motion panel should show Stopped after the ramp timer");
     expect(!forwardButton->isChecked() && !turnLeftButton->isChecked()
                && !turnRightButton->isChecked()
                && !ascendButton->isChecked() && !descendButton->isChecked(),
            "Motion button highlight must clear after graceful STOP completes");
+
+    QPushButton *disableAll = window.findChild<QPushButton *>(QStringLiteral("disableAllButton"));
+    expect(disableAll != nullptr && disableAll->isEnabled(),
+           "persistent Disable All remains enabled after Motion Stop");
+    if (disableAll != nullptr && disableAll->isEnabled()) {
+        const qsizetype writesBeforeDisableAll = transport.writes().size();
+        disableAll->click();
+        expect(transport.writes().size() == writesBeforeDisableAll + 1,
+               "persistent Disable All invokes exactly one controller command");
+    }
+    QPushButton *emergencyStop = window.findChild<QPushButton *>(QStringLiteral("emergencyStopButton"));
+    expect(emergencyStop != nullptr && !emergencyStop->isEnabled(),
+           "Emergency Stop remains disabled after lifecycle actions");
+    if (emergencyStop != nullptr) {
+        const qsizetype writesBeforeEmergency = transport.writes().size();
+        emergencyStop->click();
+        expect(transport.writes().size() == writesBeforeEmergency,
+               "disabled Emergency Stop emits no controller command");
+    }
 }
 
 void testGaitBackendPanelLifecycle()
@@ -646,7 +669,7 @@ void testVisionConnectionIsIndependentFromControlTransport()
          && !hasLabelText(panel, QStringLiteral("Connected")); ++i) {
         waitForMs(10);
     }
-    expect(hasLabelText(panel, QStringLiteral("Connected")),
+    expect(hasLabelText(panel, QStringLiteral("Video: Connected")),
            "Vision card reports its own connected state");
     expect(transport.writes().isEmpty(),
            "Vision connect must not emit any robot-control transport bytes");
@@ -691,7 +714,7 @@ void testVisionCaptureControlsAreIndependentFromRobotTransport()
     auto *stopRecording =
         panel->findChild<QPushButton *>(QStringLiteral("stopRecordingButton"));
     auto *captureDiagnostics =
-        panel->findChild<QLabel *>(QStringLiteral("captureDiagnostics"));
+        window.findChild<QLabel *>(QStringLiteral("captureDiagnostics"));
     QPushButton *connectVideo =
         buttonWithText(panel, QStringLiteral("Connect Video"));
     expect(host != nullptr && port != nullptr && snapshot != nullptr
@@ -781,11 +804,11 @@ void testVisionCaptureControlsAreIndependentFromRobotTransport()
     }
 
     for (int i = 0; i < 50
-         && !captureDiagnostics->text().contains(QStringLiteral("Snapshots 1"));
+         && !captureDiagnostics->text().contains(QStringLiteral("Snapshots: 1"));
          ++i) {
         waitForMs(5);
     }
-    expect(captureDiagnostics->text().contains(QStringLiteral("Snapshots 1")),
+    expect(captureDiagnostics->text().contains(QStringLiteral("Snapshots: 1")),
            "capture action response updates UI diagnostics");
     expect(transport.writes().isEmpty(),
            "Snapshot action emits no robot-control bytes");
@@ -984,6 +1007,8 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
         QStringLiteral("127.0.0.1"), controlServer.serverPort());
 
     rb::MainWindow window(&controller, &visionClient, &controlClient);
+    window.show();
+    QApplication::processEvents();
     QGroupBox *panel = findGroupBox(&window, QStringLiteral("Realtime Video"));
     expect(panel != nullptr, "inference diagnostics retain the Realtime Video card");
     if (panel == nullptr) {
@@ -994,14 +1019,26 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
     auto *port = window.findChild<QSpinBox *>(QStringLiteral("visionPort"));
     auto *state = panel->findChild<QLabel *>(QStringLiteral("inferenceState"));
     auto *diagnostics =
-        panel->findChild<QLabel *>(QStringLiteral("inferenceDiagnostics"));
+        window.findChild<QLabel *>(QStringLiteral("inferenceDiagnostics"));
+    auto *visionDiagnostics =
+        window.findChild<QLabel *>(QStringLiteral("visionDiagnostics"));
+    auto *endpointDetails =
+        window.findChild<QLabel *>(QStringLiteral("visionEndpointDetails"));
+    auto *performance =
+        panel->findChild<QLabel *>(QStringLiteral("inferencePerformanceSummary"));
+    auto *detectionSummary =
+        panel->findChild<QLabel *>(QStringLiteral("inferenceDetectionSummary"));
     QPushButton *connectVideo =
         buttonWithText(panel, QStringLiteral("Connect Video"));
     expect(host != nullptr && port != nullptr && state != nullptr
-               && diagnostics != nullptr && connectVideo != nullptr,
+               && diagnostics != nullptr && visionDiagnostics != nullptr
+               && endpointDetails != nullptr && performance != nullptr
+               && detectionSummary != nullptr && connectVideo != nullptr,
            "Realtime Video card exposes inference state and diagnostics labels");
     if (host == nullptr || port == nullptr || state == nullptr
-        || diagnostics == nullptr || connectVideo == nullptr) {
+        || diagnostics == nullptr || visionDiagnostics == nullptr
+        || endpointDetails == nullptr || performance == nullptr
+        || detectionSummary == nullptr || connectVideo == nullptr) {
         return;
     }
 
@@ -1036,42 +1073,99 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
         QByteArrayLiteral(
             "{\"ok\":true,\"camera\":{\"running\":true,"
             "\"latest_frame_id\":12},\"capture\":{\"state\":\"idle\","
-            "\"recording\":false,\"last_error\":null},"
-            "\"inference\":{\"state\":\"running\","
+            "\"recording\":false,\"session_id\":\"capture-test\","
+            "\"segment\":\"raw.avi\",\"recorded_frames\":7,"
+            "\"snapshot_count\":2,\"queue_bytes\":1234,"
+            "\"max_queue_bytes\":67108864,\"free_disk_bytes\":2147483648,"
+            "\"last_error\":null},"
+            "\"inference\":{\"configured\":true,\"control_supported\":true,"
+            "\"operation\":null,\"state\":\"running\","
             "\"artifact_name\":\"lab_pool_d2_seed42_e20.onnx\","
             "\"model_sha256\":\"3dea74511bf2aabbccddeeff00112233445566778899aabbccddeeff00112233\",\"latest_frame_id\":0,"
-            "\"skipped_frames\":0,\"inference_fps\":0.0,"
-            "\"latency_ms\":0.0,\"detection_count\":0}}"));
+            "\"capture_timestamp_ns\":987654321,\"processed_frames\":99,"
+            "\"skipped_frames\":0,\"inference_fps\":12.3,"
+            "\"latency_ms\":45.6,\"detection_count\":0,"
+            "\"confidence_threshold\":0.75,\"last_error\":null}}"));
     for (int i = 0; i < 50 && state->text() != QStringLiteral("Inference Running");
          ++i) {
         waitForMs(5);
     }
     expect(state->text() == QStringLiteral("Inference Running"),
            "running inference status is rendered in the state label");
-    const QString shaLabel = QStringLiteral("SHA-256: ");
-    const int shaStart = diagnostics->text().indexOf(shaLabel);
-    const int shaEnd = diagnostics->text().indexOf(QStringLiteral("\nFPS:"), shaStart);
-    const QString displayedSha =
-        shaStart >= 0 && shaEnd > shaStart
-        ? diagnostics->text().mid(
-              shaStart + shaLabel.size(), shaEnd - shaStart - shaLabel.size())
-        : QString();
     expect(controlClient.status().inferenceModelSha256 == fullSha
                && controlClient.status().inferenceModelSha256.size() == 64,
            "parsed inference status retains the complete model SHA-256");
-    expect(diagnostics->text().contains(QStringLiteral("Artifact: lab_pool_d2_seed42_e20.onnx"))
-               && displayedSha == fullSha.left(12)
-               && !diagnostics->text().contains(fullSha)
-               && diagnostics->text().contains(QStringLiteral("FPS: 0.0"))
-               && diagnostics->text().contains(QStringLiteral("Latency ms: 0.0"))
-               && diagnostics->text().contains(QStringLiteral("Latest Frame ID: 0"))
-               && diagnostics->text().contains(QStringLiteral("Detections: 0"))
-               && diagnostics->text().contains(QStringLiteral("Skipped: 0")),
-           "running inference diagnostics preserve validated identity and zero values");
+    expect(diagnostics->text().contains(QStringLiteral("Fresh"))
+               && diagnostics->text().contains(QStringLiteral("Artifact: lab_pool_d2_seed42_e20.onnx"))
+               && diagnostics->text().contains(fullSha)
+               && diagnostics->text().contains(QStringLiteral("Confidence threshold: 0.75"))
+               && diagnostics->text().contains(QStringLiteral("FPS: 12.3"))
+               && diagnostics->text().contains(QStringLiteral("Latency ms: 45.6"))
+               && diagnostics->text().contains(QStringLiteral("Latest inference frame: 0"))
+               && diagnostics->text().contains(QStringLiteral("Capture timestamp ns: 987654321"))
+               && diagnostics->text().contains(QStringLiteral("Processed frames: 99"))
+               && diagnostics->text().contains(QStringLiteral("Detection count: 0")),
+           "Vision Details preserve every authoritative inference field including zero values");
+    expect(performance->text() == QStringLiteral("12.3 FPS / 45.6 ms")
+               && detectionSummary->text() == QStringLiteral("Detections 0")
+               && performance->toolTip() == QStringLiteral(
+                   "Camera capture to inference completion; not ORT-only duration."),
+           "main inference row renders active metrics with frozen formatting and tooltip");
+    expect(visionDiagnostics->text().contains(QStringLiteral("RX FPS:"))
+               && visionDiagnostics->text().contains(QStringLiteral("Display paint-event FPS:"))
+               && !panel->findChild<QLabel *>(QStringLiteral("visionDiagnostics")),
+           "full video diagnostics live only in Vision Details");
+    expect(endpointDetails->text().contains(
+               QStringLiteral("Vision HTTP endpoint: http://127.0.0.1:%1")
+                   .arg(controlServer.serverPort())),
+           "Vision Details retains the test-injected HTTP control port");
+    auto *captureDetails = window.findChild<QLabel *>(QStringLiteral("captureDiagnostics"));
+    expect(captureDetails != nullptr
+               && captureDetails->text().contains(QStringLiteral("Session: capture-test"))
+               && captureDetails->text().contains(QStringLiteral("Segment: raw.avi"))
+               && captureDetails->text().contains(QStringLiteral("Recorded frames: 7"))
+               && captureDetails->text().contains(QStringLiteral("Snapshots: 2"))
+               && captureDetails->text().contains(QStringLiteral("Queue bytes: 1234 / 67108864")),
+           "Vision Details preserve capture session, segment, counters, and queue data");
     expect(transport.writes().isEmpty(),
            "inference status updates emit no robot-control transport writes");
 
     controlClient.stopPolling();
+    waitForMs(3600);
+    QApplication::processEvents();
+    expect(performance->text() == QStringLiteral("-- FPS / -- ms")
+               && detectionSummary->text() == QStringLiteral("Detections --"),
+           "stale status masks retained inference metrics on the main card");
+    expect(diagnostics->text().contains(QStringLiteral("Last received / stale"))
+               && diagnostics->text().contains(QStringLiteral("FPS: 12.3"))
+               && captureDetails->text().contains(QStringLiteral("Last received / stale"))
+               && captureDetails->text().contains(QStringLiteral("Recorded frames: 7")),
+           "stale status keeps last-received inference and capture values in Details");
+
+    controlClient.requestFailed(QStringLiteral("Start Inference"),
+                                QStringLiteral("timeout"),
+                                QStringLiteral("simulated timeout detail"),
+                                true);
+    QApplication::processEvents();
+    auto *notice = window.findChild<QLabel *>(QStringLiteral("visionControlMessage"));
+    auto *controlDetails = window.findChild<QLabel *>(QStringLiteral("controlResponseDetails"));
+    expect(notice != nullptr && notice->isVisible()
+               && notice->text().startsWith(QStringLiteral("Control:"))
+               && notice->toolTip().contains(QStringLiteral("simulated timeout detail"))
+               && controlDetails != nullptr
+               && controlDetails->text().contains(QStringLiteral("Failure: Start Inference")),
+           "local HTTP failure is visible with Control prefix and full Details text");
+    const QString lastControlDetail =
+        controlDetails != nullptr ? controlDetails->text() : QString();
+    controlClient.authoritativeStatusRefreshed();
+    QApplication::processEvents();
+    expect(notice != nullptr && !notice->isVisible(),
+           "empty authoritative control response hides the notice row");
+    expect(controlDetails != nullptr
+               && controlDetails->text() == lastControlDetail
+               && controlDetails->text().contains(QStringLiteral("Failure: Start Inference")),
+           "authoritative reconciliation hides the notice without erasing the last local control detail");
+
     statusPeer->deleteLater();
 
     const auto applyInferenceStatus = [&](const QByteArray &inference) {
@@ -1111,9 +1205,9 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
     applyInferenceStatus(QByteArrayLiteral("{\"state\":\"unsupported\"}"));
     expect(state->text() == QStringLiteral("Inference Unavailable")
                && diagnostics->text().contains(QStringLiteral("FPS: --"))
-               && diagnostics->text().contains(QStringLiteral("Latest Frame ID: --"))
-               && diagnostics->text().contains(QStringLiteral("Detections: --"))
-               && diagnostics->text().contains(QStringLiteral("Skipped: --")),
+               && diagnostics->text().contains(QStringLiteral("Latest inference frame: --"))
+               && diagnostics->text().contains(QStringLiteral("Detection count: --"))
+               && diagnostics->text().contains(QStringLiteral("Skipped frames: --")),
            "unsupported inference status renders unavailable diagnostics");
     expect(transport.writes().isEmpty(),
            "inference state changes emit no robot-control transport writes");
@@ -1341,14 +1435,88 @@ void testTask02CaptureAndInferenceErrorsStaySeparated()
     }
     expect(waitUntil([message] {
         return message != nullptr
-            && message->text().contains(QStringLiteral("worker is stopping"));
+            && (message->text().contains(QStringLiteral("worker is stopping"))
+                || message->toolTip().contains(QStringLiteral("worker is stopping")));
     }), "typed inference error is shown in the Vision control message");
+    expect(message != nullptr && message->text().startsWith(QStringLiteral("Control:")),
+           "local HTTP action failure uses the Control notice prefix");
     expect(captureState->text() != QStringLiteral("Capture Error"),
            "inference error does not become Capture Error");
     answerNextMessageBox(QMessageBox::Yes);
     window.close();
     if (peer != nullptr) peer->deleteLater();
     if (action != nullptr) action->deleteLater();
+}
+
+void testTask03VisionNoticePrefixes()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionControlClient controlClient;
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "notice-prefix server must listen");
+    controlClient.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    rb::MainWindow window(&controller, nullptr, &controlClient);
+    window.show();
+    QApplication::processEvents();
+    auto *refresh = window.findChild<QPushButton *>(QStringLiteral("visionRefreshStatusButton"));
+    auto *message = window.findChild<QLabel *>(QStringLiteral("visionControlMessage"));
+    expect(refresh != nullptr && message != nullptr,
+           "notice-prefix test exposes Refresh and notice widgets");
+    if (refresh == nullptr || message == nullptr) {
+        return;
+    }
+
+    const auto sendStatus = [&](const QByteArray &body) {
+        refresh->click();
+        expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+               "notice-prefix status request connects");
+        QTcpSocket *peer = server.nextPendingConnection();
+        if (peer == nullptr) {
+            return;
+        }
+        readHttpRequest(peer);
+        sendHttpJson(peer, body);
+        expect(waitUntil([&controlClient] {
+            return !controlClient.requestInFlight() && controlClient.hasFreshStatus();
+        }), "notice-prefix status request completes authoritatively");
+        peer->deleteLater();
+    };
+
+    sendStatus(QByteArrayLiteral(
+        "{\"ok\":true,\"camera\":{\"running\":true},"
+        "\"capture\":{\"state\":\"idle\",\"recording\":false,"
+        "\"last_error\":\"disk full\"},"
+        "\"inference\":{\"configured\":true,\"control_supported\":true,"
+        "\"operation\":null,\"state\":\"failed\","
+        "\"last_error\":\"model load failed\"}}"));
+    expect(message->isVisible() && message->text().startsWith(QStringLiteral("Inference:")),
+           "inference status error takes the Inference notice prefix");
+
+    sendStatus(QByteArrayLiteral(
+        "{\"ok\":true,\"camera\":{\"running\":true},"
+        "\"capture\":{\"state\":\"idle\",\"recording\":false,"
+        "\"last_error\":\"disk full\"},"
+        "\"inference\":{\"configured\":true,\"control_supported\":true,"
+        "\"operation\":null,\"state\":\"disabled\","
+        "\"last_error\":null}}"));
+    expect(message->isVisible() && message->text().startsWith(QStringLiteral("Capture:")),
+           "capture status error takes the Capture notice prefix");
+
+    sendStatus(QByteArrayLiteral(
+        "{\"ok\":true,\"camera\":{\"running\":true},"
+        "\"capture\":{\"state\":\"idle\",\"recording\":false,"
+        "\"last_error\":null},"
+        "\"inference\":{\"configured\":true,\"control_supported\":true,"
+        "\"operation\":null,\"state\":\"disabled\","
+        "\"last_error\":null}}"));
+    controlClient.errorOccurred(QStringLiteral("request timed out"));
+    QApplication::processEvents();
+    expect(message->isVisible() && message->text().startsWith(QStringLiteral("Control:")),
+           "local action error takes the Control notice prefix");
+    window.close();
 }
 
 void testTask02ApplyHostBlocksQueuedMutation()
@@ -1748,7 +1916,7 @@ void testDashboardLayout()
            "dashboard status grid must keep the Leak Detection card");
     expect(findGroupBox(&window, QStringLiteral("IMU — JY901S")) != nullptr,
            "dashboard status grid must keep the IMU card");
-    expect(findGroupBox(&window, QStringLiteral("Depth Sensor — ROVMAKER")) != nullptr,
+    expect(findGroupBox(&window, QStringLiteral("Depth Sensor")) != nullptr,
            "dashboard status grid must keep the Depth card");
     expect(findGroupBox(&window, QStringLiteral("Protocol / Link")) != nullptr,
            "dashboard status grid must keep the Protocol / Link card");
@@ -1778,10 +1946,10 @@ void testDashboardLayout()
            "MainWindow must expose the Data Plots region (IMU/Depth/Actuator)");
 
     // Log and Protocol Details tabs exist.
-    QTabWidget *logTabs = tabWidgetWithText(&window, QStringLiteral("Log"));
-    QTabWidget *detailsTabs = tabWidgetWithText(&window, QStringLiteral("Protocol Details"));
+    QTabWidget *logTabs = window.findChild<QTabWidget *>(QStringLiteral("operatorToolsTabs"));
+    QTabWidget *detailsTabs = logTabs;
     expect(logTabs != nullptr && detailsTabs != nullptr,
-           "MainWindow must expose Log and Protocol Details tabs");
+           "MainWindow must expose operator tabs");
 
     // ACK status must be owned by the Protocol Details page only, never also
     // placed in the Protocol/Link summary card. The summary card must not
@@ -1811,8 +1979,8 @@ void testDashboardLayout()
 
     // Log/Details tab widget keeps its three pages.
     if (detailsTabs != nullptr) {
-        expect(detailsTabs->count() == 3,
-               "Log/Details tab must keep Log, Telemetry Details, and Protocol Details pages");
+        expect(detailsTabs->count() == 7,
+               "Operator tab widget must keep all seven frozen pages");
     }
 
     // A Telemetry Details page exists and hosts the IMU/Depth diagnostics.
@@ -1936,7 +2104,7 @@ void testDashboardLayout()
     };
     expect(checkLabelHeight(QStringLiteral("IMU — JY901S")),
            "IMU card status/metric labels must not be vertically clipped");
-    expect(checkLabelHeight(QStringLiteral("Depth Sensor — ROVMAKER")),
+    expect(checkLabelHeight(QStringLiteral("Depth Sensor")),
            "Depth card status/metric labels must not be vertically clipped");
     expect(checkLabelHeight(QStringLiteral("Protocol / Link")),
            "Protocol/Link card TX/RX/CRC/Timeout/ACK RTT labels must not be "
@@ -1955,6 +2123,7 @@ int main(int argc, char **argv)
     testTask02SharedHostWidgetsAndHttpOnlyControls();
     testTask02RefreshAndInferenceUseOnlyCommittedHost();
     testTask02CaptureAndInferenceErrorsStaySeparated();
+    testTask03VisionNoticePrefixes();
     testTask02ApplyHostBlocksQueuedMutation();
     testTask02CloseNeverImplicitlyStopsRemoteWork();
     testTask02CloseWarnsForStoppingAndRetryingRemoteWork();
@@ -1975,6 +2144,7 @@ int main(int argc, char **argv)
     testTask02SharedHostWidgetsAndHttpOnlyControls();
     testTask02RefreshAndInferenceUseOnlyCommittedHost();
     testTask02CaptureAndInferenceErrorsStaySeparated();
+    testTask03VisionNoticePrefixes();
     testTask02ApplyHostBlocksQueuedMutation();
     testTask02CloseNeverImplicitlyStopsRemoteWork();
     testTask02CloseWarnsForStoppingAndRetryingRemoteWork();

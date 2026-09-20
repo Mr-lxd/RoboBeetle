@@ -62,12 +62,18 @@ target_include_directories(RoboBeetleCore PUBLIC
 )
 target_link_libraries(RoboBeetleCore PUBLIC Qt6::Core Qt6::Gui Qt6::Network Qt6::SerialPort)
 
-add_executable(RoboBeetleConsole
-    src/main.cpp
+set(RB_CONSOLE_UI_SOURCES
     src/ui/MainWindow.h
     src/ui/MainWindow.cpp
     src/vision/VideoView.h
     src/vision/VideoView.cpp
+    src/ui/ElidedLabel.h
+    src/ui/ElidedLabel.cpp
+)
+
+add_executable(RoboBeetleConsole
+    src/main.cpp
+    ${RB_CONSOLE_UI_SOURCES}
 )
 
 target_link_libraries(RoboBeetleConsole PRIVATE RoboBeetleCore Qt6::Widgets)
@@ -133,20 +139,14 @@ if(BUILD_TESTING)
 
     add_executable(main_window_tests
         tests/main_window_tests.cpp
-        src/ui/MainWindow.h
-        src/ui/MainWindow.cpp
-        src/vision/VideoView.h
-        src/vision/VideoView.cpp
+        ${RB_CONSOLE_UI_SOURCES}
     )
     target_link_libraries(main_window_tests PRIVATE RoboBeetleCore Qt6::Widgets)
     add_test(NAME main_window_tests COMMAND main_window_tests)
 
     add_executable(main_window_inference_controls_tests
         tests/main_window_inference_controls_tests.cpp
-        src/ui/MainWindow.h
-        src/ui/MainWindow.cpp
-        src/vision/VideoView.h
-        src/vision/VideoView.cpp
+        ${RB_CONSOLE_UI_SOURCES}
     )
     target_link_libraries(main_window_inference_controls_tests PRIVATE RoboBeetleCore Qt6::Widgets)
     add_test(NAME main_window_inference_controls_tests COMMAND main_window_inference_controls_tests)
@@ -159,11 +159,25 @@ if(BUILD_TESTING)
 
     add_executable(remote_robot_controller_tests
         tests/remote_robot_controller_tests.cpp
-        src/ui/MainWindow.h
-        src/ui/MainWindow.cpp
-        src/vision/VideoView.h
-        src/vision/VideoView.cpp
+        ${RB_CONSOLE_UI_SOURCES}
     )
     target_link_libraries(remote_robot_controller_tests PRIVATE RoboBeetleCore Qt6::Widgets)
     add_test(NAME remote_robot_controller_tests COMMAND remote_robot_controller_tests)
+
+    add_executable(main_window_layout_tests
+        tests/main_window_layout_tests.cpp
+        tests/helpers/OperatorConsoleFixture.h
+        ${RB_CONSOLE_UI_SOURCES}
+    )
+    target_include_directories(main_window_layout_tests PRIVATE tests src)
+    target_link_libraries(main_window_layout_tests PRIVATE RoboBeetleCore Qt6::Widgets)
+    add_test(NAME main_window_layout_tests COMMAND main_window_layout_tests)
+
+    add_executable(operator_console_preview
+        tests/operator_console_preview.cpp
+        tests/helpers/OperatorConsoleFixture.h
+        ${RB_CONSOLE_UI_SOURCES}
+    )
+    target_include_directories(operator_console_preview PRIVATE tests src)
+    target_link_libraries(operator_console_preview PRIVATE RoboBeetleCore Qt6::Widgets)
 endif()
