@@ -331,9 +331,8 @@ void VisionControlClient::handleFinished(QNetworkReply *reply,
             statusFresh_ = true;
             lastStatusElapsed_.start();
             freshnessTimer_.start(kFreshnessWindowMs);
-            if (inferenceReconcilePending_) {
-                inferenceReconcilePending_ = false;
-            }
+            inferenceReconcilePending_ = false;
+            emit authoritativeStatusRefreshed();
             dispatchPendingAction();
             emit requestStateChanged();
         }

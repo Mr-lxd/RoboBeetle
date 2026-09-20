@@ -1005,6 +1005,14 @@ QWidget *MainWindow::createVideoPlaceholder()
         });
         connect(visionControlClient_, &vision::VisionControlClient::requestStateChanged,
                 this, &MainWindow::refreshVisionUi);
+        connect(visionControlClient_,
+                &vision::VisionControlClient::authoritativeStatusRefreshed,
+                this,
+                [this] {
+            visionOutcomeUncertain_ = false;
+            refreshVisionUi();
+            refreshPiHostUi();
+        });
         connect(visionControlClient_, &vision::VisionControlClient::inferenceActionAcknowledged,
                 this, [this](const QString &action, const QString &outcome) {
             visionOutcomeUncertain_ = false;
@@ -2185,6 +2193,23 @@ bool MainWindow::hostDirty() const
         && normalizedHostCandidate(piHost_->text()) != committedPiHost_;
 }
 
+bool MainWindow::hasRemoteVisionWorkThatMayContinue() const
+{
+    if (visionControlClient_ == nullptr) {
+        return false;
+    }
+    const auto status = visionControlClient_->status();
+    return visionControlClient_->inferenceReconcilePending()
+        || status.recording
+        || status.state == QStringLiteral("stopping")
+        || status.inferenceState == QStringLiteral("running")
+        || status.inferenceState == QStringLiteral("starting")
+        || status.inferenceOperation == QStringLiteral("stopping")
+        || status.inferenceOperation == QStringLiteral("retrying")
+        || visionOutcomeUncertain_
+        || (visionControlClient_->isPolling() && !visionControlClient_->hasFreshStatus());
+}
+
 bool MainWindow::hostCandidateValid(const QString &candidate) const
 {
     return validHostSyntax(candidate);
@@ -2259,20 +2284,7 @@ void MainWindow::applyPiHost()
         refreshPiHostUi();
         return;
     }
-    const auto status = visionControlClient_ != nullptr
-        ? visionControlClient_->status()
-        : vision::VisionCaptureStatus{};
-    const bool activeRemoteWork = (visionControlClient_ != nullptr
-                                   && (status.recording
-                                       || status.state == QStringLiteral("stopping")
-                                       || status.inferenceState == QStringLiteral("running")
-                                       || status.inferenceState == QStringLiteral("starting")
-                                       || !status.inferenceOperation.isEmpty()
-                                       || visionControlClient_->inferenceReconcilePending()
-                                       || visionOutcomeUncertain_
-                                       || (visionControlClient_->isPolling()
-                                           && !visionControlClient_->hasFreshStatus())));
-    if (activeRemoteWork) {
+    if (hasRemoteVisionWorkThatMayContinue()) {
         const QString oldCommittedHost = committedPiHost_;
         updatingEndpoints_ = true;
         const auto answer = QMessageBox::question(
@@ -2408,12 +2420,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
         return;
     }
     if (visionControlClient_ != nullptr) {
-        const auto status = visionControlClient_->status();
-        if (visionControlClient_->inferenceReconcilePending()
-            || status.recording
-            || status.inferenceState == QStringLiteral("running")
-            || status.inferenceState == QStringLiteral("starting")
-            || visionOutcomeUncertain_) {
+        if (hasRemoteVisionWorkThatMayContinue()) {
             const auto answer = QMessageBox::question(
                 this,
                 QStringLiteral("Close RoboBeetle Console"),

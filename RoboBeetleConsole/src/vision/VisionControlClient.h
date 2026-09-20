@@ -101,6 +101,7 @@ signals:
     void errorOccurred(const QString &message);
     void logMessage(const QString &message);
     void requestStateChanged();
+    void authoritativeStatusRefreshed();
     void inferenceActionAcknowledged(
         const QString &action,
         const QString &outcome);

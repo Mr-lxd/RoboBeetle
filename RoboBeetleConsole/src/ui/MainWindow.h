@@ -80,6 +80,7 @@ private:
     void refreshInferenceUi();
     void refreshPiHostUi();
     void applyPiHost();
+    [[nodiscard]] bool hasRemoteVisionWorkThatMayContinue() const;
     [[nodiscard]] bool hostCandidateValid(const QString &candidate) const;
     [[nodiscard]] bool hostDirty() const;
     void appendLog(const QString &message);

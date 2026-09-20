@@ -30,6 +30,7 @@
 
 #include <cstdio>
 #include <functional>
+#include <memory>
 
 namespace {
 
@@ -216,6 +217,26 @@ void answerNextMessageBox(QMessageBox::StandardButton button)
             }
         }
     });
+}
+
+std::shared_ptr<bool> answerNextMessageBoxAndTrack(QMessageBox::StandardButton button)
+{
+    const auto seen = std::make_shared<bool>(false);
+    QTimer::singleShot(50, [button, seen] {
+        for (QWidget *widget : QApplication::topLevelWidgets()) {
+            auto *box = qobject_cast<QMessageBox *>(widget);
+            if (box != nullptr) {
+                *seen = true;
+                if (auto *push = box->button(button)) {
+                    push->click();
+                } else {
+                    box->done(static_cast<int>(button));
+                }
+                return;
+            }
+        }
+    });
+    return seen;
 }
 
 QByteArray readHttpRequest(QTcpSocket *socket)
@@ -1467,6 +1488,222 @@ void testTask02CloseNeverImplicitlyStopsRemoteWork()
            "closing Vision work does not create Robot-control writes");
 }
 
+void testTask02CloseWarnsForRemoteVisionState(const QByteArray &statusBody)
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionControlClient controlClient;
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "remote-work close warning server must listen");
+    controlClient.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    rb::MainWindow window(&controller, nullptr, &controlClient);
+    auto *refresh = window.findChild<QPushButton *>(QStringLiteral("visionRefreshStatusButton"));
+    expect(refresh != nullptr, "remote-work close warning exposes Refresh Status");
+    if (refresh == nullptr) {
+        return;
+    }
+    refresh->click();
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "remote-work close warning refresh connects");
+    QTcpSocket *peer = server.nextPendingConnection();
+    if (peer != nullptr) {
+        readHttpRequest(peer);
+        sendHttpJson(peer, statusBody);
+        peer->deleteLater();
+    }
+    expect(waitUntil([&controlClient] { return controlClient.hasFreshStatus(); }),
+           "remote-work close warning status becomes fresh");
+
+    const auto messageBoxSeen = answerNextMessageBoxAndTrack(QMessageBox::Yes);
+    const bool closed = window.close();
+    waitForMs(80);
+    expect(closed, "close accepts after the user confirms remote-work warning");
+    expect(*messageBoxSeen,
+           "close warns when authoritative remote Vision work may continue");
+    expect(!server.hasPendingConnections(),
+           "remote-work warning close emits no inference/recording Stop POST");
+    expect(transport.writes().isEmpty(),
+           "remote-work warning close emits no Robot-control writes");
+}
+
+void testTask02CloseWarnsForStoppingAndRetryingRemoteWork()
+{
+    testTask02CloseWarnsForRemoteVisionState(QByteArrayLiteral(
+        "{\"ok\":true,\"camera\":{\"running\":true},"
+        "\"capture\":{\"state\":\"idle\",\"recording\":false},"
+        "\"inference\":{\"configured\":true,\"control_supported\":true,"
+        "\"operation\":\"stopping\",\"state\":\"disabled\"}}"));
+    testTask02CloseWarnsForRemoteVisionState(QByteArrayLiteral(
+        "{\"ok\":true,\"camera\":{\"running\":true},"
+        "\"capture\":{\"state\":\"idle\",\"recording\":false},"
+        "\"inference\":{\"configured\":true,\"control_supported\":true,"
+        "\"operation\":\"retrying\",\"state\":\"disabled\"}}"));
+    testTask02CloseWarnsForRemoteVisionState(QByteArrayLiteral(
+        "{\"ok\":true,\"camera\":{\"running\":true},"
+        "\"capture\":{\"state\":\"stopping\",\"recording\":false},"
+        "\"inference\":{\"configured\":true,\"control_supported\":true,"
+        "\"operation\":null,\"state\":\"disabled\"}}"));
+}
+
+void seedAmbiguousInferenceReconciliation(
+    rb::vision::VisionControlClient &controlClient,
+    QTcpServer &server,
+    bool successful)
+{
+    controlClient.refreshStatus();
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "ambiguous MainWindow setup initial GET connects");
+    QTcpSocket *initial = server.nextPendingConnection();
+    if (initial != nullptr) {
+        readHttpRequest(initial);
+        sendHttpJson(
+            initial,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"camera\":{\"running\":true},"
+                "\"capture\":{\"state\":\"idle\",\"recording\":false},"
+                "\"inference\":{\"configured\":true,"
+                "\"control_supported\":true,\"operation\":null,"
+                "\"state\":\"disabled\"}}"));
+        initial->deleteLater();
+    }
+    expect(waitUntil([&controlClient] { return controlClient.hasFreshStatus(); }),
+           "ambiguous MainWindow setup starts from fresh status");
+
+    controlClient.startInference();
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "ambiguous MainWindow setup POST connects");
+    QTcpSocket *action = server.nextPendingConnection();
+    if (action != nullptr) {
+        readHttpRequest(action);
+        action->abort();
+        action->deleteLater();
+    }
+    expect(waitUntil([&controlClient] { return controlClient.inferenceReconcilePending(); }),
+           "ambiguous MainWindow setup schedules reconciliation GET");
+
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "ambiguous MainWindow setup reconciliation GET connects");
+    QTcpSocket *reconcile = server.nextPendingConnection();
+    if (reconcile != nullptr) {
+        readHttpRequest(reconcile);
+        if (successful) {
+            sendHttpJson(
+                reconcile,
+                QByteArrayLiteral(
+                    "{\"ok\":true,\"camera\":{\"running\":true},"
+                    "\"capture\":{\"state\":\"idle\",\"recording\":false},"
+                    "\"inference\":{\"configured\":true,"
+                    "\"control_supported\":true,\"operation\":null,"
+                    "\"state\":\"disabled\"}}"));
+        } else {
+            const QByteArray body = QByteArrayLiteral(
+                "{\"ok\":false,\"error\":\"internal_error\","
+                "\"message\":\"status unavailable\"}");
+            const QByteArray response =
+                "HTTP/1.1 500 Internal Server Error\r\n"
+                "Content-Type: application/json\r\n"
+                "Content-Length: " + QByteArray::number(body.size())
+                + "\r\nConnection: close\r\n\r\n" + body;
+            reconcile->write(response);
+            reconcile->flush();
+            reconcile->disconnectFromHost();
+        }
+        reconcile->deleteLater();
+    }
+    expect(waitUntil([&controlClient] {
+        return !controlClient.requestInFlight()
+            && !controlClient.inferenceReconcilePending();
+    }), "ambiguous MainWindow setup reconciliation completes");
+    expect(controlClient.hasFreshStatus() == successful,
+           "ambiguous MainWindow setup preserves GET freshness outcome");
+}
+
+void testTask02SuccessfulReconciliationClearsUncertaintyBeforeClose()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionControlClient controlClient;
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "successful reconciliation close server must listen");
+    controlClient.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    rb::MainWindow window(&controller, nullptr, &controlClient);
+
+    seedAmbiguousInferenceReconciliation(controlClient, server, true);
+    const auto messageBoxSeen = answerNextMessageBoxAndTrack(QMessageBox::Yes);
+    const bool closed = window.close();
+    waitForMs(80);
+    expect(closed, "successful authoritative reconciliation permits close");
+    expect(!*messageBoxSeen,
+           "successful authoritative reconciliation clears uncertainty-only close warning");
+    expect(!server.hasPendingConnections(),
+           "successful reconciliation close emits no automatic Stop POST");
+    expect(transport.writes().isEmpty(),
+           "successful reconciliation close emits no Robot-control writes");
+}
+
+void testTask02SuccessfulReconciliationClearsUncertaintyBeforeApplyHost()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionControlClient controlClient;
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "successful reconciliation Apply Host server must listen");
+    controlClient.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    rb::MainWindow window(&controller, nullptr, &controlClient);
+    auto *host = window.findChild<QLineEdit *>(QStringLiteral("piHost"));
+    auto *apply = window.findChild<QPushButton *>(QStringLiteral("applyPiHostButton"));
+    expect(host != nullptr && apply != nullptr,
+           "successful reconciliation Apply Host widgets exist");
+    if (host == nullptr || apply == nullptr) {
+        return;
+    }
+
+    seedAmbiguousInferenceReconciliation(controlClient, server, true);
+    host->setText(QStringLiteral("127.0.0.2"));
+    const auto messageBoxSeen = answerNextMessageBoxAndTrack(QMessageBox::Yes);
+    apply->click();
+    waitForMs(80);
+    expect(!*messageBoxSeen,
+           "successful authoritative reconciliation clears uncertainty-only Apply Host warning");
+    expect(host->text() == QStringLiteral("127.0.0.2")
+               && controlClient.host() == QStringLiteral("127.0.0.2"),
+           "Apply Host commits directly after uncertainty is reconciled");
+    expect(transport.writes().isEmpty(),
+           "Apply Host uncertainty reconciliation emits no Robot-control writes");
+    window.close();
+}
+
+void testTask02FailedReconciliationKeepsUncertaintyAndDoesNotRetry()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport, rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionControlClient controlClient;
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "failed reconciliation close server must listen");
+    controlClient.setEndpoint(QStringLiteral("127.0.0.1"), server.serverPort());
+    rb::MainWindow window(&controller, nullptr, &controlClient);
+
+    seedAmbiguousInferenceReconciliation(controlClient, server, false);
+    const auto messageBoxSeen = answerNextMessageBoxAndTrack(QMessageBox::Yes);
+    const bool closed = window.close();
+    waitForMs(100);
+    expect(closed, "failed reconciliation still permits confirmed close");
+    expect(*messageBoxSeen,
+           "failed reconciliation keeps the uncertainty-only close warning latched");
+    expect(!server.hasPendingConnections(),
+           "failed reconciliation does not retry the inference POST");
+    expect(transport.writes().isEmpty(),
+           "failed reconciliation close emits no Robot-control writes");
+}
+
 void testTask02RemoteAndDirectEndpointWidgetsStayDistinct()
 {
     rb::RemoteRobotController remote;
@@ -1720,6 +1957,10 @@ int main(int argc, char **argv)
     testTask02CaptureAndInferenceErrorsStaySeparated();
     testTask02ApplyHostBlocksQueuedMutation();
     testTask02CloseNeverImplicitlyStopsRemoteWork();
+    testTask02CloseWarnsForStoppingAndRetryingRemoteWork();
+    testTask02SuccessfulReconciliationClearsUncertaintyBeforeClose();
+    testTask02SuccessfulReconciliationClearsUncertaintyBeforeApplyHost();
+    testTask02FailedReconciliationKeepsUncertaintyAndDoesNotRetry();
     testTask02RemoteAndDirectEndpointWidgetsStayDistinct();
 #else
     testImuPanelLifecycle();
@@ -1736,6 +1977,10 @@ int main(int argc, char **argv)
     testTask02CaptureAndInferenceErrorsStaySeparated();
     testTask02ApplyHostBlocksQueuedMutation();
     testTask02CloseNeverImplicitlyStopsRemoteWork();
+    testTask02CloseWarnsForStoppingAndRetryingRemoteWork();
+    testTask02SuccessfulReconciliationClearsUncertaintyBeforeClose();
+    testTask02SuccessfulReconciliationClearsUncertaintyBeforeApplyHost();
+    testTask02FailedReconciliationKeepsUncertaintyAndDoesNotRetry();
     testTask02RemoteAndDirectEndpointWidgetsStayDistinct();
     testDashboardLayout();
 #endif
