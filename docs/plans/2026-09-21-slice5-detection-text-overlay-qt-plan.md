@@ -125,21 +125,23 @@ Expected final suite: 19 tests, zero failures.
 The real Pi/native Qt gate completed successfully:
 
 1. Pi 47010 / 47011 / 47012 reachable.
-2. Inference began and ended in authoritative Disabled state.
-3. Connect Video established a real 47010 stream at 640x480 with live FPS.
+2. Inference was forced to authoritative Disabled before the native UI gate.
+3. Connect Video established the real 47010 stream.
 4. Fresh advertised `detection_stream_supported=true`, port 47012, version 1
-   produced one real 47012 connection owned by the Qt process.
-5. Start Inference produced real non-zero detection counts and real frame-associated
-   metadata; backend smoke observed fish / jellyfish / stingray records.
-6. Qt log reported both "Vision stream connected" and
-   "Detection metadata connected".
-7. Text-only rendering is verified by automated VideoView render tests and source
-   review: only class/confidence text plus a one-pixel dark shadow is drawn; no
-   bbox/marker drawing primitive is present.
-8. Stop returned the Pi to authoritative Disabled.
-9. Disconnect Video released both the Qt process's 47010 and 47012 sockets.
-10. Automated loopback coverage verified 47012 failure isolation, freshness rules,
-    one-attempt session behavior, and zero Robot transport writes.
+   established one real 47012 Qt connection.
+5. With inference Running, native Qt visibly rendered only
+   `class confidence` text for fresh detections.
+6. No rectangle, dot, circle, crosshair, centroid glyph, or background marker was
+   visible.
+7. Stop Inference returned the Pi to authoritative Disabled.
+8. Overlay text disappeared while both the existing 47010 video connection and
+   47012 metadata connection remained established.
+9. Automated MainWindow loopback coverage verifies metadata failure isolation,
+   old-Pi capability suppression, HTTP-stale display suppression,
+   one-attempt-per-video-session behavior, session reset/reconnect semantics, and
+   zero Robot transport writes.
+10. The separate GUI Disconnect Video socket-release step was not re-run in the
+    final native hardware gate; that lifecycle is covered by the automated tests.
 11. Pi inference was left Disabled.
 
 Release gate after hardware acceptance:
