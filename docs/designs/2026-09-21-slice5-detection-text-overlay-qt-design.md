@@ -1,4 +1,4 @@
-# Vision Slice 5 — Qt Detection Text Overlay Design
+# Vision Slice 5 — Qt Detection Overlay Design
 
 ## Status
 
@@ -15,19 +15,19 @@ The operator overlay is display-only. It is not a control signal.
 
 ## Scope
 
-Slice 5 adds fresh, frame-associated detection text to the existing
+Slice 5 adds fresh, frame-associated detection visualization to the existing
 Realtime Video surface.
 
 Rendered form:
 
-`<class_name> <confidence>`
+`centroid marker + <class_name> <confidence>`
 
 Example:
 
 `fish 0.88`
 
-No bounding box, dot, circle, crosshair, centroid marker, tracker,
-target lock, PID, visual servo, STM32 change, or robot motion is included.
+No bounding box, target selection, target lock, tracking identity, trail,
+PID, visual servo, STM32 change, or robot motion is included.
 ## Network boundaries
 
 Existing endpoints remain unchanged:
@@ -90,7 +90,7 @@ age_ns =
     - detection_capture_timestamp_ns
 ```
 
-Text is renderable only when:
+The detection overlay is renderable only when:
 
 - Vision HTTP status is fresh
 - inference state is Running with no active transition
@@ -99,10 +99,10 @@ Text is renderable only when:
 - metadata timestamp is not newer than the video timestamp
 - age is <= 1,500,000,000 ns
 - detections is non-empty
-HTTP freshness expiry suppresses text immediately but does not tear down
+HTTP freshness expiry suppresses the overlay immediately but does not tear down
 an otherwise healthy 47012 socket.
 
-Inference Disabled/Starting/Stopping/Retrying/Failed suppresses text.
+Inference Disabled/Starting/Stopping/Retrying/Failed suppresses the overlay.
 
 Video disconnect, host switch, unsupported fresh capability, metadata
 disconnect, empty detections, dimension mismatch, future metadata, or
@@ -116,15 +116,18 @@ control threshold.
 VideoView maps original-frame centroid coordinates through the exact
 KeepAspectRatio image target rectangle already used to draw the live image.
 
-For each renderable detection it draws only:
+For each renderable detection it draws:
 
-- white class/confidence text
+- one Bright Amber (`#FFB000`) crosshair centered at the mapped centroid,
+  approximately 13 display pixels across with a 2-pixel stroke
+- one Bright Amber filled center dot with an approximately 3-pixel radius
+- Bright Amber class/confidence text offset from the centroid marker
 - a one-pixel dark text shadow for readability
 
 The painter is clipped to the actual video image rectangle.
 
-No rectangle, ellipse, line, point, background detection box, or other
-visual marker is drawn.
+No bounding box, background detection box, trail/history, target-selection or
+target-lock indicator, tracking identity, or control/servo marker is drawn.
 
 Label baselines and horizontal placement are clamped to the visible image.
 ## Lifecycle ownership
@@ -135,7 +138,7 @@ MainWindow owns presentation policy only.
 
 `DetectionClient` owns transport/decoder state.
 
-`VideoView` owns image-coordinate mapping and text painting.
+`VideoView` owns image-coordinate mapping and display-only overlay painting.
 
 Vision actions and detection metadata produce zero RobotController writes.
 
@@ -154,7 +157,7 @@ New Pi + old Qt:
 - old Qt ignores extra 47011 fields and port 47012
 
 New Pi + new Qt:
-- fresh frame-associated text appears on the latest live video
+- a fresh frame-associated detection overlay appears on the latest live video
 ## Automated acceptance
 
 Required tests include:
@@ -167,25 +170,25 @@ Required tests include:
 - old-Pi capability suppression
 - unknown-version suppression
 - 1500 ms freshness boundary
-- HTTP-stale text suppression without tearing down healthy 47012
+- HTTP-stale overlay suppression without tearing down healthy 47012
 - inference-state suppression
 - isolated 47012 failure
 - one-attempt-per-video-session behavior
-- VideoView text-only render lifecycle
+- VideoView text-and-centroid-marker render lifecycle
 - zero Robot transport writes
 
 ## Native hardware acceptance
 
-Completed on the real Pi and native Windows Qt console:
+The completed real-Pi/native-Windows acceptance predates the centroid-marker
+and Bright Amber closeout. It verified the text-only baseline:
 
 - Pi 47010 / 47011 / 47012 were reachable.
 - Inference was first forced to Disabled for a deterministic starting state.
 - Connect Video established the real 47010 stream.
 - Fresh advertised v1 capability established one real 47012 metadata connection.
-- With inference Running, the native video showed only white
+- With inference Running, the native video showed
   `class confidence` text at real detections.
-- No rectangle, dot, circle, crosshair, centroid glyph, or background marker was
-  visible.
+- That gate did not include or validate the later centroid-marker presentation.
 - Stop Inference returned the Pi to Disabled and the text disappeared while the
   47010 video connection remained established.
 - The 47012 transport remained isolated from video/control lifecycle.
@@ -193,3 +196,6 @@ Completed on the real Pi and native Windows Qt console:
   Robot transport writes.
 
 Final Pi inference state was left Disabled.
+
+The final Bright Amber centroid-marker and text appearance is host-verified in
+this closeout. Native visual revalidation of that appearance remains Pending.

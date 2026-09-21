@@ -3,6 +3,7 @@
 #include <QFontMetrics>
 #include <QPainter>
 #include <QPaintEvent>
+#include <QPen>
 #include <QRect>
 
 namespace rb::vision {
@@ -91,6 +92,11 @@ void VideoView::paintEvent(QPaintEvent *event)
         overlayFont.setPointSizeF(qMax(9.0, overlayFont.pointSizeF()));
         painter.setFont(overlayFont);
         const QFontMetrics metrics(overlayFont);
+        const QColor overlayColor(0xFF, 0xB0, 0x00);
+        constexpr int markerArmRadiusPx = 6;
+        constexpr int markerStrokeWidthPx = 2;
+        constexpr int markerDotRadiusPx = 3;
+        constexpr int labelOffsetPx = 9;
 
         for (const DetectionObservation &detection
              : detectionOverlay_->detections) {
@@ -108,22 +114,46 @@ void VideoView::paintEvent(QPaintEvent *event)
                 + detection.originalPoint.y()
                     * static_cast<double>(target.height())
                     / static_cast<double>(image_.height());
+            const QPoint marker(qRound(mappedX), qRound(mappedY));
+
+            painter.setPen(QPen(
+                overlayColor,
+                markerStrokeWidthPx,
+                Qt::SolidLine,
+                Qt::SquareCap));
+            painter.drawLine(
+                marker.x() - markerArmRadiusPx,
+                marker.y(),
+                marker.x() + markerArmRadiusPx,
+                marker.y());
+            painter.drawLine(
+                marker.x(),
+                marker.y() - markerArmRadiusPx,
+                marker.x(),
+                marker.y() + markerArmRadiusPx);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(overlayColor);
+            painter.drawEllipse(
+                marker,
+                markerDotRadiusPx,
+                markerDotRadiusPx);
+            painter.setBrush(Qt::NoBrush);
 
             const int textWidth = metrics.horizontalAdvance(label);
             const int minimumBaseline = target.top() + metrics.ascent();
             const int maximumBaseline = target.bottom() - metrics.descent();
             const int x = qBound(
                 target.left(),
-                qRound(mappedX) + 5,
+                marker.x() + labelOffsetPx,
                 qMax(target.left(), target.right() - textWidth));
             const int baseline = qBound(
                 minimumBaseline,
-                qRound(mappedY) - 5,
+                marker.y() - labelOffsetPx,
                 qMax(minimumBaseline, maximumBaseline));
 
             painter.setPen(QColor(0, 0, 0, 210));
             painter.drawText(x + 1, baseline + 1, label);
-            painter.setPen(QColor(255, 255, 255));
+            painter.setPen(overlayColor);
             painter.drawText(x, baseline, label);
         }
         painter.restore();
