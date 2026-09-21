@@ -3,6 +3,7 @@
 #include "controller/IConsoleController.h"
 
 #include <QMainWindow>
+#include <QSize>
 
 #include <array>
 #include <cstddef>
@@ -64,6 +65,7 @@ private:
     QWidget *createServoPanel(int index, ServoId id);
     QWidget *createActuatorPanel();
     QWidget *createMotionPanel();
+    QWidget *createServoFineControlTab();
     // Lower dashboard: Data Plots (independent) + Log | Telemetry Details |
 // Protocol Details tabs.
     QWidget *createDataPlotsTab();
@@ -83,6 +85,7 @@ private:
     void refreshVisionNoticeUi();
     void refreshVisionEndpointUi();
     void reflowActuatorCards();
+    void updateVideoSurfaceGeometry();
     void initializeWorkspaceSizes();
     // Refresh helpers.
     void setConnectedUi(bool connected);
@@ -122,9 +125,13 @@ private:
     QSpinBox *visionPort_{nullptr};
     QPushButton *visionConnectButton_{nullptr};
     QLabel *visionState_{nullptr};
+    QLabel *visionDot_{nullptr};
     QLabel *visionDiagnostics_{nullptr};
     QLabel *videoFpsSummary_{nullptr};
+    QLabel *videoResolutionSummary_{nullptr};
+    QLabel *storageFreeSummary_{nullptr};
     QLabel *inferenceState_{nullptr};
+    QLabel *inferenceDot_{nullptr};
     QLabel *inferencePerformanceSummary_{nullptr};
     QLabel *inferenceDetectionSummary_{nullptr};
     QLabel *inferenceDiagnostics_{nullptr};
@@ -162,6 +169,7 @@ private:
     QPushButton *releaseButton_{nullptr};
     QLabel *connectionStatus_{nullptr};
     QLabel *authorityStatus_{nullptr};
+    QPushButton *enableAllButton_{nullptr};
     QPushButton *emergencyStopButton_{nullptr};
 
     // Leak card.
@@ -198,7 +206,7 @@ private:
     std::array<QSpinBox *, kServoCount> pwmSpins_{};
     std::array<QSlider *, kServoCount> pwmSliders_{};
     std::array<QDoubleSpinBox *, kServoCount> angleSpins_{};
-    std::array<QPushButton *, kServoCount> angleButtons_{};
+    std::array<bool, kServoCount> angleEditDirty_{};
     std::array<QPushButton *, kServoCount> enableButtons_{};
     std::array<QPushButton *, kServoCount> neutralButtons_{};
     std::array<QPushButton *, kServoCount> applyButtons_{};
@@ -223,6 +231,10 @@ private:
     QWidget *telemetrySidebar_{nullptr};
     QWidget *operatorToolsPane_{nullptr};
     QWidget *videoCard_{nullptr};
+    QWidget *videoContentHost_{nullptr};
+    QWidget *visionSummaryPanel_{nullptr};
+    QSize visionFrameSize_{};
+    bool videoGeometryUpdatePending_{false};
     QScrollArea *motionScrollArea_{nullptr};
     QScrollArea *actuatorScroll_{nullptr};
     QWidget *actuatorCardsHost_{nullptr};

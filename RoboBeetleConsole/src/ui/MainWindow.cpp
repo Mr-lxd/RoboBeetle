@@ -29,6 +29,9 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QStyle>
+
+#include <numeric>
 #include <QScrollArea>
 #include <QScreen>
 #include <QTabWidget>
@@ -309,7 +312,7 @@ QString motionModeText(MotionMode mode)
     switch (mode) {
     case MotionMode::Stop: return QStringLiteral("Stop");
     case MotionMode::Forward: return QStringLiteral("Forward");
-    case MotionMode::Backward: return QStringLiteral("Backward (Pending)");
+    case MotionMode::Backward: return QStringLiteral("Brake");
     case MotionMode::TurnLeft: return QStringLiteral("Turn Left");
     case MotionMode::TurnRight: return QStringLiteral("Turn Right");
     case MotionMode::Ascend: return QStringLiteral("Ascend");
@@ -490,14 +493,14 @@ MainWindow::MainWindow(
     const QScreen *startupScreen = QGuiApplication::primaryScreen();
     if (startupScreen != nullptr) {
         const QRect available = startupScreen->availableGeometry();
-        const int initialWidth = qMax(1100, qMin(1600, available.width() - 32));
+        const int initialWidth = qMax(1100, qMin(1420, available.width() - 32));
         const int initialHeight = qMax(720, qMin(1000, available.height() - 80));
         resize(initialWidth, initialHeight);
         const QSize frameSize = frameGeometry().size();
         move(available.center()
              - QPoint(frameSize.width() / 2, frameSize.height() / 2));
     } else {
-        resize(1600, 1000);
+        resize(1420, 1000);
     }
 
     auto *central = new QWidget(this);
@@ -582,112 +585,133 @@ QWidget *MainWindow::createConnectionBar()
     auto *bar = new QWidget(this);
     bar->setObjectName(QStringLiteral("topHeaderBar"));
     bar->setStyleSheet(QStringLiteral(
-        "#topHeaderBar {"
-        "  background: #FFFFFF;"
-        "  border: 1px solid #C5D3DE;"
-        "  border-radius: 7px;"
-        "}"
-    ));
+        "#topHeaderBar { background: #FFFFFF; border: 1px solid #C5D3DE; border-radius: 7px; }"));
     const bool remote =
         controller_->backendKind() == ConsoleBackendKind::RemoteRbrp;
 
-    auto *layout = new QVBoxLayout(bar);
-    layout->setContentsMargins(10, 7, 10, 7);
-    layout->setSpacing(4);
+    auto *row = new QHBoxLayout(bar);
+    row->setContentsMargins(10, 6, 10, 6);
+    row->setSpacing(3);
 
-    auto *row1 = new QHBoxLayout;
-    row1->setContentsMargins(0, 0, 0, 0);
-    row1->setSpacing(6);
-    auto *title = new QLabel(QStringLiteral("RoboBeetle Console"), bar);
+    auto *title = new QLabel(QStringLiteral("RoboBeetle"), bar);
     title->setObjectName(QStringLiteral("consoleTitle"));
-    title->setStyleSheet(QStringLiteral("font-weight: 700; font-size: 15px; color: #1F4058;"));
-    row1->addWidget(title);
-    row1->addSpacing(10);
-    row1->addWidget(new QLabel(QStringLiteral("Pi Host"), bar));
+    title->setVisible(false);
+
+    auto addLabel = [bar, row](const QString &text) {
+        auto *label = new QLabel(text, bar);
+        label->setStyleSheet(QStringLiteral("color: #566B79; font-size: 11px; font-weight: 600;"));
+        row->addWidget(label);
+    };
+
+    addLabel(QStringLiteral("Pi Host"));
     piHost_ = new QLineEdit(committedPiHost_, bar);
     piHost_->setObjectName(QStringLiteral("piHost"));
     piHost_->setPlaceholderText(QStringLiteral("Pi IP / hostname"));
-    piHost_->setMinimumWidth(200);
+    piHost_->setFixedWidth(130);
+    piHost_->setFixedHeight(32);
     piHost_->installEventFilter(this);
-    row1->addWidget(piHost_, 1);
-    applyPiHostButton_ = new QPushButton(QStringLiteral("Apply Host"), bar);
+    row->addWidget(piHost_);
+
+    applyPiHostButton_ = new QPushButton(QStringLiteral("Applied"), bar);
     applyPiHostButton_->setObjectName(QStringLiteral("applyPiHostButton"));
     applyPiHostButton_->setProperty("consoleActionRole", "primary");
-    row1->addWidget(applyPiHostButton_);
-    row1->addWidget(new QLabel(QStringLiteral("Video"), bar));
+    applyPiHostButton_->setFixedSize(74, 32);
+    applyPiHostButton_->setStyleSheet(QStringLiteral("min-height: 0px; max-height: 32px; padding: 2px 8px;"));
+    row->addWidget(applyPiHostButton_);
+    row->addSpacing(4);
+
+    addLabel(QStringLiteral("Video"));
     visionPort_ = new QSpinBox(bar);
     visionPort_->setObjectName(QStringLiteral("visionPort"));
     visionPort_->setRange(1, 65535);
     visionPort_->setValue(47010);
     visionPort_->setButtonSymbols(QAbstractSpinBox::NoButtons);
     visionPort_->setKeyboardTracking(false);
-    row1->addWidget(visionPort_);
-    layout->addLayout(row1);
+    visionPort_->setFixedSize(62, 32);
+    row->addWidget(visionPort_);
+    row->addSpacing(4);
 
-    auto *row2 = new QHBoxLayout;
-    row2->setContentsMargins(0, 0, 0, 0);
-    row2->setSpacing(6);
-    piHostHint_ = new QLabel(bar);
-    piHostHint_->setObjectName(QStringLiteral("piHostHint"));
-    piHostHint_->setStyleSheet(QStringLiteral("font-size: 10px; color: #667C8C;"));
-    piHostHint_->setVisible(false);
+    auto *refresh = new QPushButton(QStringLiteral("Refresh"), bar);
+    refresh->setObjectName(QStringLiteral("serialRefreshButton"));
+    refresh->setProperty("consoleActionRole", "secondary");
+    refresh->setFixedHeight(32);
+    refresh->setVisible(!remote);
 
     if (remote) {
-        row2->addWidget(new QLabel(QStringLiteral("Robot TCP"), bar));
+        addLabel(QStringLiteral("Robot TCP"));
         robotTcpPort_ = new QSpinBox(bar);
         robotTcpPort_->setObjectName(QStringLiteral("robotTcpPort"));
         robotTcpPort_->setRange(1, 65535);
         robotTcpPort_->setValue(47000);
         robotTcpPort_->setButtonSymbols(QAbstractSpinBox::NoButtons);
         robotTcpPort_->setKeyboardTracking(false);
-        row2->addWidget(robotTcpPort_);
+        robotTcpPort_->setFixedSize(62, 32);
+        row->addWidget(robotTcpPort_);
     } else {
-        row2->addWidget(new QLabel(QStringLiteral("Serial Port"), bar));
+        addLabel(QStringLiteral("Serial"));
         serialPortCombo_ = new QComboBox(bar);
         serialPortCombo_->setObjectName(QStringLiteral("serialPortCombo"));
         serialPortCombo_->setEditable(true);
-        row2->addWidget(serialPortCombo_);
-        row2->addWidget(new QLabel(QStringLiteral("Baud"), bar));
+        serialPortCombo_->setMinimumWidth(110);
+        serialPortCombo_->setFixedHeight(32);
+        row->addWidget(serialPortCombo_);
+
+        addLabel(QStringLiteral("Baud"));
         serialBaud_ = new QSpinBox(bar);
         serialBaud_->setObjectName(QStringLiteral("serialBaud"));
         serialBaud_->setRange(1200, 3000000);
         serialBaud_->setValue(9600);
         serialBaud_->setButtonSymbols(QAbstractSpinBox::NoButtons);
         serialBaud_->setKeyboardTracking(false);
-        row2->addWidget(serialBaud_);
+        serialBaud_->setFixedSize(90, 32);
+        row->addWidget(serialBaud_);
+
+        refresh->setFixedWidth(70);
+        row->addWidget(refresh);
     }
 
-    auto *refresh = new QPushButton(QStringLiteral("Refresh"), bar);
-    refresh->setObjectName(QStringLiteral("serialRefreshButton"));
-    refresh->setProperty("consoleActionRole", "secondary");
     connectButton_ = new QPushButton(QStringLiteral("Connect"), bar);
     connectButton_->setObjectName(QStringLiteral("connectRobotButton"));
     connectButton_->setProperty("consoleActionRole", "primary");
-    refresh->setVisible(!remote);
-    row2->addWidget(refresh);
-    row2->addWidget(connectButton_);
+    connectButton_->setFixedSize(78, 32);
+    connectButton_->setStyleSheet(QStringLiteral("min-height: 0px; max-height: 32px; padding: 2px 8px;"));
+    row->addWidget(connectButton_);
 
     acquireButton_ = new QPushButton(QStringLiteral("Acquire"), bar);
     releaseButton_ = new QPushButton(QStringLiteral("Release"), bar);
     acquireButton_->setProperty("consoleActionRole", "secondary");
     releaseButton_->setProperty("consoleActionRole", "secondary");
+    acquireButton_->setFixedSize(60, 32);
+    releaseButton_->setFixedSize(60, 32);
+    acquireButton_->setStyleSheet(QStringLiteral("min-height: 0px; max-height: 32px; padding: 2px 6px;"));
+    releaseButton_->setStyleSheet(QStringLiteral("min-height: 0px; max-height: 32px; padding: 2px 6px;"));
     acquireButton_->setVisible(remote);
     releaseButton_->setVisible(remote);
-    row2->addWidget(acquireButton_);
-    row2->addWidget(releaseButton_);
+    row->addWidget(acquireButton_);
+    row->addWidget(releaseButton_);
 
-    row2->addStretch();
-    row2->addWidget(new QLabel(QStringLiteral("State"), bar));
+    row->addStretch(1);
+    auto *stateLabel = new QLabel(QStringLiteral("State"), bar);
+    stateLabel->setStyleSheet(QStringLiteral(
+        "color: #667C8C; font-size: 11px; font-weight: 600;"));
+    row->addWidget(stateLabel);
     connectionStatus_ = new QLabel(QStringLiteral("Disconnected"), bar);
-    connectionStatus_->setStyleSheet(QStringLiteral("font-weight: 700; color: #263238;"));
-    row2->addWidget(connectionStatus_);
-    authorityStatus_ = new QLabel(remote ? QStringLiteral("Unowned")
-                                          : QStringLiteral("Direct"), bar);
+    connectionStatus_->setObjectName(QStringLiteral("connectionStatus"));
+    connectionStatus_->setStyleSheet(
+        QStringLiteral("font-size: 11px; font-weight: 700; color: #263238;"));
+    row->addWidget(connectionStatus_);
+    authorityStatus_ = new QLabel(
+        remote ? QStringLiteral("Unowned") : QStringLiteral("Direct"), bar);
+    authorityStatus_->setObjectName(QStringLiteral("authorityStatus"));
     authorityStatus_->setStyleSheet(
-        QStringLiteral("font-weight: 700; color: #455A64;"));
-    row2->addWidget(authorityStatus_);
-    layout->addLayout(row2);
-    layout->addWidget(piHostHint_);
+        QStringLiteral("font-size: 11px; font-weight: 700; color: #455A64;"));
+    row->addWidget(authorityStatus_);
+
+    // Kept as a non-visible compatibility/status helper only. The header no
+    // longer spends a second row on "Active Pi" text.
+    piHostHint_ = new QLabel(bar);
+    piHostHint_->setObjectName(QStringLiteral("piHostHint"));
+    piHostHint_->setVisible(false);
 
     connect(refresh, &QPushButton::clicked,
             controller_, &IConsoleController::refreshSerialPorts);
@@ -699,6 +723,7 @@ QWidget *MainWindow::createConnectionBar()
             this, &MainWindow::refreshPiHostUi);
     connect(visionPort_, qOverload<int>(&QSpinBox::valueChanged),
             this, [this] { refreshVisionEndpointUi(); });
+
     if (robotTcpPort_ != nullptr) {
         connect(robotTcpPort_, qOverload<int>(&QSpinBox::valueChanged),
                 this, [this] { refreshVisionEndpointUi(); });
@@ -709,11 +734,13 @@ QWidget *MainWindow::createConnectionBar()
             return;
         }
         ConsoleConnectionConfiguration configuration;
-        configuration.endpoint = controller_->backendKind() == ConsoleBackendKind::RemoteRbrp
-            ? committedPiHost_
-            : serialPortCombo_->currentText().trimmed();
+        configuration.endpoint =
+            controller_->backendKind() == ConsoleBackendKind::RemoteRbrp
+                ? committedPiHost_
+                : serialPortCombo_->currentText().trimmed();
         if (controller_->backendKind() == ConsoleBackendKind::RemoteRbrp) {
-            configuration.tcpPort = static_cast<quint16>(robotTcpPort_->value());
+            configuration.tcpPort =
+                static_cast<quint16>(robotTcpPort_->value());
         } else {
             configuration.baudRate = serialBaud_->value();
         }
@@ -733,144 +760,226 @@ QWidget *MainWindow::createVideoPlaceholder()
     videoCard_ = box;
     applyDashboardCardStyle(box);
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(8, 6, 8, 6);
-    layout->setSpacing(4);
+    layout->setContentsMargins(8, 5, 8, 6);
+    layout->setSpacing(5);
+
     auto *header = new QHBoxLayout;
     header->setContentsMargins(0, 0, 0, 0);
-    header->setSpacing(6);
     auto *title = new QLabel(QStringLiteral("Realtime Video"), box);
     title->setStyleSheet(QStringLiteral(
         "color: #1F4058; font-size: 13px; font-weight: 700;"));
     header->addWidget(title);
+    header->addStretch(1);
+    layout->addLayout(header);
 
-    visionConnectButton_ = new QPushButton(QStringLiteral("Connect Video"), box);
-    visionConnectButton_->setObjectName(QStringLiteral("visionConnectButton"));
-    visionConnectButton_->setProperty("consoleActionRole", "primary");
-    visionRefreshStatusButton_ = new QPushButton(QStringLiteral("Refresh Status"), box);
-    visionRefreshStatusButton_->setObjectName(QStringLiteral("visionRefreshStatusButton"));
-    visionRefreshStatusButton_->setProperty("consoleActionRole", "secondary");
-    visionRefreshStatusButton_->setToolTip(
-        QStringLiteral("Refresh HTTP status from the committed endpoint http://%1:%2")
-            .arg(committedPiHost_)
-            .arg(visionControlClient_ != nullptr
-                     ? visionControlClient_->port()
-                     : vision::kVisionControlDefaultPort));
-    auto *detailsButton = new QPushButton(QStringLiteral("Details"), box);
-    detailsButton->setObjectName(QStringLiteral("visionDetailsButton"));
-    detailsButton->setProperty("consoleActionRole", "secondary");
-    detailsButton->setToolTip(QStringLiteral("Show Vision Details without issuing a request"));
-    connect(detailsButton, &QPushButton::clicked, this, [this] {
-        if (operatorToolsTabs_ != nullptr) {
-            operatorToolsTabs_->setCurrentIndex(2);
-        }
-    });
+    videoContentHost_ = new QWidget(box);
+    videoContentHost_->setObjectName(QStringLiteral("videoContentHost"));
+    videoContentHost_->setMinimumHeight(180);
+    videoContentHost_->installEventFilter(this);
+    auto *content = new QHBoxLayout(videoContentHost_);
+    content->setContentsMargins(0, 0, 0, 0);
+    content->setSpacing(8);
 
+    videoView_ = new vision::VideoView(videoContentHost_);
+    videoView_->setObjectName(QStringLiteral("videoView"));
+    videoView_->setStyleSheet(QStringLiteral(
+        "#videoView { background: #101820; border: 1px solid #D5E0E8; border-radius: 6px; }"));
+    videoView_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+    content->addWidget(videoView_, 0, Qt::AlignLeft | Qt::AlignVCenter);
+
+    auto *summary = new QGroupBox(QStringLiteral("Vision Status"), videoContentHost_);
+    summary->setObjectName(QStringLiteral("visionSummaryPanel"));
+    visionSummaryPanel_ = summary;
+    summary->setMinimumWidth(210);
+    summary->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    applySubpanelStyle(summary);
+    auto *summaryLayout = new QVBoxLayout(summary);
+    summaryLayout->setContentsMargins(8, 10, 8, 8);
+    summaryLayout->setSpacing(4);
+
+    auto *videoStateRow = new QHBoxLayout;
+    videoStateRow->setContentsMargins(0, 0, 0, 0);
+    videoStateRow->setSpacing(6);
+    visionDot_ = new QLabel(summary);
+    visionDot_->setObjectName(QStringLiteral("visionStatusDot"));
+    visionDot_->setFixedSize(10, 10);
+    visionDot_->setStyleSheet(
+        QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     visionState_ = new QLabel(
-        visionClient_ != nullptr ? QStringLiteral("Video: Disconnected")
-                                 : QStringLiteral("Video: Unavailable"),
-        box);
+        visionClient_ != nullptr ? QStringLiteral("Disconnected")
+                                 : QStringLiteral("Unavailable"),
+        summary);
     visionState_->setObjectName(QStringLiteral("visionState"));
-    visionState_->setStyleSheet(QStringLiteral("font-weight: 600; color: #566B79;"));
-    header->addWidget(visionState_);
+    visionState_->setStyleSheet(
+        QStringLiteral("font-size: 14px; font-weight: 800; color: #1F4058;"));
+    videoStateRow->addWidget(visionDot_);
+    videoStateRow->addWidget(visionState_);
+    videoStateRow->addStretch(1);
+    summaryLayout->addLayout(videoStateRow);
 
-    videoFpsSummary_ = new QLabel(QStringLiteral("FPS --"), box);
+    videoFpsSummary_ = new QLabel(QStringLiteral("Video FPS --"), summary);
     videoFpsSummary_->setObjectName(QStringLiteral("videoFpsSummary"));
     videoFpsSummary_->setToolTip(
         QStringLiteral("Received RBVS frame rate; not inference FPS or unique display FPS."));
-    videoFpsSummary_->setStyleSheet(QStringLiteral("color: #566B79; font-weight: 600;"));
-    header->addWidget(videoFpsSummary_);
-    header->addStretch(1);
-    header->addWidget(visionConnectButton_);
-    header->addWidget(visionRefreshStatusButton_);
-    header->addWidget(detailsButton);
-    layout->addLayout(header);
+    videoFpsSummary_->setStyleSheet(
+        QStringLiteral("color: #257A9E; font-size: 13px; font-weight: 700;"));
+    summaryLayout->addWidget(videoFpsSummary_);
 
-    videoView_ = new vision::VideoView(box);
-    videoView_->setObjectName(QStringLiteral("videoView"));
-    videoView_->setStyleSheet(QStringLiteral(
-        "#videoView { background: #101820; border: 1px solid #D5E0E8; "
-        "border-radius: 6px; }"));
-    layout->addWidget(videoView_, 1);
+    videoResolutionSummary_ =
+        new QLabel(QStringLiteral("Resolution --"), summary);
+    videoResolutionSummary_->setObjectName(
+        QStringLiteral("videoResolutionSummary"));
+    videoResolutionSummary_->setStyleSheet(
+        QStringLiteral("color: #566B79; font-weight: 600;"));
+    summaryLayout->addWidget(videoResolutionSummary_);
+
+    storageFreeSummary_ = new QLabel(QStringLiteral("Storage Free --"), summary);
+    storageFreeSummary_->setObjectName(QStringLiteral("storageFreeSummary"));
+    storageFreeSummary_->setToolTip(QStringLiteral("Pi free disk space reported by the Vision status API; this is storage, not RAM."));
+    storageFreeSummary_->setStyleSheet(
+        QStringLiteral("color: #566B79; font-weight: 600;"));
+    summaryLayout->addWidget(storageFreeSummary_);
+
+    auto *divider1 = new QFrame(summary);
+    divider1->setFrameShape(QFrame::HLine);
+    divider1->setStyleSheet(QStringLiteral("color: #D5E0E8;"));
+    summaryLayout->addWidget(divider1);
 
     const bool inferenceAvailable = visionControlClient_ != nullptr;
+    auto *inferenceStateRow = new QHBoxLayout;
+    inferenceStateRow->setContentsMargins(0, 0, 0, 0);
+    inferenceStateRow->setSpacing(6);
+    inferenceDot_ = new QLabel(summary);
+    inferenceDot_->setObjectName(QStringLiteral("inferenceStatusDot"));
+    inferenceDot_->setFixedSize(10, 10);
+    inferenceDot_->setStyleSheet(
+        QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     inferenceState_ = new QLabel(
         inferenceAvailable
             ? inferenceStateText(visionControlClient_->status().inferenceState)
             : QStringLiteral("Inference Unavailable"),
-        box);
+        summary);
     inferenceState_->setObjectName(QStringLiteral("inferenceState"));
     inferenceState_->setStyleSheet(
-        QStringLiteral("font-weight: 600; color: #566B79;"));
-    auto *inferenceControls = new QHBoxLayout;
-    inferenceControls->setContentsMargins(0, 0, 0, 0);
-    inferenceControls->setSpacing(5);
-    startInferenceButton_ = new QPushButton(QStringLiteral("Start Inference"), box);
-    startInferenceButton_->setObjectName(QStringLiteral("startInferenceButton"));
-    startInferenceButton_->setProperty("consoleActionRole", "primary");
-    stopInferenceButton_ = new QPushButton(QStringLiteral("Stop Inference"), box);
-    stopInferenceButton_->setObjectName(QStringLiteral("stopInferenceButton"));
-    stopInferenceButton_->setProperty("consoleActionRole", "stop");
-    inferenceControls->addWidget(startInferenceButton_);
-    inferenceControls->addWidget(stopInferenceButton_);
-    inferenceControls->addWidget(inferenceState_);
-    inferencePerformanceSummary_ = new QLabel(QStringLiteral("-- FPS / -- ms"), box);
-    inferencePerformanceSummary_->setObjectName(QStringLiteral("inferencePerformanceSummary"));
+        QStringLiteral("font-size: 14px; font-weight: 800; color: #1F4058;"));
+    inferenceStateRow->addWidget(inferenceDot_);
+    inferenceStateRow->addWidget(inferenceState_);
+    inferenceStateRow->addStretch(1);
+    summaryLayout->addLayout(inferenceStateRow);
+
+    inferencePerformanceSummary_ = new QLabel(
+        QStringLiteral("-- FPS / -- ms"), summary);
+    inferencePerformanceSummary_->setObjectName(
+        QStringLiteral("inferencePerformanceSummary"));
     inferencePerformanceSummary_->setToolTip(
         QStringLiteral("Camera capture to inference completion; not ORT-only duration."));
-    inferenceControls->addWidget(inferencePerformanceSummary_);
-    inferenceDetectionSummary_ = new QLabel(QStringLiteral("Detections --"), box);
-    inferenceDetectionSummary_->setObjectName(QStringLiteral("inferenceDetectionSummary"));
-    inferenceControls->addWidget(inferenceDetectionSummary_);
-    inferenceControls->addStretch(1);
-    visionControlState_ = new QLabel(QStringLiteral("Unavailable"), box);
+    inferencePerformanceSummary_->setStyleSheet(
+        QStringLiteral("color: #6C5AAE; font-size: 13px; font-weight: 700;"));
+    summaryLayout->addWidget(inferencePerformanceSummary_);
+
+    inferenceDetectionSummary_ = new QLabel(
+        QStringLiteral("Detections --"), summary);
+    inferenceDetectionSummary_->setObjectName(
+        QStringLiteral("inferenceDetectionSummary"));
+    summaryLayout->addWidget(inferenceDetectionSummary_);
+
+    visionControlState_ = new QLabel(
+        QStringLiteral("HTTP: Unavailable"), summary);
     visionControlState_->setObjectName(QStringLiteral("visionControlState"));
-    visionControlState_->setStyleSheet(QStringLiteral("font-weight: 600; color: #566B79;"));
-    visionControlState_->setText(QStringLiteral("HTTP: Unavailable"));
-    inferenceControls->addWidget(visionControlState_);
-    layout->addLayout(inferenceControls);
-    visionControlMessage_ = new ui::ElidedLabel(box);
-    visionControlMessage_->setObjectName(QStringLiteral("visionControlMessage"));
-    visionControlMessage_->setFullText(QString());
-    visionControlMessage_->setAccessibleName(QStringLiteral("Vision notice"));
-    visionControlMessage_->setToolTip(QStringLiteral("Vision control acknowledgements and errors"));
-    visionControlMessage_->setStyleSheet(QStringLiteral("font-size: 10px; color: #7B8F9D;"));
-    layout->addWidget(visionControlMessage_);
+    visionControlState_->setStyleSheet(
+        QStringLiteral("font-weight: 600; color: #566B79;"));
+    summaryLayout->addWidget(visionControlState_);
 
-    auto *captureControls = new QHBoxLayout;
-    captureControls->setContentsMargins(0, 0, 0, 0);
-    captureControls->setSpacing(5);
+    auto *divider2 = new QFrame(summary);
+    divider2->setFrameShape(QFrame::HLine);
+    divider2->setStyleSheet(QStringLiteral("color: #D5E0E8;"));
+    summaryLayout->addWidget(divider2);
 
-    snapshotButton_ = new QPushButton(QStringLiteral("Snapshot"), box);
-    snapshotButton_->setObjectName(QStringLiteral("snapshotButton"));
-    snapshotButton_->setProperty("consoleActionRole", "secondary");
-    startRecordingButton_ =
-        new QPushButton(QStringLiteral("Start Recording"), box);
-    startRecordingButton_->setObjectName(
-        QStringLiteral("startRecordingButton"));
-    startRecordingButton_->setProperty("consoleActionRole", "primary");
-    stopRecordingButton_ =
-        new QPushButton(QStringLiteral("Stop Recording"), box);
-    stopRecordingButton_->setObjectName(
-        QStringLiteral("stopRecordingButton"));
-    stopRecordingButton_->setProperty("consoleActionRole", "stop");
     captureState_ = new QLabel(
         visionControlClient_ != nullptr
             ? QStringLiteral("Capture Disconnected")
             : QStringLiteral("Capture Unavailable"),
-        box);
+        summary);
     captureState_->setObjectName(QStringLiteral("captureState"));
     captureState_->setStyleSheet(
-        QStringLiteral("font-weight: 600; color: #566B79;"));
+        QStringLiteral("font-weight: 700; color: #566B79;"));
+    summaryLayout->addWidget(captureState_);
 
-    captureControls->addWidget(snapshotButton_);
-    captureControls->addWidget(startRecordingButton_);
-    captureControls->addWidget(stopRecordingButton_);
-    captureControls->addStretch();
-    captureControls->addWidget(captureState_);
-    captureCountSummary_ = new QLabel(QStringLiteral("Recorded -- | Snapshots --"), box);
+    captureCountSummary_ = new QLabel(
+        QStringLiteral("Recorded -- | Snapshots --"), summary);
     captureCountSummary_->setObjectName(QStringLiteral("captureCountSummary"));
-    captureControls->addWidget(captureCountSummary_);
-    layout->addLayout(captureControls);
+    captureCountSummary_->setWordWrap(true);
+    summaryLayout->addWidget(captureCountSummary_);
+
+    visionControlMessage_ = new ui::ElidedLabel(summary);
+    visionControlMessage_->setObjectName(QStringLiteral("visionControlMessage"));
+    visionControlMessage_->setFullText(QString());
+    visionControlMessage_->setAccessibleName(QStringLiteral("Vision notice"));
+    visionControlMessage_->setStyleSheet(
+        QStringLiteral("font-size: 10px; color: #7B8F9D;"));
+    summaryLayout->addWidget(visionControlMessage_);
+    summaryLayout->addStretch(1);
+
+    auto *controlsLabel = new QLabel(QStringLiteral("Vision Controls"), summary);
+    controlsLabel->setObjectName(QStringLiteral("visionControlsLabel"));
+    controlsLabel->setStyleSheet(QStringLiteral(
+        "color: #667C8C; font-size: 11px; font-weight: 700;"));
+    summaryLayout->addWidget(controlsLabel);
+
+    visionConnectButton_ = new QPushButton(QStringLiteral("Connect Video"), summary);
+    visionConnectButton_->setObjectName(QStringLiteral("visionConnectButton"));
+    visionConnectButton_->setProperty("consoleActionRole", "primary");
+
+    // The visible inference action is a state-driven Start/Stop toggle.
+    // The legacy stop button remains hidden except for Failed -> Clear Error,
+    // preserving the frozen recovery semantics without showing duplicate
+    // Start/Stop controls during normal operation.
+    startInferenceButton_ =
+        new QPushButton(QStringLiteral("Start Inference"), summary);
+    startInferenceButton_->setObjectName(QStringLiteral("startInferenceButton"));
+    startInferenceButton_->setProperty("consoleActionRole", "primary");
+    stopInferenceButton_ =
+        new QPushButton(QStringLiteral("Clear Error"), summary);
+    stopInferenceButton_->setObjectName(QStringLiteral("stopInferenceButton"));
+    stopInferenceButton_->setProperty("consoleActionRole", "secondary");
+    stopInferenceButton_->setVisible(false);
+
+    snapshotButton_ = new QPushButton(QStringLiteral("Snapshot"), summary);
+    snapshotButton_->setObjectName(QStringLiteral("snapshotButton"));
+    snapshotButton_->setProperty("consoleActionRole", "secondary");
+
+    // Same pattern for capture: the visible button toggles Start/Stop from
+    // authoritative capture status. The legacy stop action stays hidden for
+    // compatibility tests and never creates a second operator-facing button.
+    startRecordingButton_ =
+        new QPushButton(QStringLiteral("Start Recording"), summary);
+    startRecordingButton_->setObjectName(QStringLiteral("startRecordingButton"));
+    startRecordingButton_->setProperty("consoleActionRole", "primary");
+    stopRecordingButton_ =
+        new QPushButton(QStringLiteral("Stop Recording"), summary);
+    stopRecordingButton_->setObjectName(QStringLiteral("stopRecordingButton"));
+    stopRecordingButton_->setProperty("consoleActionRole", "stop");
+    stopRecordingButton_->setVisible(false);
+
+    for (QPushButton *button :
+         {visionConnectButton_, startInferenceButton_,
+          stopInferenceButton_, snapshotButton_,
+          startRecordingButton_}) {
+        button->setMinimumHeight(34);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        summaryLayout->addWidget(button);
+    }
+
+    content->addWidget(summary, 1);
+    layout->addWidget(videoContentHost_, 1);
+
+    // Hidden compatibility action: behavior tests and HTTP-only reconciliation
+    // keep the same signal path, but the operator no longer sees a redundant
+    // Refresh Status button.
+    visionRefreshStatusButton_ = new QPushButton(box);
+    visionRefreshStatusButton_->setObjectName(
+        QStringLiteral("visionRefreshStatusButton"));
+    visionRefreshStatusButton_->setVisible(false);
 
     const bool available = visionClient_ != nullptr;
     visionConnectButton_->setEnabled(available);
@@ -880,7 +989,7 @@ QWidget *MainWindow::createVideoPlaceholder()
     stopRecordingButton_->setEnabled(false);
     startInferenceButton_->setEnabled(false);
     stopInferenceButton_->setEnabled(false);
-
+    QTimer::singleShot(0, this, [this] { updateVideoSurfaceGeometry(); });
     return box;
 }
 
@@ -890,7 +999,7 @@ QWidget *MainWindow::createLeakCard()
     box->setObjectName(QStringLiteral("leakCard"));
     applyDashboardCardStyle(box);
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(10, 9, 10, 9);
+    layout->setContentsMargins(7, 6, 7, 6);
     layout->setSpacing(7);
     addDashboardCardHeader(
         layout, box, QStringLiteral("Leak Detection"));
@@ -917,14 +1026,14 @@ QWidget *MainWindow::createLeakCard()
 
 QWidget *MainWindow::createImuCard()
 {
-    auto *box = new QGroupBox(QStringLiteral("IMU — JY901S"), this);
+    auto *box = new QGroupBox(QStringLiteral("IMU"), this);
     box->setObjectName(QStringLiteral("imuCard"));
     applyDashboardCardStyle(box);
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(10, 9, 10, 9);
+    layout->setContentsMargins(7, 6, 7, 6);
     layout->setSpacing(6);
     addDashboardCardHeader(
-        layout, box, QStringLiteral("IMU — JY901S"));
+        layout, box, QStringLiteral("IMU"));
 
     auto *statusRow = new QHBoxLayout;
     statusRow->setContentsMargins(1, 0, 0, 0);
@@ -972,7 +1081,7 @@ QWidget *MainWindow::createDepthCard()
     box->setObjectName(QStringLiteral("depthCard"));
     applyDashboardCardStyle(box);
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(10, 9, 10, 9);
+    layout->setContentsMargins(7, 6, 7, 6);
     layout->setSpacing(6);
     addDashboardCardHeader(
         layout, box, QStringLiteral("Depth Sensor"));
@@ -1019,72 +1128,90 @@ QWidget *MainWindow::createDepthCard()
 
 QWidget *MainWindow::createProtocolSummaryCard()
 {
-    auto *box = new QGroupBox(QStringLiteral("Protocol / Link"), this);
+    auto *box = new QGroupBox(QStringLiteral("Protocol"), this);
     box->setObjectName(QStringLiteral("protocolSummaryCard"));
     applyDashboardCardStyle(box);
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(10, 9, 10, 9);
-    layout->setSpacing(7);
+    layout->setContentsMargins(8, 7, 8, 7);
+    layout->setSpacing(4);
     addDashboardCardHeader(
-        layout, box, QStringLiteral("Protocol / Link"));
+        layout, box, QStringLiteral("Protocol"));
 
     auto *metrics = new QGridLayout;
-    metrics->setContentsMargins(1, 0, 0, 0);
-    metrics->setHorizontalSpacing(10);
-    metrics->setVerticalSpacing(5);
+    metrics->setContentsMargins(0, 0, 0, 0);
+    metrics->setHorizontalSpacing(6);
+    metrics->setVerticalSpacing(2);
+
     txCount_ = new QLabel(QStringLiteral("0"), box);
     rxCount_ = new QLabel(QStringLiteral("0"), box);
     crcCount_ = new QLabel(QStringLiteral("0"), box);
     timeoutCount_ = new QLabel(QStringLiteral("0"), box);
     ackRtt_ = new QLabel(QStringLiteral("—"), box);
-    for (QLabel *value : {txCount_, rxCount_, crcCount_, timeoutCount_, ackRtt_}) {
-        value->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
+    for (QLabel *value : {txCount_, crcCount_, ackRtt_, rxCount_, timeoutCount_}) {
+        value->setStyleSheet(QStringLiteral(
+            "color: #405A6B; font-size: 11px; font-weight: 600;"));
     }
+
     const QStringList labels = {
-        QStringLiteral("TX"), QStringLiteral("RX"), QStringLiteral("CRC"),
-        QStringLiteral("Timeout"), QStringLiteral("ACK RTT"),
+        QStringLiteral("TX"), QStringLiteral("CRC"), QStringLiteral("ACK RTT"),
+        QStringLiteral("RX"), QStringLiteral("Timeout"),
     };
-    for (int index = 0; index < labels.size(); ++index) {
-        auto *label = new QLabel(labels.at(index), box);
-        label->setStyleSheet(QStringLiteral("color: #7B8F9D; font-size: 11px; font-weight: 500;"));
-        const int row = index < 4 ? index / 2 : 2;
-        const int column = index < 4 ? (index % 2) * 2 : 0;
-        metrics->addWidget(label, row, column);
+    const QList<QLabel *> values = {
+        txCount_, crcCount_, ackRtt_, rxCount_, timeoutCount_,
+    };
+    for (int row = 0; row < labels.size(); ++row) {
+        auto *label = new QLabel(labels.at(row), box);
+        label->setStyleSheet(QStringLiteral(
+            "color: #7B8F9D; font-size: 11px; font-weight: 500;"));
+        metrics->addWidget(label, row, 0);
+        metrics->addWidget(values.at(row), row, 1);
     }
-    metrics->addWidget(txCount_, 0, 1);
-    metrics->addWidget(rxCount_, 0, 3);
-    metrics->addWidget(crcCount_, 1, 1);
-    metrics->addWidget(timeoutCount_, 1, 3);
-    metrics->addWidget(ackRtt_, 2, 1);
     metrics->setColumnStretch(1, 1);
-    metrics->setColumnStretch(3, 1);
     layout->addLayout(metrics);
-    layout->addStretch();
+    layout->addStretch(1);
     return box;
 }
 
 QWidget *MainWindow::createStatusColumn()
 {
-    auto *column = new QWidget(this);
-    column->setObjectName(QStringLiteral("telemetrySidebar"));
-    telemetrySidebar_ = column;
-    auto *layout = new QVBoxLayout(column);
+    auto *panel = new QWidget(this);
+    panel->setObjectName(QStringLiteral("telemetrySidebar"));
+    telemetrySidebar_ = panel;
+    panel->setMinimumWidth(215);
+    panel->setMaximumWidth(230);
+    panel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+
+    auto *layout = new QVBoxLayout(panel);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
+    layout->setSpacing(5);
+
     QWidget *leak = createLeakCard();
     QWidget *imu = createImuCard();
     QWidget *depth = createDepthCard();
     QWidget *protocol = createProtocolSummaryCard();
-    leak->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    imu->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-    depth->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-    protocol->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-    layout->addWidget(leak);
-    layout->addWidget(imu);
-    layout->addWidget(depth);
-    layout->addWidget(protocol);
-    layout->addStretch(1);
-    return column;
+    QWidget *actuator = createActuatorPanel();
+
+    leak->setMinimumHeight(60);
+    imu->setMinimumHeight(96);
+    depth->setMinimumHeight(92);
+    protocol->setMinimumHeight(110);
+    actuator->setMinimumHeight(145);
+
+    const std::array<std::pair<QWidget *, int>, 5> cards = {{
+        {leak, 1},
+        {imu, 2},
+        {depth, 2},
+        {protocol, 2},
+        {actuator, 3},
+    }};
+    for (const auto &[card, stretch] : cards) {
+        card->setMinimumWidth(215);
+        card->setMaximumWidth(230);
+        card->setMaximumHeight(QWIDGETSIZE_MAX);
+        card->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+        layout->addWidget(card, stretch);
+    }
+    return panel;
 }
 
 QWidget *MainWindow::createDashboard()
@@ -1094,12 +1221,16 @@ QWidget *MainWindow::createDashboard()
     auto *layout = new QHBoxLayout(dashboard);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(8);
-    layout->addWidget(createVideoPlaceholder(), 4);
-    layout->addWidget(createStatusColumn(), 1);
-    if (auto *sidebar = qobject_cast<QWidget *>(telemetrySidebar_)) {
-        sidebar->setMinimumWidth(272);
-        sidebar->setMaximumWidth(320);
-    }
+
+    QWidget *video = createVideoPlaceholder();
+    video->setMinimumWidth(430);
+    video->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    layout->addWidget(video, 1);
+
+    QWidget *telemetry = createStatusColumn();
+    layout->addWidget(telemetry, 0);
+
+    actuatorScroll_ = nullptr;
     return dashboard;
 }
 
@@ -1107,265 +1238,316 @@ QWidget *MainWindow::createServoPanel(int index, ServoId id)
 {
     const ServoDescriptor *descriptor = servoDescriptor(id);
     Q_ASSERT(descriptor != nullptr);
-    const bool supported = descriptor != nullptr && controller_->isServoSupported(id);
     const QString semanticName = descriptor == nullptr
         ? QStringLiteral("Unknown")
         : QString::fromLatin1(descriptor->displayName);
-    auto *box = new QGroupBox(semanticName, this);
-    box->setMinimumWidth(248);
-    applyCardStyle(box);
-    box->setStyleSheet(box->styleSheet() + QStringLiteral(
-        "QGroupBox { margin-top: 5px; padding-top: 3px; }"
-        "QGroupBox::title { color: transparent; background: transparent; }"));
-    auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(6, 6, 6, 6);
-    layout->setSpacing(3);
 
-    const bool angleSupported = supported && descriptor != nullptr && descriptor->angleSupported;
+    auto *row = new QWidget(this);
+    row->setObjectName(QStringLiteral("servoStatusRow%1").arg(index));
+    row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    row->setFixedHeight(20);
 
-    auto *header = new QHBoxLayout;
-    header->setSpacing(4);
-    auto *name = new QLabel(semanticName, box);
-    name->setStyleSheet(QStringLiteral("color: #263238; font-size: 13px; font-weight: 700;"));
-    header->addWidget(name);
-    header->addStretch();
-    auto *statusDot = new QLabel(box);
+    auto *layout = new QHBoxLayout(row);
+    layout->setContentsMargins(2, 1, 2, 1);
+    layout->setSpacing(5);
+
+    auto *name = new QLabel(semanticName, row);
+    name->setObjectName(QStringLiteral("servoStatusName%1").arg(index));
+    name->setStyleSheet(QStringLiteral(
+        "color: #263238; font-size: 11px; font-weight: 700;"));
+    layout->addWidget(name);
+    layout->addStretch(1);
+
+    auto *statusDot = new QLabel(row);
     statusDot->setObjectName(QStringLiteral("servoStatusDot%1").arg(index));
     statusDot->setFixedSize(8, 8);
-    statusDot->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 4px;"));
-    header->addWidget(statusDot);
-    statusLabels_[index] = new QLabel(QStringLiteral("Disconnected"), box);
-    statusLabels_[index]->setStyleSheet(QStringLiteral("color: #6F7F8B; font-size: 11px; font-weight: 600;"));
-    header->addWidget(statusLabels_[index]);
-    layout->addLayout(header);
+    statusDot->setStyleSheet(
+        QStringLiteral("background: #9e9e9e; border-radius: 4px;"));
+    layout->addWidget(statusDot);
 
-    const QString warningText = descriptor == nullptr || !supported
-        ? QStringLiteral("UNSUPPORTED — NO HARDWARE CHANNEL")
-        : descriptor->calibrationPending
-            ? QStringLiteral("PWM bring-up only: %1–%2 μs")
-                  .arg(descriptor->commandMinPwmUs)
-                  .arg(descriptor->commandMaxPwmUs)
-            : QStringLiteral("PWM: %1–%2 μs; angle: %3–%4°")
-                  .arg(descriptor->commandMinPwmUs)
-                  .arg(descriptor->commandMaxPwmUs)
-                  .arg(static_cast<double>(descriptor->commandMinAngleCdeg) / 100.0, 0, 'f', 1)
-                  .arg(static_cast<double>(descriptor->commandMaxAngleCdeg) / 100.0, 0, 'f', 1);
-    auto *warning = new QLabel(warningText, box);
-    warning->setWordWrap(true);
-    warning->setStyleSheet(QStringLiteral(
-        "color: #756451;"
-        "font-size: 10px;"
-        "font-weight: 600;"
-    ));
-    layout->addWidget(warning);
+    statusLabels_[index] = new QLabel(QStringLiteral("Disconnected"), row);
+    statusLabels_[index]->setObjectName(
+        QStringLiteral("servoStatusLabel%1").arg(index));
+    statusLabels_[index]->setStyleSheet(QStringLiteral(
+        "color: #6F7F8B; font-size: 10px; font-weight: 600;"));
+    layout->addWidget(statusLabels_[index]);
 
-    // PWM label + spin + slider share one compact row.
-    auto *pwmRow = new QHBoxLayout;
-    pwmRow->setSpacing(2);
-    pwmSpins_[index] = new QSpinBox(box);
-    pwmSpins_[index]->setRange(descriptor == nullptr ? 0 : descriptor->commandMinPwmUs,
-                               descriptor == nullptr ? 0 : descriptor->commandMaxPwmUs);
-    pwmSpins_[index]->setValue(descriptor == nullptr ? 0 : descriptor->neutralPwmUs);
-    pwmSpins_[index]->setSuffix(QStringLiteral(" μs"));
-    pwmSpins_[index]->setEnabled(supported);
-    pwmRow->addWidget(new QLabel(QStringLiteral("PWM"), box));
-    pwmRow->addWidget(pwmSpins_[index]);
-    pwmSliders_[index] = new QSlider(Qt::Horizontal, box);
-    pwmSliders_[index]->setRange(descriptor == nullptr ? 0 : descriptor->commandMinPwmUs,
-                                 descriptor == nullptr ? 0 : descriptor->commandMaxPwmUs);
-    pwmSliders_[index]->setValue(descriptor == nullptr ? 0 : descriptor->neutralPwmUs);
-    pwmSliders_[index]->setEnabled(supported);
-    pwmRow->addWidget(pwmSliders_[index], 1);
-    layout->addLayout(pwmRow);
-
-    // Angle + Set Angle share one compact row.
-    auto *angleRow = new QHBoxLayout;
-    angleRow->setSpacing(2);
-    angleSpins_[index] = new QDoubleSpinBox(box);
-    angleSpins_[index]->setRange(descriptor == nullptr ? 0.0
-                                                      : static_cast<double>(descriptor->commandMinAngleCdeg) / 100.0,
-                                 descriptor == nullptr ? 0.0
-                                                      : static_cast<double>(descriptor->commandMaxAngleCdeg) / 100.0);
-    angleSpins_[index]->setDecimals(1);
-    angleSpins_[index]->setSingleStep(0.1);
-    angleSpins_[index]->setValue(0.0);
-    angleSpins_[index]->setSuffix(QStringLiteral(" deg"));
-    angleSpins_[index]->setEnabled(false);
-    angleRow->addWidget(new QLabel(QStringLiteral("Angle"), box));
-    angleRow->addWidget(angleSpins_[index], 1);
-    angleButtons_[index] = new QPushButton(
-        angleSupported
-            ? QStringLiteral("Set Angle")
-            : QStringLiteral("Set Angle — PWM Only / Planned"),
-        box);
-    angleButtons_[index]->setEnabled(false);
-    angleButtons_[index]->setToolTip(
-        angleSupported
-            ? QStringLiteral("Send %1 as Protocol V2 centidegrees after Enable ACK")
-                  .arg(semanticName)
-            : QStringLiteral("%1 has no angle capability; use PWM only while calibration is pending")
-                  .arg(semanticName));
-    angleRow->addWidget(angleButtons_[index]);
-    layout->addLayout(angleRow);
-
-    // Enable / Neutral / Apply on a single row.
-    enableButtons_[index] = new QPushButton(QStringLiteral("Enable PWM"), box);
-    enableButtons_[index]->setToolTip(QStringLiteral(
-        "Enable PWM drive and hold the calibrated neutral position."));
-    neutralButtons_[index] = new QPushButton(
-        descriptor != nullptr && descriptor->calibrationPending
-            ? QStringLiteral("Center %1 us — Provisional").arg(descriptor->neutralPwmUs)
-            : QStringLiteral("Neutral"),
-        box);
-    if (descriptor != nullptr && descriptor->calibrationPending) {
-        neutralButtons_[index]->setToolTip(QStringLiteral(
-            "Provisional center candidate only; not a calibrated Neutral. "
-            "This action reuses the Protocol V2 Neutral command."));
-    }
-    applyButtons_[index] = new QPushButton(QStringLiteral("Apply PWM"), box);
-    if (!controller_->supportsRawPwm()) {
-        pwmSpins_[index]->setEnabled(false);
-        pwmSliders_[index]->setEnabled(false);
-        applyButtons_[index]->setEnabled(false);
-        applyButtons_[index]->setToolTip(
-            QStringLiteral("Raw PWM is available only in Direct/APC maintenance mode."));
-    }
-
-    for (QPushButton *button : {enableButtons_[index], neutralButtons_[index], applyButtons_[index]}) {
-        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        button->setMinimumWidth(0);
-        button->setProperty("consoleActionRole", "secondary");
-    }
-    auto *actionsRow = new QHBoxLayout;
-    actionsRow->setSpacing(2);
-    actionsRow->addWidget(enableButtons_[index], 1);
-    actionsRow->addWidget(neutralButtons_[index], 1);
-    actionsRow->addWidget(applyButtons_[index], 1);
-    layout->addLayout(actionsRow);
-
-    connect(pwmSpins_[index], qOverload<int>(&QSpinBox::valueChanged),
-            pwmSliders_[index], &QSlider::setValue);
-    connect(pwmSliders_[index], &QSlider::valueChanged,
-            pwmSpins_[index], &QSpinBox::setValue);
-    connect(enableButtons_[index], &QPushButton::clicked, this, [this, id, index] {
-        if (controller_->isServoEnabled(id)) {
-            controller_->disableServo(id);
-        } else {
-            controller_->enableServo(id);
-        }
-    });
-    connect(neutralButtons_[index], &QPushButton::clicked, this, [this, id] {
-        controller_->neutralServo(id);
-    });
-    connect(applyButtons_[index], &QPushButton::clicked, this, [this, id, index] {
-        controller_->setServoPwm(id, static_cast<quint16>(pwmSpins_[index]->value()));
-    });
-    connect(angleButtons_[index], &QPushButton::clicked, this, [this, id, index] {
-        if (!controller_->isControlActive() || !controller_->isServoSupported(id)
-            || !controller_->isServoEnabled(id)
-            || controller_->isServoDisablePending(id)
-            || servoDescriptor(id) == nullptr
-            || !servoDescriptor(id)->angleSupported) {
-            refreshServoUi(index);
-            return;
-        }
-        controller_->setServoAngle(id, angleDegreesToCentidegrees(angleSpins_[index]->value()));
-    });
     refreshServoUi(index);
-    return box;
+    return row;
 }
 
 QWidget *MainWindow::createActuatorPanel()
 {
     auto *box = new QGroupBox(QStringLiteral("Actuator Control"), this);
     box->setObjectName(QStringLiteral("actuatorPage"));
-    applySectionStyle(box);
+    applyDashboardCardStyle(box);
+
     auto *layout = new QVBoxLayout(box);
-    layout->setContentsMargins(10, 8, 10, 10);
-    layout->setSpacing(7);
-
-    auto *header = new QHBoxLayout;
-    header->setContentsMargins(0, 0, 0, 0);
-    header->setSpacing(7);
-
-    auto *accent = new QWidget(box);
-    accent->setFixedSize(4, 18);
-    accent->setStyleSheet(QStringLiteral(
-        "background: #1976D2;"
-        "border-radius: 2px;"
-    ));
-    header->addWidget(accent);
-
-    auto *title = new QLabel(QStringLiteral("Actuator Control"), box);
-    title->setStyleSheet(QStringLiteral(
-        "color: #18364F;"
-        "font-size: 14px;"
-        "font-weight: 700;"
-    ));
-    header->addWidget(title);
-
-    header->addStretch();
-    layout->addLayout(header);
+    layout->setContentsMargins(7, 6, 7, 6);
+    layout->setSpacing(2);
+    addDashboardCardHeader(
+        layout, box, QStringLiteral("Actuator Control"));
 
     actuatorCardsHost_ = new QWidget(box);
     actuatorCardsHost_->setObjectName(QStringLiteral("actuatorCardsHost"));
-    actuatorCardsHost_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    actuatorCardsHost_->setMinimumWidth(0);
-    actuatorCardsHost_->installEventFilter(this);
+    actuatorCardsHost_->setSizePolicy(
+        QSizePolicy::Expanding, QSizePolicy::Expanding);
     actuatorGrid_ = new QGridLayout(actuatorCardsHost_);
     actuatorGrid_->setContentsMargins(0, 0, 0, 0);
-    actuatorGrid_->setHorizontalSpacing(8);
-    actuatorGrid_->setVerticalSpacing(8);
+    actuatorGrid_->setHorizontalSpacing(0);
+    actuatorGrid_->setVerticalSpacing(0);
+
     const auto &descriptors = servoDescriptorTable();
     for (int index = 0; index < kServoCount; ++index) {
         servoPanels_[static_cast<std::size_t>(index)] =
             createServoPanel(index, descriptors.at(index).id);
+        actuatorGrid_->addWidget(
+            servoPanels_[static_cast<std::size_t>(index)], index, 0);
+        actuatorGrid_->setRowStretch(index, 1);
     }
+    actuatorColumnCount_ = 1;
     layout->addWidget(actuatorCardsHost_, 1);
-    reflowActuatorCards();
     return box;
+}
+
+QWidget *MainWindow::createServoFineControlTab()
+{
+    auto *page = new QGroupBox(QStringLiteral("Servo Fine Control"), this);
+    page->setObjectName(QStringLiteral("servoFineControlPage"));
+    applySectionStyle(page);
+
+    auto *grid = new QGridLayout(page);
+    grid->setContentsMargins(8, 8, 8, 8);
+    grid->setHorizontalSpacing(8);
+    grid->setVerticalSpacing(6);
+
+    const QStringList headers = {
+        QStringLiteral("Servo"),
+        QStringLiteral("PWM Range"),
+        QStringLiteral("PWM"),
+        QStringLiteral("PWM Slider"),
+        QStringLiteral("Angle"),
+        QStringLiteral(""),
+        QStringLiteral("Servo"),
+        QStringLiteral(""),
+    };
+    for (int col = 0; col < headers.size(); ++col) {
+        auto *label = new QLabel(headers.at(col), page);
+        label->setStyleSheet(QStringLiteral(
+            "color: #667C8C; font-size: 11px; font-weight: 700;"));
+        grid->addWidget(label, 0, col);
+    }
+
+    const auto &descriptors = servoDescriptorTable();
+    for (int index = 0; index < kServoCount; ++index) {
+        const ServoDescriptor &descriptor = descriptors.at(index);
+        const ServoId id = descriptor.id;
+        const bool supported = controller_->isServoSupported(id);
+        const QString semanticName =
+            QString::fromLatin1(descriptor.displayName);
+
+        auto *name = new QLabel(semanticName, page);
+        name->setStyleSheet(QStringLiteral(
+            "color: #263238; font-weight: 700;"));
+        grid->addWidget(name, index + 1, 0);
+
+        auto *range = new QLabel(
+            QStringLiteral("%1–%2 μs")
+                .arg(descriptor.commandMinPwmUs)
+                .arg(descriptor.commandMaxPwmUs),
+            page);
+        range->setObjectName(
+            QStringLiteral("servoPwmRange%1").arg(index));
+        range->setStyleSheet(QStringLiteral(
+            "color: #756451; font-size: 10px; font-weight: 600;"));
+        grid->addWidget(range, index + 1, 1);
+
+        pwmSpins_[index] = new QSpinBox(page);
+        pwmSpins_[index]->setObjectName(
+            QStringLiteral("servoPwmSpin%1").arg(index));
+        pwmSpins_[index]->setRange(
+            descriptor.commandMinPwmUs,
+            descriptor.commandMaxPwmUs);
+        pwmSpins_[index]->setValue(descriptor.neutralPwmUs);
+        pwmSpins_[index]->setSuffix(QStringLiteral(" μs"));
+        pwmSpins_[index]->setKeyboardTracking(false);
+        pwmSpins_[index]->setEnabled(
+            supported && controller_->supportsRawPwm());
+        grid->addWidget(pwmSpins_[index], index + 1, 2);
+
+        pwmSliders_[index] = new QSlider(Qt::Horizontal, page);
+        pwmSliders_[index]->setObjectName(
+            QStringLiteral("servoPwmSlider%1").arg(index));
+        pwmSliders_[index]->setRange(
+            descriptor.commandMinPwmUs,
+            descriptor.commandMaxPwmUs);
+        pwmSliders_[index]->setValue(descriptor.neutralPwmUs);
+        pwmSliders_[index]->setEnabled(
+            supported && controller_->supportsRawPwm());
+        grid->addWidget(pwmSliders_[index], index + 1, 3);
+
+        angleSpins_[index] = new QDoubleSpinBox(page);
+        angleSpins_[index]->setObjectName(
+            QStringLiteral("servoAngleSpin%1").arg(index));
+        angleSpins_[index]->setRange(
+            static_cast<double>(descriptor.commandMinAngleCdeg) / 100.0,
+            static_cast<double>(descriptor.commandMaxAngleCdeg) / 100.0);
+        angleSpins_[index]->setDecimals(1);
+        angleSpins_[index]->setSingleStep(0.1);
+        angleSpins_[index]->setValue(0.0);
+        angleSpins_[index]->setSuffix(QStringLiteral(" deg"));
+        angleSpins_[index]->setButtonSymbols(
+            QAbstractSpinBox::NoButtons);
+        angleSpins_[index]->setKeyboardTracking(false);
+        angleSpins_[index]->setEnabled(false);
+        angleSpins_[index]->setToolTip(
+            descriptor.angleSupported
+                ? QStringLiteral(
+                      "Type an angle and press Enter or leave the field "
+                      "to send the existing SetServoAngle command.")
+                : QStringLiteral(
+                      "Angle control is unavailable for this servo."));
+        grid->addWidget(angleSpins_[index], index + 1, 4);
+
+        applyButtons_[index] =
+            new QPushButton(QStringLiteral("Apply"), page);
+        applyButtons_[index]->setObjectName(
+            QStringLiteral("servoApplyButton%1").arg(index));
+        applyButtons_[index]->setProperty(
+            "consoleActionRole", "secondary");
+        applyButtons_[index]->setEnabled(false);
+        applyButtons_[index]->setToolTip(
+            controller_->supportsRawPwm()
+                ? QStringLiteral("Apply the selected raw PWM value.")
+                : QStringLiteral(
+                      "Raw PWM is available only in Direct/APC maintenance mode."));
+        grid->addWidget(applyButtons_[index], index + 1, 5);
+
+        enableButtons_[index] =
+            new QPushButton(QStringLiteral("Enable"), page);
+        enableButtons_[index]->setObjectName(
+            QStringLiteral("servoEnableButton%1").arg(index));
+        enableButtons_[index]->setProperty(
+            "consoleActionRole", "secondary");
+        enableButtons_[index]->setEnabled(false);
+        enableButtons_[index]->setToolTip(QStringLiteral(
+            "Enable PWM drive and hold the calibrated neutral position."));
+        grid->addWidget(enableButtons_[index], index + 1, 6);
+
+        neutralButtons_[index] =
+            new QPushButton(QStringLiteral("Neutral"), page);
+        neutralButtons_[index]->setObjectName(
+            QStringLiteral("servoNeutralButton%1").arg(index));
+        neutralButtons_[index]->setProperty(
+            "consoleActionRole", "secondary");
+        neutralButtons_[index]->setEnabled(false);
+        if (descriptor.calibrationPending) {
+            neutralButtons_[index]->setToolTip(QStringLiteral(
+                "Provisional center candidate; this action reuses the "
+                "existing Protocol V2 Neutral command."));
+        }
+        grid->addWidget(neutralButtons_[index], index + 1, 7);
+
+        connect(pwmSpins_[index],
+                qOverload<int>(&QSpinBox::valueChanged),
+                pwmSliders_[index], &QSlider::setValue);
+        connect(pwmSliders_[index], &QSlider::valueChanged,
+                pwmSpins_[index], &QSpinBox::setValue);
+        connect(applyButtons_[index], &QPushButton::clicked,
+                this, [this, id, index] {
+            if (pwmSpins_[index] == nullptr) {
+                return;
+            }
+            controller_->setServoPwm(
+                id,
+                static_cast<quint16>(pwmSpins_[index]->value()));
+            refreshServoUi(index);
+        });
+        connect(enableButtons_[index], &QPushButton::clicked,
+                this, [this, id, index] {
+            if (controller_->isServoEnabled(id)) {
+                controller_->disableServo(id);
+            } else {
+                controller_->enableServo(id);
+            }
+            refreshServoUi(index);
+        });
+        connect(neutralButtons_[index], &QPushButton::clicked,
+                this, [this, id, index] {
+            controller_->neutralServo(id);
+            refreshServoUi(index);
+        });
+
+        connect(angleSpins_[index],
+                qOverload<double>(&QDoubleSpinBox::valueChanged),
+                this, [this, index](double) {
+            angleEditDirty_[index] = true;
+        });
+        connect(angleSpins_[index], &QDoubleSpinBox::editingFinished,
+                this, [this, id, index] {
+            if (!angleEditDirty_[index]) {
+                return;
+            }
+            angleEditDirty_[index] = false;
+            const ServoDescriptor *descriptor = servoDescriptor(id);
+            if (!controller_->isControlActive()
+                || !controller_->isServoSupported(id)
+                || !controller_->isServoEnabled(id)
+                || controller_->isServoDisablePending(id)
+                || controller_->isMotionActive()
+                || descriptor == nullptr
+                || !descriptor->angleSupported
+                || descriptor->calibrationPending) {
+                refreshServoUi(index);
+                return;
+            }
+            controller_->setServoAngle(
+                id,
+                angleDegreesToCentidegrees(
+                    angleSpins_[index]->value()));
+            refreshServoUi(index);
+        });
+
+    }
+
+    grid->setColumnStretch(3, 1);
+    grid->setRowStretch(kServoCount + 1, 1);
+    return page;
 }
 
 QWidget *MainWindow::createMotionPanel()
 {
-    auto *box = new QGroupBox(QStringLiteral("Motion / Gait — Bench"), this);
+    auto *box = new QGroupBox(QStringLiteral("Motion / Gait"), this);
     box->setObjectName(QStringLiteral("motionPage"));
     applySectionStyle(box);
     auto *outer = new QVBoxLayout(box);
-    outer->setContentsMargins(10, 8, 10, 10);
-    outer->setSpacing(7);
-
-    auto *sectionHeader = new QHBoxLayout;
-    sectionHeader->setContentsMargins(0, 0, 0, 0);
-    sectionHeader->setSpacing(7);
-
-    auto *accent = new QWidget(box);
-    accent->setFixedSize(4, 18);
-    accent->setStyleSheet(QStringLiteral(
-        "background: #1976D2;"
-        "border-radius: 2px;"
-    ));
-    sectionHeader->addWidget(accent);
-
-    auto *sectionTitle = new QLabel(QStringLiteral("Motion / Gait — Bench"), box);
-    sectionTitle->setStyleSheet(QStringLiteral(
-        "color: #18364F;"
-        "font-size: 14px;"
-        "font-weight: 700;"
-    ));
-    sectionHeader->addWidget(sectionTitle);
-    sectionHeader->addStretch();
-    outer->addLayout(sectionHeader);
+    outer->setContentsMargins(6, 5, 6, 5);
+    outer->setSpacing(4);
 
     auto *content = new QHBoxLayout;
     content->setContentsMargins(0, 0, 0, 0);
     content->setSpacing(8);
 
-    // --- Motion Control (left): D-pad-like arrangement ---
+    const QString commandButtonStyle = QStringLiteral(
+        "QPushButton {"
+        " background: #E1E7EC;"
+        " border: 1px solid #AABAC6;"
+        " border-radius: 6px;"
+        " color: #294252;"
+        " font-size: 13px;"
+        " font-weight: 700;"
+        " min-height: 26px;"
+        " padding: 2px 8px;"
+        "}"
+        "QPushButton:hover { background: #D5DEE5; border-color: #7F929F; }"
+        "QPushButton:pressed, QPushButton:checked { background: #C5D2DC; }"
+        "QPushButton:disabled { background: #F0F3F5; color: #8A98A2; border-color: #D2DAE0; }");
+
+    // --- Motion Control ---
     auto *motionGroup = new QGroupBox(QStringLiteral("Motion Control"), box);
     applySubpanelStyle(motionGroup);
     auto *dpad = new QGridLayout(motionGroup);
-    dpad->setContentsMargins(8, 12, 8, 8);
+    dpad->setContentsMargins(6, 6, 6, 6);
     dpad->setSpacing(6);
 
     const MotionMode dpadModes[] = {
@@ -1379,35 +1561,50 @@ QWidget *MainWindow::createMotionPanel()
         button->setCheckable(true);
         button->setAutoExclusive(false);
         button->setProperty("consoleActionRole", "secondary");
+        button->setStyleSheet(commandButtonStyle);
         motionButtons_[static_cast<std::size_t>(mode)] = button;
         if (mode == MotionMode::Backward) {
             button->setEnabled(false);
-            button->setToolTip(
-                QStringLiteral("Pending water-tank verification; no BACKWARD START is emitted."));
+            button->setToolTip(QStringLiteral(
+                "Brake control is pending water-tank verification; no motion command is emitted."));
         }
-        connect(button,
-                &QPushButton::clicked,
-                this,
-                [this, mode] {
-                    controller_->startMotion(mode);
-                    refreshMotionUi();
-                });
+        connect(button, &QPushButton::clicked, this, [this, mode] {
+            controller_->startMotion(mode);
+            refreshMotionUi();
+        });
     }
-    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Forward)], 0, 1);
-    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::TurnLeft)], 1, 0);
-    auto *manual = new QLabel(QStringLiteral("Manual"), motionGroup);
-    manual->setObjectName(QStringLiteral("motionManualCenter"));
-    manual->setAlignment(Qt::AlignCenter);
-    manual->setStyleSheet(QStringLiteral("color: #667C8C; font-size: 11px; font-weight: 600;"));
-    dpad->addWidget(manual, 1, 1);
-    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::TurnRight)], 1, 2);
-    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Backward)], 2, 1);
 
-    // --- Gait / Vertical (right) ---
+    dpad->addWidget(
+        motionButtons_[static_cast<std::size_t>(MotionMode::Forward)], 0, 1);
+    dpad->addWidget(
+        motionButtons_[static_cast<std::size_t>(MotionMode::TurnLeft)], 1, 0);
+
+    motionStopButton_ = new QPushButton(QStringLiteral("STOP"), motionGroup);
+    motionStopButton_->setObjectName(QStringLiteral("motionStopButton"));
+    motionStopButton_->setProperty("consoleActionRole", "stop");
+    motionStopButton_->setMinimumHeight(30);
+    motionStopButton_->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #C8D0D6; border: 1px solid #788A96;"
+        " border-radius: 6px; color: #253945; font-size: 13px;"
+        " font-weight: 800; min-height: 26px; padding: 2px 8px; }"
+        "QPushButton:hover { background: #BAC5CC; }"
+        "QPushButton:pressed { background: #AAB7C0; }"));
+    motionStopButton_->setToolTip(QStringLiteral("Stop the active motion."));
+    connect(motionStopButton_, &QPushButton::clicked, this, [this] {
+        controller_->stopMotion();
+        refreshMotionUi();
+    });
+    dpad->addWidget(motionStopButton_, 1, 1);
+    dpad->addWidget(
+        motionButtons_[static_cast<std::size_t>(MotionMode::TurnRight)], 1, 2);
+    dpad->addWidget(
+        motionButtons_[static_cast<std::size_t>(MotionMode::Backward)], 2, 1);
+
+    // --- Gait / Vertical ---
     auto *gaitGroup = new QGroupBox(QStringLiteral("Gait / Vertical"), box);
     applySubpanelStyle(gaitGroup);
     auto *gaitLayout = new QGridLayout(gaitGroup);
-    gaitLayout->setContentsMargins(8, 12, 8, 8);
+    gaitLayout->setContentsMargins(6, 8, 6, 6);
     gaitLayout->setSpacing(6);
 
     const MotionMode verticalModes[] = {
@@ -1419,14 +1616,12 @@ QWidget *MainWindow::createMotionPanel()
         button->setCheckable(true);
         button->setAutoExclusive(false);
         button->setProperty("consoleActionRole", "secondary");
+        button->setStyleSheet(commandButtonStyle);
         motionButtons_[static_cast<std::size_t>(mode)] = button;
-        connect(button,
-                &QPushButton::clicked,
-                this,
-                [this, mode] {
-                    controller_->startMotion(mode);
-                    refreshMotionUi();
-                });
+        connect(button, &QPushButton::clicked, this, [this, mode] {
+            controller_->startMotion(mode);
+            refreshMotionUi();
+        });
     }
 
     gaitBackendCombo_ = new QComboBox(gaitGroup);
@@ -1437,24 +1632,42 @@ QWidget *MainWindow::createMotionPanel()
     gaitBackendCombo_->addItem(
         QStringLiteral("CPG"), static_cast<int>(GaitBackend::CPG));
     gaitBackendStatus_ = new QLabel(QStringLiteral("Unknown"), gaitGroup);
-    auto *provisional = new QLabel(
-        QStringLiteral("Bench Provisional / Pending Water Verification"),
-        gaitGroup);
-    provisional->setStyleSheet(QStringLiteral("color: #b35c00; font-weight: bold;"));
+    gaitBackendStatus_->setStyleSheet(
+        QStringLiteral("font-weight: 700; color: #405A6B;"));
 
-    gaitLayout->addWidget(new QLabel(QStringLiteral("Gait Backend"), gaitGroup), 0, 0, 1, 3);
-    gaitLayout->addWidget(gaitBackendCombo_, 1, 0, 1, 3);
-    gaitLayout->addWidget(new QLabel(QStringLiteral("Current:"), gaitGroup), 2, 0);
-    gaitLayout->addWidget(gaitBackendStatus_, 2, 1, 1, 2);
-    auto *motionStatusHint = new QLabel(QStringLiteral("Motion status is shown in Operator tools"), gaitGroup);
-    motionStatusHint->setStyleSheet(QStringLiteral("color: #667C8C; font-size: 11px;"));
-    gaitLayout->addWidget(motionStatusHint, 3, 0, 1, 3);
-    gaitLayout->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)], 4, 0);
-    gaitLayout->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Descend)], 4, 1);
-    gaitLayout->addWidget(provisional, 5, 0, 1, 3);
+    gaitLayout->addWidget(
+        new QLabel(QStringLiteral("Gait Backend"), gaitGroup), 0, 0, 1, 2);
+    gaitLayout->addWidget(gaitBackendCombo_, 1, 0, 1, 2);
+    gaitLayout->addWidget(
+        new QLabel(QStringLiteral("Current"), gaitGroup), 2, 0);
+    gaitLayout->addWidget(gaitBackendStatus_, 2, 1);
+    gaitLayout->addWidget(
+        motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)], 3, 0);
+    gaitLayout->addWidget(
+        motionButtons_[static_cast<std::size_t>(MotionMode::Descend)], 3, 1);
+    gaitLayout->setColumnStretch(0, 1);
+    gaitLayout->setColumnStretch(1, 1);
+
+    // --- Runtime Log ---
+    auto *logGroup = new QGroupBox(QStringLiteral("Log"), box);
+    applySubpanelStyle(logGroup);
+    auto *logLayout = new QVBoxLayout(logGroup);
+    logLayout->setContentsMargins(6, 8, 6, 6);
+    logLayout->setSpacing(4);
+    log_ = new QPlainTextEdit(logGroup);
+    log_->setObjectName(QStringLiteral("motionLog"));
+    log_->setReadOnly(true);
+    log_->setMaximumBlockCount(1000);
+    log_->setPlaceholderText(
+        QStringLiteral("Runtime events and controller messages will appear here."));
+    log_->setStyleSheet(QStringLiteral(
+        "QPlainTextEdit { background: #F8FAFC; border: 1px solid #D4DEE5;"
+        " border-radius: 5px; color: #405A6B; padding: 5px; font-size: 11px; }"));
+    logLayout->addWidget(log_, 1);
 
     content->addWidget(motionGroup, 1);
     content->addWidget(gaitGroup, 1);
+    content->addWidget(logGroup, 1);
     outer->addLayout(content, 1);
 
     connect(gaitBackendCombo_, qOverload<int>(&QComboBox::currentIndexChanged),
@@ -1746,27 +1959,43 @@ QWidget *MainWindow::createOperatorActionBar()
     layout->setSpacing(8);
     auto *title = new QLabel(QStringLiteral("Operator tools"), bar);
     title->setObjectName(QStringLiteral("operatorToolsTitle"));
-    title->setStyleSheet(QStringLiteral("color: #1F4058; font-size: 15px; font-weight: 700;"));
+    title->setStyleSheet(QStringLiteral(
+        "color: #1F4058; font-size: 15px; font-weight: 700;"));
     layout->addWidget(title);
     layout->addSpacing(12);
     motionStatus_ = new QLabel(QStringLiteral("Stopped"), bar);
     motionStatus_->setObjectName(QStringLiteral("motionStatus"));
     motionStatus_->setMinimumWidth(110);
-    motionStatus_->setStyleSheet(QStringLiteral("color: #667C8C; font-weight: 700;"));
+    motionStatus_->setStyleSheet(
+        QStringLiteral("color: #667C8C; font-weight: 700;"));
     layout->addWidget(motionStatus_);
     layout->addStretch(1);
 
-    motionStopButton_ = new QPushButton(QStringLiteral("Motion Stop"), bar);
-    motionStopButton_->setObjectName(QStringLiteral("motionStopButton"));
-    motionStopButton_->setProperty("consoleActionRole", "stop");
-    layout->addWidget(motionStopButton_);
-    connect(motionStopButton_, &QPushButton::clicked, this, [this] {
-        controller_->stopMotion();
+    enableAllButton_ = new QPushButton(QStringLiteral("Enable All"), bar);
+    enableAllButton_->setObjectName(QStringLiteral("enableAllButton"));
+    enableAllButton_->setProperty("consoleActionRole", "secondary");
+    layout->addWidget(enableAllButton_);
+    connect(enableAllButton_, &QPushButton::clicked, this, [this] {
+        if (!controller_->isControlActive() || controller_->isMotionActive()) {
+            return;
+        }
+        const auto &descriptors = servoDescriptorTable();
+        for (const auto &descriptor : descriptors) {
+            if (controller_->isServoSupported(descriptor.id)
+                && !controller_->isServoEnabled(descriptor.id)
+                && !controller_->isServoDisablePending(descriptor.id)) {
+                controller_->enableServo(descriptor.id);
+            }
+        }
+        for (int index = 0; index < kServoCount; ++index) {
+            refreshServoUi(index);
+        }
         refreshMotionUi();
     });
 
     disableAllButton_ = new QPushButton(QStringLiteral("Disable All"), bar);
     disableAllButton_->setObjectName(QStringLiteral("disableAllButton"));
+
     disableAllButton_->setProperty("consoleActionRole", "stop");
     layout->addWidget(disableAllButton_);
     connect(disableAllButton_, &QPushButton::clicked, this, [this] {
@@ -1774,13 +2003,15 @@ QWidget *MainWindow::createOperatorActionBar()
         for (int index = 0; index < kServoCount; ++index) {
             refreshServoUi(index);
         }
+        refreshMotionUi();
     });
 
     emergencyStopButton_ = new QPushButton(QStringLiteral("Emergency Stop"), bar);
     emergencyStopButton_->setObjectName(QStringLiteral("emergencyStopButton"));
     emergencyStopButton_->setEnabled(false);
     emergencyStopButton_->setProperty("consoleActionRole", "danger");
-    emergencyStopButton_->setToolTip(QStringLiteral("Protocol V2 has no Emergency Stop message in Phase 1"));
+    emergencyStopButton_->setToolTip(
+        QStringLiteral("Protocol V2 has no Emergency Stop message in Phase 1"));
     layout->addWidget(emergencyStopButton_);
     return bar;
 }
@@ -1791,6 +2022,7 @@ QTabWidget *MainWindow::createOperatorToolsTabs()
     operatorToolsTabs_->setObjectName(QStringLiteral("operatorToolsTabs"));
     operatorToolsTabs_->setMinimumHeight(0);
     operatorToolsTabs_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
+
     motionScrollArea_ = new QScrollArea(this);
     motionScrollArea_->setObjectName(QStringLiteral("motionScrollArea"));
     motionScrollArea_->setWidgetResizable(true);
@@ -1798,19 +2030,22 @@ QTabWidget *MainWindow::createOperatorToolsTabs()
     motionScrollArea_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     motionScrollArea_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     motionScrollArea_->setWidget(createMotionPanel());
-    operatorToolsTabs_->addTab(motionScrollArea_, QStringLiteral("Motion / Gait"));
+    operatorToolsTabs_->addTab(
+        motionScrollArea_, QStringLiteral("Motion / Gait"));
 
-    actuatorScroll_ = new QScrollArea(this);
-    actuatorScroll_->setObjectName(QStringLiteral("actuatorScrollArea"));
-    actuatorScroll_->setWidgetResizable(true);
-    actuatorScroll_->setFrameShape(QFrame::NoFrame);
-    actuatorScroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    actuatorScroll_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    actuatorScroll_->installEventFilter(this);
-    actuatorScroll_->viewport()->installEventFilter(this);
-    actuatorScroll_->setWidget(createActuatorPanel());
-    operatorToolsTabs_->addTab(actuatorScroll_, QStringLiteral("Actuators"));
-    operatorToolsTabs_->addTab(createVisionDetailsTab(), QStringLiteral("Vision Details"));
+    auto *servoFineScroll = new QScrollArea(this);
+    servoFineScroll->setObjectName(QStringLiteral("servoFineControlScrollArea"));
+    servoFineScroll->setWidgetResizable(true);
+    servoFineScroll->setFrameShape(QFrame::NoFrame);
+    servoFineScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    servoFineScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    servoFineScroll->setWidget(createServoFineControlTab());
+    operatorToolsTabs_->addTab(
+        servoFineScroll, QStringLiteral("Servo Fine Control"));
+
+    operatorToolsTabs_->addTab(
+        createVisionDetailsTab(), QStringLiteral("Vision Details"));
+
     auto wrapDetailsPage = [this](QWidget *page, const QString &scrollName) {
         auto *scroll = new QScrollArea(this);
         scroll->setObjectName(scrollName);
@@ -1821,21 +2056,23 @@ QTabWidget *MainWindow::createOperatorToolsTabs()
         scroll->setWidget(page);
         return scroll;
     };
+
     operatorToolsTabs_->addTab(
-        wrapDetailsPage(createTelemetryDetailsTab(), QStringLiteral("telemetryDetailsScroll")),
+        wrapDetailsPage(
+            createTelemetryDetailsTab(),
+            QStringLiteral("telemetryDetailsScroll")),
         QStringLiteral("Telemetry Details"));
     operatorToolsTabs_->addTab(
-        wrapDetailsPage(createProtocolDetailsTab(), QStringLiteral("protocolDetailsScroll")),
+        wrapDetailsPage(
+            createProtocolDetailsTab(),
+            QStringLiteral("protocolDetailsScroll")),
         QStringLiteral("Protocol Details"));
-    operatorToolsTabs_->addTab(createLogTab(), QStringLiteral("Log"));
     operatorToolsTabs_->addTab(
-        wrapDetailsPage(createDataPlotsTab(), QStringLiteral("dataPlotsScroll")),
+        wrapDetailsPage(
+            createDataPlotsTab(),
+            QStringLiteral("dataPlotsScroll")),
         QStringLiteral("Data Plots"));
-    connect(operatorToolsTabs_, &QTabWidget::currentChanged, this, [this] {
-        if (actuatorGrid_ != nullptr) {
-            reflowActuatorCards();
-        }
-    });
+
     return operatorToolsTabs_;
 }
 
@@ -1899,12 +2136,25 @@ void MainWindow::bindVisionUi()
                 text = QStringLiteral("Error");
                 break;
             }
-            visionState_->setText(QStringLiteral("Video: %1").arg(text));
+            visionState_->setText(text);
+            if (visionDot_ != nullptr) {
+                QString color = QStringLiteral("#9e9e9e");
+                if (state == vision::VisionConnectionState::Connecting) {
+                    color = QStringLiteral("#D39B2A");
+                } else if (state == vision::VisionConnectionState::Connected) {
+                    color = QStringLiteral("#35A853");
+                } else if (state == vision::VisionConnectionState::Error) {
+                    color = QStringLiteral("#C53F3F");
+                }
+                visionDot_->setStyleSheet(
+                    QStringLiteral("background: %1; border-radius: 5px;").arg(color));
+            }
             visionConnectButton_->setText(buttonText);
             const bool videoConnected =
                 state == vision::VisionConnectionState::Connected;
             if (!videoConnected) {
                 haveVisionReceiveSample_ = false;
+                visionFrameSize_ = QSize();
                 videoView_->clearFrame();
             }
             refreshVideoDiagnosticsUi();
@@ -1914,7 +2164,11 @@ void MainWindow::bindVisionUi()
         connect(visionClient_, &vision::VisionClient::frameReady,
                 this, [this](const QImage &image, quint64 frameId, quint64) {
             haveVisionReceiveSample_ = true;
+            if (!image.isNull()) {
+                visionFrameSize_ = image.size();
+            }
             videoView_->setFrame(image, frameId);
+            updateVideoSurfaceGeometry();
             refreshVideoDiagnosticsUi();
         });
         connect(visionClient_, &vision::VisionClient::diagnosticsChanged,
@@ -1936,12 +2190,47 @@ void MainWindow::bindVisionUi()
     if (visionControlClient_ != nullptr) {
         connect(snapshotButton_, &QPushButton::clicked,
                 visionControlClient_, &vision::VisionControlClient::requestSnapshot);
-        connect(startRecordingButton_, &QPushButton::clicked,
-                visionControlClient_, &vision::VisionControlClient::startRecording);
+
+        connect(startRecordingButton_, &QPushButton::clicked, this, [this] {
+            if (visionControlClient_ == nullptr
+                || !visionControlClient_->hasFreshStatus()
+                || visionControlClient_->actionBusy()) {
+                return;
+            }
+            const auto status = visionControlClient_->status();
+            if (!status.haveCaptureStatus) {
+                return;
+            }
+            if (status.recording) {
+                visionControlClient_->stopRecording();
+            } else if (status.state != QStringLiteral("stopping")
+                       && !hostDirty()) {
+                visionControlClient_->startRecording();
+            }
+        });
         connect(stopRecordingButton_, &QPushButton::clicked,
                 visionControlClient_, &vision::VisionControlClient::stopRecording);
-        connect(startInferenceButton_, &QPushButton::clicked,
-                visionControlClient_, &vision::VisionControlClient::startInference);
+
+        connect(startInferenceButton_, &QPushButton::clicked, this, [this] {
+            if (visionControlClient_ == nullptr
+                || !visionControlClient_->hasFreshStatus()
+                || visionControlClient_->actionBusy()
+                || visionControlClient_->inferenceReconcilePending()) {
+                return;
+            }
+            const auto status = visionControlClient_->status();
+            const auto ui = vision::makeInferenceUiState(
+                status, true, false, false);
+            const bool stopIntent =
+                status.haveInferenceState
+                && (status.inferenceState == QStringLiteral("running")
+                    || status.inferenceState == QStringLiteral("starting"));
+            if (stopIntent && ui.stopEnabled) {
+                visionControlClient_->stopInference();
+            } else if (ui.startEnabled && !hostDirty()) {
+                visionControlClient_->startInference();
+            }
+        });
         connect(stopInferenceButton_, &QPushButton::clicked,
                 visionControlClient_, &vision::VisionControlClient::stopInference);
         connect(visionRefreshStatusButton_, &QPushButton::clicked, this, [this] {
@@ -2106,9 +2395,17 @@ void MainWindow::refreshVideoDiagnosticsUi()
         && haveVisionReceiveSample_;
     if (videoFpsSummary_ != nullptr) {
         videoFpsSummary_->setText(
-            QStringLiteral("FPS %1")
+            QStringLiteral("Video FPS %1")
                 .arg(live ? QString::number(visionClient_->receivedFps(), 'f', 1)
                           : QStringLiteral("--")));
+    }
+    if (videoResolutionSummary_ != nullptr) {
+        videoResolutionSummary_->setText(
+            live && visionFrameSize_.isValid()
+                ? QStringLiteral("Resolution %1 × %2")
+                      .arg(visionFrameSize_.width())
+                      .arg(visionFrameSize_.height())
+                : QStringLiteral("Resolution --"));
     }
     if (visionDiagnostics_ != nullptr) {
         visionDiagnostics_->setText(
@@ -2230,30 +2527,65 @@ void MainWindow::reflowActuatorCards()
     if (actuatorGrid_ == nullptr || actuatorCardsHost_ == nullptr) {
         return;
     }
-    const int width = actuatorCardsHost_->width();
-    const int columns = width >= 5 * 248 + 4 * 8 ? 5
-        : width >= 3 * 248 + 2 * 8 ? 3
-        : width >= 2 * 248 + 8 ? 2 : 1;
+    constexpr int columns = 1;
     int actualColumns = 0;
     for (int index = 0; index < actuatorGrid_->count(); ++index) {
         int row = 0;
         int column = 0;
         int rowSpan = 0;
         int columnSpan = 0;
-        actuatorGrid_->getItemPosition(index, &row, &column, &rowSpan, &columnSpan);
+        actuatorGrid_->getItemPosition(
+            index, &row, &column, &rowSpan, &columnSpan);
         actualColumns = qMax(actualColumns, column + columnSpan);
     }
-    if (columns == actuatorColumnCount_ && actualColumns == columns) {
+    if (actuatorColumnCount_ == columns
+        && actualColumns == columns) {
         return;
     }
     while (QLayoutItem *item = actuatorGrid_->takeAt(0)) {
         delete item;
     }
     for (int index = 0; index < kServoCount; ++index) {
-        actuatorGrid_->addWidget(servoPanels_[static_cast<std::size_t>(index)],
-                                 index / columns, index % columns);
+        actuatorGrid_->addWidget(
+            servoPanels_[static_cast<std::size_t>(index)],
+            index, 0);
     }
     actuatorColumnCount_ = columns;
+}
+
+void MainWindow::updateVideoSurfaceGeometry()
+{
+    if (videoView_ == nullptr || videoContentHost_ == nullptr) {
+        return;
+    }
+    const QSize frameSize = visionFrameSize_.isValid()
+        ? visionFrameSize_ : QSize(640, 480);
+    const int frameWidth = qMax(1, frameSize.width());
+    const int frameHeight = qMax(1, frameSize.height());
+    const int ratioDivisor = std::gcd(frameWidth, frameHeight);
+    const int ratioWidth = frameWidth / ratioDivisor;
+    const int ratioHeight = frameHeight / ratioDivisor;
+
+    const int hostHeight =
+        qMax(160, videoContentHost_->contentsRect().height());
+    const int hostWidth =
+        qMax(240, videoContentHost_->contentsRect().width());
+
+    // Reserve a bounded share for Vision Status. Then choose an exact
+    // integer multiple of the source aspect ratio. Using rounded width and
+    // height independently can make a nominal 4:3 surface a few pixels off,
+    // which VideoView::KeepAspectRatio exposes as a black edge.
+    const int reservedSummaryWidth =
+        qBound(210, qRound(hostWidth * 0.28), 360);
+    const int availableVideoWidth =
+        qMax(240, hostWidth - reservedSummaryWidth - 8);
+    const int ratioUnits = qMax(
+        1,
+        qMin(availableVideoWidth / ratioWidth,
+             hostHeight / ratioHeight));
+    const int targetWidth = ratioWidth * ratioUnits;
+    const int targetHeight = ratioHeight * ratioUnits;
+    videoView_->setFixedSize(targetWidth, targetHeight);
 }
 
 void MainWindow::initializeWorkspaceSizes()
@@ -2272,7 +2604,7 @@ void MainWindow::initializeWorkspaceSizes()
         return;
     }
     const int availableHeight = qMax(0, height() - 100);
-    const int toolsHeight = availableHeight > 760 ? 240 : 190;
+    const int toolsHeight = availableHeight > 760 ? 260 : 240;
     const int total = qMax(400, workspaceSplitter_->height());
     workspaceSplitter_->setSizes({qMax(1, total - toolsHeight), toolsHeight});
     workspaceSplitter_->setStretchFactor(0, 1);
@@ -2473,20 +2805,30 @@ void MainWindow::refreshServoUi(int index)
     const bool enabled = controller_->isServoEnabled(id);
     const bool pendingDisable = controller_->isServoDisablePending(id);
     const bool motionActive = controller_->isMotionActive();
-    enableButtons_[index]->setText(enabled
-                                       ? QStringLiteral("Release PWM")
-                                       : QStringLiteral("Enable PWM"));
-    enableButtons_[index]->setToolTip(enabled
-                                          ? QStringLiteral(
-                                                "Release PWM: stop PWM drive without sending Neutral; the servo is no longer actively held.")
-                                          : QStringLiteral(
-                                                "Enable PWM drive and hold the calibrated neutral position."));
-    enableButtons_[index]->setEnabled(active && supported && !motionActive);
-    neutralButtons_[index]->setEnabled(active && supported && enabled
-                                       && !pendingDisable && !motionActive);
-    applyButtons_[index]->setEnabled(
-        active && controller_->supportsRawPwm() && supported && enabled
-        && !pendingDisable && !motionActive);
+    if (enableButtons_[index] != nullptr) {
+        enableButtons_[index]->setText(
+            enabled ? QStringLiteral("Release") : QStringLiteral("Enable"));
+        enableButtons_[index]->setToolTip(
+            enabled
+                ? QStringLiteral(
+                      "Release PWM drive without sending Neutral; "
+                      "the servo is no longer actively held.")
+                : QStringLiteral(
+                      "Enable PWM drive and hold the calibrated neutral position."));
+        enableButtons_[index]->setEnabled(
+            active && supported && !motionActive);
+    }
+    if (neutralButtons_[index] != nullptr) {
+        neutralButtons_[index]->setEnabled(
+            active && supported && enabled
+            && !pendingDisable && !motionActive);
+    }
+    if (applyButtons_[index] != nullptr) {
+        applyButtons_[index]->setEnabled(
+            active && controller_->supportsRawPwm()
+            && supported && enabled
+            && !pendingDisable && !motionActive);
+    }
     QString statusColor = QStringLiteral("#6F7F8B");
     if (!connected) {
         statusLabels_[index]->setText(QStringLiteral("Disconnected"));
@@ -2499,7 +2841,7 @@ void MainWindow::refreshServoUi(int index)
         statusColor = QStringLiteral("#b35c00");
     } else if (enabled) {
         statusLabels_[index]->setText(QStringLiteral("Enabled / ACKed"));
-        statusColor = QStringLiteral("#43a047");
+        statusColor = QStringLiteral("#2F80ED");
     } else if (descriptor->calibrationPending) {
         statusLabels_[index]->setText(QStringLiteral("Disabled — Calibration Pending"));
     } else {
@@ -2529,8 +2871,9 @@ void MainWindow::setAngleUiEnabled(int index, bool enabled)
         && !descriptor->calibrationPending && controller_->isServoEnabled(id)
         && !controller_->isServoDisablePending(id)
         && !controller_->isMotionActive();
-    angleSpins_[index]->setEnabled(actionable);
-    angleButtons_[index]->setEnabled(actionable);
+    if (angleSpins_[index] != nullptr) {
+        angleSpins_[index]->setEnabled(actionable);
+    }
 }
 
 void MainWindow::refreshMotionUi()
@@ -2559,6 +2902,18 @@ void MainWindow::refreshMotionUi()
     const bool connected = controller_->isControlActive();
     if (disableAllButton_ != nullptr) {
         disableAllButton_->setEnabled(connected);
+    }
+    if (enableAllButton_ != nullptr) {
+        bool haveEnableCandidate = false;
+        const auto &descriptors = servoDescriptorTable();
+        for (const auto &descriptor : descriptors) {
+            haveEnableCandidate = haveEnableCandidate
+                || (controller_->isServoSupported(descriptor.id)
+                    && !controller_->isServoEnabled(descriptor.id)
+                    && !controller_->isServoDisablePending(descriptor.id));
+        }
+        enableAllButton_->setEnabled(connected && !controller_->isMotionActive()
+                                     && haveEnableCandidate);
     }
     const bool transitioning = controller_->isMotionTransitioning();
     for (int index = 0; index < static_cast<int>(motionButtons_.size()); ++index) {
@@ -2688,10 +3043,18 @@ void MainWindow::refreshPiHostUi()
     const bool controlBusy = visionControlClient_ != nullptr
         && visionControlClient_->actionBusy();
     const bool safe = !remoteBusy && !socketBusy && !controlBusy && !updatingEndpoints_;
+    applyPiHostButton_->setText(dirty ? QStringLiteral("Apply Host") : QStringLiteral("Applied"));
     applyPiHostButton_->setEnabled(dirty && hostCandidateValid(piHost_->text()) && safe);
-    piHostHint_->setVisible(dirty);
-    piHostHint_->setText(
-        QStringLiteral("Active Pi: %1 | Host edit not applied").arg(committedPiHost_));
+    piHostHint_->setVisible(false);
+    piHostHint_->clear();
+    piHost_->setToolTip(
+        dirty
+            ? QStringLiteral("Edited value is not applied. Current endpoint: %1").arg(committedPiHost_)
+            : QStringLiteral("Applied endpoint: %1").arg(committedPiHost_));
+    applyPiHostButton_->setToolTip(
+        dirty
+            ? QStringLiteral("Apply this Pi Host to Robot, RBVS, and Vision HTTP endpoints.")
+            : QStringLiteral("Pi Host is applied."));
     if (visionRefreshStatusButton_ != nullptr) {
         visionRefreshStatusButton_->setEnabled(
             visionControlClient_ != nullptr && !dirty);
@@ -2811,10 +3174,83 @@ void MainWindow::refreshInferenceUi()
         visionControlClient_->actionBusy(),
         visionControlClient_->inferenceReconcilePending());
     inferenceState_->setText(ui.stateText);
-    startInferenceButton_->setText(ui.startText);
+
+    if (inferenceDot_ != nullptr) {
+        QString inferenceColor = QStringLiteral("#9e9e9e");
+        const QString operation =
+            rawStatus.inferenceOperationValid
+                ? rawStatus.inferenceOperation
+                : QString();
+        if (!fresh || !rawStatus.haveInferenceStatus) {
+            inferenceColor = QStringLiteral("#9e9e9e");
+        } else if (operation == QStringLiteral("stopping")
+                   || operation == QStringLiteral("retrying")
+                   || rawStatus.inferenceState == QStringLiteral("starting")) {
+            inferenceColor = QStringLiteral("#D39B2A");
+        } else if (rawStatus.inferenceState == QStringLiteral("running")) {
+            inferenceColor = QStringLiteral("#2F80ED");
+        } else if (rawStatus.inferenceState == QStringLiteral("failed")) {
+            inferenceColor = QStringLiteral("#C53F3F");
+        }
+        inferenceDot_->setStyleSheet(
+            QStringLiteral("background: %1; border-radius: 5px;")
+                .arg(inferenceColor));
+    }
+
+    const auto setActionRole = [](QPushButton *button, const char *role) {
+        if (button == nullptr) {
+            return;
+        }
+        const QString next = QString::fromLatin1(role);
+        if (button->property("consoleActionRole").toString() == next) {
+            return;
+        }
+        button->setProperty("consoleActionRole", next);
+        button->style()->unpolish(button);
+        button->style()->polish(button);
+        button->update();
+    };
+
+    const QString operation =
+        rawStatus.inferenceOperationValid
+            ? rawStatus.inferenceOperation
+            : QString();
+    const bool failed =
+        rawStatus.haveInferenceState
+        && rawStatus.inferenceState == QStringLiteral("failed");
+    const bool stopMode =
+        rawStatus.haveInferenceState
+        && (rawStatus.inferenceState == QStringLiteral("running")
+            || rawStatus.inferenceState == QStringLiteral("starting"))
+        && operation != QStringLiteral("stopping")
+        && operation != QStringLiteral("retrying");
+
+    if (operation == QStringLiteral("stopping")) {
+        startInferenceButton_->setText(QStringLiteral("Stopping Inference..."));
+        startInferenceButton_->setEnabled(false);
+        setActionRole(startInferenceButton_, "stop");
+    } else if (operation == QStringLiteral("retrying")) {
+        startInferenceButton_->setText(QStringLiteral("Retrying Inference..."));
+        startInferenceButton_->setEnabled(false);
+        setActionRole(startInferenceButton_, "primary");
+    } else if (stopMode) {
+        startInferenceButton_->setText(ui.stopText);
+        startInferenceButton_->setEnabled(ui.stopEnabled);
+        setActionRole(startInferenceButton_, "stop");
+    } else {
+        startInferenceButton_->setText(ui.startText);
+        startInferenceButton_->setEnabled(ui.startEnabled && !hostDirty());
+        setActionRole(startInferenceButton_, "primary");
+    }
+
+    // Preserve Failed -> Clear Error as the only exceptional second action.
+    // Normal Start/Stop is always one operator-facing toggle.
     stopInferenceButton_->setText(ui.stopText);
-    startInferenceButton_->setEnabled(ui.startEnabled && !hostDirty());
-    stopInferenceButton_->setEnabled(ui.stopEnabled);
+    stopInferenceButton_->setVisible(failed && operation.isEmpty());
+    stopInferenceButton_->setEnabled(
+        failed && operation.isEmpty() && ui.stopEnabled);
+    setActionRole(stopInferenceButton_, "secondary");
+
     const auto displayStatus = rawStatus;
     if (!ui.showActiveMetrics) {
         if (inferencePerformanceSummary_ != nullptr) {
@@ -2897,12 +3333,52 @@ void MainWindow::refreshCaptureUi()
                       .arg(status.snapshotCount)
                 : QStringLiteral("Recorded -- | Snapshots --"));
     }
+    if (storageFreeSummary_ != nullptr) {
+        storageFreeSummary_->setText(
+            fresh && status.haveFreeDisk
+                ? QStringLiteral("Storage Free %1 GiB")
+                      .arg(static_cast<double>(status.freeDiskBytes)
+                               / (1024.0 * 1024.0 * 1024.0),
+                           0, 'f', 1)
+                : QStringLiteral("Storage Free --"));
+    }
     snapshotButton_->setEnabled(usable && !busy && !hostDirty());
-    startRecordingButton_->setEnabled(
-        usable && !busy && !status.recording
-        && status.state != QStringLiteral("stopping") && !hostDirty());
+
+    const auto setRecordingRole = [](QPushButton *button, const char *role) {
+        if (button == nullptr) {
+            return;
+        }
+        const QString next = QString::fromLatin1(role);
+        if (button->property("consoleActionRole").toString() == next) {
+            return;
+        }
+        button->setProperty("consoleActionRole", next);
+        button->style()->unpolish(button);
+        button->style()->polish(button);
+        button->update();
+    };
+
+    if (captureFresh && status.state == QStringLiteral("stopping")) {
+        startRecordingButton_->setText(QStringLiteral("Stopping Recording..."));
+        startRecordingButton_->setEnabled(false);
+        setRecordingRole(startRecordingButton_, "stop");
+    } else if (captureFresh && status.recording) {
+        startRecordingButton_->setText(QStringLiteral("Stop Recording"));
+        startRecordingButton_->setEnabled(!busy);
+        setRecordingRole(startRecordingButton_, "stop");
+    } else {
+        startRecordingButton_->setText(QStringLiteral("Start Recording"));
+        startRecordingButton_->setEnabled(
+            usable && !busy && !hostDirty());
+        setRecordingRole(startRecordingButton_, "primary");
+    }
+
+    // Compatibility-only stop action: never presented as a second recording
+    // control in the operator console.
     stopRecordingButton_->setEnabled(
         fresh && status.haveCaptureStatus && status.recording && !busy);
+    stopRecordingButton_->setVisible(false);
+
     if (captureDiagnostics_ != nullptr) {
         captureDiagnostics_->setText(captureDetailsText(status, fresh));
     }
@@ -2918,16 +3394,21 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             return true;
         }
     }
+    if (watched == videoContentHost_ && event->type() == QEvent::Resize) {
+        if (!videoGeometryUpdatePending_) {
+            videoGeometryUpdatePending_ = true;
+            QTimer::singleShot(0, this, [this] {
+                videoGeometryUpdatePending_ = false;
+                updateVideoSurfaceGeometry();
+            });
+        }
+    }
     if ((watched == actuatorCardsHost_ || watched == actuatorScroll_
          || (actuatorScroll_ != nullptr && watched == actuatorScroll_->viewport()))
         && event->type() == QEvent::Resize) {
-        if (!actuatorReflowPending_) {
-            actuatorReflowPending_ = true;
-            QTimer::singleShot(0, this, [this] {
-                actuatorReflowPending_ = false;
-                reflowActuatorCards();
-            });
-        }
+        // Reflow synchronously against the new viewport width so the operator
+        // never sees a stale five-column layout after narrowing the window.
+        reflowActuatorCards();
     }
     return QMainWindow::eventFilter(watched, event);
 }

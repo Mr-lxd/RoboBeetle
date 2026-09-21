@@ -13,13 +13,16 @@
 #include <QAbstractSpinBox>
 #include <QComboBox>
 #include <QElapsedTimer>
+#include <QDoubleSpinBox>
 #include <QEventLoop>
 #include <QGroupBox>
 #include <QHostAddress>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLayout>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
@@ -83,7 +86,7 @@ void injectLeakState(rb::FakeTransport &transport, rb::LeakState state)
 QGroupBox *imuPanel(rb::MainWindow &window)
 {
     for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
-        if (box->title() == QStringLiteral("IMU — JY901S")) {
+        if (box->title() == QStringLiteral("IMU")) {
             return box;
         }
     }
@@ -113,7 +116,7 @@ QGroupBox *leakPanel(rb::MainWindow &window)
 QGroupBox *motionPanel(rb::MainWindow &window)
 {
     for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
-        if (box->title() == QStringLiteral("Motion / Gait — Bench")) {
+        if (box->objectName() == QStringLiteral("motionPage")) {
             return box;
         }
     }
@@ -288,7 +291,7 @@ void testImuPanelLifecycle()
     rb::MainWindow window(&controller);
 
     QGroupBox *panel = imuPanel(window);
-    expect(panel != nullptr, "MainWindow must expose an IMU — JY901S panel");
+    expect(panel != nullptr, "MainWindow must expose an IMU panel");
     if (panel == nullptr) {
         return;
     }
@@ -391,7 +394,7 @@ void testMotionPanelLifecycleAndManualArbitration()
 
     QGroupBox *panel = motionPanel(window);
     expect(panel != nullptr,
-           "MainWindow must expose the Motion / Gait — Bench panel");
+           "MainWindow must expose the Motion / Gait panel");
     if (panel == nullptr) {
         return;
     }
@@ -406,7 +409,7 @@ void testMotionPanelLifecycleAndManualArbitration()
     expect(gaitBackendCombo(panel) != nullptr,
            "Motion panel must expose a dedicated gait backend combo");
     QPushButton *forwardButton = buttonWithText(panel, QStringLiteral("Forward"));
-    QPushButton *backwardButton = buttonWithText(panel, QStringLiteral("Backward (Pending)"));
+    QPushButton *backwardButton = buttonWithText(panel, QStringLiteral("Brake"));
     QPushButton *turnLeftButton = buttonWithText(panel, QStringLiteral("Turn Left"));
     QPushButton *turnRightButton = buttonWithText(panel, QStringLiteral("Turn Right"));
     QPushButton *ascendButton = buttonWithText(panel, QStringLiteral("Ascend"));
@@ -416,7 +419,7 @@ void testMotionPanelLifecycleAndManualArbitration()
                && turnLeftButton != nullptr && turnRightButton != nullptr
                && ascendButton != nullptr && descendButton != nullptr
                && stopButton != nullptr,
-           "Motion panel must expose direct Forward/Backward/Turn/Axis/Stop buttons");
+           "Motion panel must expose direct Forward/Brake/Turn/Axis/Stop buttons");
     if (forwardButton == nullptr || backwardButton == nullptr
         || turnLeftButton == nullptr || turnRightButton == nullptr
         || ascendButton == nullptr || descendButton == nullptr
@@ -431,8 +434,9 @@ void testMotionPanelLifecycleAndManualArbitration()
                && !descendButton->isEnabled() && !stopButton->isEnabled(),
            "Motion controls must be disabled while disconnected");
     expect(!backwardButton->isEnabled()
-               && backwardButton->toolTip().contains(QStringLiteral("Pending")),
-           "Backward must remain disabled and visibly Pending");
+               && backwardButton->toolTip().contains(QStringLiteral("pending"),
+                                                      Qt::CaseInsensitive),
+           "Brake remains disabled until the existing motion backend is verified");
 
     enablePaddles(transport, controller);
     expect(forwardButton->isEnabled() && turnLeftButton->isEnabled()
@@ -445,9 +449,35 @@ void testMotionPanelLifecycleAndManualArbitration()
     expect(ascendButton->isEnabled() && descendButton->isEnabled(),
            "Ascend and Descend should enable after FrontAxis ACK");
     expect(!backwardButton->isEnabled(),
-           "Backward must remain disabled after the link is ready");
-    expect(buttonWithText(&window, QStringLiteral("Release PWM")) != nullptr,
-           "enabled individual Servo controls must use Release PWM semantics");
+           "Brake must remain disabled after the link is ready");
+    expect(buttonWithText(&window, QStringLiteral("Release")) != nullptr,
+           "enabled individual Servo controls must use Release semantics");
+
+    auto *frontRightAngle =
+        window.findChild<QDoubleSpinBox *>(QStringLiteral("servoAngleSpin0"));
+    expect(frontRightAngle != nullptr && frontRightAngle->isEnabled(),
+           "Servo Fine Control keeps FrontRight Angle editable after Enable ACK");
+    expect(frontRightAngle != nullptr
+               && frontRightAngle->buttonSymbols() == QAbstractSpinBox::NoButtons,
+           "Angle input removes its up/down buttons");
+    expect(buttonWithText(&window, QStringLiteral("Set Angle")) == nullptr,
+           "Set Angle button is removed while Angle setting remains available");
+    if (frontRightAngle != nullptr && frontRightAngle->isEnabled()) {
+        const qsizetype writesBeforeAngle = transport.writes().size();
+        frontRightAngle->setValue(12.3);
+        QMetaObject::invokeMethod(
+            frontRightAngle, "editingFinished", Qt::DirectConnection);
+        expect(transport.writes().size() == writesBeforeAngle + 1,
+               "finishing an edited Angle field sends exactly one command");
+        expect(!transport.writes().isEmpty()
+                   && lastPacket(transport).type
+                          == rb::MessageType::SetServoAngle,
+               "Angle editing must preserve the existing SetServoAngle protocol command");
+        if (transport.writes().size() == writesBeforeAngle + 1) {
+            acknowledgeLast(transport);
+        }
+    }
+
     forwardButton->click();
     acknowledgeLast(transport);
     expect(controller.motionState() == rb::MotionState::Running,
@@ -466,8 +496,7 @@ void testMotionPanelLifecycleAndManualArbitration()
            "the active Forward button must be checked exclusively");
 
     for (QPushButton *button : window.findChildren<QPushButton *>()) {
-        if (button->text() == QStringLiteral("Set Angle")
-            || button->text() == QStringLiteral("Apply PWM")
+        if (button->text() == QStringLiteral("Apply")
             || button->text() == QStringLiteral("Neutral")) {
             expect(!button->isEnabled(),
                    "manual Servo controls must be disabled while Motion runs");
@@ -669,8 +698,8 @@ void testVisionConnectionIsIndependentFromControlTransport()
          && !hasLabelText(panel, QStringLiteral("Connected")); ++i) {
         waitForMs(10);
     }
-    expect(hasLabelText(panel, QStringLiteral("Video: Connected")),
-           "Vision card reports its own connected state");
+    expect(hasLabelText(panel, QStringLiteral("Connected")),
+           "Vision Status reports its own connected state");
     expect(transport.writes().isEmpty(),
            "Vision connect must not emit any robot-control transport bytes");
 
@@ -841,11 +870,17 @@ void testVisionCaptureControlsAreIndependentFromRobotTransport()
                 "\"free_disk_bytes\":1073741824,"
                 "\"last_error\":null}}"));
     }
-    for (int i = 0; i < 50 && !stopRecording->isEnabled(); ++i) {
+    for (int i = 0; i < 50
+         && !(startRecording->isEnabled()
+              && startRecording->text() == QStringLiteral("Stop Recording"));
+         ++i) {
         waitForMs(5);
     }
-    expect(stopRecording->isEnabled() && !startRecording->isEnabled(),
-           "recording status enables Stop and disables Start");
+    expect(startRecording->isEnabled()
+               && startRecording->text() == QStringLiteral("Stop Recording")
+               && stopRecording->isEnabled()
+               && !stopRecording->isVisible(),
+           "recording status turns the single visible Recording action into Stop");
 
     // Drop RBVS only. Capture control must remain usable so a recording can
     // always be stopped even when the realtime video path fails.
@@ -854,12 +889,13 @@ void testVisionCaptureControlsAreIndependentFromRobotTransport()
          && !hasLabelText(panel, QStringLiteral("Disconnected")); ++i) {
         waitForMs(5);
     }
-    expect(stopRecording->isEnabled(),
-           "Stop Recording remains enabled after RBVS disconnect");
+    expect(startRecording->isEnabled()
+               && startRecording->text() == QStringLiteral("Stop Recording"),
+           "the visible Recording toggle remains a committed-host Stop after RBVS disconnect");
     expect(transport.writes().isEmpty(),
            "RBVS disconnect while recording emits no robot-control bytes");
 
-    stopRecording->click();
+    startRecording->click();
     for (int i = 0; i < 50 && !controlServer.hasPendingConnections(); ++i) {
         waitForMs(5);
     }
@@ -883,13 +919,17 @@ void testVisionCaptureControlsAreIndependentFromRobotTransport()
                 "\"free_disk_bytes\":1073741824,"
                 "\"last_error\":null}}"));
     }
-    for (int i = 0; i < 50 && stopRecording->isEnabled(); ++i) {
+    for (int i = 0; i < 50
+         && startRecording->text() != QStringLiteral("Start Recording"); ++i) {
         waitForMs(5);
     }
     for (int i = 0; i < 50 && controlClient.actionBusy(); ++i) {
         waitForMs(5);
     }
-    expect(!stopRecording->isEnabled() && startRecording->isEnabled(),
+    expect(!stopRecording->isEnabled()
+               && !stopRecording->isVisible()
+               && startRecording->isEnabled()
+               && startRecording->text() == QStringLiteral("Start Recording"),
            "Stop response returns capture UI to idle");
     expect(transport.writes().isEmpty(),
            "capture start/stop emits no robot-control bytes");
@@ -1092,6 +1132,11 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
     }
     expect(state->text() == QStringLiteral("Inference Running"),
            "running inference status is rendered in the state label");
+    auto *inferenceDot =
+        window.findChild<QLabel *>(QStringLiteral("inferenceStatusDot"));
+    expect(inferenceDot != nullptr
+               && inferenceDot->styleSheet().contains(QStringLiteral("#2F80ED")),
+           "running inference uses the dedicated blue status light");
     expect(controlClient.status().inferenceModelSha256 == fullSha
                && controlClient.status().inferenceModelSha256.size() == 64,
            "parsed inference status retains the complete model SHA-256");
@@ -1248,10 +1293,10 @@ void testTask02SharedHostWidgetsAndHttpOnlyControls()
     window.show();
     waitForMs(10);
     expect(host != nullptr && host->isVisible()
-               && refresh != nullptr && refresh->isVisible()
+               && refresh != nullptr && !refresh->isVisible()
                && start != nullptr && start->isVisible()
-               && stop != nullptr && stop->isVisible(),
-           "Task 02 Host, Refresh, and inference buttons are reachable at normal size");
+               && stop != nullptr && !stop->isVisible(),
+           "Task 02 exposes one visible inference Start/Stop toggle while redundant Refresh Status stays hidden");
     window.hide();
     expect(window.findChild<QLineEdit *>(QStringLiteral("visionHost")) == nullptr,
            "Task 02 removes the per-card visionHost editor");
@@ -1367,20 +1412,65 @@ void testTask02RefreshAndInferenceUseOnlyCommittedHost()
     auto *host = window.findChild<QLineEdit *>(QStringLiteral("piHost"));
     auto *stop = window.findChild<QPushButton *>(QStringLiteral("stopInferenceButton"));
     expect(host != nullptr && stop != nullptr,
-           "running HTTP-only status exposes committed-host Stop access");
+           "running HTTP-only status retains compatibility Clear/Stop action");
     if (host != nullptr && stop != nullptr) {
         host->setText(QStringLiteral("127.0.0.2"));
-        expect(!start->isEnabled() && !refresh->isEnabled() && stop->isEnabled(),
-               "dirty Host disables new actions but keeps committed Stop available");
+        expect(start->isEnabled()
+                   && start->text() == QStringLiteral("Stop Inference")
+                   && !refresh->isEnabled()
+                   && !stop->isVisible(),
+               "dirty Host blocks new actions but keeps the committed inference Stop toggle available");
         host->setText(QStringLiteral("127.0.0.1"));
     }
+    controlClient.stopPolling();
+    expect(start->text() == QStringLiteral("Stop Inference")
+               && start->isEnabled(),
+           "running inference is represented by one visible Stop toggle");
+    start->click();
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "the visible inference toggle reaches Stop when authoritative state is running");
+    QTcpSocket *stopActionPeer = server.nextPendingConnection();
+    if (stopActionPeer != nullptr) {
+        expect(readHttpRequest(stopActionPeer).startsWith(
+                   "POST /api/v1/vision/inference/stop HTTP/1.1"),
+               "running inference toggle uses the frozen Stop endpoint");
+        sendHttpJson(
+            stopActionPeer,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"action\":\"inference/stop\","
+                "\"outcome\":\"accepted\"}"));
+    }
+
+    QTcpSocket *stopRefreshPeer = nullptr;
+    expect(waitUntil([&server] { return server.hasPendingConnections(); }),
+           "Stop ACK schedules one authoritative reconciliation GET");
+    if (server.hasPendingConnections()) {
+        stopRefreshPeer = server.nextPendingConnection();
+        expect(readHttpRequest(stopRefreshPeer).startsWith(
+                   "GET /api/v1/vision/status HTTP/1.1"),
+               "Stop reconciliation uses authoritative status GET");
+        sendHttpJson(
+            stopRefreshPeer,
+            QByteArrayLiteral(
+                "{\"ok\":true,\"camera\":{\"running\":true},"
+                "\"capture\":{\"state\":\"idle\",\"recording\":false},"
+                "\"inference\":{\"configured\":true,"
+                "\"control_supported\":true,\"operation\":null,"
+                "\"state\":\"disabled\"}}"));
+    }
+    expect(waitUntil([&] {
+        return start->text() == QStringLiteral("Start Inference")
+            && start->isEnabled();
+    }), "authoritative disabled status returns the same toggle to Start Inference");
+
     expect(transport.writes().isEmpty(),
            "HTTP-only inference controls emit no Robot writes");
-    answerNextMessageBox(QMessageBox::Yes);
     window.close();
     if (statusPeer != nullptr) statusPeer->deleteLater();
     if (actionPeer != nullptr) actionPeer->deleteLater();
     if (refreshPeer != nullptr) refreshPeer->deleteLater();
+    if (stopActionPeer != nullptr) stopActionPeer->deleteLater();
+    if (stopRefreshPeer != nullptr) stopRefreshPeer->deleteLater();
 }
 
 void testTask02CaptureAndInferenceErrorsStaySeparated()
@@ -1911,31 +2001,53 @@ void testDashboardLayout()
     expect(estop != nullptr && !estop->isEnabled(),
            "Emergency Stop must remain disabled (no Phase 1 message)");
 
-    // The 2x2 status grid keeps all four compact status cards present.
+    // The compact telemetry rail keeps all four status cards present.
     expect(findGroupBox(&window, QStringLiteral("Leak Detection")) != nullptr,
            "dashboard status grid must keep the Leak Detection card");
-    expect(findGroupBox(&window, QStringLiteral("IMU — JY901S")) != nullptr,
+    expect(findGroupBox(&window, QStringLiteral("IMU")) != nullptr,
            "dashboard status grid must keep the IMU card");
     expect(findGroupBox(&window, QStringLiteral("Depth Sensor")) != nullptr,
            "dashboard status grid must keep the Depth card");
-    expect(findGroupBox(&window, QStringLiteral("Protocol / Link")) != nullptr,
-           "dashboard status grid must keep the Protocol / Link card");
+    expect(findGroupBox(&window, QStringLiteral("Protocol")) != nullptr,
+           "dashboard status rail must keep the Protocol card");
 
     // Actuator Control exists.
     expect(findGroupBox(&window, QStringLiteral("Actuator Control")) != nullptr,
            "MainWindow must expose the Actuator Control panel");
 
-    // All five semantic servo panels exist.
-    const char *servoNames[] = {
-        "FrontRight", "FrontLeft", "Depth", "RearRight", "RearLeft",
-    };
-    int servoPanels = 0;
-    for (const char *name : servoNames) {
-        if (findGroupBox(&window, QString::fromLatin1(name)) != nullptr) {
-            ++servoPanels;
+    // Actuator Control is a status-only list; all controls live in Servo Fine Control.
+    int servoStatusRows = 0;
+    for (int index = 0; index < rb::kServoCount; ++index) {
+        QWidget *row = window.findChild<QWidget *>(
+            QStringLiteral("servoStatusRow%1").arg(index));
+        if (row != nullptr) {
+            ++servoStatusRows;
+            expect(row->findChildren<QPushButton *>().isEmpty(),
+                   "Actuator status rows must not contain control buttons");
+            expect(row->findChildren<QSpinBox *>().isEmpty()
+                       && row->findChildren<QDoubleSpinBox *>().isEmpty()
+                       && row->findChildren<QSlider *>().isEmpty(),
+                   "Actuator status rows must not duplicate fine-control editors");
         }
     }
-    expect(servoPanels == 5, "MainWindow must expose all five servo panels");
+    expect(servoStatusRows == rb::kServoCount,
+           "MainWindow must expose five actuator status rows");
+
+    auto *finePage =
+        window.findChild<QWidget *>(QStringLiteral("servoFineControlPage"));
+    expect(finePage != nullptr,
+           "MainWindow must expose Servo Fine Control");
+    if (finePage != nullptr) {
+        for (int index = 0; index < rb::kServoCount; ++index) {
+            expect(finePage->findChild<QPushButton *>(
+                       QStringLiteral("servoEnableButton%1").arg(index)) != nullptr
+                       && finePage->findChild<QPushButton *>(
+                              QStringLiteral("servoNeutralButton%1").arg(index)) != nullptr
+                       && finePage->findChild<QPushButton *>(
+                              QStringLiteral("servoApplyButton%1").arg(index)) != nullptr,
+                   "Servo Fine Control owns Enable/Neutral/Apply for every servo");
+        }
+    }
 
     // Data Plots region exists as an independent tab widget with IMU/Depth/
     // Actuator placeholder sub-tabs.
@@ -1954,8 +2066,8 @@ void testDashboardLayout()
     // ACK status must be owned by the Protocol Details page only, never also
     // placed in the Protocol/Link summary card. The summary card must not
     // contain an ACK-state label, and the details page must retain one.
-    QGroupBox *summary = findGroupBox(&window, QStringLiteral("Protocol / Link"));
-    expect(summary != nullptr, "MainWindow must expose the Protocol / Link summary");
+    QGroupBox *summary = findGroupBox(&window, QStringLiteral("Protocol"));
+    expect(summary != nullptr, "MainWindow must expose the Protocol summary");
     bool summaryHasAckLabel = false;
     for (QLabel *label : summary->findChildren<QLabel *>()) {
         if (label->text() == QStringLiteral("Idle")) {
@@ -1963,7 +2075,7 @@ void testDashboardLayout()
         }
     }
     expect(!summaryHasAckLabel,
-           "Protocol/Link summary must not contain an ACK-state label");
+           "Protocol summary must not contain an ACK-state label");
     if (detailsTabs != nullptr) {
         bool detailsHasAckLabel = false;
         for (int i = 0; i < detailsTabs->count(); ++i) {
@@ -1977,10 +2089,10 @@ void testDashboardLayout()
                "Protocol Details page must retain the ACK-status label");
     }
 
-    // Log/Details tab widget keeps its three pages.
+    // Operator tabs include the Servo Fine Control page.
     if (detailsTabs != nullptr) {
-        expect(detailsTabs->count() == 7,
-               "Operator tab widget must keep all seven frozen pages");
+        expect(detailsTabs->count() == 6,
+               "Operator tab widget includes Motion/Gait, Servo Fine Control, and four detail/data pages");
     }
 
     // A Telemetry Details page exists and hosts the IMU/Depth diagnostics.
@@ -2034,45 +2146,44 @@ void testDashboardLayout()
     expect(ws.width() >= 1100 && ws.height() >= 720,
            "window must fit the approved minimum (1100x720)");
 
-    // Structural one-row check: all five servo cards share the same parent
-    // (the Actuator Control cards layout), i.e. they are siblings in one row.
-    // This avoids pixel coordinates and platform font metrics.
-    const QWidget *cardsParent = nullptr;
-    bool allSameParent = true;
-    for (QGroupBox *g : window.findChildren<QGroupBox *>()) {
-        const QString t = g->title();
-        if (t == QStringLiteral("FrontRight")
-            || t == QStringLiteral("FrontLeft")
-            || t == QStringLiteral("Depth")
-            || t == QStringLiteral("RearRight")
-            || t == QStringLiteral("RearLeft")) {
-            if (cardsParent == nullptr) {
-                cardsParent = g->parentWidget();
-            } else if (g->parentWidget() != cardsParent) {
-                allSameParent = false;
-            }
-        }
-    }
-    expect(allSameParent,
-           "all five servo cards must be siblings in one row");
+    // Structural status-list check: five servo rows are siblings under
+    // the single Actuator Control card beneath Protocol.
+    QWidget *statusHost =
+        window.findChild<QWidget *>(QStringLiteral("actuatorCardsHost"));
+    QWidget *actuatorPanel =
+        window.findChild<QWidget *>(QStringLiteral("actuatorPage"));
+    QWidget *protocolCard =
+        window.findChild<QWidget *>(QStringLiteral("protocolSummaryCard"));
+    QWidget *telemetrySidebar =
+        window.findChild<QWidget *>(QStringLiteral("telemetrySidebar"));
+    expect(statusHost != nullptr && actuatorPanel != nullptr
+               && protocolCard != nullptr && telemetrySidebar != nullptr
+               && telemetrySidebar->isAncestorOf(actuatorPanel)
+               && telemetrySidebar->layout() != nullptr
+               && telemetrySidebar->layout()->indexOf(protocolCard) >= 0
+               && telemetrySidebar->layout()->indexOf(actuatorPanel)
+                      > telemetrySidebar->layout()->indexOf(protocolCard),
+           "Actuator status list lives below Protocol in the telemetry rail");
 
-    // Relative horizontal-clip check: no servo card wider than the window.
-    // A card wider than the window would be horizontally clipped.
-    bool anyClipped = false;
-    for (QGroupBox *g : window.findChildren<QGroupBox *>()) {
-        const QString t = g->title();
-        if (t == QStringLiteral("FrontRight")
-            || t == QStringLiteral("FrontLeft")
-            || t == QStringLiteral("Depth")
-            || t == QStringLiteral("RearRight")
-            || t == QStringLiteral("RearLeft")) {
-            if (g->width() > ws.width()) {
-                anyClipped = true;
-            }
+    const QWidget *rowParent = nullptr;
+    bool allStatusRowsSameParent = true;
+    for (int index = 0; index < rb::kServoCount; ++index) {
+        QWidget *row = window.findChild<QWidget *>(
+            QStringLiteral("servoStatusRow%1").arg(index));
+        if (row == nullptr) {
+            allStatusRowsSameParent = false;
+            continue;
         }
+        if (rowParent == nullptr) {
+            rowParent = row->parentWidget();
+        } else if (row->parentWidget() != rowParent) {
+            allStatusRowsSameParent = false;
+        }
+        expect(row->width() <= ws.width(),
+               "no actuator status row may be wider than the window");
     }
-    expect(!anyClipped,
-           "no servo card may be wider than the window (horizontal clip)");
+    expect(allStatusRowsSameParent && rowParent == statusHost,
+           "all five actuator status rows are siblings in one compact list");
 
     // Vertical-clipping regression: after showing at the default size and
     // letting the layout settle, every critical dashboard telemetry label must
@@ -2102,12 +2213,12 @@ void testDashboardLayout()
         }
         return ok;
     };
-    expect(checkLabelHeight(QStringLiteral("IMU — JY901S")),
+    expect(checkLabelHeight(QStringLiteral("IMU")),
            "IMU card status/metric labels must not be vertically clipped");
     expect(checkLabelHeight(QStringLiteral("Depth Sensor")),
            "Depth card status/metric labels must not be vertically clipped");
-    expect(checkLabelHeight(QStringLiteral("Protocol / Link")),
-           "Protocol/Link card TX/RX/CRC/Timeout/ACK RTT labels must not be "
+    expect(checkLabelHeight(QStringLiteral("Protocol")),
+           "Protocol card TX/RX/CRC/Timeout/ACK RTT labels must not be "
            "vertically clipped");
     expect(checkLabelHeight(QStringLiteral("Leak Detection")),
            "Leak card label must not be vertically clipped");

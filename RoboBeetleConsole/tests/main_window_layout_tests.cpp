@@ -20,6 +20,7 @@
 #include <QSpinBox>
 #include <QTabWidget>
 
+#include <algorithm>
 #include <cstdio>
 
 namespace {
@@ -48,7 +49,7 @@ void testScreenAwareStartupGeometry()
         return;
     }
     const QRect available = screen->availableGeometry();
-    const int expectedWidth = qMax(1100, qMin(1600, available.width() - 32));
+    const int expectedWidth = qMax(1100, qMin(1420, available.width() - 32));
     const int expectedHeight = qMax(720, qMin(1000, available.height() - 80));
     std::fprintf(stdout,
                  "startup_available=%dx%d expected=%dx%d actual=%dx%d\n",
@@ -114,11 +115,14 @@ void testTreeAndSizing()
 
     auto *tabs = window.findChild<QTabWidget *>(QStringLiteral("operatorToolsTabs"));
     expect(tabs != nullptr, "U15: operator tools tabs exist");
-    const QStringList expected = {QStringLiteral("Motion / Gait"), QStringLiteral("Actuators"),
-                                  QStringLiteral("Vision Details"), QStringLiteral("Telemetry Details"),
-                                  QStringLiteral("Protocol Details"), QStringLiteral("Log"),
+    const QStringList expected = {QStringLiteral("Motion / Gait"),
+                                  QStringLiteral("Servo Fine Control"),
+                                  QStringLiteral("Vision Details"),
+                                  QStringLiteral("Telemetry Details"),
+                                  QStringLiteral("Protocol Details"),
                                   QStringLiteral("Data Plots")};
-    expect(tabs != nullptr && tabs->count() == expected.size(), "U15: exactly seven operator tabs");
+    expect(tabs != nullptr && tabs->count() == expected.size(),
+           "U15: operator tabs exclude Actuators moved to dashboard and Log merged into Motion/Gait");
     if (tabs != nullptr) {
         for (int i = 0; i < expected.size() && i < tabs->count(); ++i) {
             expect(tabs->tabText(i) == expected.at(i), "U15: frozen operator tab order");
@@ -127,7 +131,9 @@ void testTreeAndSizing()
     expect(window.minimumSize() == QSize(1100, 720), "U08: root minimum is exactly 1100x720");
     expect(window.size() == QSize(1100, 720), "U08: minimum request settles at 1100x720");
     expect(window.findChild<QPushButton *>(QStringLiteral("motionStopButton")) != nullptr,
-           "U17: persistent Motion Stop exists");
+           "U17: D-pad center Motion Stop exists");
+    expect(window.findChild<QPushButton *>(QStringLiteral("enableAllButton")) != nullptr,
+           "U17: persistent Enable All exists");
     expect(window.findChild<QPushButton *>(QStringLiteral("disableAllButton")) != nullptr,
            "U17: persistent Disable All exists");
     auto *estop = window.findChild<QPushButton *>(QStringLiteral("emergencyStopButton"));
@@ -170,22 +176,69 @@ void testCompactVisionSurfaceAndDetailsTree()
                "main video card does not own inference identity SHA");
         expect(videoCard->findChild<QLabel *>(QStringLiteral("videoFpsSummary")) != nullptr,
                "main video card exposes the compact received-FPS summary");
+        auto *resolutionSummary =
+            videoCard->findChild<QLabel *>(QStringLiteral("videoResolutionSummary"));
+        expect(resolutionSummary != nullptr
+                   && resolutionSummary->text() == QStringLiteral("Resolution --"),
+               "Vision Status exposes a camera resolution field before a live frame exists");
         expect(videoCard->findChild<QLabel *>(QStringLiteral("inferencePerformanceSummary")) != nullptr,
                "main video card exposes the compact inference performance summary");
         expect(videoCard->findChild<QLabel *>(QStringLiteral("inferenceDetectionSummary")) != nullptr,
                "main video card exposes the compact inference detection summary");
         expect(videoCard->findChild<QLabel *>(QStringLiteral("captureCountSummary")) != nullptr,
                "main video card exposes the compact capture count summary");
+        expect(videoCard->findChild<QWidget *>(QStringLiteral("visionSummaryPanel")) != nullptr,
+               "main video card places inference/capture status in a dedicated side summary panel");
+        expect(videoCard->findChild<QPushButton *>(QStringLiteral("visionDetailsButton")) == nullptr,
+               "redundant Details shortcut is absent from the video card");
+        auto *summaryPanel =
+            videoCard->findChild<QWidget *>(QStringLiteral("visionSummaryPanel"));
+        const QStringList visibleControlNames = {
+            QStringLiteral("visionConnectButton"),
+            QStringLiteral("startInferenceButton"),
+            QStringLiteral("snapshotButton"),
+            QStringLiteral("startRecordingButton")};
+        auto *hiddenRefresh =
+            videoCard->findChild<QPushButton *>(QStringLiteral("visionRefreshStatusButton"));
+        auto *hiddenInferenceStop =
+            videoCard->findChild<QPushButton *>(QStringLiteral("stopInferenceButton"));
+        auto *hiddenRecordingStop =
+            videoCard->findChild<QPushButton *>(QStringLiteral("stopRecordingButton"));
+        expect(hiddenRefresh != nullptr && !hiddenRefresh->isVisible(),
+               "redundant Refresh Status action is hidden from the operator surface");
+        expect(hiddenInferenceStop != nullptr && !hiddenInferenceStop->isVisible()
+                   && hiddenRecordingStop != nullptr && !hiddenRecordingStop->isVisible(),
+               "normal operation presents one inference toggle and one recording toggle");
+
+        int previousY = -1;
+        for (const QString &name : visibleControlNames) {
+            auto *button = videoCard->findChild<QPushButton *>(name);
+            expect(button != nullptr && button->isVisible()
+                       && summaryPanel != nullptr
+                       && summaryPanel->isAncestorOf(button),
+                   "Vision Status owns every visible video/capture action");
+            if (button != nullptr) {
+                const int y = button->mapTo(summaryPanel, QPoint(0, 0)).y();
+                expect(y > previousY,
+                       "Vision Status actions are stacked vertically");
+                previousY = y;
+            }
+        }
         auto *fpsSummary = videoCard->findChild<QLabel *>(QStringLiteral("videoFpsSummary"));
         auto *performance = videoCard->findChild<QLabel *>(QStringLiteral("inferencePerformanceSummary"));
         auto *detections = videoCard->findChild<QLabel *>(QStringLiteral("inferenceDetectionSummary"));
         auto *captureCounts = videoCard->findChild<QLabel *>(QStringLiteral("captureCountSummary"));
         expect(fpsSummary != nullptr
                    && fpsSummary->toolTip() == QStringLiteral(
-                       "Received RBVS frame rate; not inference FPS or unique display FPS."),
-               "received FPS summary uses the frozen tooltip");
-        expect(performance != nullptr && performance->text() == QStringLiteral("-- FPS / -- ms"),
-               "non-active inference masks both performance values");
+                       "Received RBVS frame rate; not inference FPS or unique display FPS.")
+                   && fpsSummary->styleSheet().contains(QStringLiteral("#257A9E"))
+                   && fpsSummary->styleSheet().contains(QStringLiteral("13px")),
+               "received Video FPS is visually emphasized with its dedicated color");
+        expect(performance != nullptr
+                   && performance->text() == QStringLiteral("-- FPS / -- ms")
+                   && performance->styleSheet().contains(QStringLiteral("#6C5AAE"))
+                   && performance->styleSheet().contains(QStringLiteral("13px")),
+               "inference FPS/latency uses a second emphasized color while masking inactive values");
         expect(detections != nullptr && detections->text() == QStringLiteral("Detections --"),
                "absent inference detection count remains distinct from zero");
         auto *captureState = videoCard->findChild<QLabel *>(QStringLiteral("captureState"));
@@ -220,7 +273,7 @@ void testMinimumToolPagesUseVerticalScrollOnly()
     QApplication::processEvents();
 
     const QStringList pages = {
-        QStringLiteral("motionPage"), QStringLiteral("actuatorPage"),
+        QStringLiteral("motionPage"), QStringLiteral("servoFineControlPage"),
         QStringLiteral("visionDetailsPage"), QStringLiteral("telemetryDetailsPage"),
         QStringLiteral("protocolDetailsPage"), QStringLiteral("dataPlotsPage")};
     for (const QString &pageName : pages) {
@@ -228,7 +281,8 @@ void testMinimumToolPagesUseVerticalScrollOnly()
                "frozen operator page has its structural objectName");
     }
     const QStringList scrollAreas = {
-        QStringLiteral("motionScrollArea"), QStringLiteral("actuatorScrollArea")};
+        QStringLiteral("motionScrollArea"),
+        QStringLiteral("servoFineControlScrollArea")};
     for (const QString &scrollName : scrollAreas) {
         auto *scroll = window.findChild<QScrollArea *>(scrollName);
         expect(scroll != nullptr, "minimum operator page has a named scroll area");
@@ -243,12 +297,14 @@ void testMinimumToolPagesUseVerticalScrollOnly()
         }
     }
     auto *motionStop = window.findChild<QPushButton *>(QStringLiteral("motionStopButton"));
+    auto *enableAll = window.findChild<QPushButton *>(QStringLiteral("enableAllButton"));
     auto *disableAll = window.findChild<QPushButton *>(QStringLiteral("disableAllButton"));
-    expect(motionStop != nullptr && motionStop->parentWidget() != nullptr
-               && motionStop->parentWidget()->objectName() == QStringLiteral("operatorActionBar"),
-           "persistent Motion Stop remains outside page scroll content");
-    expect(disableAll != nullptr && disableAll->parentWidget() != nullptr
-               && disableAll->parentWidget()->objectName() == QStringLiteral("operatorActionBar"),
+    auto *actionBar = window.findChild<QWidget *>(QStringLiteral("operatorActionBar"));
+    expect(motionStop != nullptr && actionBar != nullptr && !actionBar->isAncestorOf(motionStop),
+           "Motion Stop lives in the Motion/Gait D-pad rather than the persistent action bar");
+    expect(enableAll != nullptr && enableAll->parentWidget() == actionBar,
+           "persistent Enable All remains outside page scroll content");
+    expect(disableAll != nullptr && disableAll->parentWidget() == actionBar,
            "persistent Disable All remains outside page scroll content");
     window.close();
 }
@@ -296,12 +352,63 @@ void testReviewerClosureContracts()
     auto *imuCard = window.findChild<QWidget *>(QStringLiteral("imuCard"));
     auto *depthCard = window.findChild<QWidget *>(QStringLiteral("depthCard"));
     auto *protocolCard = window.findChild<QWidget *>(QStringLiteral("protocolSummaryCard"));
-    expect(leakCard != nullptr && imuCard != nullptr && depthCard != nullptr && protocolCard != nullptr
-               && leakCard->y() < imuCard->y() && imuCard->y() < depthCard->y()
-               && depthCard->y() < protocolCard->y(),
-           "U03: telemetry sidebar cards form one top-to-bottom vertical stack");
-    expect(leakCard != nullptr && imuCard != nullptr && leakCard->height() < imuCard->height(),
-           "U03: Leak Detection remains the smallest telemetry card");
+    auto *actuatorPanel = window.findChild<QWidget *>(QStringLiteral("actuatorPage"));
+    auto *telemetryRail =
+        window.findChild<QWidget *>(QStringLiteral("telemetrySidebar"));
+    auto *dashboard = window.findChild<QWidget *>(QStringLiteral("dashboard"));
+    auto *videoCardForTelemetry =
+        window.findChild<QWidget *>(QStringLiteral("videoCard"));
+
+    expect(leakCard != nullptr && imuCard != nullptr
+               && depthCard != nullptr && protocolCard != nullptr
+               && actuatorPanel != nullptr
+               && leakCard->y() < imuCard->y()
+               && imuCard->y() < depthCard->y()
+               && depthCard->y() < protocolCard->y()
+               && protocolCard->y() < actuatorPanel->y()
+               && qAbs(leakCard->x() - imuCard->x()) <= 2
+               && qAbs(imuCard->x() - depthCard->x()) <= 2
+               && qAbs(depthCard->x() - protocolCard->x()) <= 2
+               && qAbs(protocolCard->x() - actuatorPanel->x()) <= 2,
+           "feedback: telemetry and actuator status cards form one compact vertical stack");
+    expect(telemetryRail != nullptr
+               && telemetryRail->isAncestorOf(leakCard)
+               && telemetryRail->isAncestorOf(imuCard)
+               && telemetryRail->isAncestorOf(depthCard)
+               && telemetryRail->isAncestorOf(protocolCard)
+               && telemetryRail->isAncestorOf(actuatorPanel),
+           "feedback: Leak/IMU/Depth/Protocol/Actuator share one telemetry rail");
+
+    if (dashboard != nullptr && videoCardForTelemetry != nullptr
+        && telemetryRail != nullptr) {
+        const int videoRight =
+            videoCardForTelemetry->mapTo(dashboard, QPoint(0, 0)).x()
+            + videoCardForTelemetry->width();
+        const int telemetryLeft =
+            telemetryRail->mapTo(dashboard, QPoint(0, 0)).x();
+        expect(videoRight <= telemetryLeft,
+               "feedback: dashboard uses Video then one compact telemetry/status rail");
+    } else {
+        expect(false, "feedback: two-column dashboard widgets all exist");
+    }
+    expect(window.findChild<QScrollArea *>(
+               QStringLiteral("actuatorScrollArea")) == nullptr,
+           "feedback: Actuator Control no longer owns a separate dashboard column");
+
+    expect(leakCard != nullptr && leakCard->height() >= 60
+               && imuCard != nullptr && imuCard->height() >= 96
+               && depthCard != nullptr && depthCard->height() >= 92
+               && protocolCard != nullptr && protocolCard->height() >= 110
+               && actuatorPanel != nullptr && actuatorPanel->height() >= 145,
+           "feedback: telemetry/status cards keep their minimum content budget while expanding vertically");
+    expect(videoCardForTelemetry != nullptr && telemetryRail != nullptr
+               && qAbs(videoCardForTelemetry->height() - telemetryRail->height()) <= 4,
+           "feedback: the five right-side status modules expand to the same overall dashboard height as Realtime Video");
+    for (QWidget *card :
+         {leakCard, imuCard, depthCard, protocolCard, actuatorPanel}) {
+        expect(card != nullptr && card->maximumWidth() <= 230,
+               "feedback: middle status rail keeps a narrow horizontal footprint");
+    }
 
     for (const QString &name : {QStringLiteral("visionDiagnostics"),
                                 QStringLiteral("inferenceDiagnostics"),
@@ -348,11 +455,17 @@ void testReviewerClosureContracts()
     const QStringList criticalNames = {
         QStringLiteral("piHost"), QStringLiteral("applyPiHostButton"),
         QStringLiteral("connectRobotButton"), QStringLiteral("visionConnectButton"),
-        QStringLiteral("visionRefreshStatusButton"), QStringLiteral("startInferenceButton"),
-        QStringLiteral("stopInferenceButton"), QStringLiteral("snapshotButton"),
-        QStringLiteral("startRecordingButton"), QStringLiteral("stopRecordingButton"),
-        QStringLiteral("motionStopButton"), QStringLiteral("disableAllButton"),
+        QStringLiteral("startInferenceButton"), QStringLiteral("snapshotButton"),
+        QStringLiteral("startRecordingButton"),
+        QStringLiteral("enableAllButton"), QStringLiteral("disableAllButton"),
         QStringLiteral("emergencyStopButton")};
+    auto *compatInferenceStop =
+        window.findChild<QPushButton *>(QStringLiteral("stopInferenceButton"));
+    auto *compatRecordingStop =
+        window.findChild<QPushButton *>(QStringLiteral("stopRecordingButton"));
+    expect(compatInferenceStop != nullptr && !compatInferenceStop->isVisible()
+               && compatRecordingStop != nullptr && !compatRecordingStop->isVisible(),
+           "U10: compatibility Stop actions are not duplicate visible controls");
     QList<QWidget *> critical;
     for (const QString &name : criticalNames) {
         QWidget *widget = window.findChild<QWidget *>(name);
@@ -371,6 +484,7 @@ void testReviewerClosureContracts()
 
     auto *tabs = window.findChild<QTabWidget *>(QStringLiteral("operatorToolsTabs"));
     auto *motionStop = window.findChild<QPushButton *>(QStringLiteral("motionStopButton"));
+    auto *enableAll = window.findChild<QPushButton *>(QStringLiteral("enableAllButton"));
     auto *disableAll = window.findChild<QPushButton *>(QStringLiteral("disableAllButton"));
     expect(tabs != nullptr, "U17: operator tabs exist for persistent-action sweep");
     if (tabs != nullptr) {
@@ -381,80 +495,173 @@ void testReviewerClosureContracts()
                 scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
             }
             QApplication::processEvents();
-            expect(fullyContainedInVisibleAncestors(motionStop, &window)
+            expect(fullyContainedInVisibleAncestors(enableAll, &window)
                        && fullyContainedInVisibleAncestors(disableAll, &window),
-                   "U17: persistent stop actions remain visible after every tab/page scroll");
+                   "U17: persistent actuator actions remain visible after every tab/page scroll");
         }
+        tabs->setCurrentIndex(0);
+        auto *motionScroll = window.findChild<QScrollArea *>(QStringLiteral("motionScrollArea"));
+        if (motionScroll != nullptr) {
+            motionScroll->verticalScrollBar()->setValue(0);
+        }
+        QApplication::processEvents();
+        bool motionStopReachable = false;
+        if (motionScroll != nullptr && motionStop != nullptr) {
+            motionScroll->ensureWidgetVisible(motionStop, 0, 0);
+            QApplication::processEvents();
+            const QRect stopInViewport(
+                motionStop->mapTo(motionScroll->viewport(), QPoint(0, 0)),
+                motionStop->size());
+            motionStopReachable =
+                stopInViewport.intersects(motionScroll->viewport()->rect());
+        }
+        expect(motionStopReachable,
+               "U17: minimum Motion/Gait can scroll directly to the center Stop button");
     }
 
     auto *video = window.findChild<rb::vision::VideoView *>(QStringLiteral("videoView"));
+    auto *videoCard = window.findChild<QWidget *>(QStringLiteral("videoCard"));
     auto *sidebar = window.findChild<QWidget *>(QStringLiteral("telemetrySidebar"));
     auto *splitter = window.findChild<QSplitter *>(QStringLiteral("workspaceSplitter"));
-    expect(video != nullptr && sidebar != nullptr
-               && static_cast<double>(video->width()) >= 2.5 * sidebar->width(),
-           "U04: minimum dashboard keeps video at least 2.5 times sidebar width");
+    expect(dashboard != nullptr && videoCard != nullptr && sidebar != nullptr
+               && dashboard->isAncestorOf(videoCard)
+               && dashboard->isAncestorOf(sidebar)
+               && !videoCard->isAncestorOf(sidebar),
+           "feedback: minimum dashboard keeps Video and telemetry as sibling columns");
+    expect(video != nullptr
+               && video->width() * 3 == video->height() * 4,
+           "U04: VideoView uses an exact 4:3 source-ratio surface with no letterbox edge");
     expect(splitter != nullptr && splitter->sizes().size() == 2
                && splitter->sizes().at(0) > 0 && splitter->sizes().at(1) > 0,
            "U06: both splitter panes remain nonzero at minimum size");
 
     if (tabs != nullptr) {
-        tabs->setCurrentIndex(1);
         window.resize(1600, 1000);
         QApplication::processEvents();
-        auto *cardsHost = window.findChild<QWidget *>(QStringLiteral("actuatorCardsHost"));
-        auto *actuatorScroll = window.findChild<QScrollArea *>(QStringLiteral("actuatorScrollArea"));
-        const QList<QGroupBox *> originalCards =
-            cardsHost != nullptr ? cardsHost->findChildren<QGroupBox *>(QString(), Qt::FindDirectChildrenOnly)
-                                 : QList<QGroupBox *>{};
-        expect(originalCards.size() == 5, "U20: exactly five actuator card objects exist before reflow");
-        QSpinBox *savedPwm = originalCards.isEmpty() ? nullptr : originalCards.first()->findChild<QSpinBox *>();
-        QDoubleSpinBox *savedAngle = originalCards.isEmpty() ? nullptr : originalCards.first()->findChild<QDoubleSpinBox *>();
+
+        auto *cardsHost =
+            window.findChild<QWidget *>(QStringLiteral("actuatorCardsHost"));
+        auto *finePage =
+            window.findChild<QWidget *>(QStringLiteral("servoFineControlPage"));
+        expect(cardsHost != nullptr && finePage != nullptr,
+               "Actuator status list and Servo Fine Control page exist");
+        expect(window.findChild<QScrollArea *>(
+                   QStringLiteral("actuatorScrollArea")) == nullptr,
+               "Actuator status list does not consume a separate scroll column");
+
+        QList<QWidget *> originalRows;
+        for (int index = 0; index < rb::kServoCount; ++index) {
+            QWidget *row = window.findChild<QWidget *>(
+                QStringLiteral("servoStatusRow%1").arg(index));
+            if (row != nullptr) {
+                originalRows.append(row);
+                expect(row->parentWidget() == cardsHost,
+                       "every actuator status row belongs to one compact host");
+                expect(row->findChildren<QPushButton *>().isEmpty()
+                           && row->findChildren<QSpinBox *>().isEmpty()
+                           && row->findChildren<QDoubleSpinBox *>().isEmpty()
+                           && row->findChildren<QSlider *>().isEmpty(),
+                       "Actuator status rows contain status only");
+            }
+        }
+        expect(originalRows.size() == rb::kServoCount,
+               "exactly five actuator status rows exist");
+        if (originalRows.size() == rb::kServoCount) {
+            const int firstX = originalRows.first()->x();
+            int previousY = -1;
+            bool oneColumn = true;
+            for (QWidget *row : originalRows) {
+                oneColumn = oneColumn
+                    && qAbs(row->x() - firstX) <= 2
+                    && row->y() > previousY;
+                previousY = row->y();
+            }
+            expect(oneColumn,
+                   "all five actuator status rows form one vertical list");
+
+            QList<int> centerGaps;
+            for (int index = 1; index < originalRows.size(); ++index) {
+                const int previousCenter =
+                    originalRows.at(index - 1)->geometry().center().y();
+                const int currentCenter =
+                    originalRows.at(index)->geometry().center().y();
+                centerGaps.append(currentCenter - previousCenter);
+            }
+            if (!centerGaps.isEmpty()) {
+                const auto [minGap, maxGap] =
+                    std::minmax_element(centerGaps.cbegin(), centerGaps.cend());
+                expect(*maxGap - *minGap <= 4,
+                       "Actuator Control distributes the five status rows evenly through its available height");
+            }
+        }
+
+        auto *savedPwm =
+            window.findChild<QSpinBox *>(QStringLiteral("servoPwmSpin0"));
+        auto *savedAngle =
+            window.findChild<QDoubleSpinBox *>(QStringLiteral("servoAngleSpin0"));
+        auto *savedSlider =
+            window.findChild<QSlider *>(QStringLiteral("servoPwmSlider0"));
+        auto *apply =
+            window.findChild<QPushButton *>(QStringLiteral("servoApplyButton0"));
+        auto *enable =
+            window.findChild<QPushButton *>(QStringLiteral("servoEnableButton0"));
+        auto *neutral =
+            window.findChild<QPushButton *>(QStringLiteral("servoNeutralButton0"));
+        expect(savedPwm != nullptr && savedAngle != nullptr
+                   && savedSlider != nullptr && apply != nullptr
+                   && enable != nullptr && neutral != nullptr,
+               "Servo Fine Control owns PWM/Angle/Apply/Enable/Neutral controls");
+        expect(savedAngle != nullptr
+                   && savedAngle->buttonSymbols() == QAbstractSpinBox::NoButtons,
+               "Angle editor keeps numeric setting but removes up/down buttons");
+        bool hasSetAngleButton = false;
+        for (QPushButton *button : window.findChildren<QPushButton *>()) {
+            hasSetAngleButton =
+                hasSetAngleButton
+                || button->text() == QStringLiteral("Set Angle");
+        }
+        expect(!hasSetAngleButton,
+               "Set Angle button is removed from the operator UI");
+
         if (savedPwm != nullptr && savedPwm->maximum() > savedPwm->minimum()) {
-            savedPwm->setValue(savedPwm->minimum() + (savedPwm->maximum() - savedPwm->minimum()) / 3);
+            savedPwm->setValue(
+                savedPwm->minimum()
+                + (savedPwm->maximum() - savedPwm->minimum()) / 3);
         }
         if (savedAngle != nullptr && savedAngle->maximum() > savedAngle->minimum()) {
-            savedAngle->setValue(savedAngle->minimum() + (savedAngle->maximum() - savedAngle->minimum()) / 3.0);
+            savedAngle->setValue(
+                savedAngle->minimum()
+                + (savedAngle->maximum() - savedAngle->minimum()) / 3.0);
         }
         const int expectedPwm = savedPwm != nullptr ? savedPwm->value() : 0;
-        const double expectedAngle = savedAngle != nullptr ? savedAngle->value() : 0.0;
+        const double expectedAngle =
+            savedAngle != nullptr ? savedAngle->value() : 0.0;
 
         window.resize(1100, 720);
         QApplication::processEvents();
-        const QList<QGroupBox *> minimumCards =
-            cardsHost != nullptr ? cardsHost->findChildren<QGroupBox *>(QString(), Qt::FindDirectChildrenOnly)
-                                 : QList<QGroupBox *>{};
-        bool samePointers = minimumCards.size() == originalCards.size();
-        for (QGroupBox *card : originalCards) samePointers = samePointers && minimumCards.contains(card);
-        expect(samePointers, "U20: 5-to-3-plus-2 reflow preserves every actuator QWidget pointer");
-        expect(savedPwm != nullptr && savedPwm->value() == expectedPwm
-                   && savedAngle != nullptr && qFuzzyCompare(savedAngle->value() + 1.0, expectedAngle + 1.0),
-               "U20: actuator PWM/angle values survive the narrow reflow");
-        expect(actuatorScroll != nullptr && actuatorScroll->horizontalScrollBar()->maximum() == 0
-                   && actuatorScroll->verticalScrollBar()->maximum() > 0,
-               "U21: minimum actuator page uses vertical scrolling only");
-        if (actuatorScroll != nullptr && !originalCards.isEmpty()) {
-            actuatorScroll->verticalScrollBar()->setValue(actuatorScroll->verticalScrollBar()->maximum());
-            QApplication::processEvents();
-            const QRect lastCardInViewport(
-                originalCards.last()->mapTo(actuatorScroll->viewport(), QPoint(0, 0)),
-                originalCards.last()->size());
-            expect(lastCardInViewport.intersects(actuatorScroll->viewport()->rect()),
-                   "U21: scrolling to maximum makes the final actuator card reachable");
+
+        bool samePointers = true;
+        for (int index = 0; index < originalRows.size(); ++index) {
+            samePointers = samePointers
+                && window.findChild<QWidget *>(
+                       QStringLiteral("servoStatusRow%1").arg(index))
+                       == originalRows.at(index);
         }
+        expect(samePointers,
+               "minimum-size resize preserves every actuator status row pointer");
+        expect(savedPwm != nullptr && savedPwm->value() == expectedPwm
+                   && savedAngle != nullptr
+                   && qFuzzyCompare(savedAngle->value() + 1.0,
+                                    expectedAngle + 1.0),
+               "Servo Fine Control PWM/Angle values survive window resize");
 
         window.resize(1600, 1000);
         QApplication::processEvents();
-        const QList<QGroupBox *> finalCards =
-            cardsHost != nullptr ? cardsHost->findChildren<QGroupBox *>(QString(), Qt::FindDirectChildrenOnly)
-                                 : QList<QGroupBox *>{};
-        bool restoredPointers = finalCards.size() == originalCards.size();
-        for (QGroupBox *card : originalCards) restoredPointers = restoredPointers && finalCards.contains(card);
-        expect(restoredPointers
-                   && savedPwm != nullptr && savedPwm->value() == expectedPwm
-                   && savedAngle != nullptr && qFuzzyCompare(savedAngle->value() + 1.0, expectedAngle + 1.0),
-               "U20: 5-to-3-plus-2-to-5 reflow preserves identity and values");
-        expect(video != nullptr && sidebar != nullptr && video->width() >= sidebar->width() * 3,
-               "U04: comfortable dashboard keeps video at least three times sidebar width");
+        expect(video != nullptr && video->width() >= 420,
+               "comfortable layout keeps a substantial live-video surface");
+        expect(video != nullptr
+                   && video->width() * 3 == video->height() * 4,
+               "comfortable VideoView remains exactly source-aspect matched");
     }
 
     window.close();
@@ -479,18 +686,39 @@ void testPresentationDetailsReflowAndNoSideEffects()
     expect(splitter != nullptr && splitter->count() == 2
                && !splitter->isCollapsible(0) && !splitter->isCollapsible(1),
            "U06: splitter panes are nonzero and noncollapsible");
-    expect(video != nullptr && sidebar != nullptr && video->width() >= sidebar->width() * 3,
-           "U04: normal dashboard keeps video at least three times sidebar width");
+    auto *videoCard = window.findChild<QWidget *>(QStringLiteral("videoCard"));
+    auto *dashboard = window.findChild<QWidget *>(QStringLiteral("dashboard"));
+    auto *actuatorPanel = window.findChild<QWidget *>(QStringLiteral("actuatorPage"));
+    auto *protocolCard = window.findChild<QWidget *>(QStringLiteral("protocolSummaryCard"));
+    expect(dashboard != nullptr && videoCard != nullptr && sidebar != nullptr
+               && actuatorPanel != nullptr && protocolCard != nullptr
+               && dashboard->isAncestorOf(videoCard)
+               && dashboard->isAncestorOf(sidebar)
+               && sidebar->isAncestorOf(actuatorPanel)
+               && actuatorPanel->y() > protocolCard->y()
+               && !videoCard->isAncestorOf(sidebar),
+           "feedback: normal dashboard uses Video plus one telemetry/status rail with Actuator below Protocol");
+    expect(video != nullptr && qAbs(video->width() * 3 - video->height() * 4) <= 6,
+           "U04: normal VideoView remains source-aspect matched");
     const int videoHeight880 = video == nullptr ? 0 : video->height();
     window.resize(1420, 1000);
     QApplication::processEvents();
-    expect(video != nullptr && video->height() - videoHeight880 >= 84,
-           "U05: 120 added pixels yield at least 70 percent video-height gain");
+    expect(video != nullptr
+               && video->height() >= videoHeight880
+               && qAbs(video->width() * 3 - video->height() * 4) <= 6,
+           "U05: extra vertical space never shrinks or distorts the source-matched video");
     expect(window.size() == QSize(1420, 1000), "U09: 1420x1000 settles exactly");
     window.resize(1600, 1000);
     QApplication::processEvents();
     expect(window.size() == QSize(1600, 1000),
            "U09: 1600x1000 settles exactly");
+    if (tabs != nullptr) {
+        tabs->setCurrentIndex(0);
+        QApplication::processEvents();
+        auto *motionScroll = window.findChild<QScrollArea *>(QStringLiteral("motionScrollArea"));
+        expect(motionScroll != nullptr && motionScroll->verticalScrollBar()->maximum() == 0,
+               "feedback: Motion/Gait is fully visible at the comfortable window size");
+    }
 
     if (splitter != nullptr && tabs != nullptr) {
         splitter->setSizes({splitter->height() / 2, splitter->height() / 2});
@@ -502,17 +730,15 @@ void testPresentationDetailsReflowAndNoSideEffects()
                "U07: tab changes do not reset user splitter sizes");
     }
 
-    auto *details = window.findChild<QPushButton *>(QStringLiteral("visionDetailsButton"));
-    expect(details != nullptr, "U16: video Details shortcut exists");
-    if (details != nullptr && tabs != nullptr) {
-        tabs->setCurrentIndex(0);
-        details->click();
-        expect(tabs->currentIndex() == 2, "U16: Details selects Vision Details only");
-    }
+    expect(window.findChild<QPushButton *>(QStringLiteral("visionDetailsButton")) == nullptr,
+           "U16: redundant video Details shortcut is removed; Vision Details remains a direct tab");
+    expect(tabs != nullptr && tabs->count() > 2
+               && tabs->tabText(2) == QStringLiteral("Vision Details"),
+           "U16: Vision Details remains directly available after Servo Fine Control");
     expect(fixture.directTransport.writes().isEmpty(),
            "U22/U38: presentation changes emit no robot writes");
 
-    auto *videoCard = window.findChild<QWidget *>(QStringLiteral("videoCard"));
+    videoCard = window.findChild<QWidget *>(QStringLiteral("videoCard"));
     expect(videoCard != nullptr
                && videoCard->findChild<QLabel *>(QStringLiteral("inferenceDiagnostics")) == nullptr
                && videoCard->findChild<QLineEdit *>(QStringLiteral("inferenceShaValue")) == nullptr,
@@ -525,39 +751,86 @@ void testPresentationDetailsReflowAndNoSideEffects()
 
     auto *visionPort = window.findChild<QSpinBox *>(QStringLiteral("visionPort"));
     auto *robotPort = window.findChild<QSpinBox *>(QStringLiteral("robotTcpPort"));
+    auto *piHost = window.findChild<QLineEdit *>(QStringLiteral("piHost"));
+    auto *connectRobot = window.findChild<QPushButton *>(QStringLiteral("connectRobotButton"));
+    auto *applyHost = window.findChild<QPushButton *>(QStringLiteral("applyPiHostButton"));
+    auto *serialRefresh = window.findChild<QPushButton *>(QStringLiteral("serialRefreshButton"));
+    auto *connectionState = window.findChild<QLabel *>(QStringLiteral("connectionStatus"));
+    auto *authorityState = window.findChild<QLabel *>(QStringLiteral("authorityStatus"));
     expect(visionPort != nullptr && visionPort->buttonSymbols() == QAbstractSpinBox::NoButtons
                && visionPort->minimum() == 1 && visionPort->maximum() == 65535
                && robotPort != nullptr,
            "U11/U12: remote endpoint fields retain labels, ranges and no buttons");
+    expect(piHost != nullptr && piHost->maximumWidth() <= 230,
+           "feedback: Pi Host editor is compact rather than consuming the full header");
+    expect(piHost != nullptr && robotPort != nullptr && connectRobot != nullptr
+               && qAbs(piHost->mapTo(&window, piHost->rect().center()).y()
+                       - robotPort->mapTo(&window, robotPort->rect().center()).y()) <= 6
+               && qAbs(piHost->mapTo(&window, piHost->rect().center()).y()
+                       - connectRobot->mapTo(&window, connectRobot->rect().center()).y()) <= 6,
+           "feedback: Robot TCP and Connect share the same top row as Pi Host");
+    expect(applyHost != nullptr && !applyHost->isEnabled()
+               && applyHost->text() == QStringLiteral("Applied"),
+           "feedback: clean Pi Host state has explicit applied feedback");
+    expect(serialRefresh != nullptr && !serialRefresh->isVisible(),
+           "feedback: Remote mode never exposes the serial Refresh button");
+    expect(connectionState != nullptr && connectionState->isVisible()
+               && connectionState->text() == QStringLiteral("Disconnected")
+               && authorityState != nullptr && authorityState->isVisible()
+               && authorityState->text() == QStringLiteral("Unowned"),
+           "feedback: top header keeps transport State and control ownership visible");
     expect(window.findChild<QPushButton *>(QStringLiteral("motionStopButton"))
                ->property("consoleActionRole").toString() == QStringLiteral("stop")
                && window.findChild<QPushButton *>(QStringLiteral("emergencyStopButton"))->isEnabled() == false,
            "U17/U36: persistent stop/danger roles are distinct and Emergency Stop disabled");
 
-    tabs->setCurrentIndex(1);
-    QApplication::processEvents();
-    auto *cardsHost = window.findChild<QWidget *>(QStringLiteral("actuatorCardsHost"));
-    expect(cardsHost != nullptr, "U20: actuator card host exists");
+    auto *cardsHost =
+        window.findChild<QWidget *>(QStringLiteral("actuatorCardsHost"));
+    auto *actuatorPanelStatus =
+        window.findChild<QWidget *>(QStringLiteral("actuatorPage"));
+    auto *protocolCardStatus =
+        window.findChild<QWidget *>(QStringLiteral("protocolSummaryCard"));
+    expect(cardsHost != nullptr && actuatorPanelStatus != nullptr
+               && protocolCardStatus != nullptr,
+           "U20: compact actuator status list exists");
     if (cardsHost != nullptr) {
-        int firstRow = 0;
-        for (auto *box : cardsHost->findChildren<QGroupBox *>()) {
-            if (box->y() < 100) {
-                ++firstRow;
+        QList<QWidget *> rows;
+        for (int index = 0; index < rb::kServoCount; ++index) {
+            QWidget *row = window.findChild<QWidget *>(
+                QStringLiteral("servoStatusRow%1").arg(index));
+            if (row != nullptr) {
+                rows.append(row);
             }
         }
-        expect(firstRow >= 5, "U20/U21: normal actuator layout has five cards in first row");
+        expect(rows.size() == rb::kServoCount,
+               "feedback: actuator status list retains five servo rows");
+        bool oneColumn = rows.size() == rb::kServoCount;
+        int lastY = -1;
+        const int firstX = rows.isEmpty() ? 0 : rows.first()->x();
+        for (QWidget *row : rows) {
+            oneColumn = oneColumn
+                && qAbs(row->x() - firstX) <= 2
+                && row->y() > lastY;
+            lastY = row->y();
+        }
+        expect(oneColumn,
+               "feedback: actuator status rows stay in one vertical list");
+        expect(actuatorPanelStatus->y() > protocolCardStatus->y(),
+               "feedback: Actuator Control is positioned below Protocol");
+
         window.resize(1100, 720);
         QApplication::processEvents();
-        int rows = 0;
-        int firstRowAtMinimum = 0;
-        int firstY = -1;
-        for (auto *box : cardsHost->findChildren<QGroupBox *>()) {
-            if (firstY < 0) firstY = box->y();
-            if (box->y() <= firstY + 4) ++firstRowAtMinimum;
-            rows = qMax(rows, box->y());
+        bool minimumOneColumn = true;
+        lastY = -1;
+        const int minimumFirstX = rows.isEmpty() ? 0 : rows.first()->x();
+        for (QWidget *row : rows) {
+            minimumOneColumn = minimumOneColumn
+                && qAbs(row->x() - minimumFirstX) <= 2
+                && row->y() > lastY;
+            lastY = row->y();
         }
-        expect(firstRowAtMinimum == 3 && rows > firstY,
-               "U21: minimum actuator layout reflows to three plus two rows");
+        expect(minimumOneColumn,
+               "U21: minimum actuator status list remains one compact column");
     }
     window.close();
 }

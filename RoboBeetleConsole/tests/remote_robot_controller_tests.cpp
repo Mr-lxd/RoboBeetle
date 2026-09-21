@@ -8,6 +8,7 @@
 #include <QElapsedTimer>
 #include <QGroupBox>
 #include <QHostAddress>
+#include <QLabel>
 #include <QPushButton>
 #include <QStringList>
 #include <QTcpServer>
@@ -266,27 +267,29 @@ void testRemoteControllerAndUi()
     expect(release != nullptr && release->isEnabled(),
            "Release must enable while remote authority is owned");
 
-    QGroupBox *frontRight =
-        groupWithTitle(&window, QStringLiteral("FrontRight"));
+    QWidget *frontRight =
+        window.findChild<QWidget *>(QStringLiteral("servoStatusRow0"));
     expect(frontRight != nullptr,
-           "MainWindow must retain FrontRight servo card");
+           "MainWindow must retain the FrontRight actuator status row");
     if (frontRight == nullptr) {
         return;
     }
+    expect(frontRight->findChildren<QPushButton *>().isEmpty(),
+           "Actuator status rows must not contain control buttons");
 
     QPushButton *enable =
-        buttonWithText(frontRight, QStringLiteral("Enable PWM"));
+        window.findChild<QPushButton *>(QStringLiteral("servoEnableButton0"));
     QPushButton *applyPwm =
-        buttonWithText(frontRight, QStringLiteral("Apply PWM"));
+        window.findChild<QPushButton *>(QStringLiteral("servoApplyButton0"));
     expect(enable != nullptr && enable->isEnabled(),
            "FrontRight Enable must be actionable when remote control is Active");
     expect(applyPwm != nullptr && !applyPwm->isEnabled(),
            "raw PWM must stay unavailable in RBRP remote mode");
 
     QPushButton *backward =
-        buttonWithText(&window, QStringLiteral("Backward (Pending)"));
+        buttonWithText(&window, QStringLiteral("Brake"));
     expect(backward != nullptr && !backward->isEnabled(),
-           "Backward must remain Pending and disabled in Slice 8");
+           "Brake remains disabled because the underlying backward command is not bench-startable");
 
     if (enable != nullptr) {
         enable->click();
@@ -313,8 +316,17 @@ void testRemoteControllerAndUi()
         return controller.isServoEnabled(rb::ServoId::FrontRight);
     }), "Accepted CommandOutcome must confirm Servo Enable");
 
-    expect(buttonWithText(frontRight, QStringLiteral("Release PWM")) != nullptr,
-           "UI must reflect accepted remote Enable outcome");
+    expect(enable != nullptr && enable->text() == QStringLiteral("Release"),
+           "Servo Fine Control must reflect the accepted remote Enable outcome");
+    auto *servoStatusDot =
+        frontRight->findChild<QLabel *>(QStringLiteral("servoStatusDot0"));
+    auto *servoStatusLabel =
+        frontRight->findChild<QLabel *>(QStringLiteral("servoStatusLabel0"));
+    expect(servoStatusDot != nullptr
+               && servoStatusDot->styleSheet().contains(QStringLiteral("#2F80ED"))
+               && servoStatusLabel != nullptr
+               && servoStatusLabel->styleSheet().contains(QStringLiteral("#2F80ED")),
+           "accepted Servo Enable is highlighted in blue in Actuator Control");
 
     expect(!controller.setServoPwm(rb::ServoId::FrontRight, 1500),
            "Remote controller must reject raw PWM locally");
