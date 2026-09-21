@@ -1,4 +1,4 @@
-# Vision Slice 5 — Qt Detection Text Overlay Plan
+# Vision Slice 5 — Qt Detection Overlay Plan
 
 ## Baseline
 
@@ -65,31 +65,37 @@ Do not use wall-clock time for frame association.
 
 Do not cache/replay old video frames.
 
-HTTP freshness expiry hides text while preserving a healthy metadata
+HTTP freshness expiry hides the overlay while preserving a healthy metadata
 connection.
 
 Within one Video session, do not repeatedly reconnect a failed identical
 metadata endpoint.
 
-## Phase B04 — VideoView text renderer
+## Phase B04 — VideoView detection renderer
 
 Retain current RBVS frame capture timestamp.
 
-Render `class confidence` near the centroid using the actual image target
-rectangle.
+Using the actual image target rectangle, render at every mapped centroid:
+
+- a Bright Amber (`#FFB000`) crosshair approximately 13 display pixels across
+  with an approximately 2-pixel stroke
+- a Bright Amber filled center dot with an approximately 3-pixel radius
+- Bright Amber `class confidence` text offset from the marker
 
 Allowed:
-- white text
+- centroid crosshair and center dot
+- Bright Amber text
 - small dark shadow/outline
 
 Not allowed:
 - bbox
-- marker
-- dot/circle
-- crosshair
 - line/trail
+- history
+- target selection
 - target lock indicator
+- tracking identity
 - detection background box
+- visual servo/control marker
 ## Phase B05 — MainWindow composition
 
 MainWindow receives one DetectionClient from application composition.
@@ -120,19 +126,19 @@ Then full CTest.
 
 Expected final suite: 19 tests, zero failures.
 
-## Phase B07 — Native Pi acceptance — completed
+## Phase B07 — Native Pi acceptance — completed for the text-only baseline
 
-The real Pi/native Qt gate completed successfully:
+The real Pi/native Qt gate completed successfully before the centroid-marker
+and Bright Amber closeout:
 
 1. Pi 47010 / 47011 / 47012 reachable.
 2. Inference was forced to authoritative Disabled before the native UI gate.
 3. Connect Video established the real 47010 stream.
 4. Fresh advertised `detection_stream_supported=true`, port 47012, version 1
    established one real 47012 Qt connection.
-5. With inference Running, native Qt visibly rendered only
+5. With inference Running, native Qt visibly rendered
    `class confidence` text for fresh detections.
-6. No rectangle, dot, circle, crosshair, centroid glyph, or background marker was
-   visible.
+6. That gate did not include or validate the later centroid-marker presentation.
 7. Stop Inference returned the Pi to authoritative Disabled.
 8. Overlay text disappeared while both the existing 47010 video connection and
    47012 metadata connection remained established.
@@ -143,6 +149,9 @@ The real Pi/native Qt gate completed successfully:
 10. The separate GUI Disconnect Video socket-release step was not re-run in the
     final native hardware gate; that lifecycle is covered by the automated tests.
 11. Pi inference was left Disabled.
+
+The final Bright Amber centroid-marker and text appearance is host-verified in
+this closeout. Native visual revalidation of that appearance remains Pending.
 
 Release gate after hardware acceptance:
 

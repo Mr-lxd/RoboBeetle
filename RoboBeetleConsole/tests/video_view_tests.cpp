@@ -1,7 +1,9 @@
 #include "vision/VideoView.h"
 
 #include <QApplication>
+#include <QColor>
 #include <QImage>
+#include <QRect>
 
 #include <cstdio>
 #include <cstdlib>
@@ -27,6 +29,22 @@ QImage image(int marker)
     QImage value(4, 3, QImage::Format_RGB32);
     value.fill(qRgb(marker, marker, marker));
     return value;
+}
+
+bool containsColor(
+    const QImage &rendered,
+    const QRect &region,
+    const QColor &color)
+{
+    const QRect bounded = region.intersected(rendered.rect());
+    for (int y = bounded.top(); y <= bounded.bottom(); ++y) {
+        for (int x = bounded.left(); x <= bounded.right(); ++x) {
+            if (rendered.pixelColor(x, y) == color) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 void latestPendingFrameReplacesOlderPendingFrame()
@@ -128,6 +146,47 @@ void textOverlayLifecycleIsIndependentFromVideoFrame()
     view.hide();
 }
 
+void amberCentroidMarkersAndLabelsRenderForEveryDetection()
+{
+    VideoView view;
+    view.resize(320, 240);
+    view.show();
+    view.setFrame(image(20), 20U, 20'000U);
+
+    DetectionFrame overlay;
+    overlay.frameId = 20U;
+    overlay.captureTimestampNs = 20'000U;
+    overlay.sourceSize = QSize(4, 3);
+    overlay.detections.push_back(
+        DetectionObservation{
+            0,
+            QStringLiteral("fish"),
+            0.88,
+            QPointF(1.0, 1.0)});
+    overlay.detections.push_back(
+        DetectionObservation{
+            1,
+            QStringLiteral("stingray"),
+            0.82,
+            QPointF(3.0, 2.0)});
+    view.setDetectionOverlay(overlay);
+
+    QImage rendered(view.size(), QImage::Format_ARGB32);
+    rendered.fill(Qt::transparent);
+    view.render(&rendered);
+
+    const QColor amber(0xFF, 0xB0, 0x00);
+    expect(rendered.pixelColor(80, 80) == amber,
+           "first detection renders an amber centroid marker");
+    expect(rendered.pixelColor(240, 160) == amber,
+           "every detection renders the same amber centroid marker");
+    expect(containsColor(rendered, QRect(88, 45, 120, 30), amber),
+           "detection label foreground renders in bright amber");
+    expect(containsColor(rendered, QRect(210, 125, 110, 28), amber),
+           "every detection renders the same amber label foreground");
+    view.hide();
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -136,5 +195,6 @@ int main(int argc, char **argv)
     latestPendingFrameReplacesOlderPendingFrame();
     paintingClearsPendingReplacementWindow();
     textOverlayLifecycleIsIndependentFromVideoFrame();
+    amberCentroidMarkersAndLabelsRenderForEveryDetection();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
