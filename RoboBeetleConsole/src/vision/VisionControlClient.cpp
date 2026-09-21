@@ -8,6 +8,9 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 
+#include <cmath>
+#include <limits>
+
 namespace rb::vision {
 
 namespace {
@@ -35,6 +38,36 @@ bool strictString(const QJsonValue &value, QString *out)
 bool validNumber(const QJsonValue &value)
 {
     return value.isDouble();
+}
+
+std::optional<quint16> strictPort(const QJsonValue &value)
+{
+    if (!value.isDouble()) {
+        return std::nullopt;
+    }
+    const double number = value.toDouble();
+    if (!std::isfinite(number)
+        || number < 1.0
+        || number > 65535.0
+        || std::floor(number) != number) {
+        return std::nullopt;
+    }
+    return static_cast<quint16>(value.toInteger());
+}
+
+std::optional<int> strictPositiveInt(const QJsonValue &value)
+{
+    if (!value.isDouble()) {
+        return std::nullopt;
+    }
+    const double number = value.toDouble();
+    if (!std::isfinite(number)
+        || number < 1.0
+        || number > static_cast<double>(std::numeric_limits<int>::max())
+        || std::floor(number) != number) {
+        return std::nullopt;
+    }
+    return static_cast<int>(value.toInteger());
 }
 
 QString responseMessage(const QJsonObject &object, const QString &fallback)
@@ -458,6 +491,9 @@ void VisionControlClient::applyStatusPayload(const QJsonObject &object)
     status_.haveInferenceState = false;
     status_.inferenceConfigured.reset();
     status_.inferenceControlSupported.reset();
+    status_.detectionStreamSupported.reset();
+    status_.detectionStreamPort.reset();
+    status_.detectionStreamVersion.reset();
     status_.inferenceOperationValid = false;
     status_.inferenceOperation.clear();
 
@@ -520,6 +556,16 @@ void VisionControlClient::applyStatusPayload(const QJsonObject &object)
     if (strictBool(inference.value(QStringLiteral("control_supported")), &boolValue)) {
         status_.inferenceControlSupported = boolValue;
     }
+    if (strictBool(
+            inference.value(QStringLiteral("detection_stream_supported")),
+            &boolValue)) {
+        status_.detectionStreamSupported = boolValue;
+    }
+    status_.detectionStreamPort = strictPort(
+        inference.value(QStringLiteral("detection_stream_port")));
+    status_.detectionStreamVersion = strictPositiveInt(
+        inference.value(QStringLiteral("detection_stream_version")));
+
     QString state;
     if (strictString(inference.value(QStringLiteral("state")), &state) && !state.isEmpty()) {
         status_.haveInferenceState = true;
@@ -633,6 +679,9 @@ void VisionControlClient::resetInferenceMetadata()
     status_.haveInferenceState = false;
     status_.inferenceConfigured.reset();
     status_.inferenceControlSupported.reset();
+    status_.detectionStreamSupported.reset();
+    status_.detectionStreamPort.reset();
+    status_.detectionStreamVersion.reset();
     status_.inferenceOperationValid = false;
     status_.inferenceOperation.clear();
     resetInferenceDiagnostics();

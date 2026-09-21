@@ -1,12 +1,14 @@
 #pragma once
 
 #include "controller/IConsoleController.h"
+#include "vision/DetectionMetadata.h"
 
 #include <QMainWindow>
 #include <QSize>
 
 #include <array>
 #include <cstddef>
+#include <optional>
 
 class QCloseEvent;
 class QComboBox;
@@ -31,6 +33,7 @@ class ElidedLabel;
 }
 
 namespace vision {
+class DetectionClient;
 class VideoView;
 class VisionClient;
 class VisionControlClient;
@@ -44,6 +47,7 @@ public:
         IConsoleController *controller,
         vision::VisionClient *visionClient = nullptr,
         vision::VisionControlClient *visionControlClient = nullptr,
+        vision::DetectionClient *detectionClient = nullptr,
         QWidget *parent = nullptr);
 
 protected:
@@ -84,6 +88,9 @@ private:
     void refreshProtocolUi(const ProtocolMonitor &monitor);
     void refreshVisionNoticeUi();
     void refreshVisionEndpointUi();
+    void syncDetectionStream();
+    void refreshDetectionOverlay();
+    void resetDetectionSession();
     void reflowActuatorCards();
     void updateVideoSurfaceGeometry();
     void initializeWorkspaceSizes();
@@ -111,6 +118,7 @@ private:
     IConsoleController *controller_;
     vision::VisionClient *visionClient_{nullptr};
     vision::VisionControlClient *visionControlClient_{nullptr};
+    vision::DetectionClient *detectionClient_{nullptr};
 
     // Vision card.
     QLineEdit *piHost_{nullptr};
@@ -159,6 +167,10 @@ private:
     QString lastControlResponseDetail_;
     bool haveVisionReceiveSample_{false};
     quint64 visionJpegDecodeErrors_{0};
+    std::optional<vision::DetectionFrame> latestDetectionFrame_;
+    bool detectionConnectAttempted_{false};
+    QString detectionAttemptHost_;
+    quint16 detectionAttemptPort_{0};
 
     // Connection bar.
     QComboBox *serialPortCombo_{nullptr};

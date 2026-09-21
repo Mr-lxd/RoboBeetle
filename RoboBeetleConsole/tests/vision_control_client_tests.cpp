@@ -2163,6 +2163,82 @@ void redirect_is_rejected_without_following_or_resending()
     client.shutdown();
 }
 
+
+void detection_stream_capability_is_strict_and_optional()
+{
+    QTcpServer server;
+    expect(server.listen(QHostAddress::LocalHost, 0),
+           "detection capability fake server must listen");
+
+    VisionControlClient client;
+    client.setEndpoint(
+        QStringLiteral("127.0.0.1"),
+        server.serverPort());
+
+    client.refreshStatus();
+    QTcpSocket *first = acceptClient(server);
+    expect(first != nullptr,
+           "detection capability status GET connects");
+    if (first != nullptr) {
+        readRequest(first);
+        sendJson(
+            first,
+            200,
+            statusBody(QByteArrayLiteral(
+                "{\"configured\":true,"
+                "\"control_supported\":true,"
+                "\"operation\":null,"
+                "\"state\":\"running\","
+                "\"detection_stream_supported\":true,"
+                "\"detection_stream_port\":47012,"
+                "\"detection_stream_version\":1}")));
+        first->deleteLater();
+    }
+
+    expect(waitUntil([&client] { return client.hasFreshStatus(); }),
+           "fresh status with detection capability is accepted");
+    const auto supported = client.status();
+    expect(supported.detectionStreamSupported.has_value()
+               && *supported.detectionStreamSupported,
+           "detection stream support bool is parsed");
+    expect(supported.detectionStreamPort.has_value()
+               && *supported.detectionStreamPort == 47012U,
+           "detection stream port is parsed");
+    expect(supported.detectionStreamVersion.has_value()
+               && *supported.detectionStreamVersion == 1,
+           "detection stream version is parsed");
+
+    client.refreshStatus();
+    QTcpSocket *second = acceptClient(server);
+    expect(second != nullptr,
+           "second detection capability status GET connects");
+    if (second != nullptr) {
+        readRequest(second);
+        sendJson(
+            second,
+            200,
+            statusBody(QByteArrayLiteral(
+                "{\"configured\":true,"
+                "\"control_supported\":true,"
+                "\"operation\":null,"
+                "\"state\":\"running\","
+                "\"detection_stream_supported\":\"true\","
+                "\"detection_stream_port\":47012.5,"
+                "\"detection_stream_version\":0}")));
+        second->deleteLater();
+    }
+
+    expect(waitUntil([&client] {
+        const auto status = client.status();
+        return client.hasFreshStatus()
+            && !status.detectionStreamSupported.has_value()
+            && !status.detectionStreamPort.has_value()
+            && !status.detectionStreamVersion.has_value();
+    }), "invalid detection capability impostors fail closed");
+
+    client.shutdown();
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -2197,5 +2273,6 @@ int main(int argc, char **argv)
     sent_post_blocks_low_level_endpoint_change();
     endpoint_switch_cancels_get_and_stale_reply_cannot_cross_generation();
     redirect_is_rejected_without_following_or_resending();
+    detection_stream_capability_is_strict_and_optional();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

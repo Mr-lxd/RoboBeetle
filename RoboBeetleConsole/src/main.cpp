@@ -3,6 +3,7 @@
 #include "robot/RobotController.h"
 #include "transport/SerialTransport.h"
 #include "ui/MainWindow.h"
+#include "vision/DetectionClient.h"
 #include "vision/VisionClient.h"
 #include "vision/VisionControlClient.h"
 
@@ -36,10 +37,12 @@ int main(int argc, char *argv[])
 
     rb::vision::VisionClient visionClient;
     rb::vision::VisionControlClient visionControlClient;
+    rb::vision::DetectionClient detectionClient;
     rb::MainWindow window(
         controller.get(),
         &visionClient,
-        &visionControlClient);
+        &visionControlClient,
+        &detectionClient);
     window.show();
     return application.exec();
 }
