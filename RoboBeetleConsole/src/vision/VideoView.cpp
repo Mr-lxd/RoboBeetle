@@ -1,5 +1,6 @@
 #include "vision/VideoView.h"
 
+#include <QFontMetrics>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QRect>
@@ -14,7 +15,10 @@ VideoView::VideoView(QWidget *parent)
     setAutoFillBackground(false);
 }
 
-void VideoView::setFrame(const QImage &image, quint64 frameId)
+void VideoView::setFrame(
+    const QImage &image,
+    quint64 frameId,
+    quint64 captureTimestampNs)
 {
     if (image.isNull()) {
         return;
@@ -24,6 +28,7 @@ void VideoView::setFrame(const QImage &image, quint64 frameId)
     }
     image_ = image;
     frameId_ = frameId;
+    captureTimestampNs_ = captureTimestampNs;
     paintPending_ = true;
     update();
 }
@@ -32,7 +37,29 @@ void VideoView::clearFrame()
 {
     image_ = QImage();
     frameId_ = 0U;
+    captureTimestampNs_ = 0U;
+    detectionOverlay_.reset();
     paintPending_ = false;
+    update();
+}
+
+void VideoView::setDetectionOverlay(const DetectionFrame &frame)
+{
+    if (image_.isNull() || frame.sourceSize != image_.size()
+        || frame.detections.isEmpty()) {
+        clearDetectionOverlay();
+        return;
+    }
+    detectionOverlay_ = frame;
+    update();
+}
+
+void VideoView::clearDetectionOverlay()
+{
+    if (!detectionOverlay_.has_value()) {
+        return;
+    }
+    detectionOverlay_.reset();
     update();
 }
 
@@ -54,6 +81,53 @@ void VideoView::paintEvent(QPaintEvent *event)
         scaled.width(),
         scaled.height());
     painter.drawImage(target, image_);
+
+    if (detectionOverlay_.has_value()
+        && detectionOverlay_->sourceSize == image_.size()) {
+        painter.save();
+        painter.setClipRect(target);
+        QFont overlayFont = font();
+        overlayFont.setBold(true);
+        overlayFont.setPointSizeF(qMax(9.0, overlayFont.pointSizeF()));
+        painter.setFont(overlayFont);
+        const QFontMetrics metrics(overlayFont);
+
+        for (const DetectionObservation &detection
+             : detectionOverlay_->detections) {
+            const QString label = QStringLiteral("%1 %2")
+                .arg(detection.className)
+                .arg(detection.confidence, 0, 'f', 2);
+
+            const double mappedX =
+                static_cast<double>(target.left())
+                + detection.originalPoint.x()
+                    * static_cast<double>(target.width())
+                    / static_cast<double>(image_.width());
+            const double mappedY =
+                static_cast<double>(target.top())
+                + detection.originalPoint.y()
+                    * static_cast<double>(target.height())
+                    / static_cast<double>(image_.height());
+
+            const int textWidth = metrics.horizontalAdvance(label);
+            const int minimumBaseline = target.top() + metrics.ascent();
+            const int maximumBaseline = target.bottom() - metrics.descent();
+            const int x = qBound(
+                target.left(),
+                qRound(mappedX) + 5,
+                qMax(target.left(), target.right() - textWidth));
+            const int baseline = qBound(
+                minimumBaseline,
+                qRound(mappedY) - 5,
+                qMax(minimumBaseline, maximumBaseline));
+
+            painter.setPen(QColor(0, 0, 0, 210));
+            painter.drawText(x + 1, baseline + 1, label);
+            painter.setPen(QColor(255, 255, 255));
+            painter.drawText(x, baseline, label);
+        }
+        painter.restore();
+    }
 
     paintPending_ = false;
     if (!fpsTimer_.isValid()) {

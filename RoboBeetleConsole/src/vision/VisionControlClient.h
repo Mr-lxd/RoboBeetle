@@ -20,6 +20,9 @@ struct VisionCaptureStatus {
     bool haveInferenceState{false};
     std::optional<bool> inferenceConfigured;
     std::optional<bool> inferenceControlSupported;
+    std::optional<bool> detectionStreamSupported;
+    std::optional<quint16> detectionStreamPort;
+    std::optional<int> detectionStreamVersion;
     bool inferenceOperationValid{false};
     QString inferenceOperation;
     bool cameraRunning{false};

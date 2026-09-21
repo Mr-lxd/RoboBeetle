@@ -37,6 +37,12 @@ add_library(RoboBeetleCore
     src/vision/VisionClient.cpp
     src/vision/VisionControlClient.h
     src/vision/VisionControlClient.cpp
+    src/vision/DetectionMetadata.h
+    src/vision/DetectionMetadata.cpp
+    src/vision/DetectionStreamDecoder.h
+    src/vision/DetectionStreamDecoder.cpp
+    src/vision/DetectionClient.h
+    src/vision/DetectionClient.cpp
     src/vision/InferenceUiState.h
     src/vision/InferenceUiState.cpp
     ../RoboBeetlePi/gateway/src/rbrp_codec.cpp
@@ -105,6 +111,18 @@ if(BUILD_TESTING)
     )
     target_link_libraries(vision_control_client_tests PRIVATE RoboBeetleCore)
     add_test(NAME vision_control_client_tests COMMAND vision_control_client_tests)
+
+    add_executable(detection_stream_decoder_tests
+        tests/detection_stream_decoder_tests.cpp
+    )
+    target_link_libraries(detection_stream_decoder_tests PRIVATE RoboBeetleCore)
+    add_test(NAME detection_stream_decoder_tests COMMAND detection_stream_decoder_tests)
+
+    add_executable(detection_client_tests
+        tests/detection_client_tests.cpp
+    )
+    target_link_libraries(detection_client_tests PRIVATE RoboBeetleCore)
+    add_test(NAME detection_client_tests COMMAND detection_client_tests)
 
     add_executable(inference_ui_state_tests
         tests/inference_ui_state_tests.cpp

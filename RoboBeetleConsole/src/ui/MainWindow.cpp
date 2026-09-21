@@ -2,6 +2,7 @@
 #include "ui/ElidedLabel.h"
 
 #include "robot/ServoDescriptor.h"
+#include "vision/DetectionClient.h"
 #include "vision/VideoView.h"
 #include "vision/VisionClient.h"
 #include "vision/VisionControlClient.h"
@@ -41,6 +42,7 @@
 #include <QTimer>
 
 #include <array>
+#include <utility>
 
 namespace rb {
 namespace {
@@ -472,11 +474,13 @@ MainWindow::MainWindow(
     IConsoleController *controller,
     vision::VisionClient *visionClient,
     vision::VisionControlClient *visionControlClient,
+    vision::DetectionClient *detectionClient,
     QWidget *parent)
     : QMainWindow(parent),
       controller_(controller),
       visionClient_(visionClient),
-      visionControlClient_(visionControlClient)
+      visionControlClient_(visionControlClient),
+      detectionClient_(detectionClient)
 {
     Q_ASSERT(controller_ != nullptr);
     committedPiHost_ = visionControlClient_ != nullptr
@@ -2156,18 +2160,25 @@ void MainWindow::bindVisionUi()
                 haveVisionReceiveSample_ = false;
                 visionFrameSize_ = QSize();
                 videoView_->clearFrame();
+                resetDetectionSession();
+            } else {
+                syncDetectionStream();
             }
+            refreshDetectionOverlay();
             refreshVideoDiagnosticsUi();
             refreshPiHostUi();
         });
 
         connect(visionClient_, &vision::VisionClient::frameReady,
-                this, [this](const QImage &image, quint64 frameId, quint64) {
+                this, [this](const QImage &image,
+                             quint64 frameId,
+                             quint64 captureTimestampNs) {
             haveVisionReceiveSample_ = true;
             if (!image.isNull()) {
                 visionFrameSize_ = image.size();
             }
-            videoView_->setFrame(image, frameId);
+            videoView_->setFrame(image, frameId, captureTimestampNs);
+            refreshDetectionOverlay();
             updateVideoSurfaceGeometry();
             refreshVideoDiagnosticsUi();
         });
@@ -2244,6 +2255,7 @@ void MainWindow::bindVisionUi()
         connect(visionControlClient_, &vision::VisionControlClient::statusChanged,
                 this, [this](vision::VisionCaptureStatus) {
             refreshVisionUi();
+            syncDetectionStream();
         });
         connect(visionControlClient_, &vision::VisionControlClient::actionSucceeded,
                 this, [this](const QString &action) {
@@ -2265,7 +2277,10 @@ void MainWindow::bindVisionUi()
             refreshVisionUi();
         });
         connect(visionControlClient_, &vision::VisionControlClient::requestStateChanged,
-                this, &MainWindow::refreshVisionUi);
+                this, [this] {
+            refreshVisionUi();
+            syncDetectionStream();
+        });
         connect(visionControlClient_,
                 &vision::VisionControlClient::authoritativeStatusRefreshed,
                 this, [this] {
@@ -2303,7 +2318,35 @@ void MainWindow::bindVisionUi()
             refreshVisionUi();
         });
     }
+
+    if (detectionClient_ != nullptr) {
+        connect(detectionClient_, &vision::DetectionClient::metadataReady,
+                this, [this](vision::DetectionFrame frame) {
+            latestDetectionFrame_ = std::move(frame);
+            refreshDetectionOverlay();
+        });
+        connect(detectionClient_, &vision::DetectionClient::connectionStateChanged,
+                this, [this](vision::DetectionConnectionState state) {
+            if (state == vision::DetectionConnectionState::Disconnected
+                || state == vision::DetectionConnectionState::Error) {
+                latestDetectionFrame_.reset();
+                if (videoView_ != nullptr) {
+                    videoView_->clearDetectionOverlay();
+                }
+            }
+        });
+        connect(detectionClient_, &vision::DetectionClient::logMessage,
+                this, [this](const QString &message) {
+            appendLog(QStringLiteral("Detection: %1").arg(message));
+        });
+        connect(detectionClient_, &vision::DetectionClient::protocolError,
+                this, [this](const QString &message) {
+            appendLog(QStringLiteral("Detection: %1").arg(message));
+        });
+    }
+
     refreshVisionUi();
+    syncDetectionStream();
     refreshPiHostUi();
     refreshVisionEndpointUi();
 }
@@ -2520,6 +2563,140 @@ void MainWindow::refreshVisionEndpointUi()
             .arg(host)
             .arg(videoPort)
             .arg(httpPort));
+}
+
+void MainWindow::resetDetectionSession()
+{
+    latestDetectionFrame_.reset();
+    detectionConnectAttempted_ = false;
+    detectionAttemptHost_.clear();
+    detectionAttemptPort_ = 0U;
+    if (videoView_ != nullptr) {
+        videoView_->clearDetectionOverlay();
+    }
+    if (detectionClient_ != nullptr
+        && (detectionClient_->endpointBusy()
+            || detectionClient_->state()
+                != vision::DetectionConnectionState::Disconnected)) {
+        detectionClient_->disconnectFromHost();
+    }
+}
+
+void MainWindow::syncDetectionStream()
+{
+    if (detectionClient_ == nullptr) {
+        return;
+    }
+
+    const bool videoConnected =
+        visionClient_ != nullptr && visionClient_->isConnected();
+    const bool statusFresh =
+        visionControlClient_ != nullptr
+        && visionControlClient_->hasFreshStatus();
+
+    if (!videoConnected) {
+        resetDetectionSession();
+        return;
+    }
+
+    if (!statusFresh) {
+        if (videoView_ != nullptr) {
+            videoView_->clearDetectionOverlay();
+        }
+        return;
+    }
+
+    const auto status = visionControlClient_->status();
+    const bool supported =
+        status.detectionStreamSupported.has_value()
+        && *status.detectionStreamSupported
+        && status.detectionStreamPort.has_value()
+        && status.detectionStreamVersion.has_value()
+        && *status.detectionStreamVersion == vision::kDetectionStreamVersion;
+
+    if (!supported) {
+        latestDetectionFrame_.reset();
+        if (videoView_ != nullptr) {
+            videoView_->clearDetectionOverlay();
+        }
+        if (detectionClient_->endpointBusy()
+            || detectionClient_->state()
+                != vision::DetectionConnectionState::Disconnected) {
+            detectionClient_->disconnectFromHost();
+        }
+        detectionConnectAttempted_ = false;
+        detectionAttemptHost_.clear();
+        detectionAttemptPort_ = 0U;
+        return;
+    }
+
+    const QString host = normalizedHostCandidate(committedPiHost_);
+    const quint16 port = *status.detectionStreamPort;
+    if (!hostCandidateValid(host) || port == 0U) {
+        return;
+    }
+
+    const bool sameAttempt =
+        detectionConnectAttempted_
+        && detectionAttemptHost_ == host
+        && detectionAttemptPort_ == port;
+    const bool sameLiveEndpoint =
+        detectionClient_->host() == host
+        && detectionClient_->port() == port
+        && (detectionClient_->state()
+                == vision::DetectionConnectionState::Connecting
+            || detectionClient_->state()
+                == vision::DetectionConnectionState::Connected);
+
+    if (sameLiveEndpoint || sameAttempt) {
+        return;
+    }
+
+    if (detectionClient_->endpointBusy()
+        || detectionClient_->state()
+            != vision::DetectionConnectionState::Disconnected) {
+        detectionClient_->disconnectFromHost();
+    }
+
+    detectionConnectAttempted_ = true;
+    detectionAttemptHost_ = host;
+    detectionAttemptPort_ = port;
+    detectionClient_->connectToHost(host, port);
+}
+
+void MainWindow::refreshDetectionOverlay()
+{
+    if (videoView_ == nullptr) {
+        return;
+    }
+    if (detectionClient_ == nullptr
+        || !detectionClient_->isConnected()
+        || visionControlClient_ == nullptr
+        || !latestDetectionFrame_.has_value()) {
+        videoView_->clearDetectionOverlay();
+        return;
+    }
+
+    const bool fresh = visionControlClient_->hasFreshStatus();
+    const auto status = visionControlClient_->status();
+    const bool inferenceRunning =
+        fresh
+        && status.haveInferenceState
+        && status.inferenceState == QStringLiteral("running")
+        && status.inferenceOperationValid
+        && status.inferenceOperation.isEmpty();
+
+    if (!vision::detectionOverlayRenderable(
+            *latestDetectionFrame_,
+            videoView_->currentFrameSize(),
+            videoView_->currentCaptureTimestampNs(),
+            inferenceRunning,
+            fresh)) {
+        videoView_->clearDetectionOverlay();
+        return;
+    }
+
+    videoView_->setDetectionOverlay(*latestDetectionFrame_);
 }
 
 void MainWindow::reflowActuatorCards()
@@ -3152,6 +3329,7 @@ void MainWindow::applyPiHost()
     visionNoticeText_.clear();
     visionNoticeTooltip_.clear();
     updatingEndpoints_ = false;
+    resetDetectionSession();
     refreshPiHostUi();
 }
 
@@ -3159,6 +3337,7 @@ void MainWindow::refreshVisionUi()
 {
     refreshInferenceUi();
     refreshCaptureUi();
+    refreshDetectionOverlay();
 }
 
 void MainWindow::refreshInferenceUi()
@@ -3455,6 +3634,9 @@ void MainWindow::closeEvent(QCloseEvent *event)
                 return;
             }
         }
+    }
+    if (detectionClient_ != nullptr) {
+        detectionClient_->shutdown();
     }
     if (visionControlClient_ != nullptr) {
         visionControlClient_->shutdown();

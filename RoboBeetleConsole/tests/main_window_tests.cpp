@@ -5,6 +5,7 @@
 #include "remote/RemoteRobotController.h"
 #include "transport/FakeTransport.h"
 #include "ui/MainWindow.h"
+#include "vision/DetectionClient.h"
 #include "vision/VisionClient.h"
 #include "vision/VisionControlClient.h"
 #include "vision/VideoView.h"
@@ -18,6 +19,9 @@
 #include <QGroupBox>
 #include <QHostAddress>
 #include <QKeyEvent>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QLayout>
@@ -264,6 +268,84 @@ void sendHttpJson(QTcpSocket *socket, const QByteArray &body)
     socket->write(response);
     socket->flush();
     socket->disconnectFromHost();
+}
+
+
+QByteArray slice5StatusBody(
+    quint16 detectionPort,
+    const QString &inferenceState = QStringLiteral("running"),
+    bool advertiseDetection = true,
+    int detectionVersion = rb::vision::kDetectionStreamVersion)
+{
+    QJsonObject inference{
+        {QStringLiteral("configured"), true},
+        {QStringLiteral("control_supported"), true},
+        {QStringLiteral("operation"), QJsonValue::Null},
+        {QStringLiteral("state"), inferenceState},
+        {QStringLiteral("artifact_name"), QJsonValue::Null},
+        {QStringLiteral("model_sha256"), QJsonValue::Null},
+        {QStringLiteral("last_error"), QJsonValue::Null},
+    };
+    if (advertiseDetection) {
+        inference.insert(
+            QStringLiteral("detection_stream_supported"),
+            true);
+        inference.insert(
+            QStringLiteral("detection_stream_port"),
+            static_cast<int>(detectionPort));
+        inference.insert(
+            QStringLiteral("detection_stream_version"),
+            detectionVersion);
+    }
+
+    const QJsonObject root{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("camera"),
+         QJsonObject{
+             {QStringLiteral("running"), true},
+             {QStringLiteral("latest_frame_id"), 100},
+         }},
+        {QStringLiteral("capture"),
+         QJsonObject{
+             {QStringLiteral("state"), QStringLiteral("idle")},
+             {QStringLiteral("recording"), false},
+             {QStringLiteral("recorded_frames"), 0},
+             {QStringLiteral("snapshot_count"), 0},
+             {QStringLiteral("queue_bytes"), 0},
+         }},
+        {QStringLiteral("inference"), inference},
+    };
+    return QJsonDocument(root).toJson(QJsonDocument::Compact);
+}
+
+QByteArray slice5DetectionLine(
+    quint64 frameId,
+    quint64 captureTimestampNs,
+    const QString &className = QStringLiteral("fish"),
+    double confidence = 0.88,
+    double x = 120.0,
+    double y = 160.0)
+{
+    const QJsonObject detection{
+        {QStringLiteral("class_id"), 0},
+        {QStringLiteral("class_name"), className},
+        {QStringLiteral("confidence"), confidence},
+        {QStringLiteral("original_x"), x},
+        {QStringLiteral("original_y"), y},
+    };
+    const QJsonObject record{
+        {QStringLiteral("type"), QStringLiteral("detections")},
+        {QStringLiteral("version"), rb::vision::kDetectionStreamVersion},
+        {QStringLiteral("frame_id"), static_cast<qint64>(frameId)},
+        {QStringLiteral("capture_timestamp_ns"),
+         static_cast<qint64>(captureTimestampNs)},
+        {QStringLiteral("width"), 640},
+        {QStringLiteral("height"), 480},
+        {QStringLiteral("coordinate_space"),
+         QStringLiteral("original_frame_pixels")},
+        {QStringLiteral("detections"), QJsonArray{detection}},
+    };
+    return QJsonDocument(record).toJson(QJsonDocument::Compact) + '\n';
 }
 
 void enablePaddles(rb::FakeTransport &transport, rb::RobotController &controller)
@@ -1985,6 +2067,339 @@ void testTask02RemoteAndDirectEndpointWidgetsStayDistinct()
     directWindow.close();
 }
 
+
+void testSlice5DetectionTextOverlayLifecycle()
+{
+    rb::FakeTransport transport;
+    rb::RobotController controller(
+        &transport,
+        rb::RobotControllerConfig::bringUpProvisional());
+    rb::vision::VisionClient visionClient;
+    rb::vision::VisionControlClient controlClient;
+    rb::vision::DetectionClient detectionClient;
+
+    QTcpServer videoServer;
+    QTcpServer controlServer;
+    QTcpServer detectionServer;
+    expect(videoServer.listen(QHostAddress::LocalHost, 0),
+           "Slice 5 fake RBVS server must listen");
+    expect(controlServer.listen(QHostAddress::LocalHost, 0),
+           "Slice 5 fake Vision HTTP server must listen");
+    expect(detectionServer.listen(QHostAddress::LocalHost, 0),
+           "Slice 5 fake detection server must listen");
+    if (!videoServer.isListening()
+        || !controlServer.isListening()
+        || !detectionServer.isListening()) {
+        return;
+    }
+
+    controlClient.setEndpoint(
+        QStringLiteral("127.0.0.1"),
+        controlServer.serverPort());
+
+    rb::MainWindow window(
+        &controller,
+        &visionClient,
+        &controlClient,
+        &detectionClient);
+    auto *view = window.findChild<rb::vision::VideoView *>(
+        QStringLiteral("videoView"));
+    expect(view != nullptr,
+           "Slice 5 integration retains the single VideoView");
+    if (view == nullptr) {
+        return;
+    }
+
+    visionClient.connectToHost(
+        QStringLiteral("127.0.0.1"),
+        videoServer.serverPort());
+    expect(waitUntil([&] { return videoServer.hasPendingConnections(); }),
+           "Slice 5 video session connects to loopback RBVS server");
+    QTcpSocket *videoPeer = videoServer.nextPendingConnection();
+    expect(waitUntil([&] { return visionClient.isConnected(); }),
+           "Slice 5 loopback RBVS session reaches Connected");
+
+    // An old Pi / legacy status must not cause speculative 47012 traffic.
+    controlClient.refreshStatus();
+    expect(waitUntil([&] { return controlServer.hasPendingConnections(); }),
+           "legacy capability status GET reaches loopback HTTP server");
+    QTcpSocket *legacyStatusPeer = controlServer.nextPendingConnection();
+    if (legacyStatusPeer != nullptr) {
+        readHttpRequest(legacyStatusPeer);
+        sendHttpJson(
+            legacyStatusPeer,
+            slice5StatusBody(
+                detectionServer.serverPort(),
+                QStringLiteral("running"),
+                false));
+        legacyStatusPeer->deleteLater();
+    }
+    expect(waitUntil([&] { return controlClient.hasFreshStatus(); }),
+           "legacy status remains a valid fresh Vision status");
+    waitForMs(60);
+    expect(!detectionServer.hasPendingConnections()
+               && detectionClient.state()
+                   == rb::vision::DetectionConnectionState::Disconnected,
+           "missing detection capability never probes 47012");
+
+    // A future/unknown metadata version is advertised but must fail closed.
+    controlClient.refreshStatus();
+    expect(waitUntil([&] { return controlServer.hasPendingConnections(); }),
+           "future-version capability status GET reaches loopback HTTP server");
+    QTcpSocket *futureVersionPeer = controlServer.nextPendingConnection();
+    if (futureVersionPeer != nullptr) {
+        readHttpRequest(futureVersionPeer);
+        sendHttpJson(
+            futureVersionPeer,
+            slice5StatusBody(
+                detectionServer.serverPort(),
+                QStringLiteral("running"),
+                true,
+                rb::vision::kDetectionStreamVersion + 1));
+        futureVersionPeer->deleteLater();
+    }
+    expect(waitUntil([&] { return controlClient.hasFreshStatus(); }),
+           "future-version capability status remains a valid HTTP status");
+    waitForMs(60);
+    expect(!detectionServer.hasPendingConnections()
+               && detectionClient.state()
+                   == rb::vision::DetectionConnectionState::Disconnected,
+           "unsupported detection stream version never probes 47012");
+
+    // Fresh authoritative support/version/port enables exactly one attempt.
+    controlClient.refreshStatus();
+    expect(waitUntil([&] { return controlServer.hasPendingConnections(); }),
+           "Slice 5 capability status GET reaches loopback HTTP server");
+    QTcpSocket *supportedStatusPeer = controlServer.nextPendingConnection();
+    if (supportedStatusPeer != nullptr) {
+        readHttpRequest(supportedStatusPeer);
+        sendHttpJson(
+            supportedStatusPeer,
+            slice5StatusBody(detectionServer.serverPort()));
+        supportedStatusPeer->deleteLater();
+    }
+    expect(waitUntil([&] { return detectionServer.hasPendingConnections(); }),
+           "fresh supported v1 capability opens detection metadata stream");
+    QTcpSocket *detectionPeer = detectionServer.nextPendingConnection();
+    expect(waitUntil([&] { return detectionClient.isConnected(); }),
+           "MainWindow-owned detection client reaches Connected");
+
+    const auto parsedCapability = controlClient.status();
+    expect(parsedCapability.detectionStreamSupported.has_value()
+               && *parsedCapability.detectionStreamSupported
+               && parsedCapability.detectionStreamPort.has_value()
+               && *parsedCapability.detectionStreamPort
+                   == detectionServer.serverPort()
+               && parsedCapability.detectionStreamVersion.has_value()
+               && *parsedCapability.detectionStreamVersion
+                   == rb::vision::kDetectionStreamVersion,
+           "MainWindow consumes the authoritative advertised detection endpoint");
+    expect(transport.writes().isEmpty(),
+           "opening detection metadata emits zero Robot transport writes");
+
+    if (detectionPeer != nullptr) {
+        detectionPeer->write(
+            slice5DetectionLine(
+                10U,
+                1'000'000'000ULL,
+                QStringLiteral("fish"),
+                0.88));
+        detectionPeer->flush();
+    }
+    expect(waitUntil([&] { return detectionClient.lastFrameId() == 10U; }),
+           "real loopback NDJSON reaches DetectionClient");
+    expect(!view->hasDetectionOverlay(),
+           "metadata alone cannot overlay before a timestamped video frame");
+
+    QImage live(640, 480, QImage::Format_RGB32);
+    live.fill(qRgb(16, 24, 32));
+    visionClient.frameReady(
+        live,
+        11U,
+        1'100'000'000ULL);
+    expect(waitUntil([&] {
+        return view->hasDetectionOverlay()
+            && view->detectionOverlayCount() == 1;
+    }), "fresh frame-associated detection text reaches VideoView");
+
+    // HTTP freshness controls visibility but must not tear down a healthy 47012.
+    waitForMs(3600);
+    expect(!controlClient.hasFreshStatus(),
+           "Vision HTTP freshness expires without polling");
+    expect(!view->hasDetectionOverlay(),
+           "stale HTTP status immediately suppresses overlay text");
+    expect(detectionClient.isConnected(),
+           "HTTP freshness expiry preserves the established 47012 socket");
+
+    // Running state is an explicit UI gate independent of the metadata socket.
+    controlClient.refreshStatus();
+    expect(waitUntil([&] { return controlServer.hasPendingConnections(); }),
+           "disabled-inference status GET reaches loopback HTTP server");
+    QTcpSocket *disabledStatusPeer = controlServer.nextPendingConnection();
+    if (disabledStatusPeer != nullptr) {
+        readHttpRequest(disabledStatusPeer);
+        sendHttpJson(
+            disabledStatusPeer,
+            slice5StatusBody(
+                detectionServer.serverPort(),
+                QStringLiteral("disabled")));
+        disabledStatusPeer->deleteLater();
+    }
+    expect(waitUntil([&] {
+        return controlClient.hasFreshStatus()
+            && controlClient.status().inferenceState
+                == QStringLiteral("disabled");
+    }), "disabled inference status becomes authoritative");
+    expect(waitUntil([&] { return !view->hasDetectionOverlay(); }),
+           "non-running inference clears operator overlay text");
+
+    // Running can expose a still-fresh retained detection again.
+    controlClient.refreshStatus();
+    expect(waitUntil([&] { return controlServer.hasPendingConnections(); }),
+           "running-inference status GET reaches loopback HTTP server");
+    QTcpSocket *runningStatusPeer = controlServer.nextPendingConnection();
+    if (runningStatusPeer != nullptr) {
+        readHttpRequest(runningStatusPeer);
+        sendHttpJson(
+            runningStatusPeer,
+            slice5StatusBody(detectionServer.serverPort()));
+        runningStatusPeer->deleteLater();
+    }
+    expect(waitUntil([&] {
+        return controlClient.hasFreshStatus()
+            && controlClient.status().inferenceState
+                == QStringLiteral("running");
+    }), "running inference status becomes authoritative");
+    expect(waitUntil([&] { return view->hasDetectionOverlay(); }),
+           "fresh retained metadata is visible again only after Running is authoritative");
+
+    // A newer live frame more than 1500 ms ahead must suppress stale metadata.
+    visionClient.frameReady(
+        live,
+        12U,
+        2'500'000'001ULL);
+    expect(waitUntil([&] { return !view->hasDetectionOverlay(); }),
+           "metadata older than 1500 ms is suppressed on the latest video frame");
+
+    // New metadata for the current time becomes visible without replaying old video.
+    if (detectionPeer != nullptr) {
+        detectionPeer->write(
+            slice5DetectionLine(
+                13U,
+                2'500'000'000ULL,
+                QStringLiteral("penguin"),
+                0.91));
+        detectionPeer->flush();
+    }
+    expect(waitUntil([&] {
+        return detectionClient.lastFrameId() == 13U
+            && view->hasDetectionOverlay();
+    }), "new fresh metadata overlays the current latest video frame");
+
+    // HTTP freshness expiry is display fail-closed, not a metadata disconnect.
+    expect(waitUntil([&] {
+        return !controlClient.hasFreshStatus();
+    }, 4200), "Vision status naturally expires after the 3500 ms freshness window");
+    expect(!view->hasDetectionOverlay(),
+           "stale Vision HTTP status hides detection text immediately");
+    expect(detectionClient.isConnected(),
+           "HTTP freshness expiry keeps the established 47012 socket alive");
+    expect(!detectionServer.hasPendingConnections(),
+           "freshness expiry does not create a replacement 47012 connection");
+
+    controlClient.refreshStatus();
+    expect(waitUntil([&] { return controlServer.hasPendingConnections(); }),
+           "freshness recovery GET reaches loopback HTTP server");
+    QTcpSocket *freshnessRecoveryPeer = controlServer.nextPendingConnection();
+    if (freshnessRecoveryPeer != nullptr) {
+        readHttpRequest(freshnessRecoveryPeer);
+        sendHttpJson(
+            freshnessRecoveryPeer,
+            slice5StatusBody(detectionServer.serverPort()));
+        freshnessRecoveryPeer->deleteLater();
+    }
+    expect(waitUntil([&] {
+        return controlClient.hasFreshStatus()
+            && view->hasDetectionOverlay();
+    }), "fresh status recovery can redisplay still-fresh retained metadata");
+    expect(detectionClient.isConnected()
+               && !detectionServer.hasPendingConnections(),
+           "freshness recovery reuses the original 47012 socket");
+
+    // Losing only 47012 clears text but leaves video and HTTP state alive.
+    if (detectionPeer != nullptr) {
+        detectionPeer->disconnectFromHost();
+    }
+    expect(waitUntil([&] {
+        return detectionClient.state()
+            == rb::vision::DetectionConnectionState::Disconnected;
+    }), "47012 peer disconnect is isolated to metadata client");
+    expect(!view->hasDetectionOverlay(),
+           "47012 disconnect clears retained overlay text");
+    expect(visionClient.isConnected(),
+           "47012 disconnect does not disconnect RBVS video");
+    expect(controlClient.hasFreshStatus(),
+           "47012 disconnect does not invalidate fresh Vision HTTP status");
+    expect(transport.writes().isEmpty(),
+           "complete detection overlay lifecycle emits zero Robot writes");
+
+    // Re-advertising the same endpoint in this video session must not retry.
+    controlClient.refreshStatus();
+    expect(waitUntil([&] { return controlServer.hasPendingConnections(); }),
+           "post-disconnect status refresh reaches HTTP server");
+    QTcpSocket *sameEndpointStatusPeer = controlServer.nextPendingConnection();
+    if (sameEndpointStatusPeer != nullptr) {
+        readHttpRequest(sameEndpointStatusPeer);
+        sendHttpJson(
+            sameEndpointStatusPeer,
+            slice5StatusBody(detectionServer.serverPort()));
+        sameEndpointStatusPeer->deleteLater();
+    }
+    expect(waitUntil([&] { return controlClient.hasFreshStatus(); }),
+           "same-endpoint status refresh remains fresh");
+    waitForMs(80);
+    expect(!detectionServer.hasPendingConnections(),
+           "same video session does not retry a failed 47012 endpoint");
+
+    // A genuinely new video session resets the one-attempt fence.
+    visionClient.disconnectFromHost();
+    expect(waitUntil([&] { return !visionClient.isConnected(); }),
+           "first Slice 5 video session disconnects");
+    if (videoPeer != nullptr) {
+        videoPeer->deleteLater();
+        videoPeer = nullptr;
+    }
+
+    visionClient.connectToHost(
+        QStringLiteral("127.0.0.1"),
+        videoServer.serverPort());
+    expect(waitUntil([&] { return videoServer.hasPendingConnections(); }),
+           "second Slice 5 video session connects");
+    QTcpSocket *secondVideoPeer = videoServer.nextPendingConnection();
+    expect(waitUntil([&] { return visionClient.isConnected(); }),
+           "second RBVS session reaches Connected");
+    expect(waitUntil([&] { return detectionServer.hasPendingConnections(); }),
+           "new video session permits one new 47012 connection attempt");
+    QTcpSocket *secondDetectionPeer = detectionServer.nextPendingConnection();
+
+    expect(transport.writes().isEmpty(),
+           "new detection session still emits zero Robot writes");
+
+    window.hide();
+    detectionClient.shutdown();
+    controlClient.shutdown();
+    visionClient.shutdown();
+    if (secondDetectionPeer != nullptr) {
+        secondDetectionPeer->deleteLater();
+    }
+    if (secondVideoPeer != nullptr) {
+        secondVideoPeer->deleteLater();
+    }
+    if (detectionPeer != nullptr) {
+        detectionPeer->deleteLater();
+    }
+}
+
 void testDashboardLayout()
 {
     rb::FakeTransport transport;
@@ -2263,6 +2678,7 @@ int main(int argc, char **argv)
     testTask02SuccessfulReconciliationClearsUncertaintyBeforeApplyHost();
     testTask02FailedReconciliationKeepsUncertaintyAndDoesNotRetry();
     testTask02RemoteAndDirectEndpointWidgetsStayDistinct();
+    testSlice5DetectionTextOverlayLifecycle();
     testDashboardLayout();
 #endif
     std::fflush(stderr);
