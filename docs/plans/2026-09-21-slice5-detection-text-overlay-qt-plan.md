@@ -125,19 +125,22 @@ Expected final suite: 19 tests, zero failures.
 The real Pi/native Qt gate completed successfully:
 
 1. Pi 47010 / 47011 / 47012 reachable.
-2. Inference forced to Disabled before the UI gate.
-3. Connect Video kept live video visible with no detection text while Disabled.
+2. Inference began and ended in authoritative Disabled state.
+3. Connect Video established a real 47010 stream at 640x480 with live FPS.
 4. Fresh advertised `detection_stream_supported=true`, port 47012, version 1
-   produced one real 47012 Qt connection.
-5. Start Inference produced real frame-associated detection metadata.
-6. Native Qt displayed only `class confidence` text over real detections.
-7. No boxes, dots, circles, crosshairs, centroid markers, or background detection
-   boxes were visible.
-8. Stop Inference returned the Pi to Disabled.
-9. Overlay text disappeared while 47010 remained established.
-10. 47012 remained isolated from the video lifecycle.
-11. Automated loopback coverage verified zero Robot transport writes.
-12. Pi inference was left Disabled.
+   produced one real 47012 connection owned by the Qt process.
+5. Start Inference produced real non-zero detection counts and real frame-associated
+   metadata; backend smoke observed fish / jellyfish / stingray records.
+6. Qt log reported both "Vision stream connected" and
+   "Detection metadata connected".
+7. Text-only rendering is verified by automated VideoView render tests and source
+   review: only class/confidence text plus a one-pixel dark shadow is drawn; no
+   bbox/marker drawing primitive is present.
+8. Stop returned the Pi to authoritative Disabled.
+9. Disconnect Video released both the Qt process's 47010 and 47012 sockets.
+10. Automated loopback coverage verified 47012 failure isolation, freshness rules,
+    one-attempt session behavior, and zero Robot transport writes.
+11. Pi inference was left Disabled.
 
 Release gate after hardware acceptance:
 
