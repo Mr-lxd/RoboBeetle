@@ -320,6 +320,10 @@ LinuxOnboardApplicationPort::submit(const RobotCommand &command)
             return application.set_servo_angle(
                 static_cast<application::ServoId>(value.servo_id),
                 value.angle_cdeg);
+        } else if constexpr (std::is_same_v<T, SetServoPwm>) {
+            return application.set_servo_pwm_maintenance(
+                static_cast<application::ServoId>(value.servo_id),
+                value.pulse_us);
         } else if constexpr (std::is_same_v<T, NeutralServos>) {
             return application.neutral_servos(value.mask);
         } else if constexpr (std::is_same_v<T, StartMotion>) {

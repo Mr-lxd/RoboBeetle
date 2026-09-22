@@ -620,6 +620,38 @@ void local_rejections_and_backward_never_submit()
            "commands before Link Active retain typed NotActive semantics");
 }
 
+void set_servo_pwm_reaches_application_as_typed_command()
+{
+    FakeGatewayApplicationPort application;
+    application.submit_result = {
+        GatewayApplicationSubmitStatus::NotActive, std::nullopt};
+    OutputSink sink;
+    ControlGatewayCore core(application, sink.callbacks());
+    core.source_connected(18U);
+    core.process(envelope(18U, 1U, hello(1U)), 1U);
+    core.process(envelope(18U, 2U, acquire(2U)), 2U);
+    sink.clear_outputs();
+
+    core.process(envelope(
+                     18U, 3U, command(3U, RobotCommandKind::SetServoPwm,
+                                      SetServoPwm{0U, 1500U})),
+                 3U);
+
+    const auto *submitted =
+        find_output<CommandSubmittedMessage>(sink, 18U, 3U);
+    expect(application.submit_calls == 1U
+               && application.submitted_commands.size() == 1U
+               && submitted != nullptr
+               && submitted->status == CommandSubmittedStatus::NotActive,
+           "SetServoPwm is accepted as a typed gateway command and reaches the application port");
+    if (application.submitted_commands.size() == 1U) {
+        const auto *pwm =
+            std::get_if<SetServoPwm>(&application.submitted_commands.front());
+        expect(pwm != nullptr && pwm->servo_id == 0U && pwm->pulse_us == 1500U,
+               "SetServoPwm preserves servo ID and pulse through gateway core");
+    }
+}
+
 void final_outcomes_correlate_only_by_live_sequence()
 {
     FakeGatewayApplicationPort application;
@@ -1155,6 +1187,7 @@ int main()
     source_generation_isolation_prevents_stale_loss();
     request_ids_are_scoped_and_duplicate_safe();
     local_rejections_and_backward_never_submit();
+    set_servo_pwm_reaches_application_as_typed_command();
     final_outcomes_correlate_only_by_live_sequence();
     submitted_correlation_is_live_before_publish_failure();
     impossible_submitted_invariants_fail_safe();

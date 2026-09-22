@@ -30,6 +30,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QSlider>
 #include <QTabWidget>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -542,19 +543,69 @@ void testMotionPanelLifecycleAndManualArbitration()
     expect(frontRightAngle != nullptr
                && frontRightAngle->buttonSymbols() == QAbstractSpinBox::NoButtons,
            "Angle input removes its up/down buttons");
-    expect(buttonWithText(&window, QStringLiteral("Set Angle")) == nullptr,
-           "Set Angle button is removed while Angle setting remains available");
-    if (frontRightAngle != nullptr && frontRightAngle->isEnabled()) {
+    auto *frontRightAngleApply =
+        window.findChild<QPushButton *>(QStringLiteral("servoAngleApplyButton0"));
+    auto *frontRightPwm =
+        window.findChild<QSpinBox *>(QStringLiteral("servoPwmSpin0"));
+    auto *frontRightPwmSlider =
+        window.findChild<QSlider *>(QStringLiteral("servoPwmSlider0"));
+    auto *frontRightPwmApply =
+        window.findChild<QPushButton *>(QStringLiteral("servoApplyButton0"));
+    expect(frontRightAngleApply != nullptr && frontRightAngleApply->isEnabled(),
+           "Servo Fine Control exposes an explicit Apply Angle action after Enable ACK");
+    expect(frontRightPwm != nullptr && frontRightPwmSlider != nullptr
+               && frontRightPwmApply != nullptr,
+           "Servo Fine Control keeps PWM value, slider, and Apply PWM controls");
+    if (frontRightAngle != nullptr && frontRightAngle->isEnabled()
+        && frontRightAngleApply != nullptr
+        && frontRightPwm != nullptr && frontRightPwmSlider != nullptr
+        && frontRightPwmApply != nullptr) {
+        const qsizetype writesBeforePreview = transport.writes().size();
+        frontRightPwmSlider->setValue(1600);
+        expect(frontRightPwm->value() == 1600
+                   && frontRightAngle->value() == -15.0,
+               "PWM slider updates the PWM field and equivalent angle preview");
+        expect(transport.writes().size() == writesBeforePreview,
+               "PWM slider movement must remain preview-only");
+
+        frontRightAngle->setValue(10.0);
+        expect(frontRightPwm->value() == 1350
+                   && frontRightPwmSlider->value() == 1350,
+               "Angle editing updates equivalent PWM field and slider position");
+        expect(transport.writes().size() == writesBeforePreview,
+               "Angle editing must remain preview-only");
+
+        frontRightAngle->setValue(45.0);
+        expect(frontRightPwm->value() == 1000
+                   && !frontRightPwmApply->isEnabled()
+                   && frontRightAngleApply->isEnabled(),
+               "Angle-only calibration endpoints remain previewable while raw PWM Apply stays inside its safety envelope");
+
+        frontRightPwmSlider->setValue(1500);
+        expect(frontRightPwmApply->isEnabled(),
+               "Apply PWM re-enables when the preview returns inside the raw PWM envelope");
+        const qsizetype writesBeforePwm = transport.writes().size();
+        frontRightPwmApply->click();
+        expect(transport.writes().size() == writesBeforePwm + 1
+                   && lastPacket(transport).type == rb::MessageType::SetServoPwm,
+               "Apply PWM sends exactly one SetServoPwm command");
+        if (transport.writes().size() == writesBeforePwm + 1) {
+            acknowledgeLast(transport);
+        }
+
         const qsizetype writesBeforeAngle = transport.writes().size();
         frontRightAngle->setValue(12.3);
         QMetaObject::invokeMethod(
             frontRightAngle, "editingFinished", Qt::DirectConnection);
+        expect(transport.writes().size() == writesBeforeAngle,
+               "editing or finishing Angle must remain preview-only");
+        frontRightAngleApply->click();
         expect(transport.writes().size() == writesBeforeAngle + 1,
-               "finishing an edited Angle field sends exactly one command");
+               "Apply Angle sends exactly one command");
         expect(!transport.writes().isEmpty()
                    && lastPacket(transport).type
                           == rb::MessageType::SetServoAngle,
-               "Angle editing must preserve the existing SetServoAngle protocol command");
+               "Apply Angle must preserve the existing SetServoAngle protocol command");
         if (transport.writes().size() == writesBeforeAngle + 1) {
             acknowledgeLast(transport);
         }

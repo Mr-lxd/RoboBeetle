@@ -601,27 +601,28 @@ void testReviewerClosureContracts()
             window.findChild<QDoubleSpinBox *>(QStringLiteral("servoAngleSpin0"));
         auto *savedSlider =
             window.findChild<QSlider *>(QStringLiteral("servoPwmSlider0"));
-        auto *apply =
+        auto *applyPwm =
             window.findChild<QPushButton *>(QStringLiteral("servoApplyButton0"));
+        auto *applyAngle =
+            window.findChild<QPushButton *>(QStringLiteral("servoAngleApplyButton0"));
         auto *enable =
             window.findChild<QPushButton *>(QStringLiteral("servoEnableButton0"));
         auto *neutral =
             window.findChild<QPushButton *>(QStringLiteral("servoNeutralButton0"));
         expect(savedPwm != nullptr && savedAngle != nullptr
-                   && savedSlider != nullptr && apply != nullptr
-                   && enable != nullptr && neutral != nullptr,
-               "Servo Fine Control owns PWM/Angle/Apply/Enable/Neutral controls");
+                   && savedSlider != nullptr && applyPwm != nullptr
+                   && applyAngle != nullptr && enable != nullptr
+                   && neutral != nullptr,
+               "Servo Fine Control owns PWM/Angle dual-Apply/Enable/Neutral controls");
         expect(savedAngle != nullptr
                    && savedAngle->buttonSymbols() == QAbstractSpinBox::NoButtons,
                "Angle editor keeps numeric setting but removes up/down buttons");
-        bool hasSetAngleButton = false;
-        for (QPushButton *button : window.findChildren<QPushButton *>()) {
-            hasSetAngleButton =
-                hasSetAngleButton
-                || button->text() == QStringLiteral("Set Angle");
-        }
-        expect(!hasSetAngleButton,
-               "Set Angle button is removed from the operator UI");
+        expect(applyPwm != nullptr
+                   && applyPwm->text() == QStringLiteral("Apply PWM"),
+               "Servo Fine Control exposes an explicit Apply PWM action");
+        expect(applyAngle != nullptr
+                   && applyAngle->text() == QStringLiteral("Apply Angle"),
+               "Servo Fine Control exposes an explicit Apply Angle action");
 
         if (savedPwm != nullptr && savedPwm->maximum() > savedPwm->minimum()) {
             savedPwm->setValue(

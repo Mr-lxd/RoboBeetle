@@ -40,6 +40,7 @@ enum class RobotCommandKind : Byte {
     StartMotion = 0x05,
     StopMotion = 0x06,
     SetGaitBackend = 0x07,
+    SetServoPwm = 0x08,
 };
 
 enum class MotionMode : Byte {
@@ -69,6 +70,11 @@ struct SetServoAngle {
     std::int16_t angle_cdeg{0};
 };
 
+struct SetServoPwm {
+    Byte servo_id{0};
+    std::uint16_t pulse_us{0};
+};
+
 struct NeutralServos {
     std::uint16_t mask{0};
 };
@@ -84,8 +90,8 @@ struct SetGaitBackend {
 };
 
 using RobotCommand = std::variant<EnableServos, DisableServos, SetServoAngle,
-                                  NeutralServos, StartMotion, StopMotion,
-                                  SetGaitBackend>;
+                                  SetServoPwm, NeutralServos, StartMotion,
+                                  StopMotion, SetGaitBackend>;
 
 enum class GatewayApplicationSubmitStatus {
     Submitted,

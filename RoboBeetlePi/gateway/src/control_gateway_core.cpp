@@ -220,7 +220,8 @@ bool ControlGatewayCore::valid_command(const RobotCommand &command) const
                           std::is_same_v<T, DisableServos> ||
                           std::is_same_v<T, NeutralServos>) {
                 return value.mask != 0U && (value.mask & ~kServoMask) == 0U;
-            } else if constexpr (std::is_same_v<T, SetServoAngle>) {
+            } else if constexpr (std::is_same_v<T, SetServoAngle> ||
+                                 std::is_same_v<T, SetServoPwm>) {
                 return value.servo_id <= 4U;
             } else if constexpr (std::is_same_v<T, StartMotion>) {
                 return is_valid_motion_mode(value.mode);
@@ -273,7 +274,7 @@ void ControlGatewayCore::handle_command(const RemoteEnvelope &envelope,
                                            RobotCommandKind::EnableServos) &&
                                    request.command_kind <=
                                        static_cast<Byte>(
-                                           RobotCommandKind::SetGaitBackend);
+                                           RobotCommandKind::SetServoPwm);
         if (known_command) {
             emit(GatewayOutbound{
                      envelope.source,

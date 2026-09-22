@@ -81,6 +81,7 @@ std::size_t GatewayOwner::remote_payload_size(
     case RobotCommandKind::NeutralServos:
         return 3U;
     case RobotCommandKind::SetServoAngle:
+    case RobotCommandKind::SetServoPwm:
         return 4U;
     case RobotCommandKind::StartMotion:
     case RobotCommandKind::SetGaitBackend:

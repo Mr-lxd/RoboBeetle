@@ -33,17 +33,20 @@ Legacy Source-Compatible CPG v1
 
 | Logical actuator | ID / mask | Physical binding | Logical calibration: negative / neutral / positive | Raw numeric command bounds |
 | --- | --- | --- | --- | --- |
-| FrontRight | `0` / `0x0001` | intended physical right front, former FrontLeft, TIM3_CH2 / PA7 | `-45/0/+45 cdeg -> 1140/1580/2020 us` | `1140..1860 us` |
-| FrontLeft | `1` / `0x0002` | intended physical left front, former FrontRight, TIM3_CH1 / PA6 | `-45/0/+45 cdeg -> 1900/1450/1000 us` | `1160..1900 us` |
+| FrontRight | `0` / `0x0001` | **hardware-confirmed physical right front**, TIM3_CH1 / PA6 | `-45/0/+45 cdeg -> 1900/1450/1000 us` | `1160..1900 us` |
+| FrontLeft | `1` / `0x0002` | **hardware-confirmed physical left front**, TIM3_CH2 / PA7 | `-45/0/+45 cdeg -> 1140/1580/2020 us` | `1140..1860 us` |
 | FrontAxis (`Depth`) | `2` / `0x0004` | same physical channel, TIM3_CH3 / PB0 | `-90/0/+90 cdeg -> 2430/1745/1060 us` | `1060..2430 us` |
 | RearRight | `3` / `0x0008` | unchanged, TIM4_CH1 / PD12 | `-45/0/+45 cdeg -> 1110/1570/2030 us` | `1110..2030 us` |
 | RearLeft | `4` / `0x0010` | unchanged, TIM4_CH2 / PD13 | `-45/0/+45 cdeg -> 1940/1450/960 us` | `960..1940 us` |
 
 The raw bounds are ascending numeric validation limits. They must not be
 reversed merely because a logical calibration endpoint decreases with angle.
-The shell measurements that define the new installed command envelope are
-physical FrontRight increasing-pulse backward motion capped at `1860 us` and
-physical FrontLeft decreasing-pulse backward motion capped at `1160 us`.
+The 2026-09-22 hardware-side confirmation established that the installed
+physical FrontRight is PA6 / TIM3_CH1 and the installed physical FrontLeft is
+PA7 / TIM3_CH2. The calibrated pulse/sign tuple and manual PWM envelope stay
+with their physical channel, so FrontRight uses `1900/1450/1000 us` with
+`1160..1900 us`, while FrontLeft uses `1140/1580/2020 us` with
+`1140..1860 us`.
 The existing signed-delta interpolation in
 `RoboBeetleFirmware/Core/Servo/servo_calibration.c` remains authoritative;
 there is no separate reverse flag. For FrontAxis, its raw envelope and
@@ -61,6 +64,19 @@ FrontAxis:   TIM3_CH3 / PB0,  -90/0/+90 -> 1060/1745/2430 us, raw 1060..2430
 ```
 
 ## Calibration evidence chain
+
+### Stage 3 — 2026-09-22 explicit physical-side correction
+
+A direct bench test showed that commanding logical `FrontRight` moved the
+physical left front actuator while commanding logical `FrontLeft` moved the
+physical right front actuator. Wiring inspection confirmed physical
+FrontRight = PA6 / TIM3_CH1 and physical FrontLeft = PA7 / TIM3_CH2.
+
+The descriptor binding is therefore corrected back to those hardware-confirmed
+physical sides. The calibration/sign tuple already associated with each
+physical channel is preserved; this change does not infer a new angle sign.
+Post-fix `+/-10 degree` hardware verification remains the authority for any
+future sign correction.
 
 ### Stage 1 — physical side swap only
 
@@ -130,9 +146,9 @@ Water Verification**.
 - The front Motion operational guard is `-4500..+2800 cdeg` (`-45..+28
   degrees`) for both front paddles. This is an installed shell envelope, not a
   change to either `-4500..+4500 cdeg` calibration range.
-- Raw manual/Qt command bounds are `FrontRight 1140..1860 us` and
-  `FrontLeft 1160..1900 us`; the complete calibration endpoints remain
-  `1140/1580/2020 us` and `1900/1450/1000 us` respectively.
+- Raw manual/Qt command bounds are `FrontRight 1160..1900 us` and
+  `FrontLeft 1140..1860 us`; the complete calibration endpoints remain
+  `1900/1450/1000 us` and `1140/1580/2020 us` respectively.
 - `SimpleGaitGenerator` remains available. Backward remains pending/disabled.
 - Closed-loop CPG, IMU/depth feedback, ROS2, and Protocol V2 changes are out
   of scope.
@@ -149,16 +165,16 @@ The following evidence is deliberately not inferred from host tests:
 | Evidence | Status |
 | --- | --- |
 | Logical descriptor/table parity | **Software Verified** |
-| Logical FrontRight -> physical TIM3_CH2 / actual right front leg | **Pending explicit hardware side confirmation** |
-| Logical FrontLeft -> physical TIM3_CH1 / actual left front leg | **Pending explicit hardware side confirmation** |
+| Logical FrontRight -> physical TIM3_CH1 / PA6 / actual right front leg | **Hardware Verified** |
+| Logical FrontLeft -> physical TIM3_CH2 / PA7 / actual left front leg | **Hardware Verified** |
 | SimpleGait Front/Rear physical anti-phase | **Hardware Verified** |
 | FrontAxis desk direction: `+10` downward / `-10` upward | **Bench Mechanical Verified** |
 | FrontAxis post-fix end-to-end retest | **Pending Hardware Verification** |
 | STM32F407 ARM build | **PASS** in the supplied PR #15 target evidence; Program Verify not supplied |
 | CPG FLASH/RAM and DWT timing evidence | **Measured** in the supplied PR #15 target evidence; production core remains `double`; FLASH/RAM deltas not supplied |
-| FrontRight/FrontLeft paddle sign against the SimpleGait baseline | **Hardware Verified** |
-| Explicit logical-to-physical side identity | **Pending explicit hardware side confirmation** |
-| Front shell operational limits: FR `1860 us`, FL `1160 us`; common Motion cap `+2800 cdeg` | **Bench Hardware Measured / Software Enforced** |
+| FrontRight/FrontLeft logical angle sign after the 2026-09-22 side correction | **Pending post-fix +/-10 degree hardware verification** |
+| Explicit logical-to-physical side identity | **Hardware Verified on 2026-09-22** |
+| Front manual PWM bounds after physical-side correction: FR `1160..1900 us`, FL `1140..1860 us`; common Motion cap `+2800 cdeg` | **Software Enforced; sign/direction pending post-fix +/-10 degree retest** |
 | SimpleGait physical Forward anti-phase | **Hardware Verified** |
 | True forward propulsion | **Pending Water Verification** |
 | Turn effectiveness | **Pending Water Verification** |

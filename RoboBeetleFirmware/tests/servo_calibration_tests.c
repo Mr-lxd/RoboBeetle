@@ -92,8 +92,8 @@ static void test_front_axis_mapping(void)
 int main(void)
 {
     static const paddle_case_t paddle_cases[] = {
-        {SERVO_ID_FRONT_RIGHT, 1140U, 1580U, 2020U, 1360U, 1800U},
-        {SERVO_ID_FRONT_LEFT, 1900U, 1450U, 1000U, 1675U, 1225U},
+        {SERVO_ID_FRONT_RIGHT, 1900U, 1450U, 1000U, 1675U, 1225U},
+        {SERVO_ID_FRONT_LEFT, 1140U, 1580U, 2020U, 1360U, 1800U},
         {SERVO_ID_REAR_RIGHT, 1110U, 1570U, 2030U, 1340U, 1800U},
         {SERVO_ID_REAR_LEFT, 1940U, 1450U, 960U, 1695U, 1205U},
     };

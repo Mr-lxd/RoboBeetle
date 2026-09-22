@@ -111,12 +111,12 @@ static void test_running_pwm_always_defers_even_at_readable_compare(void)
     timer.Instance = &timer_registers;
     servo_driver_stm32_init(&driver, &timer, NULL);
 
-    expect(ops->start(&driver, SERVO_ID_FRONT_LEFT),
-           "safe-stop test channel must start");
+    expect(ops->start(&driver, SERVO_ID_FRONT_RIGHT),
+           "safe-stop CC1 test channel must start");
     timer_registers.CCR1 = 1500U;
     timer_registers.CNT = 1500U;
     timer_registers.SR = TIM_SR_CC1IF;
-    ops->stop(&driver, SERVO_ID_FRONT_LEFT);
+    ops->stop(&driver, SERVO_ID_FRONT_RIGHT);
 
     expect(stop_calls == stops_before,
            "running PWM must defer even when readable CNT >= CCR");
@@ -127,7 +127,7 @@ static void test_running_pwm_always_defers_even_at_readable_compare(void)
     expect((timer_registers.DIER & TIM_DIER_CC1IE) != 0U,
            "deferred running stop must arm CC1 interrupt");
     expect(servo_driver_stm32_stop_pending_mask(&driver) ==
-               (uint16_t)(1U << SERVO_ID_FRONT_LEFT),
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT),
            "deferred running stop must retain pending ownership");
 }
 
@@ -143,8 +143,8 @@ static void test_preload_shadow_mismatch_never_truncates_running_pulse(void)
     timer.Instance = &timer_registers;
     servo_driver_stm32_init(&driver, &timer, NULL);
 
-    expect(ops->start(&driver, SERVO_ID_FRONT_LEFT),
-           "preload/shadow regression channel must start");
+    expect(ops->start(&driver, SERVO_ID_FRONT_RIGHT),
+           "preload/shadow CC1 regression channel must start");
     /*
      * Host HAL mocks expose one CCR only.  Model the hazardous observation:
      * the readable preload is 1000 while the current shadow pulse is still
@@ -152,12 +152,12 @@ static void test_preload_shadow_mismatch_never_truncates_running_pulse(void)
      */
     timer_registers.CCR1 = 1000U;
     timer_registers.CNT = 1500U;
-    ops->stop(&driver, SERVO_ID_FRONT_LEFT);
+    ops->stop(&driver, SERVO_ID_FRONT_RIGHT);
 
     expect(stop_calls == stops_before,
            "preload/shadow mismatch must not truncate a running pulse");
     expect(servo_driver_stm32_stop_pending_mask(&driver) ==
-               (uint16_t)(1U << SERVO_ID_FRONT_LEFT),
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT),
            "preload/shadow mismatch must defer to compare");
     expect((timer_registers.CCER & TIM_CCER_CC1E) != 0U,
            "preload/shadow mismatch must retain the active output");
@@ -197,12 +197,12 @@ static void test_high_stop_waits_for_compare_and_preserves_hal_state(void)
     timer.Instance = &timer_registers;
     servo_driver_stm32_init(&driver, &timer, NULL);
 
-    expect(ops->start(&driver, SERVO_ID_FRONT_LEFT),
-           "deferred-stop test channel must start");
+    expect(ops->start(&driver, SERVO_ID_FRONT_RIGHT),
+           "deferred-stop CC1 test channel must start");
     timer_registers.CCR1 = 1500U;
     timer_registers.CNT = 1000U;
     timer_registers.SR = TIM_SR_CC1IF; /* stale flag must be cleared while arming */
-    ops->stop(&driver, SERVO_ID_FRONT_LEFT);
+    ops->stop(&driver, SERVO_ID_FRONT_RIGHT);
 
     expect(stop_calls == stops_before,
            "stop during HIGH must not truncate the active pulse");
@@ -213,7 +213,7 @@ static void test_high_stop_waits_for_compare_and_preserves_hal_state(void)
     expect((timer_registers.DIER & TIM_DIER_CC1IE) != 0U,
            "deferred stop must arm CC1 compare interrupt");
     expect(servo_driver_stm32_stop_pending_mask(&driver) ==
-               (uint16_t)(1U << SERVO_ID_FRONT_LEFT),
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT),
            "deferred stop must retain per-channel pending ownership");
 
     timer_registers.CNT = timer_registers.CCR1;
@@ -246,16 +246,16 @@ static void test_shared_timer_channels_finalize_independently(void)
     timer.Instance = &timer_registers;
     servo_driver_stm32_init(&driver, &timer, NULL);
 
-    expect(ops->start(&driver, SERVO_ID_FRONT_LEFT),
-           "shared timer CC1 must start");
     expect(ops->start(&driver, SERVO_ID_FRONT_RIGHT),
+           "shared timer CC1 must start");
+    expect(ops->start(&driver, SERVO_ID_FRONT_LEFT),
            "shared timer CC2 must start");
     timer_registers.CCR1 = 1200U;
     timer_registers.CCR2 = 1800U;
     timer_registers.CNT = 1000U;
 
-    ops->stop(&driver, SERVO_ID_FRONT_LEFT);
     ops->stop(&driver, SERVO_ID_FRONT_RIGHT);
+    ops->stop(&driver, SERVO_ID_FRONT_LEFT);
     expect((timer_registers.CCER & TIM_CCER_CC1E) != 0U &&
                (timer_registers.CCER & TIM_CCER_CC2E) != 0U,
            "stopping CC1 during HIGH must not affect enabled CC2");
@@ -291,12 +291,12 @@ static void test_pending_stop_is_idempotent_and_blocks_reenable(void)
     reset_timer_registers(&timer_registers);
     timer.Instance = &timer_registers;
     servo_driver_stm32_init(&driver, &timer, NULL);
-    expect(ops->start(&driver, SERVO_ID_FRONT_LEFT),
-           "pending ownership test channel must start");
+    expect(ops->start(&driver, SERVO_ID_FRONT_RIGHT),
+           "pending ownership CC1 test channel must start");
     timer_registers.CCR1 = 1500U;
     timer_registers.CNT = 1000U;
-    ops->stop(&driver, SERVO_ID_FRONT_LEFT);
-    ops->stop(&driver, SERVO_ID_FRONT_LEFT);
+    ops->stop(&driver, SERVO_ID_FRONT_RIGHT);
+    ops->stop(&driver, SERVO_ID_FRONT_RIGHT);
 
     expect(stop_calls == stops_before,
            "repeated Disable must not call HAL stop before the safe edge");
@@ -307,7 +307,7 @@ static void test_pending_stop_is_idempotent_and_blocks_reenable(void)
     servo_service_init(&service, ops, &driver);
     expect(servo_service_enable(
                &service,
-               (uint16_t)(1U << SERVO_ID_FRONT_LEFT)) ==
+               (uint16_t)(1U << SERVO_ID_FRONT_RIGHT)) ==
                SERVO_SERVICE_RESULT_BUSY,
            "Enable must return BUSY while physical stop is pending");
     expect(timer_registers.CCR1 == 1500U,
@@ -429,14 +429,14 @@ static void test_descriptor_bindings(
 
     expect(front_right != NULL && front_right->timer == tim3,
            "FrontRight must bind to TIM3");
-    expect(front_right != NULL && front_right->hal_channel == TIM_CHANNEL_2
+    expect(front_right != NULL && front_right->hal_channel == TIM_CHANNEL_1
+               && front_right->hal_channel == 0U
                && front_right->channel_valid,
-           "FrontRight remap must bind to TIM3_CH2");
+           "FrontRight PA6 must bind to TIM3_CH1 and preserve HAL channel zero");
     expect(front_left != NULL && front_left->timer == tim3
-               && front_left->hal_channel == TIM_CHANNEL_1
-               && front_left->hal_channel == 0U
+               && front_left->hal_channel == TIM_CHANNEL_2
                && front_left->channel_valid,
-           "FrontLeft TIM3_CH1 zero HAL value must still be valid");
+           "FrontLeft PA7 must bind to TIM3_CH2");
     expect(front_axis != NULL && front_axis->timer == tim3
                && front_axis->hal_channel == TIM_CHANNEL_3
                && front_axis->channel_valid,
@@ -462,12 +462,12 @@ static void test_all_valid_channels_start(
 
     expect(ops->start(driver, SERVO_ID_FRONT_RIGHT),
            "FrontRight ServoEnable must remain valid after remap");
-    expect(last_timer == tim3 && last_channel == TIM_CHANNEL_2,
-           "FrontRight start must use TIM3_CH2");
+    expect(last_timer == tim3 && last_channel == TIM_CHANNEL_1,
+           "FrontRight start must use TIM3_CH1");
     expect(ops->start(driver, SERVO_ID_FRONT_LEFT),
            "FrontLeft start must remain valid");
-    expect(last_timer == tim3 && last_channel == TIM_CHANNEL_1,
-           "FrontLeft start must use TIM3_CH1");
+    expect(last_timer == tim3 && last_channel == TIM_CHANNEL_2,
+           "FrontLeft start must use TIM3_CH2");
     expect(ops->start(driver, SERVO_ID_FRONT_AXIS),
            "FrontAxis start must remain valid");
     expect(last_timer == tim3 && last_channel == TIM_CHANNEL_3,
@@ -494,17 +494,17 @@ static void test_servo_enable_for_front_bindings(
     servo_service_init(&service, ops, driver);
     expect(servo_service_enable(&service, 0x0002U) ==
                SERVO_SERVICE_RESULT_OK,
-           "FrontLeft ServoEnable must not fail for HAL channel zero");
-    expect(tim3_registers->CCR1 == 1450U,
-           "FrontLeft enable must write TIM3_CH1 neutral pulse");
+           "FrontLeft ServoEnable must remain valid on TIM3_CH2");
+    expect(tim3_registers->CCR2 == 1580U,
+           "FrontLeft enable must write TIM3_CH2 neutral pulse");
 
     (void)memset(&service, 0, sizeof(service));
     servo_service_init(&service, ops, driver);
     expect(servo_service_enable(&service, 0x0001U) ==
                SERVO_SERVICE_RESULT_OK,
-           "FrontRight ServoEnable must write its remapped channel");
-    expect(tim3_registers->CCR2 == 1580U,
-           "FrontRight enable must write TIM3_CH2 neutral pulse");
+           "FrontRight ServoEnable must write its PA6 channel");
+    expect(tim3_registers->CCR1 == 1450U,
+           "FrontRight enable must write TIM3_CH1 neutral pulse");
 
     (void)memset(&service, 0, sizeof(service));
     servo_service_init(&service, ops, driver);
@@ -524,7 +524,7 @@ static void test_invalid_channel_fails_closed(
     servo_descriptor_t invalid_descriptor = *binding->descriptor;
     const servo_service_driver_ops_t *ops = servo_driver_stm32_ops();
     const unsigned int stops_before = stop_calls;
-    const uint32_t compare_before = tim3_registers->CCR2;
+    const uint32_t compare_before = tim3_registers->CCR1;
 
     invalid_descriptor.channel = (servo_channel_id_t)0xFFU;
     binding->descriptor = &invalid_descriptor;
@@ -536,7 +536,7 @@ static void test_invalid_channel_fails_closed(
     ops->stop(driver, SERVO_ID_FRONT_RIGHT);
     expect(stop_calls == stops_before,
            "invalid symbolic channel must not call HAL stop");
-    expect(tim3_registers->CCR2 == compare_before,
+    expect(tim3_registers->CCR1 == compare_before,
            "invalid symbolic channel must not write a compare value");
 }
 

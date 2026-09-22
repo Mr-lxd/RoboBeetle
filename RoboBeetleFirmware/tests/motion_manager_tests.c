@@ -889,7 +889,7 @@ static void test_common_motion_guard_clamps_alternate_generator_output(void)
             "common Motion output guard should count each front and rear clamp");
 }
 
-static void test_simple_gait_production_pipeline_preserves_physical_directions(void)
+static void test_simple_gait_production_pipeline_uses_current_descriptor_calibration(void)
 {
     fixture_t fixture;
     const joint_targets_t *targets;
@@ -913,10 +913,10 @@ static void test_simple_gait_production_pipeline_preserves_physical_directions(v
                targets->rear_right_cdeg == -1000 &&
                targets->rear_left_cdeg == -1000,
            "SimpleGait quarter-cycle must produce the logical anti-phase target pattern");
-    expect(fixture.driver.current_pulse[SERVO_ID_FRONT_RIGHT] > 1580U,
-           "FrontRight logical +10 degrees must map above neutral for backward stroke");
-    expect(fixture.driver.current_pulse[SERVO_ID_FRONT_LEFT] < 1450U,
-           "FrontLeft logical +10 degrees must map below neutral for backward stroke");
+    expect(fixture.driver.current_pulse[SERVO_ID_FRONT_RIGHT] < 1450U,
+           "FrontRight logical +10 degrees must follow the current PA6 calibration");
+    expect(fixture.driver.current_pulse[SERVO_ID_FRONT_LEFT] > 1580U,
+           "FrontLeft logical +10 degrees must follow the current PA7 calibration");
     expect(fixture.driver.current_pulse[SERVO_ID_REAR_RIGHT] < 1570U,
            "RearRight logical -10 degrees must map below neutral for recovery stroke");
     expect(fixture.driver.current_pulse[SERVO_ID_REAR_LEFT] > 1450U,
@@ -932,10 +932,10 @@ static void test_simple_gait_production_pipeline_preserves_physical_directions(v
                targets->rear_right_cdeg == 1000 &&
                targets->rear_left_cdeg == 1000,
            "SimpleGait half-cycle must reverse every logical target sign");
-    expect(fixture.driver.current_pulse[SERVO_ID_FRONT_RIGHT] < 1580U,
-           "FrontRight half-cycle must reverse below neutral");
-    expect(fixture.driver.current_pulse[SERVO_ID_FRONT_LEFT] > 1450U,
-           "FrontLeft half-cycle must reverse above neutral");
+    expect(fixture.driver.current_pulse[SERVO_ID_FRONT_RIGHT] > 1450U,
+           "FrontRight negative half-cycle must follow the current PA6 calibration");
+    expect(fixture.driver.current_pulse[SERVO_ID_FRONT_LEFT] < 1580U,
+           "FrontLeft negative half-cycle must follow the current PA7 calibration");
     expect(fixture.driver.current_pulse[SERVO_ID_REAR_RIGHT] > 1570U,
            "RearRight half-cycle must reverse above neutral");
     expect(fixture.driver.current_pulse[SERVO_ID_REAR_LEFT] < 1450U,
@@ -1280,7 +1280,7 @@ int main(void)
     test_graceful_stop_uses_actual_750_ms_duration();
     test_stop_elapsed_time_starts_at_acceptance();
     test_common_motion_guard_clamps_alternate_generator_output();
-    test_simple_gait_production_pipeline_preserves_physical_directions();
+    test_simple_gait_production_pipeline_uses_current_descriptor_calibration();
     test_stop_transition_reapplies_operational_sanitizer();
     test_gait_backend_switch_is_stopped_only_and_has_no_output_side_effect();
     test_gait_backend_selector_busy_precedes_value_validation();
