@@ -369,6 +369,9 @@ void typed_commands_and_submit_statuses()
         fixture, SetServoAngle{4U, -2}, 0x13U,
         {0x01U, 0x04U, 0xfeU, 0xffU});
     (void)submit_and_ack(
+        fixture, SetServoPwm{0U, 1500U}, 0x12U,
+        {0x01U, 0x00U, 0xdcU, 0x05U});
+    (void)submit_and_ack(
         fixture, NeutralServos{0x0002U}, 0x14U, {0x02U, 0x00U});
     (void)submit_and_ack(
         fixture, StartMotion{MotionMode::Forward}, 0x15U,

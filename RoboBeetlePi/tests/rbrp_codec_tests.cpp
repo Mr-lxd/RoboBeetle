@@ -274,8 +274,33 @@ void typed_commands_and_semantic_decode()
         }
     }
 
+    const auto pwm = encode_frame(
+        RbrpMessageKind::CommandRequest, 43U,
+        bytes({0x08U, 0x00U, 0xdcU, 0x05U}));
+    expect(pwm.status == RbrpEncodeStatus::Ok,
+           "SetServoPwm command frame encodes");
+    RbrpDecoder pwm_decoder;
+    std::vector<RbrpFrame> pwm_frames;
+    pwm_decoder.feed(pwm.wire.data(), pwm.wire.size(), pwm_frames);
+    const auto pwm_message = decode_remote_message(pwm_frames[0]);
+    expect(pwm_message.status == RbrpMessageDecodeStatus::Ok
+               && pwm_message.message.has_value(),
+           "SetServoPwm command frame decodes semantically");
+    if (pwm_message.message) {
+        const auto *request =
+            std::get_if<CommandRequest>(&pwm_message.message->payload);
+        expect(request != nullptr && request->command.has_value(),
+               "SetServoPwm maps to a typed RobotCommand");
+        if (request != nullptr && request->command) {
+            const auto *set_pwm = std::get_if<SetServoPwm>(&*request->command);
+            expect(set_pwm != nullptr && set_pwm->servo_id == 0U
+                       && set_pwm->pulse_us == 1500U,
+                   "SetServoPwm preserves servo ID and uint16 little endian pulse");
+        }
+    }
+
     const auto backward = encode_frame(
-        RbrpMessageKind::CommandRequest, 43U, bytes({0x05U, 0x02U}));
+        RbrpMessageKind::CommandRequest, 44U, bytes({0x05U, 0x02U}));
     RbrpDecoder backward_decoder;
     std::vector<RbrpFrame> backward_frames;
     backward_decoder.feed(backward.wire.data(), backward.wire.size(),

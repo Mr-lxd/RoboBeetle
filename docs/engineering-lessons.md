@@ -69,7 +69,7 @@ Budget the complete exchange, not just MCU handler time: host serialization, DAP
 
 ## Keep descriptor tables independent at a C/C++ boundary
 
-The five-servo bring-up keeps a pure-C Firmware `servo_descriptor` table and an independent Qt/C++ table. Keep both tables in parity: compare IDs, supported mask, capability, calibration, neutral, software PWM limits, software angle limits, and Console `calibrationPending` state. This avoids coupling HAL headers to Qt and makes descriptor drift a visible test failure. HAL timer/channel constants belong only in `servo_driver_stm32`, which maps abstract selectors to `TIM_HandleTypeDef *` and HAL channels. The 2026-09-14 front-assembly remap is absorbed at this boundary: logical identity stays stable, while Firmware binds logical FrontRight to TIM3_CH2 / PA7 and logical FrontLeft to TIM3_CH1 / PA6; the Qt table mirrors logical calibration/ranges but does not own timer/channel data.
+The five-servo bring-up keeps a pure-C Firmware `servo_descriptor` table and an independent Qt/C++ table. Keep both tables in parity: compare IDs, supported mask, capability, calibration, neutral, software PWM limits, software angle limits, and Console `calibrationPending` state. This avoids coupling HAL headers to Qt and makes descriptor drift a visible test failure. HAL timer/channel constants belong only in `servo_driver_stm32`, which maps abstract selectors to `TIM_HandleTypeDef *` and HAL channels. The 2026-09-22 hardware-side confirmation established physical FrontRight = TIM3_CH1 / PA6 and physical FrontLeft = TIM3_CH2 / PA7; the Firmware descriptor owns that binding and the Qt table mirrors the corresponding logical calibration/ranges without owning timer/channel data.
 
 ## Keep logical joint angles above Servo calibration
 

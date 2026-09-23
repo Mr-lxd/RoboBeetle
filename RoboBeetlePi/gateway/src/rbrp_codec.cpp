@@ -233,6 +233,13 @@ RbrpMessageDecodeResult decode_remote_message(const RbrpFrame &frame)
                         read_le16(frame.payload.data() + 2U))};
             }
             break;
+        case RobotCommandKind::SetServoPwm:
+            if (frame.payload.size() == 4U) {
+                request.command = SetServoPwm{
+                    frame.payload[1],
+                    read_le16(frame.payload.data() + 2U)};
+            }
+            break;
         case RobotCommandKind::NeutralServos:
             if (frame.payload.size() == 3U) {
                 request.command = NeutralServos{read_le16(frame.payload.data() + 1U)};

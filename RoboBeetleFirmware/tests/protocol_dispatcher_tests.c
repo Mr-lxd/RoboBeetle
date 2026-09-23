@@ -376,8 +376,8 @@ static void test_servo_commands(void)
     outcome = handle(&fixture, &frame, 0U);
     expect(outcome.result == RBP2_RESULT_OK,
            "valid Set Angle should return OK");
-    expect(fixture.driver.last_pulse_us == 2020U,
-           "Set Angle should pass cdeg to Servo service");
+    expect(fixture.driver.last_pulse_us == 1000U,
+           "Set Angle should pass cdeg to the current FrontRight calibration");
 
     frame = make_frame(
         RBP2_MSG_SET_SERVO_ANGLE,
@@ -387,8 +387,8 @@ static void test_servo_commands(void)
     outcome = handle(&fixture, &frame, 0U);
     expect(outcome.result == RBP2_RESULT_OK,
            "negative Set Angle should return OK");
-    expect(fixture.driver.last_pulse_us == 1140U,
-           "Set Angle should decode signed little-endian cdeg");
+    expect(fixture.driver.last_pulse_us == 1900U,
+           "Set Angle should decode signed little-endian cdeg through the current FrontRight calibration");
 
     frame = make_frame(
         RBP2_MSG_NEUTRAL,
@@ -398,8 +398,8 @@ static void test_servo_commands(void)
     outcome = handle(&fixture, &frame, 0U);
     expect(outcome.result == RBP2_RESULT_OK,
            "valid Neutral should return OK");
-    expect(fixture.driver.last_pulse_us == 1580U,
-           "Neutral should call Servo service");
+    expect(fixture.driver.last_pulse_us == 1450U,
+           "Neutral should call Servo service with the current FrontRight neutral");
 
     frame = make_frame(
         RBP2_MSG_SERVO_DISABLE,

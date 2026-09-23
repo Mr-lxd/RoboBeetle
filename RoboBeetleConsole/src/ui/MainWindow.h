@@ -218,10 +218,10 @@ private:
     std::array<QSpinBox *, kServoCount> pwmSpins_{};
     std::array<QSlider *, kServoCount> pwmSliders_{};
     std::array<QDoubleSpinBox *, kServoCount> angleSpins_{};
-    std::array<bool, kServoCount> angleEditDirty_{};
     std::array<QPushButton *, kServoCount> enableButtons_{};
     std::array<QPushButton *, kServoCount> neutralButtons_{};
     std::array<QPushButton *, kServoCount> applyButtons_{};
+    std::array<QPushButton *, kServoCount> angleApplyButtons_{};
     std::array<QLabel *, kServoCount> statusLabels_{};
 
     // Protocol summary card (dashboard) + protocol details tab.

@@ -41,7 +41,9 @@
 #include <QUrl>
 #include <QTimer>
 
+#include <algorithm>
 #include <array>
+#include <cstdint>
 #include <utility>
 
 namespace rb {
@@ -81,6 +83,83 @@ QString formatTemperature(qint16 temperatureCentiC)
 {
     return QStringLiteral("%1 C")
         .arg(static_cast<double>(temperatureCentiC) / 100.0, 0, 'f', 2);
+}
+
+quint16 servoPreviewAngleToPwm(const ServoDescriptor &descriptor,
+                               qint16 angleCdeg)
+{
+    angleCdeg = qBound(descriptor.electricalMinAngleCdeg,
+                       angleCdeg,
+                       descriptor.electricalMaxAngleCdeg);
+    if (angleCdeg < 0) {
+        const qint32 denominator =
+            -static_cast<qint32>(descriptor.electricalMinAngleCdeg);
+        if (denominator <= 0) {
+            return descriptor.neutralPwmUs;
+        }
+        const qint32 pulse = static_cast<qint32>(descriptor.neutralPwmUs)
+            + (static_cast<qint32>(angleCdeg)
+               * (static_cast<qint32>(descriptor.neutralPwmUs)
+                  - static_cast<qint32>(descriptor.electricalMinPwmUs)))
+                / denominator;
+        return static_cast<quint16>(pulse);
+    }
+
+    const qint32 denominator =
+        static_cast<qint32>(descriptor.electricalMaxAngleCdeg);
+    if (denominator <= 0) {
+        return descriptor.neutralPwmUs;
+    }
+    const qint32 pulse = static_cast<qint32>(descriptor.neutralPwmUs)
+        + (static_cast<qint32>(angleCdeg)
+           * (static_cast<qint32>(descriptor.electricalMaxPwmUs)
+              - static_cast<qint32>(descriptor.neutralPwmUs)))
+            / denominator;
+    return static_cast<quint16>(pulse);
+}
+
+bool pulseBetween(quint16 pulse, quint16 endpoint, quint16 neutral)
+{
+    const quint16 low = std::min(endpoint, neutral);
+    const quint16 high = std::max(endpoint, neutral);
+    return pulse >= low && pulse <= high;
+}
+
+qint16 servoPreviewPwmToAngle(const ServoDescriptor &descriptor,
+                              quint16 pulseUs)
+{
+    if (pulseUs == descriptor.neutralPwmUs) {
+        return 0;
+    }
+    if (pulseBetween(pulseUs, descriptor.electricalMinPwmUs,
+                     descriptor.neutralPwmUs)) {
+        const qint32 denominator =
+            static_cast<qint32>(descriptor.neutralPwmUs)
+            - static_cast<qint32>(descriptor.electricalMinPwmUs);
+        if (denominator != 0) {
+            const qint32 angle =
+                (static_cast<qint32>(pulseUs)
+                 - static_cast<qint32>(descriptor.neutralPwmUs))
+                * (-static_cast<qint32>(descriptor.electricalMinAngleCdeg))
+                / denominator;
+            return static_cast<qint16>(angle);
+        }
+    }
+    if (pulseBetween(pulseUs, descriptor.electricalMaxPwmUs,
+                     descriptor.neutralPwmUs)) {
+        const qint32 denominator =
+            static_cast<qint32>(descriptor.electricalMaxPwmUs)
+            - static_cast<qint32>(descriptor.neutralPwmUs);
+        if (denominator != 0) {
+            const qint32 angle =
+                (static_cast<qint32>(pulseUs)
+                 - static_cast<qint32>(descriptor.neutralPwmUs))
+                * static_cast<qint32>(descriptor.electricalMaxAngleCdeg)
+                / denominator;
+            return static_cast<qint16>(angle);
+        }
+    }
+    return 0;
 }
 
 QString inferenceStateText(const QString &state)
@@ -1327,9 +1406,9 @@ QWidget *MainWindow::createServoFineControlTab()
 
     const QStringList headers = {
         QStringLiteral("Servo"),
-        QStringLiteral("PWM Range"),
         QStringLiteral("PWM"),
         QStringLiteral("PWM Slider"),
+        QStringLiteral(""),
         QStringLiteral("Angle"),
         QStringLiteral(""),
         QStringLiteral("Servo"),
@@ -1355,40 +1434,38 @@ QWidget *MainWindow::createServoFineControlTab()
             "color: #263238; font-weight: 700;"));
         grid->addWidget(name, index + 1, 0);
 
-        auto *range = new QLabel(
-            QStringLiteral("%1–%2 μs")
-                .arg(descriptor.commandMinPwmUs)
-                .arg(descriptor.commandMaxPwmUs),
-            page);
-        range->setObjectName(
-            QStringLiteral("servoPwmRange%1").arg(index));
-        range->setStyleSheet(QStringLiteral(
-            "color: #756451; font-size: 10px; font-weight: 600;"));
-        grid->addWidget(range, index + 1, 1);
+        name->setToolTip(QStringLiteral("Manual raw PWM range: %1-%2 us")
+                             .arg(descriptor.commandMinPwmUs)
+                             .arg(descriptor.commandMaxPwmUs));
+
+        const int previewMinPwm = std::min({
+            static_cast<int>(descriptor.electricalMinPwmUs),
+            static_cast<int>(descriptor.neutralPwmUs),
+            static_cast<int>(descriptor.electricalMaxPwmUs)});
+        const int previewMaxPwm = std::max({
+            static_cast<int>(descriptor.electricalMinPwmUs),
+            static_cast<int>(descriptor.neutralPwmUs),
+            static_cast<int>(descriptor.electricalMaxPwmUs)});
 
         pwmSpins_[index] = new QSpinBox(page);
         pwmSpins_[index]->setObjectName(
             QStringLiteral("servoPwmSpin%1").arg(index));
-        pwmSpins_[index]->setRange(
-            descriptor.commandMinPwmUs,
-            descriptor.commandMaxPwmUs);
+        pwmSpins_[index]->setRange(previewMinPwm, previewMaxPwm);
         pwmSpins_[index]->setValue(descriptor.neutralPwmUs);
         pwmSpins_[index]->setSuffix(QStringLiteral(" μs"));
         pwmSpins_[index]->setKeyboardTracking(false);
         pwmSpins_[index]->setEnabled(
             supported && controller_->supportsRawPwm());
-        grid->addWidget(pwmSpins_[index], index + 1, 2);
+        grid->addWidget(pwmSpins_[index], index + 1, 1);
 
         pwmSliders_[index] = new QSlider(Qt::Horizontal, page);
         pwmSliders_[index]->setObjectName(
             QStringLiteral("servoPwmSlider%1").arg(index));
-        pwmSliders_[index]->setRange(
-            descriptor.commandMinPwmUs,
-            descriptor.commandMaxPwmUs);
+        pwmSliders_[index]->setRange(previewMinPwm, previewMaxPwm);
         pwmSliders_[index]->setValue(descriptor.neutralPwmUs);
         pwmSliders_[index]->setEnabled(
             supported && controller_->supportsRawPwm());
-        grid->addWidget(pwmSliders_[index], index + 1, 3);
+        grid->addWidget(pwmSliders_[index], index + 1, 2);
 
         angleSpins_[index] = new QDoubleSpinBox(page);
         angleSpins_[index]->setObjectName(
@@ -1407,14 +1484,14 @@ QWidget *MainWindow::createServoFineControlTab()
         angleSpins_[index]->setToolTip(
             descriptor.angleSupported
                 ? QStringLiteral(
-                      "Type an angle and press Enter or leave the field "
-                      "to send the existing SetServoAngle command.")
+                      "Edit the logical angle preview. PWM follows locally; "
+                      "nothing is sent until Apply Angle is clicked.")
                 : QStringLiteral(
                       "Angle control is unavailable for this servo."));
         grid->addWidget(angleSpins_[index], index + 1, 4);
 
         applyButtons_[index] =
-            new QPushButton(QStringLiteral("Apply"), page);
+            new QPushButton(QStringLiteral("Apply PWM"), page);
         applyButtons_[index]->setObjectName(
             QStringLiteral("servoApplyButton%1").arg(index));
         applyButtons_[index]->setProperty(
@@ -1425,7 +1502,18 @@ QWidget *MainWindow::createServoFineControlTab()
                 ? QStringLiteral("Apply the selected raw PWM value.")
                 : QStringLiteral(
                       "Raw PWM is available only in Direct/APC maintenance mode."));
-        grid->addWidget(applyButtons_[index], index + 1, 5);
+        grid->addWidget(applyButtons_[index], index + 1, 3);
+
+        angleApplyButtons_[index] =
+            new QPushButton(QStringLiteral("Apply Angle"), page);
+        angleApplyButtons_[index]->setObjectName(
+            QStringLiteral("servoAngleApplyButton%1").arg(index));
+        angleApplyButtons_[index]->setProperty(
+            "consoleActionRole", "secondary");
+        angleApplyButtons_[index]->setEnabled(false);
+        angleApplyButtons_[index]->setToolTip(QStringLiteral(
+            "Apply the selected logical angle using SetServoAngle."));
+        grid->addWidget(angleApplyButtons_[index], index + 1, 5);
 
         enableButtons_[index] =
             new QPushButton(QStringLiteral("Enable"), page);
@@ -1454,17 +1542,96 @@ QWidget *MainWindow::createServoFineControlTab()
 
         connect(pwmSpins_[index],
                 qOverload<int>(&QSpinBox::valueChanged),
-                pwmSliders_[index], &QSlider::setValue);
-        connect(pwmSliders_[index], &QSlider::valueChanged,
-                pwmSpins_[index], &QSpinBox::setValue);
-        connect(applyButtons_[index], &QPushButton::clicked,
-                this, [this, id, index] {
-            if (pwmSpins_[index] == nullptr) {
+                this, [this, id, index](int value) {
+            const ServoDescriptor *descriptor = servoDescriptor(id);
+            if (descriptor == nullptr) {
                 return;
             }
-            controller_->setServoPwm(
-                id,
-                static_cast<quint16>(pwmSpins_[index]->value()));
+            {
+                const QSignalBlocker sliderBlock(pwmSliders_[index]);
+                pwmSliders_[index]->setValue(value);
+            }
+            {
+                const QSignalBlocker angleBlock(angleSpins_[index]);
+                angleSpins_[index]->setValue(
+                    static_cast<double>(servoPreviewPwmToAngle(
+                        *descriptor, static_cast<quint16>(value))) / 100.0);
+            }
+            refreshServoUi(index);
+        });
+        connect(pwmSliders_[index], &QSlider::valueChanged,
+                this, [this, id, index](int value) {
+            const ServoDescriptor *descriptor = servoDescriptor(id);
+            if (descriptor == nullptr) {
+                return;
+            }
+            {
+                const QSignalBlocker spinBlock(pwmSpins_[index]);
+                pwmSpins_[index]->setValue(value);
+            }
+            {
+                const QSignalBlocker angleBlock(angleSpins_[index]);
+                angleSpins_[index]->setValue(
+                    static_cast<double>(servoPreviewPwmToAngle(
+                        *descriptor, static_cast<quint16>(value))) / 100.0);
+            }
+            refreshServoUi(index);
+        });
+        connect(angleSpins_[index],
+                qOverload<double>(&QDoubleSpinBox::valueChanged),
+                this, [this, id, index](double degrees) {
+            const ServoDescriptor *descriptor = servoDescriptor(id);
+            if (descriptor == nullptr) {
+                return;
+            }
+            const quint16 pulseUs = servoPreviewAngleToPwm(
+                *descriptor, angleDegreesToCentidegrees(degrees));
+            {
+                const QSignalBlocker spinBlock(pwmSpins_[index]);
+                pwmSpins_[index]->setValue(pulseUs);
+            }
+            {
+                const QSignalBlocker sliderBlock(pwmSliders_[index]);
+                pwmSliders_[index]->setValue(pulseUs);
+            }
+            refreshServoUi(index);
+        });
+
+        connect(applyButtons_[index], &QPushButton::clicked,
+                this, [this, id, index] {
+            if (pwmSpins_[index] == nullptr || applyButtons_[index] == nullptr) {
+                return;
+            }
+            const bool submitted = controller_->setServoPwm(
+                id, static_cast<quint16>(pwmSpins_[index]->value()));
+            applyButtons_[index]->setText(
+                submitted ? QStringLiteral("Sent ✓")
+                          : QStringLiteral("Rejected"));
+            QTimer::singleShot(900, applyButtons_[index],
+                               [button = applyButtons_[index]] {
+                if (button != nullptr) {
+                    button->setText(QStringLiteral("Apply PWM"));
+                }
+            });
+            refreshServoUi(index);
+        });
+        connect(angleApplyButtons_[index], &QPushButton::clicked,
+                this, [this, id, index] {
+            if (angleSpins_[index] == nullptr
+                || angleApplyButtons_[index] == nullptr) {
+                return;
+            }
+            const bool submitted = controller_->setServoAngle(
+                id, angleDegreesToCentidegrees(angleSpins_[index]->value()));
+            angleApplyButtons_[index]->setText(
+                submitted ? QStringLiteral("Sent ✓")
+                          : QStringLiteral("Rejected"));
+            QTimer::singleShot(900, angleApplyButtons_[index],
+                               [button = angleApplyButtons_[index]] {
+                if (button != nullptr) {
+                    button->setText(QStringLiteral("Apply Angle"));
+                }
+            });
             refreshServoUi(index);
         });
         connect(enableButtons_[index], &QPushButton::clicked,
@@ -1482,39 +1649,9 @@ QWidget *MainWindow::createServoFineControlTab()
             refreshServoUi(index);
         });
 
-        connect(angleSpins_[index],
-                qOverload<double>(&QDoubleSpinBox::valueChanged),
-                this, [this, index](double) {
-            angleEditDirty_[index] = true;
-        });
-        connect(angleSpins_[index], &QDoubleSpinBox::editingFinished,
-                this, [this, id, index] {
-            if (!angleEditDirty_[index]) {
-                return;
-            }
-            angleEditDirty_[index] = false;
-            const ServoDescriptor *descriptor = servoDescriptor(id);
-            if (!controller_->isControlActive()
-                || !controller_->isServoSupported(id)
-                || !controller_->isServoEnabled(id)
-                || controller_->isServoDisablePending(id)
-                || controller_->isMotionActive()
-                || descriptor == nullptr
-                || !descriptor->angleSupported
-                || descriptor->calibrationPending) {
-                refreshServoUi(index);
-                return;
-            }
-            controller_->setServoAngle(
-                id,
-                angleDegreesToCentidegrees(
-                    angleSpins_[index]->value()));
-            refreshServoUi(index);
-        });
-
     }
 
-    grid->setColumnStretch(3, 1);
+    grid->setColumnStretch(2, 1);
     grid->setRowStretch(kServoCount + 1, 1);
     return page;
 }
@@ -3001,10 +3138,22 @@ void MainWindow::refreshServoUi(int index)
             && !pendingDisable && !motionActive);
     }
     if (applyButtons_[index] != nullptr) {
+        const int previewPwm = pwmSpins_[index] == nullptr
+            ? static_cast<int>(descriptor->neutralPwmUs)
+            : pwmSpins_[index]->value();
+        const bool rawPwmInRange =
+            previewPwm >= descriptor->commandMinPwmUs
+            && previewPwm <= descriptor->commandMaxPwmUs;
         applyButtons_[index]->setEnabled(
             active && controller_->supportsRawPwm()
-            && supported && enabled
+            && supported && enabled && rawPwmInRange
             && !pendingDisable && !motionActive);
+        applyButtons_[index]->setToolTip(
+            rawPwmInRange
+                ? QStringLiteral("Apply this raw PWM value. Slider edits do not transmit.")
+                : QStringLiteral("Equivalent PWM is outside the manual raw PWM range %1-%2 us; use Apply Angle instead.")
+                      .arg(descriptor->commandMinPwmUs)
+                      .arg(descriptor->commandMaxPwmUs));
     }
     QString statusColor = QStringLiteral("#6F7F8B");
     if (!connected) {
@@ -3050,6 +3199,9 @@ void MainWindow::setAngleUiEnabled(int index, bool enabled)
         && !controller_->isMotionActive();
     if (angleSpins_[index] != nullptr) {
         angleSpins_[index]->setEnabled(actionable);
+    }
+    if (angleApplyButtons_[index] != nullptr) {
+        angleApplyButtons_[index]->setEnabled(actionable);
     }
 }
 

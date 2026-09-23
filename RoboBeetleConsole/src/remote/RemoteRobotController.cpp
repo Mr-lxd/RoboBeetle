@@ -2,6 +2,7 @@
 
 #include "robot/DepthSnapshot.h"
 #include "robot/ImuSnapshot.h"
+#include "robot/ServoDescriptor.h"
 
 #include <QByteArrayView>
 #include <QDateTime>
@@ -41,6 +42,7 @@ QString commandKindText(robobeetle::gateway::RobotCommandKind kind)
     case Kind::EnableServos: return QStringLiteral("EnableServos");
     case Kind::DisableServos: return QStringLiteral("DisableServos");
     case Kind::SetServoAngle: return QStringLiteral("SetServoAngle");
+    case Kind::SetServoPwm: return QStringLiteral("SetServoPwm");
     case Kind::NeutralServos: return QStringLiteral("NeutralServos");
     case Kind::StartMotion: return QStringLiteral("StartMotion");
     case Kind::StopMotion: return QStringLiteral("StopMotion");
@@ -221,11 +223,27 @@ bool RemoteRobotController::disableAll()
 
 bool RemoteRobotController::setServoPwm(ServoId id, quint16 pulseUs)
 {
-    Q_UNUSED(id);
-    Q_UNUSED(pulseUs);
-    emit logMessage(QStringLiteral(
-        "Raw PWM is unavailable in RBRP remote mode; use angle/neutral commands"));
-    return false;
+    if (!isControlActive() || !isServoSupported(id) || !isServoEnabled(id)
+        || isServoDisablePending(id) || isMotionActive()) {
+        return false;
+    }
+    const ServoDescriptor *descriptor = servoDescriptor(id);
+    if (descriptor == nullptr
+        || pulseUs < descriptor->commandMinPwmUs
+        || pulseUs > descriptor->commandMaxPwmUs) {
+        emit logMessage(QStringLiteral(
+            "Set PWM rejected: %1 us is outside the manual PWM envelope")
+                            .arg(pulseUs));
+        return false;
+    }
+
+    QByteArray payload;
+    payload.append(static_cast<char>(id));
+    appendLe16(payload, pulseUs);
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::SetServoPwm;
+    pending.servoMask = servoMask(id);
+    return submitCommand(pending.kind, payload, pending).has_value();
 }
 
 bool RemoteRobotController::setServoAngle(ServoId id, qint16 angleCentidegrees)
@@ -640,6 +658,7 @@ void RemoteRobotController::applyAcceptedCommand(
         }
         break;
     case Kind::SetServoAngle:
+    case Kind::SetServoPwm:
     case Kind::NeutralServos:
         break;
     case Kind::StartMotion:
@@ -712,6 +731,9 @@ void RemoteRobotController::supersedePendingForDisable(quint16 affectedMask)
         bool affected = false;
         switch (it->kind) {
         case robobeetle::gateway::RobotCommandKind::EnableServos:
+        case robobeetle::gateway::RobotCommandKind::SetServoAngle:
+        case robobeetle::gateway::RobotCommandKind::SetServoPwm:
+        case robobeetle::gateway::RobotCommandKind::NeutralServos:
             affected = (it->servoMask & affectedMask) != 0U;
             break;
         case robobeetle::gateway::RobotCommandKind::StartMotion:

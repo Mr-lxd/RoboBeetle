@@ -45,7 +45,7 @@ public:
     {
         return session_.authorityState();
     }
-    [[nodiscard]] bool supportsRawPwm() const noexcept override { return false; }
+    [[nodiscard]] bool supportsRawPwm() const noexcept override { return true; }
     [[nodiscard]] bool isServoSupported(ServoId id) const override;
     [[nodiscard]] bool isServoEnabled(ServoId id) const override;
     [[nodiscard]] bool isServoDisablePending(ServoId id) const override;

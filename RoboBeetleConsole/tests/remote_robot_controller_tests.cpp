@@ -284,7 +284,7 @@ void testRemoteControllerAndUi()
     expect(enable != nullptr && enable->isEnabled(),
            "FrontRight Enable must be actionable when remote control is Active");
     expect(applyPwm != nullptr && !applyPwm->isEnabled(),
-           "raw PWM must stay unavailable in RBRP remote mode");
+           "raw PWM remains gated until the servo is enabled");
 
     QPushButton *backward =
         buttonWithText(&window, QStringLiteral("Brake"));
@@ -328,10 +328,23 @@ void testRemoteControllerAndUi()
                && servoStatusLabel->styleSheet().contains(QStringLiteral("#2F80ED")),
            "accepted Servo Enable is highlighted in blue in Actuator Control");
 
-    expect(!controller.setServoPwm(rb::ServoId::FrontRight, 1500),
-           "Remote controller must reject raw PWM locally");
-    expect(!gateway.nextFrame(RbrpMessageKind::CommandRequest, 120).has_value(),
-           "raw PWM rejection must emit no remote command");
+    expect(applyPwm != nullptr && applyPwm->isEnabled(),
+           "raw PWM becomes actionable after accepted remote Enable");
+    expect(controller.setServoPwm(rb::ServoId::FrontRight, 1500),
+           "Remote controller must submit raw PWM through RBRP");
+    const auto pwmRequest =
+        gateway.nextFrame(RbrpMessageKind::CommandRequest, 120);
+    expect(pwmRequest.has_value(),
+           "raw PWM must emit one remote CommandRequest");
+    if (pwmRequest.has_value()) {
+        expect(pwmRequest->payload == Bytes({0x08U, 0x00U, 0xdcU, 0x05U}),
+               "FrontRight 1500 us must encode SetServoPwm with servo ID and uint16 LE pulse");
+        sendSubmitted(gateway, pwmRequest->request_id, 43U);
+        sendOutcome(gateway, pwmRequest->request_id,
+                    RobotCommandKind::SetServoPwm, 43U,
+                    GatewayCommandOutcome::Accepted);
+        QApplication::processEvents();
+    }
 
     GatewayLeakTelemetry leak;
     leak.sequence = 100;
