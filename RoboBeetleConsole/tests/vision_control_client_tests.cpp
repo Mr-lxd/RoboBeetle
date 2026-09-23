@@ -336,6 +336,8 @@ void statusParsesRunningInferenceDiagnostics()
             "\"inference_fps\":8.5,"
             "\"latency_ms\":4.25,"
             "\"detection_count\":2,"
+            "\"vision_process_rss_bytes\":327786496,"
+            "\"system_total_memory_bytes\":4089446400,"
             "\"last_error\":null}}"));
 
     expect(
@@ -367,6 +369,12 @@ void statusParsesRunningInferenceDiagnostics()
     expect(seen.haveInferenceDetectionCount
                && seen.inferenceDetectionCount == 2U,
            "inference detection count is parsed");
+    expect(seen.haveVisionProcessRss
+               && seen.visionProcessRssBytes == 327786496ULL,
+           "Vision process RSS is parsed as exact bytes");
+    expect(seen.haveSystemTotalMemory
+               && seen.systemTotalMemoryBytes == 4089446400ULL,
+           "system total memory is parsed as exact bytes");
     expect(seen.inferenceLastError.isEmpty(),
            "null inference last error stays absent");
 
@@ -403,6 +411,7 @@ void failedInferencePreservesNullFlagsAndNumericZero()
             "\"processed_frames\":null,\"skipped_frames\":null,"
             "\"inference_fps\":null,\"latency_ms\":null,"
             "\"detection_count\":null,"
+            "\"vision_process_rss_bytes\":null,"
             "\"last_error\":\"model load failed\"}}"));
 
     expect(
@@ -419,6 +428,11 @@ void failedInferencePreservesNullFlagsAndNumericZero()
                && !seen.haveInferenceLatencyMs
                && !seen.haveInferenceDetectionCount,
            "null inference numeric fields remain absent");
+    expect(!seen.haveVisionProcessRss
+               && seen.visionProcessRssBytes == 0U
+               && !seen.haveSystemTotalMemory
+               && seen.systemTotalMemoryBytes == 0U,
+           "null and missing memory fields remain absent without failing status parsing");
     expect(seen.haveInferenceLatestFrame && seen.inferenceLatestFrameId == 0U,
            "failed inference frame id zero remains present");
     expect(seen.inferenceLastError == QStringLiteral("model load failed"),
@@ -449,12 +463,17 @@ void legacyStatusResetsInferenceAfterActionPreservesIt()
         200,
         QByteArrayLiteral(
             "{\"ok\":true,\"inference\":{\"state\":\"running\","
-            "\"latest_frame_id\":7,\"processed_frames\":11}}"));
+            "\"latest_frame_id\":7,\"processed_frames\":11,"
+            "\"vision_process_rss_bytes\":327786496,"
+            "\"system_total_memory_bytes\":4089446400}}"));
     expect(
         waitUntil([&client] {
             return client.status().inferenceState == QStringLiteral("running");
         }),
         "initial inference status becomes running");
+    expect(client.status().haveVisionProcessRss
+               && client.status().haveSystemTotalMemory,
+           "initial memory diagnostics are present before later status resets");
     statusPeer->deleteLater();
 
     client.requestSnapshot();
@@ -564,6 +583,11 @@ void legacyStatusResetsInferenceAfterActionPreservesIt()
                    && seen.inferenceLatestFrameId == 0U
                    && seen.inferenceProcessedFrames == 0U,
                "legacy status restores disabled inference defaults");
+        expect(!seen.haveVisionProcessRss
+                   && seen.visionProcessRssBytes == 0U
+                   && !seen.haveSystemTotalMemory
+                   && seen.systemTotalMemoryBytes == 0U,
+               "legacy status resets both memory diagnostics");
         legacyPeer->deleteLater();
     }
 

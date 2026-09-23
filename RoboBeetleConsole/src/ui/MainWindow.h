@@ -142,6 +142,7 @@ private:
     QLabel *inferenceDot_{nullptr};
     QLabel *inferencePerformanceSummary_{nullptr};
     QLabel *inferenceDetectionSummary_{nullptr};
+    QLabel *inferenceMemorySummary_{nullptr};
     QLabel *inferenceDiagnostics_{nullptr};
     QPushButton *startInferenceButton_{nullptr};
     QPushButton *stopInferenceButton_{nullptr};

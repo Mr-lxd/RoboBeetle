@@ -607,6 +607,12 @@ void VisionControlClient::applyStatusPayload(const QJsonObject &object)
     readOptionalDouble(QStringLiteral("latency_ms"), status_.haveInferenceLatencyMs, status_.inferenceLatencyMs);
     readOptionalUInt64(QStringLiteral("detection_count"), status_.haveInferenceDetectionCount,
                        status_.inferenceDetectionCount);
+    readOptionalUInt64(QStringLiteral("vision_process_rss_bytes"),
+                       status_.haveVisionProcessRss,
+                       status_.visionProcessRssBytes);
+    readOptionalUInt64(QStringLiteral("system_total_memory_bytes"),
+                       status_.haveSystemTotalMemory,
+                       status_.systemTotalMemoryBytes);
     status_.inferenceLastError = inference.value(QStringLiteral("last_error")).toString();
 }
 
@@ -670,6 +676,10 @@ void VisionControlClient::resetInferenceDiagnostics()
     status_.inferenceLatencyMs = 0.0;
     status_.haveInferenceDetectionCount = false;
     status_.inferenceDetectionCount = 0;
+    status_.haveVisionProcessRss = false;
+    status_.visionProcessRssBytes = 0;
+    status_.haveSystemTotalMemory = false;
+    status_.systemTotalMemoryBytes = 0;
     status_.inferenceLastError.clear();
 }
 

@@ -1201,17 +1201,23 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
         panel->findChild<QLabel *>(QStringLiteral("inferencePerformanceSummary"));
     auto *detectionSummary =
         panel->findChild<QLabel *>(QStringLiteral("inferenceDetectionSummary"));
+    auto *memorySummary =
+        panel->findChild<QLabel *>(QStringLiteral("inferenceMemorySummary"));
+    auto *httpState =
+        panel->findChild<QLabel *>(QStringLiteral("visionControlState"));
     QPushButton *connectVideo =
         buttonWithText(panel, QStringLiteral("Connect Video"));
     expect(host != nullptr && port != nullptr && state != nullptr
                && diagnostics != nullptr && visionDiagnostics != nullptr
                && endpointDetails != nullptr && performance != nullptr
-               && detectionSummary != nullptr && connectVideo != nullptr,
+               && detectionSummary != nullptr && memorySummary != nullptr
+               && httpState != nullptr && connectVideo != nullptr,
            "Realtime Video card exposes inference state and diagnostics labels");
     if (host == nullptr || port == nullptr || state == nullptr
         || diagnostics == nullptr || visionDiagnostics == nullptr
         || endpointDetails == nullptr || performance == nullptr
-        || detectionSummary == nullptr || connectVideo == nullptr) {
+        || detectionSummary == nullptr || memorySummary == nullptr
+        || httpState == nullptr || connectVideo == nullptr) {
         return;
     }
 
@@ -1258,6 +1264,8 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
             "\"capture_timestamp_ns\":987654321,\"processed_frames\":99,"
             "\"skipped_frames\":0,\"inference_fps\":12.3,"
             "\"latency_ms\":45.6,\"detection_count\":0,"
+            "\"vision_process_rss_bytes\":327786496,"
+            "\"system_total_memory_bytes\":4089446400,"
             "\"confidence_threshold\":0.75,\"last_error\":null}}"));
     for (int i = 0; i < 50 && state->text() != QStringLiteral("Inference Running");
          ++i) {
@@ -1286,6 +1294,11 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
            "Vision Details preserve every authoritative inference field including zero values");
     expect(performance->text() == QStringLiteral("12.3 FPS / 45.6 ms")
                && detectionSummary->text() == QStringLiteral("Detections 0")
+               && memorySummary->text() == QStringLiteral(
+                   "Memory 312.6 MiB / 3.8 GiB")
+               && memorySummary->toolTip() == QStringLiteral(
+                   "Vision process RSS / total system physical memory")
+               && httpState->text() == QStringLiteral("HTTP: Reachable")
                && performance->toolTip() == QStringLiteral(
                    "Camera capture to inference completion; not ORT-only duration."),
            "main inference row renders active metrics with frozen formatting and tooltip");
@@ -1312,7 +1325,9 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
     waitForMs(3600);
     QApplication::processEvents();
     expect(performance->text() == QStringLiteral("-- FPS / -- ms")
-               && detectionSummary->text() == QStringLiteral("Detections --"),
+               && detectionSummary->text() == QStringLiteral("Detections --")
+               && memorySummary->text() == QStringLiteral("Memory -- / --")
+               && httpState->text() == QStringLiteral("HTTP: Stale"),
            "stale status masks retained inference metrics on the main card");
     expect(diagnostics->text().contains(QStringLiteral("Last received / stale"))
                && diagnostics->text().contains(QStringLiteral("FPS: 12.3"))
@@ -1371,17 +1386,30 @@ void testVisionInferenceDiagnosticsAreRenderedWithoutRobotWrites()
     applyInferenceStatus(QByteArrayLiteral("{\"state\":\"starting\"}"));
     expect(state->text() == QStringLiteral("Inference Starting"),
            "starting inference status is rendered in the state label");
+    expect(memorySummary->text() == QStringLiteral("Memory -- / --")
+               && httpState->text() == QStringLiteral("HTTP: Reachable"),
+           "starting inference masks memory while preserving HTTP reachability");
 
     applyInferenceStatus(
         QByteArrayLiteral(
             "{\"state\":\"failed\",\"last_error\":\"model load failed\"}"));
     expect(state->text() == QStringLiteral("Inference Error")
+               && memorySummary->text() == QStringLiteral("Memory -- / --")
                && diagnostics->text().contains(
                    QStringLiteral("Last error: model load failed")),
            "failed inference status renders a short last error");
 
+    applyInferenceStatus(QByteArrayLiteral(
+        "{\"state\":\"running\",\"vision_process_rss_bytes\":327786496}"));
+    expect(memorySummary->text() == QStringLiteral("Memory 312.6 MiB / --"),
+           "active inference renders RSS when total RAM is unavailable");
+    applyInferenceStatus(QByteArrayLiteral(
+        "{\"state\":\"running\",\"system_total_memory_bytes\":4089446400}"));
+    expect(memorySummary->text() == QStringLiteral("Memory -- / 3.8 GiB"),
+           "active inference renders total RAM when RSS is unavailable");
     applyInferenceStatus(QByteArrayLiteral("{\"state\":\"unsupported\"}"));
     expect(state->text() == QStringLiteral("Inference Unavailable")
+               && memorySummary->text() == QStringLiteral("Memory -- / --")
                && diagnostics->text().contains(QStringLiteral("FPS: --"))
                && diagnostics->text().contains(QStringLiteral("Latest inference frame: --"))
                && diagnostics->text().contains(QStringLiteral("Detection count: --"))

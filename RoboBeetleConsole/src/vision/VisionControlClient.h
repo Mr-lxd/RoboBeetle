@@ -58,6 +58,10 @@ struct VisionCaptureStatus {
     double inferenceLatencyMs{0.0};
     bool haveInferenceDetectionCount{false};
     quint64 inferenceDetectionCount{0};
+    bool haveVisionProcessRss{false};
+    quint64 visionProcessRssBytes{0};
+    bool haveSystemTotalMemory{false};
+    quint64 systemTotalMemoryBytes{0};
     QString inferenceLastError;
 };
 
