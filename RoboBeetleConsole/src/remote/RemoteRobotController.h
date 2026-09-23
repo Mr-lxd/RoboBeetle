@@ -37,6 +37,7 @@ public:
     bool startMotion(MotionMode mode) override;
     bool stopMotion() override;
     bool setGaitBackend(GaitBackend backend) override;
+    bool setFrontRearCoordination(FrontRearCoordination coordination) override;
 
     [[nodiscard]] bool isConnected() const override { return session_.isConnected(); }
     [[nodiscard]] bool canAcquireControl() const override { return session_.canAcquireControl(); }
@@ -67,6 +68,20 @@ public:
     {
         return pendingGaitBackend_.has_value();
     }
+    [[nodiscard]] std::optional<FrontRearCoordination>
+    confirmedFrontRearCoordination() const override
+    {
+        return confirmedFrontRearCoordination_;
+    }
+    [[nodiscard]] std::optional<FrontRearCoordination>
+    requestedFrontRearCoordination() const override
+    {
+        return pendingFrontRearCoordination_;
+    }
+    [[nodiscard]] bool isFrontRearCoordinationChangePending() const override
+    {
+        return pendingFrontRearCoordination_.has_value();
+    }
     [[nodiscard]] bool isMotionActive() const override;
     [[nodiscard]] bool isMotionReady(MotionMode mode) const override;
     [[nodiscard]] bool isMotionTransitioning() const override
@@ -81,6 +96,7 @@ private:
         quint16 servoMask{0};
         std::optional<MotionMode> motionMode;
         std::optional<GaitBackend> gaitBackend;
+        std::optional<FrontRearCoordination> frontRearCoordination;
         std::optional<quint16> submittedSequence;
         bool superseded{false};
         qint64 sentAtMs{0};
@@ -128,6 +144,8 @@ private:
     MotionMode motionMode_{MotionMode::Stop};
     std::optional<GaitBackend> confirmedGaitBackend_;
     std::optional<GaitBackend> pendingGaitBackend_;
+    std::optional<FrontRearCoordination> confirmedFrontRearCoordination_;
+    std::optional<FrontRearCoordination> pendingFrontRearCoordination_;
     QHash<quint32, PendingCommand> pending_;
     QTimer motionStopTimer_;
     QTimer motionModeTransitionTimer_;

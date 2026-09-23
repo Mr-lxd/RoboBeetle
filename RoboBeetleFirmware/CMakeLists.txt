@@ -70,6 +70,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Communication/protocol_dispatcher.c
     Core/Motion/cpg_core.c
     Core/Motion/cpg_gait_generator.c
+    Core/Motion/experimental_flex_gait_generator.c
     Core/Motion/simple_gait_generator.c
     Core/Motion/motion_manager.c
     Core/Sensors/leak_sensor.c

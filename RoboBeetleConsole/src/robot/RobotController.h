@@ -88,6 +88,7 @@ public:
     bool startMotion(MotionMode mode) override;
     bool stopMotion() override;
     bool setGaitBackend(GaitBackend backend) override;
+    bool setFrontRearCoordination(FrontRearCoordination coordination) override;
 
     [[nodiscard]] bool isConnected() const override { return state_ == TransportState::Connected; }
     [[nodiscard]] bool isControlActive() const override { return isConnected(); }
@@ -123,6 +124,20 @@ public:
     {
         return pendingGaitBackend_.has_value();
     }
+    [[nodiscard]] std::optional<FrontRearCoordination>
+    confirmedFrontRearCoordination() const override
+    {
+        return confirmedFrontRearCoordination_;
+    }
+    [[nodiscard]] std::optional<FrontRearCoordination>
+    requestedFrontRearCoordination() const override
+    {
+        return pendingFrontRearCoordination_;
+    }
+    [[nodiscard]] bool isFrontRearCoordinationChangePending() const override
+    {
+        return pendingFrontRearCoordination_.has_value();
+    }
     [[nodiscard]] bool isMotionActive() const override;
     [[nodiscard]] bool isMotionReady(MotionMode mode) const override;
     [[nodiscard]] bool isMotionTransitioning() const override
@@ -147,6 +162,7 @@ private:
         bool motionCancelled{false};
         bool cancelled{false};
         std::optional<GaitBackend> gaitBackendRequest;
+        std::optional<FrontRearCoordination> frontRearCoordinationRequest;
     };
 
     struct QueuedCommand {
@@ -155,12 +171,14 @@ private:
         quint16 affectedMask{0};
         std::optional<MotionRequest> motionRequest;
         std::optional<GaitBackend> gaitBackendRequest;
+        std::optional<FrontRearCoordination> frontRearCoordinationRequest;
     };
 
     bool sendCommand(MessageType type, const QByteArray &payload, quint16 affectedMask = 0,
                      bool expectAck = true,
                      std::optional<MotionRequest> motionRequest = std::nullopt,
-                     std::optional<GaitBackend> gaitBackendRequest = std::nullopt);
+                     std::optional<GaitBackend> gaitBackendRequest = std::nullopt,
+                     std::optional<FrontRearCoordination> frontRearCoordinationRequest = std::nullopt);
     void sendHeartbeat();
     bool dispatchApc220Command(const QueuedCommand &command);
     bool dispatchApc220Retry(quint16 sequence);
@@ -195,6 +213,8 @@ private:
     void setLeakState(LeakState state);
     void clearGaitBackendPending();
     void clearGaitBackendOutstanding();
+    void clearFrontRearCoordinationPending();
+    void clearFrontRearCoordinationOutstanding();
     void markApc220LivenessLost();
     void noteWriteFailure(const QString &context);
     bool rejectUnsupportedServo(ServoId id, const QString &command);
@@ -240,6 +260,8 @@ private:
     MotionMode motionMode_{MotionMode::Stop};
     std::optional<GaitBackend> confirmedGaitBackend_;
     std::optional<GaitBackend> pendingGaitBackend_;
+    std::optional<FrontRearCoordination> confirmedFrontRearCoordination_;
+    std::optional<FrontRearCoordination> pendingFrontRearCoordination_;
 };
 
 } // namespace rb

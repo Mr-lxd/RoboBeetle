@@ -246,7 +246,9 @@ void validation_and_typed_commands()
             f.app.set_servo_angle(static_cast<ServoId>(5), 0),
             f.app.set_servo_pwm_maintenance(static_cast<ServoId>(255), 1000),
             f.app.start_motion(MotionMode::Stop), f.app.start_motion(static_cast<MotionMode>(7)),
-            f.app.set_gait_backend(static_cast<GaitBackend>(2))}) {
+            f.app.set_gait_backend(static_cast<GaitBackend>(3)),
+            f.app.set_front_rear_coordination(
+                static_cast<FrontRearCoordination>(2))}) {
         expect(result.status == CommandSubmitStatus::InvalidArgument && !result.sequence,
                "invalid argument is rejected without allocating sequence");
     }
@@ -268,6 +270,13 @@ void validation_and_typed_commands()
     f.complete(f.app.stop_motion(), 0x15, {1, 0, 0});
     f.complete(f.app.set_gait_backend(GaitBackend::SimpleGait), 0x16, {0});
     f.complete(f.app.set_gait_backend(GaitBackend::CPG), 0x16, {1});
+    f.complete(f.app.set_gait_backend(GaitBackend::ExperimentalFlex), 0x16, {2});
+    f.complete(f.app.set_front_rear_coordination(
+                   FrontRearCoordination::SameDirection),
+               0x17, {0});
+    f.complete(f.app.set_front_rear_coordination(
+                   FrontRearCoordination::OppositeDirection),
+               0x17, {1});
 }
 
 void telemetry_interleave_and_malformed()

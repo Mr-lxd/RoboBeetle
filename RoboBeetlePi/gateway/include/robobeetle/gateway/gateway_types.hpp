@@ -41,6 +41,7 @@ enum class RobotCommandKind : Byte {
     StopMotion = 0x06,
     SetGaitBackend = 0x07,
     SetServoPwm = 0x08,
+    SetFrontRearCoordination = 0x09,
 };
 
 enum class MotionMode : Byte {
@@ -55,6 +56,12 @@ enum class MotionMode : Byte {
 enum class GaitBackend : Byte {
     SimpleGait = 0,
     CPG = 1,
+    ExperimentalFlex = 2,
+};
+
+enum class FrontRearCoordination : Byte {
+    SameDirection = 0,
+    OppositeDirection = 1,
 };
 
 struct EnableServos {
@@ -89,9 +96,14 @@ struct SetGaitBackend {
     GaitBackend backend{GaitBackend::SimpleGait};
 };
 
+struct SetFrontRearCoordination {
+    FrontRearCoordination coordination{FrontRearCoordination::SameDirection};
+};
+
 using RobotCommand = std::variant<EnableServos, DisableServos, SetServoAngle,
                                   SetServoPwm, NeutralServos, StartMotion,
-                                  StopMotion, SetGaitBackend>;
+                                  StopMotion, SetGaitBackend,
+                                  SetFrontRearCoordination>;
 
 enum class GatewayApplicationSubmitStatus {
     Submitted,

@@ -102,7 +102,7 @@ private:
     void setImuUiState(const ImuMonitorState &state);
     void setDepthUiState(const DepthMonitorState &state);
     void refreshMotionUi();
-    void refreshGaitBackendUi();
+    void refreshGaitSelectorsUi();
     void refreshAuthorityUi();
     void refreshVisionUi();
     void refreshCaptureUi();
@@ -195,6 +195,8 @@ private:
     QLabel *motionStatus_{nullptr};
     QComboBox *gaitBackendCombo_{nullptr};
     QLabel *gaitBackendStatus_{nullptr};
+    QComboBox *frontRearCoordinationCombo_{nullptr};
+    QLabel *frontRearCoordinationStatus_{nullptr};
     QPushButton *disableAllButton_{nullptr};
 
     // IMU card.

@@ -15,7 +15,12 @@ enum class MotionMode : std::uint8_t {
 };
 
 enum class MotionAction : std::uint8_t { Stop = 0, Start = 1 };
-enum class GaitBackend : std::uint8_t { SimpleGait = 0, CPG = 1 };
+enum class GaitBackend : std::uint8_t {
+    SimpleGait = 0, CPG = 1, ExperimentalFlex = 2,
+};
+enum class FrontRearCoordination : std::uint8_t {
+    SameDirection = 0, OppositeDirection = 1,
+};
 inline constexpr std::uint16_t SupportedServoMask = 0x001f;
 
 enum class LeakState : std::uint8_t { Unknown = 0, Dry = 1, Wet = 2 };

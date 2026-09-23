@@ -1,6 +1,7 @@
 #include "motion_config.h"
 #include "motion_manager.h"
 #include "cpg_gait_generator.h"
+#include "experimental_flex_gait_generator.h"
 #include "simple_gait_generator.h"
 #include "motion_timing_diagnostics.h"
 
@@ -160,6 +161,7 @@ typedef struct
     safety_supervisor_t safety_supervisor;
     simple_gait_generator_t simple_generator;
     cpg_gait_generator_t cpg_generator;
+    experimental_flex_gait_generator_t flex_generator;
     motion_manager_t manager;
 } backend_fixture_t;
 
@@ -232,13 +234,35 @@ static void backend_fixture_init(
     safety_supervisor_on_heartbeat(&fixture->safety_supervisor, 0U);
     simple_gait_generator_init(&fixture->simple_generator);
     cpg_gait_generator_init(&fixture->cpg_generator);
+    experimental_flex_gait_generator_init(&fixture->flex_generator);
     motion_manager_init_with_backends(
         &fixture->manager,
         &fixture->servo_service,
         &fixture->safety_supervisor,
         simple_gait_generator_interface(&fixture->simple_generator),
         cpg_gait_generator_interface(&fixture->cpg_generator),
+        experimental_flex_gait_generator_interface(&fixture->flex_generator),
         initial_backend);
+}
+
+static void keep_host_alive(fixture_t *fixture, uint32_t now_ms);
+
+static void process_motion_for(
+    fixture_t *fixture,
+    uint32_t start_ms,
+    uint32_t duration_ms)
+{
+    uint32_t now_ms;
+    const uint32_t end_ms = start_ms + duration_ms;
+
+    (void)motion_manager_process(&fixture->manager, start_ms);
+    for (now_ms = start_ms + MOTION_GAIT_TICK_MS;
+         now_ms <= end_ms;
+         now_ms += MOTION_GAIT_TICK_MS)
+    {
+        keep_host_alive(fixture, now_ms);
+        (void)motion_manager_process(&fixture->manager, now_ms);
+    }
 }
 
 static void keep_host_alive(
@@ -1041,6 +1065,182 @@ static void test_gait_backend_switch_is_stopped_only_and_has_no_output_side_effe
            "same-backend CPG no-op must not reset or advance state");
     expect(fixture.driver.write_calls == writes_before,
            "all successful selector operations must preserve Servo output");
+
+    expect(motion_manager_set_gait_backend(
+               &fixture.manager,
+               MOTION_GAIT_BACKEND_EXPERIMENTAL_FLEX) ==
+               MOTION_MANAGER_RESULT_OK,
+           "STOPPED CPG to ExperimentalFlex should succeed");
+    expect(motion_manager_gait_backend(&fixture.manager) ==
+               MOTION_GAIT_BACKEND_EXPERIMENTAL_FLEX &&
+               fixture.flex_generator.phase_ms == 650U,
+           "ExperimentalFlex selection should reset and activate backend value 2");
+    expect(motion_manager_set_gait_backend(
+               &fixture.manager,
+               (motion_gait_backend_t)3) ==
+               MOTION_MANAGER_RESULT_INVALID_BACKEND,
+           "backend value 3 should remain invalid");
+    expect(fixture.driver.write_calls == writes_before,
+           "ExperimentalFlex selection must not write Servo output");
+}
+
+static void test_coordination_selector_admission_has_no_servo_side_effects(void)
+{
+    fixture_t fixture;
+    fake_gait_generator_t generator = {
+        .targets = {800, 900, 0, 1000, 1100},
+    };
+    joint_targets_t targets_before;
+    unsigned int writes_before;
+
+    fixture_init_with_generator(
+        &fixture, 0x001BU, fake_gait_interface(&generator));
+    targets_before = *motion_manager_last_targets(&fixture.manager);
+    writes_before = fixture.driver.write_calls;
+    expect(motion_manager_set_front_rear_coordination(
+               &fixture.manager,
+               MOTION_FRONT_REAR_OPPOSITE_DIRECTION) ==
+               MOTION_MANAGER_RESULT_OK,
+           "STOPPED should accept OppositeDirection coordination");
+    expect(motion_manager_front_rear_coordination(&fixture.manager) ==
+               MOTION_FRONT_REAR_OPPOSITE_DIRECTION,
+           "coordination getter should report the selected value");
+    expect(motion_manager_set_front_rear_coordination(
+               &fixture.manager,
+               (motion_front_rear_coordination_t)2) ==
+               MOTION_MANAGER_RESULT_INVALID_COORDINATION,
+           "coordination values outside 0 and 1 should be invalid");
+    expect(memcmp(motion_manager_last_targets(&fixture.manager),
+                  &targets_before, sizeof(targets_before)) == 0 &&
+               fixture.driver.write_calls == writes_before &&
+               !servo_service_motion_is_active(&fixture.servo_service),
+           "coordination selection must not change output, targets, or ownership");
+
+    expect(motion_manager_start(&fixture.manager, MOTION_FORWARD) ==
+               MOTION_MANAGER_RESULT_OK,
+           "coordination RUNNING setup should start Motion");
+    expect(motion_manager_set_front_rear_coordination(
+               &fixture.manager,
+               MOTION_FRONT_REAR_SAME_DIRECTION) ==
+               MOTION_MANAGER_RESULT_BUSY,
+           "RUNNING must reject coordination changes");
+    expect(motion_manager_request_stop_at(&fixture.manager, 0U) ==
+               MOTION_MANAGER_RESULT_OK,
+           "coordination STOPPING setup should accept STOP");
+    expect(motion_manager_set_front_rear_coordination(
+               &fixture.manager,
+               MOTION_FRONT_REAR_SAME_DIRECTION) ==
+               MOTION_MANAGER_RESULT_BUSY,
+           "STOPPING must reject coordination changes");
+    fixture.manager.state = MOTION_STATE_FAULTED;
+    expect(motion_manager_set_front_rear_coordination(
+               &fixture.manager,
+               MOTION_FRONT_REAR_SAME_DIRECTION) ==
+               MOTION_MANAGER_RESULT_BUSY,
+           "FAULTED must reject coordination changes");
+}
+
+static void test_coordination_and_turn_neutral_hold_are_common_policies(void)
+{
+    const motion_front_rear_coordination_t coordination_values[] = {
+        MOTION_FRONT_REAR_SAME_DIRECTION,
+        MOTION_FRONT_REAR_OPPOSITE_DIRECTION,
+    };
+    const motion_mode_t turn_modes[] = {
+        MOTION_TURN_LEFT,
+        MOTION_TURN_RIGHT,
+    };
+
+    for (size_t coordination_index = 0U;
+         coordination_index < sizeof(coordination_values) /
+                                  sizeof(coordination_values[0]);
+         ++coordination_index)
+    {
+        for (size_t mode_index = 0U;
+             mode_index < sizeof(turn_modes) / sizeof(turn_modes[0]);
+             ++mode_index)
+        {
+            fixture_t fixture;
+            fake_gait_generator_t generator = {
+                .targets = {800, 900, 0, 1000, 1100},
+            };
+            const motion_front_rear_coordination_t coordination =
+                coordination_values[coordination_index];
+            const motion_mode_t mode = turn_modes[mode_index];
+            const joint_targets_t *targets;
+
+            fixture_init_with_generator(
+                &fixture, 0x001BU, fake_gait_interface(&generator));
+            expect(motion_manager_set_front_rear_coordination(
+                       &fixture.manager, coordination) ==
+                       MOTION_MANAGER_RESULT_OK,
+                   "turn setup should select coordination while STOPPED");
+            expect(motion_manager_start(&fixture.manager, mode) ==
+                       MOTION_MANAGER_RESULT_OK,
+                   "turn setup should start selected turn mode");
+            process_motion_for(&fixture, 0U,
+                               MOTION_TRANSITION_DURATION_MS);
+
+            targets = motion_manager_last_targets(&fixture.manager);
+            if (mode == MOTION_TURN_LEFT)
+            {
+                expect(targets->front_left_cdeg == 0 &&
+                           targets->rear_left_cdeg == 0 &&
+                           targets->front_right_cdeg == 800,
+                       "TurnLeft must neutral-hold the left pair after coordination");
+                expect(targets->rear_right_cdeg ==
+                           (coordination ==
+                                    MOTION_FRONT_REAR_OPPOSITE_DIRECTION
+                                ? -1000
+                                : 1000),
+                       "TurnLeft right-side rear target must follow coordination");
+            }
+            else
+            {
+                expect(targets->front_right_cdeg == 0 &&
+                           targets->rear_right_cdeg == 0 &&
+                           targets->front_left_cdeg == 900,
+                       "TurnRight must neutral-hold the right pair after coordination");
+                expect(targets->rear_left_cdeg ==
+                           (coordination ==
+                                    MOTION_FRONT_REAR_OPPOSITE_DIRECTION
+                                ? -1100
+                                : 1100),
+                       "TurnRight left-side rear target must follow coordination");
+            }
+            expect(fixture.manager.write_mask == 0x001BU &&
+                       servo_service_motion_is_active(&fixture.servo_service),
+                   "neutral-held paddles must keep the full four-servo Motion mask and ownership");
+        }
+    }
+}
+
+static void test_turn_mode_transition_blends_neutral_hold_for_750_ms(void)
+{
+    fixture_t fixture;
+    fake_gait_generator_t generator = {
+        .targets = {800, 900, 0, 1000, 1100},
+    };
+
+    fixture_init_with_generator(
+        &fixture, 0x001BU, fake_gait_interface(&generator));
+    expect(motion_manager_start(&fixture.manager, MOTION_FORWARD) ==
+               MOTION_MANAGER_RESULT_OK,
+           "mode-transition setup should start FORWARD");
+    process_motion_for(&fixture, 0U, MOTION_TRANSITION_DURATION_MS);
+    expect(motion_manager_start(&fixture.manager, MOTION_TURN_LEFT) ==
+               MOTION_MANAGER_RESULT_OK,
+           "RUNNING should accept a neutral-hold turn mode");
+    process_motion_for(&fixture, MOTION_TRANSITION_DURATION_MS,
+                       MOTION_TRANSITION_DURATION_MS - MOTION_GAIT_TICK_MS);
+    expect(motion_manager_last_targets(&fixture.manager)->front_left_cdeg != 0,
+           "left pair should still be blending before the 750 ms deadline");
+    keep_host_alive(&fixture, 1500U);
+    (void)motion_manager_process(&fixture.manager, 1500U);
+    expect(motion_manager_mode(&fixture.manager) == MOTION_TURN_LEFT &&
+               motion_manager_last_targets(&fixture.manager)->front_left_cdeg == 0 &&
+               motion_manager_last_targets(&fixture.manager)->rear_left_cdeg == 0,
+           "left pair should reach neutral exactly at the 750 ms mode deadline");
 }
 
 static void test_gait_backend_selector_busy_precedes_value_validation(void)
@@ -1141,6 +1341,7 @@ static void test_legacy_and_missing_backend_registration_never_guess_or_mutate(v
         &legacy.manager,
         &legacy.servo_service,
         &legacy.safety_supervisor,
+        fake_gait_interface(&fake),
         fake_gait_interface(&fake),
         fake_gait_interface(&fake),
         MOTION_GAIT_BACKEND_SIMPLE_GAIT);
@@ -1285,6 +1486,9 @@ int main(void)
     test_gait_backend_switch_is_stopped_only_and_has_no_output_side_effect();
     test_gait_backend_selector_busy_precedes_value_validation();
     test_legacy_and_missing_backend_registration_never_guess_or_mutate();
+    test_coordination_selector_admission_has_no_servo_side_effects();
+    test_coordination_and_turn_neutral_hold_are_common_policies();
+    test_turn_mode_transition_blends_neutral_hold_for_750_ms();
     test_motion_timing_hooks_follow_accepted_tick_gate();
 
     if (failures == 0)

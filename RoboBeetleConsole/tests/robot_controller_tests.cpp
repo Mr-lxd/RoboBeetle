@@ -3099,6 +3099,82 @@ void testGaitBackendAckCorrelationAndLifecycle()
            "reconnect must not emit an automatic gait backend selector");
 }
 
+void testFrontRearCoordinationAckAndMotionGate()
+{
+    rb::FakeTransport transport;
+    rb::RobotControllerConfig config = rb::RobotControllerConfig::bringUpProvisional();
+    config.heartbeatIntervalMs = 10000;
+    rb::RobotController controller(&transport, config);
+    controller.connectTransport({"COM_TEST", 9600});
+    transport.simulateConnected();
+
+    expect(controller.setFrontRearCoordination(
+               rb::FrontRearCoordination::OppositeDirection),
+           "front/rear coordination should submit while Motion is stopped");
+    const rb::Packet request = lastPacket(transport);
+    expect(request.type == rb::MessageType::SetFrontRearCoordination,
+           "front/rear selection must use Protocol V2 0x17");
+    expect(request.payload.size() == 1
+               && static_cast<quint8>(request.payload.front()) == 1U,
+           "OppositeDirection must be the one-byte value one");
+    expect(controller.isFrontRearCoordinationChangePending()
+               && controller.requestedFrontRearCoordination().has_value()
+               && *controller.requestedFrontRearCoordination()
+                   == rb::FrontRearCoordination::OppositeDirection,
+           "coordination request remains pending and exposes the requested value");
+    expect(!controller.confirmedFrontRearCoordination().has_value(),
+           "coordination remains Unknown before its matching ACK");
+    expect(!controller.setGaitBackend(rb::GaitBackend::ExperimentalFlex),
+           "gait selection must be blocked while coordination is pending");
+
+    acknowledgeSequence(transport, static_cast<quint16>(request.sequence + 1U),
+                        rb::AckResult::Ok,
+                        rb::MessageType::SetFrontRearCoordination);
+    expect(controller.isFrontRearCoordinationChangePending()
+               && !controller.confirmedFrontRearCoordination().has_value(),
+           "unrelated sequence must not settle the coordination request");
+    acknowledgeSequence(transport, request.sequence, rb::AckResult::Ok,
+                        rb::MessageType::SetFrontRearCoordination);
+    expect(!controller.isFrontRearCoordinationChangePending()
+               && controller.confirmedFrontRearCoordination().has_value()
+               && *controller.confirmedFrontRearCoordination()
+                   == rb::FrontRearCoordination::OppositeDirection,
+           "matching ACK confirms the requested coordination");
+
+    expect(controller.setGaitBackend(rb::GaitBackend::ExperimentalFlex),
+           "ExperimentalFlex selection should use the existing gait command");
+    const rb::Packet flexRequest = lastPacket(transport);
+    expect(flexRequest.type == rb::MessageType::SetGaitBackend
+               && flexRequest.payload.size() == 1
+               && static_cast<quint8>(flexRequest.payload.front()) == 2U,
+           "ExperimentalFlex is encoded as backend value two");
+    acknowledgeSequence(transport, flexRequest.sequence, rb::AckResult::Ok,
+                        rb::MessageType::SetGaitBackend);
+
+    const rb::ServoId motionServos[] = {
+        rb::ServoId::FrontRight, rb::ServoId::FrontLeft,
+        rb::ServoId::RearRight, rb::ServoId::RearLeft,
+    };
+    for (const rb::ServoId servo : motionServos) {
+        expect(controller.enableServo(servo),
+               "motion gate fixture must enable all four paddles");
+        acknowledgeLast(transport);
+    }
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "motion gate fixture must start a supported gait mode");
+    acknowledgeLast(transport);
+    expect(controller.isMotionActive(),
+           "motion gate fixture must reach active Motion");
+    const qsizetype writesBeforeRejectedSelectors = transport.writes().size();
+    expect(!controller.setGaitBackend(rb::GaitBackend::CPG),
+           "gait selector must be rejected during active Motion");
+    expect(!controller.setFrontRearCoordination(
+               rb::FrontRearCoordination::SameDirection),
+           "coordination selector must be rejected during active Motion");
+    expect(transport.writes().size() == writesBeforeRejectedSelectors,
+           "active-Motion selector rejection must not write robot commands");
+}
+
 void testApc220MotionCommandsUseTheExistingBoundedScheduler()
 {
     rb::FakeTransport transport;
@@ -3451,6 +3527,7 @@ int main(int argc, char **argv)
     testMotionBusyAckAndReconnectDoesNotResume();
     testMotionFailClosedIgnoresLateMotionAck();
     testGaitBackendAckCorrelationAndLifecycle();
+    testFrontRearCoordinationAckAndMotionGate();
     testApc220MotionCommandsUseTheExistingBoundedScheduler();
     testApc220GaitBackendSelectorIsSerialized();
     testApc220SelectorEvictionBySafetyDisableClearsLifecycle();

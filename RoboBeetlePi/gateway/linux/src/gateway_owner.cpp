@@ -85,6 +85,7 @@ std::size_t GatewayOwner::remote_payload_size(
         return 4U;
     case RobotCommandKind::StartMotion:
     case RobotCommandKind::SetGaitBackend:
+    case RobotCommandKind::SetFrontRearCoordination:
         return 2U;
     case RobotCommandKind::StopMotion:
         return 1U;

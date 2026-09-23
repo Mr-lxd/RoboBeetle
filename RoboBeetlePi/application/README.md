@@ -11,7 +11,8 @@ existing runtime. No Firmware, Qt, or frozen Pi production layer is changed.
 
 The facade offers `enable_servos(mask)`, `disable_servos(mask)`,
 `neutral_servos(mask)`, `set_servo_angle(id, angle_cdeg)`,
-`start_motion(mode)`, `stop_motion()`, and `set_gait_backend(backend)`.
+`start_motion(mode)`, `stop_motion()`, `set_gait_backend(backend)`, and
+`set_front_rear_coordination(coordination)`.
 `set_servo_pwm_maintenance(id, pulse_us)` is a bring-up / maintenance interface,
 not the regular motion interface; the smoke CLI does not expose it.
 Masks are nonzero subsets of `0x001f`; servo IDs 0..4 are FrontRight,

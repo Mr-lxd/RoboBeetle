@@ -380,6 +380,13 @@ void typed_commands_and_submit_statuses()
         fixture, StopMotion{}, 0x15U, {0x01U, 0x00U, 0x00U});
     (void)submit_and_ack(
         fixture, SetGaitBackend{GaitBackend::CPG}, 0x16U, {0x01U});
+    (void)submit_and_ack(
+        fixture, SetGaitBackend{GaitBackend::ExperimentalFlex}, 0x16U,
+        {0x02U});
+    (void)submit_and_ack(
+        fixture,
+        SetFrontRearCoordination{FrontRearCoordination::OppositeDirection},
+        0x17U, {0x01U});
 
     const auto invalid = fixture.port.submit(EnableServos{0U});
     expect(invalid.status ==

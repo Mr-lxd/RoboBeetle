@@ -378,6 +378,24 @@ static motion_manager_result_t motion_manager_sample(
         return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
     }
 
+    if (manager->front_rear_coordination ==
+        MOTION_FRONT_REAR_OPPOSITE_DIRECTION)
+    {
+        targets->rear_right_cdeg = -targets->rear_right_cdeg;
+        targets->rear_left_cdeg = -targets->rear_left_cdeg;
+    }
+
+    if (mode == MOTION_TURN_LEFT)
+    {
+        targets->front_left_cdeg = 0;
+        targets->rear_left_cdeg = 0;
+    }
+    else if (mode == MOTION_TURN_RIGHT)
+    {
+        targets->front_right_cdeg = 0;
+        targets->rear_right_cdeg = 0;
+    }
+
     return MOTION_MANAGER_RESULT_OK;
 }
 
@@ -577,6 +595,7 @@ void motion_manager_init_with_backends(
     safety_supervisor_t *safety_supervisor,
     gait_generator_t simple_gait,
     gait_generator_t cpg,
+    gait_generator_t experimental_flex,
     motion_gait_backend_t initial_backend)
 {
     if (manager == NULL)
@@ -589,6 +608,8 @@ void motion_manager_init_with_backends(
     manager->safety_supervisor = safety_supervisor;
     manager->registered_generators[MOTION_GAIT_BACKEND_SIMPLE_GAIT] = simple_gait;
     manager->registered_generators[MOTION_GAIT_BACKEND_CPG] = cpg;
+    manager->registered_generators[MOTION_GAIT_BACKEND_EXPERIMENTAL_FLEX] =
+        experimental_flex;
     manager->gait_backend = MOTION_GAIT_BACKEND_UNSPECIFIED;
     manager->backend_selector_available = false;
     manager->state = MOTION_STATE_STOPPED;
@@ -658,6 +679,37 @@ motion_gait_backend_t motion_manager_gait_backend(
     return (manager == NULL) ?
         MOTION_GAIT_BACKEND_UNSPECIFIED :
         manager->gait_backend;
+}
+
+motion_manager_result_t motion_manager_set_front_rear_coordination(
+    motion_manager_t *manager,
+    motion_front_rear_coordination_t coordination)
+{
+    if (manager == NULL)
+    {
+        return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
+    }
+
+    if (manager->state != MOTION_STATE_STOPPED)
+    {
+        return MOTION_MANAGER_RESULT_BUSY;
+    }
+
+    if (!motion_front_rear_coordination_is_valid(coordination))
+    {
+        return MOTION_MANAGER_RESULT_INVALID_COORDINATION;
+    }
+
+    manager->front_rear_coordination = coordination;
+    return MOTION_MANAGER_RESULT_OK;
+}
+
+motion_front_rear_coordination_t motion_manager_front_rear_coordination(
+    const motion_manager_t *manager)
+{
+    return (manager == NULL)
+        ? MOTION_FRONT_REAR_SAME_DIRECTION
+        : manager->front_rear_coordination;
 }
 
 motion_manager_result_t motion_manager_start(

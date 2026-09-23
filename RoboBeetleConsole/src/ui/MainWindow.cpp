@@ -679,7 +679,7 @@ MainWindow::MainWindow(
     setImuUiState(controller_->imuState());
     setDepthUiState(controller_->depthState());
     refreshMotionUi();
-    refreshGaitBackendUi();
+    refreshGaitSelectorsUi();
     refreshAuthorityUi();
     controller_->refreshSerialPorts();
 }
@@ -1774,8 +1774,8 @@ QWidget *MainWindow::createMotionPanel()
     auto *gaitGroup = new QGroupBox(QStringLiteral("Gait / Vertical"), box);
     applySubpanelStyle(gaitGroup);
     auto *gaitLayout = new QGridLayout(gaitGroup);
-    gaitLayout->setContentsMargins(6, 8, 6, 6);
-    gaitLayout->setSpacing(6);
+    gaitLayout->setContentsMargins(4, 2, 4, 2);
+    gaitLayout->setSpacing(2);
 
     const MotionMode verticalModes[] = {
         MotionMode::Ascend,
@@ -1801,20 +1801,48 @@ QWidget *MainWindow::createMotionPanel()
         QStringLiteral("SimpleGait"), static_cast<int>(GaitBackend::SimpleGait));
     gaitBackendCombo_->addItem(
         QStringLiteral("CPG"), static_cast<int>(GaitBackend::CPG));
+    gaitBackendCombo_->addItem(
+        QStringLiteral("Experimental Flex"),
+        static_cast<int>(GaitBackend::ExperimentalFlex));
     gaitBackendStatus_ = new QLabel(QStringLiteral("Unknown"), gaitGroup);
+    gaitBackendStatus_->setObjectName(QStringLiteral("gaitBackendStatus"));
     gaitBackendStatus_->setStyleSheet(
         QStringLiteral("font-weight: 700; color: #405A6B;"));
+    frontRearCoordinationCombo_ = new QComboBox(gaitGroup);
+    frontRearCoordinationCombo_->setObjectName(
+        QStringLiteral("frontRearCoordinationCombo"));
+    frontRearCoordinationCombo_->addItem(QStringLiteral("Unknown"), -1);
+    frontRearCoordinationCombo_->addItem(
+        QStringLiteral("Same Direction"),
+        static_cast<int>(FrontRearCoordination::SameDirection));
+    frontRearCoordinationCombo_->addItem(
+        QStringLiteral("Opposite Direction"),
+        static_cast<int>(FrontRearCoordination::OppositeDirection));
+    frontRearCoordinationStatus_ = new QLabel(QStringLiteral("Unknown"), gaitGroup);
+    frontRearCoordinationStatus_->setObjectName(
+        QStringLiteral("frontRearCoordinationStatus"));
+    frontRearCoordinationStatus_->setStyleSheet(
+        QStringLiteral("font-weight: 700; color: #405A6B;"));
 
+    gaitLayout->addWidget(new QLabel(QStringLiteral("Gait"), gaitGroup), 0, 0);
+    gaitLayout->addWidget(gaitBackendCombo_, 0, 1);
+    auto *gaitCurrentLabel = new QLabel(QStringLiteral("Current"), gaitGroup);
+    gaitCurrentLabel->setObjectName(QStringLiteral("gaitBackendCurrentLabel"));
+    gaitLayout->addWidget(gaitCurrentLabel, 1, 0);
+    gaitLayout->addWidget(gaitBackendStatus_, 1, 1);
     gaitLayout->addWidget(
-        new QLabel(QStringLiteral("Gait Backend"), gaitGroup), 0, 0, 1, 2);
-    gaitLayout->addWidget(gaitBackendCombo_, 1, 0, 1, 2);
+        new QLabel(QStringLiteral("Front / Rear"), gaitGroup), 2, 0);
+    gaitLayout->addWidget(frontRearCoordinationCombo_, 2, 1);
+    auto *coordinationCurrentLabel =
+        new QLabel(QStringLiteral("Current"), gaitGroup);
+    coordinationCurrentLabel->setObjectName(
+        QStringLiteral("frontRearCoordinationCurrentLabel"));
+    gaitLayout->addWidget(coordinationCurrentLabel, 3, 0);
+    gaitLayout->addWidget(frontRearCoordinationStatus_, 3, 1);
     gaitLayout->addWidget(
-        new QLabel(QStringLiteral("Current"), gaitGroup), 2, 0);
-    gaitLayout->addWidget(gaitBackendStatus_, 2, 1);
+        motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)], 4, 0);
     gaitLayout->addWidget(
-        motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)], 3, 0);
-    gaitLayout->addWidget(
-        motionButtons_[static_cast<std::size_t>(MotionMode::Descend)], 3, 1);
+        motionButtons_[static_cast<std::size_t>(MotionMode::Descend)], 4, 1);
     gaitLayout->setColumnStretch(0, 1);
     gaitLayout->setColumnStretch(1, 1);
 
@@ -1844,22 +1872,42 @@ QWidget *MainWindow::createMotionPanel()
             this, [this](int index) {
                 if (index < 0 || gaitBackendCombo_ == nullptr
                     || !gaitBackendCombo_->isEnabled()) {
-                    refreshGaitBackendUi();
+                    refreshGaitSelectorsUi();
                     return;
                 }
                 const QVariant value = gaitBackendCombo_->itemData(index);
                 if (!value.isValid()
                     || !isValidGaitBackend(static_cast<quint8>(value.toInt()))) {
-                    refreshGaitBackendUi();
+                    refreshGaitSelectorsUi();
                     return;
                 }
                 controller_->setGaitBackend(
                     static_cast<GaitBackend>(value.toInt()));
-                refreshGaitBackendUi();
+                refreshGaitSelectorsUi();
+            });
+
+    connect(frontRearCoordinationCombo_,
+            qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int index) {
+                if (index < 0 || frontRearCoordinationCombo_ == nullptr
+                    || !frontRearCoordinationCombo_->isEnabled()) {
+                    refreshGaitSelectorsUi();
+                    return;
+                }
+                const QVariant value = frontRearCoordinationCombo_->itemData(index);
+                if (!value.isValid()
+                    || !isValidFrontRearCoordination(
+                        static_cast<quint8>(value.toInt()))) {
+                    refreshGaitSelectorsUi();
+                    return;
+                }
+                controller_->setFrontRearCoordination(
+                    static_cast<FrontRearCoordination>(value.toInt()));
+                refreshGaitSelectorsUi();
             });
 
     refreshMotionUi();
-    refreshGaitBackendUi();
+    refreshGaitSelectorsUi();
     return box;
 }
 
@@ -2549,7 +2597,7 @@ void MainWindow::bindControllerUi()
             refreshServoUi(index);
         }
         refreshMotionUi();
-        refreshGaitBackendUi();
+        refreshGaitSelectorsUi();
     });
     connect(controller_, &IConsoleController::servoStateChanged,
             this, [this](int index, bool enabled) {
@@ -2571,12 +2619,15 @@ void MainWindow::bindControllerUi()
     connect(controller_, &IConsoleController::motionStateChanged,
             this, [this](MotionState, MotionMode) {
         refreshMotionUi();
+        refreshGaitSelectorsUi();
         for (int index = 0; index < kServoCount; ++index) {
             refreshServoUi(index);
         }
     });
     connect(controller_, &IConsoleController::gaitBackendStateChanged,
-            this, &MainWindow::refreshGaitBackendUi);
+            this, &MainWindow::refreshGaitSelectorsUi);
+    connect(controller_, &IConsoleController::frontRearCoordinationStateChanged,
+            this, &MainWindow::refreshGaitSelectorsUi);
     connect(controller_, &IConsoleController::leakStateChanged,
             this, &MainWindow::setLeakUiState);
     connect(controller_, &IConsoleController::imuStateChanged, this,
@@ -3128,7 +3179,7 @@ void MainWindow::setConnectedUi(bool connected)
         refreshServoUi(index);
     }
     refreshMotionUi();
-    refreshGaitBackendUi();
+    refreshGaitSelectorsUi();
     refreshAuthorityUi();
 }
 
@@ -3291,32 +3342,67 @@ void MainWindow::refreshMotionUi()
     motionStopButton_->setEnabled(connected && controller_->isMotionActive());
 }
 
-void MainWindow::refreshGaitBackendUi()
+void MainWindow::refreshGaitSelectorsUi()
 {
-    if (gaitBackendCombo_ == nullptr || gaitBackendStatus_ == nullptr) {
+    if (gaitBackendCombo_ == nullptr || gaitBackendStatus_ == nullptr
+        || frontRearCoordinationCombo_ == nullptr
+        || frontRearCoordinationStatus_ == nullptr) {
         return;
     }
 
     const bool connected = controller_->isControlActive();
-    const bool pending = controller_->isGaitBackendChangePending();
-    const std::optional<GaitBackend> displayBackend = pending
+    const bool backendPending = controller_->isGaitBackendChangePending();
+    const bool coordinationPending =
+        controller_->isFrontRearCoordinationChangePending();
+    const std::optional<GaitBackend> displayBackend = backendPending
         ? controller_->requestedGaitBackend()
         : controller_->confirmedGaitBackend();
+    const std::optional<FrontRearCoordination> displayCoordination =
+        coordinationPending
+        ? controller_->requestedFrontRearCoordination()
+        : controller_->confirmedFrontRearCoordination();
     int displayIndex = gaitBackendCombo_->findData(-1);
-    QString status = QStringLiteral("Unknown");
     if (displayBackend.has_value()) {
         displayIndex = gaitBackendCombo_->findData(
             static_cast<int>(*displayBackend));
-        const QString name = gaitBackendCombo_->itemText(displayIndex);
-        status = pending
-            ? QStringLiteral("Requested — %1 (awaiting ACK)").arg(name)
-            : QStringLiteral("Confirmed — %1").arg(name);
+    }
+    int coordinationIndex = frontRearCoordinationCombo_->findData(-1);
+    if (displayCoordination.has_value()) {
+        coordinationIndex = frontRearCoordinationCombo_->findData(
+            static_cast<int>(*displayCoordination));
     }
 
-    const QSignalBlocker blocker(gaitBackendCombo_);
-    gaitBackendCombo_->setCurrentIndex(displayIndex);
-    gaitBackendCombo_->setEnabled(connected && !pending);
-    gaitBackendStatus_->setText(connected ? status : QStringLiteral("Unknown"));
+    const bool selectorsEnabled = connected && !controller_->isMotionActive()
+        && !backendPending && !coordinationPending;
+    {
+        const QSignalBlocker blocker(gaitBackendCombo_);
+        gaitBackendCombo_->setCurrentIndex(displayIndex);
+    }
+    {
+        const QSignalBlocker blocker(frontRearCoordinationCombo_);
+        frontRearCoordinationCombo_->setCurrentIndex(coordinationIndex);
+    }
+    gaitBackendCombo_->setEnabled(selectorsEnabled);
+    frontRearCoordinationCombo_->setEnabled(selectorsEnabled);
+
+    const std::optional<GaitBackend> confirmedBackend =
+        controller_->confirmedGaitBackend();
+    const std::optional<FrontRearCoordination> confirmedCoordination =
+        controller_->confirmedFrontRearCoordination();
+    const QString backendStatus = connected && confirmedBackend.has_value()
+        ? QStringLiteral("Confirmed — %1").arg(
+              gaitBackendCombo_->itemText(gaitBackendCombo_->findData(
+                  static_cast<int>(*confirmedBackend))))
+        : QStringLiteral("Unknown");
+    const QString coordinationStatus =
+        connected && confirmedCoordination.has_value()
+        ? QStringLiteral("Confirmed — %1").arg(
+              frontRearCoordinationCombo_->itemText(
+                  frontRearCoordinationCombo_->findData(
+                      static_cast<int>(*confirmedCoordination))))
+        : QStringLiteral("Unknown");
+    gaitBackendStatus_->setText(backendStatus);
+    frontRearCoordinationStatus_->setText(coordinationStatus);
 }
 
 void MainWindow::refreshAuthorityUi()

@@ -334,6 +334,11 @@ LinuxOnboardApplicationPort::submit(const RobotCommand &command)
         } else if constexpr (std::is_same_v<T, SetGaitBackend>) {
             return application.set_gait_backend(
                 static_cast<application::GaitBackend>(value.backend));
+        } else if constexpr (
+            std::is_same_v<T, SetFrontRearCoordination>) {
+            return application.set_front_rear_coordination(
+                static_cast<application::FrontRearCoordination>(
+                    value.coordination));
         }
     };
     return map_submit_result(std::visit(submit, command));

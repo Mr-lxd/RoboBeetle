@@ -65,6 +65,8 @@ public:
     CommandSubmitResult start_motion(MotionMode mode);
     CommandSubmitResult stop_motion();
     CommandSubmitResult set_gait_backend(GaitBackend backend);
+    CommandSubmitResult set_front_rear_coordination(
+        FrontRearCoordination coordination);
     // Bring-up / maintenance only; normal motion does not use raw PWM.
     CommandSubmitResult set_servo_pwm_maintenance(ServoId id, std::uint16_t pulse_us);
 

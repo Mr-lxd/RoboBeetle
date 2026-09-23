@@ -96,9 +96,25 @@ void command_payloads_and_validation()
            "SimpleGait uses wire value zero");
     expect(encoded_as(encode_gait_backend(GaitBackend::CPG), bytes({1})),
            "CPG uses wire value one");
-    expect(encode_gait_backend(static_cast<GaitBackend>(2)).status ==
+    expect(encoded_as(encode_gait_backend(GaitBackend::ExperimentalFlex),
+                      bytes({2})),
+           "ExperimentalFlex uses wire value two");
+    expect(encode_gait_backend(static_cast<GaitBackend>(3)).status ==
                CodecStatus::InvalidGaitBackend,
            "invalid gait backend is rejected");
+
+    expect(encoded_as(encode_front_rear_coordination(
+                          FrontRearCoordination::SameDirection),
+                      bytes({0})),
+           "SameDirection coordination uses one-byte value zero");
+    expect(encoded_as(encode_front_rear_coordination(
+                          FrontRearCoordination::OppositeDirection),
+                      bytes({1})),
+           "OppositeDirection coordination uses one-byte value one");
+    expect(encode_front_rear_coordination(
+               static_cast<FrontRearCoordination>(2)).status ==
+               CodecStatus::InvalidFrontRearCoordination,
+           "invalid FrontRear coordination is rejected");
 }
 
 void telemetry_decoders_match_firmware_layout()

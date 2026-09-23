@@ -65,6 +65,7 @@ public:
     virtual bool startMotion(MotionMode mode) = 0;
     virtual bool stopMotion() = 0;
     virtual bool setGaitBackend(GaitBackend backend) = 0;
+    virtual bool setFrontRearCoordination(FrontRearCoordination coordination) = 0;
 
     [[nodiscard]] virtual bool isConnected() const = 0;
     [[nodiscard]] virtual bool isControlActive() const = 0;
@@ -82,6 +83,11 @@ public:
     [[nodiscard]] virtual std::optional<GaitBackend> confirmedGaitBackend() const = 0;
     [[nodiscard]] virtual std::optional<GaitBackend> requestedGaitBackend() const = 0;
     [[nodiscard]] virtual bool isGaitBackendChangePending() const = 0;
+    [[nodiscard]] virtual std::optional<FrontRearCoordination>
+    confirmedFrontRearCoordination() const = 0;
+    [[nodiscard]] virtual std::optional<FrontRearCoordination>
+    requestedFrontRearCoordination() const = 0;
+    [[nodiscard]] virtual bool isFrontRearCoordinationChangePending() const = 0;
     [[nodiscard]] virtual bool isMotionActive() const = 0;
     [[nodiscard]] virtual bool isMotionReady(MotionMode mode) const = 0;
     [[nodiscard]] virtual bool isMotionTransitioning() const = 0;
@@ -98,6 +104,7 @@ signals:
     void depthStateChanged();
     void motionStateChanged(rb::MotionState state, rb::MotionMode mode);
     void gaitBackendStateChanged();
+    void frontRearCoordinationStateChanged();
     void protocolMonitorChanged(const rb::ProtocolMonitor &monitor);
     void txHexChanged(const QString &hex);
     void rxHexChanged(const QString &hex);
@@ -111,3 +118,4 @@ Q_DECLARE_METATYPE(rb::ProtocolMonitor)
 Q_DECLARE_METATYPE(rb::MotionState)
 Q_DECLARE_METATYPE(rb::MotionMode)
 Q_DECLARE_METATYPE(rb::GaitBackend)
+Q_DECLARE_METATYPE(rb::FrontRearCoordination)

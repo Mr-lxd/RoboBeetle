@@ -34,6 +34,7 @@ typedef enum
     RBP2_MSG_NEUTRAL = 0x14,
     RBP2_MSG_SET_MOTION_MODE = 0x15,
     RBP2_MSG_SET_GAIT_BACKEND = 0x16,
+    RBP2_MSG_SET_FRONT_REAR_COORDINATION = 0x17,
 
     /* Unacknowledged robot-status telemetry (not a command). */
     RBP2_MSG_LEAK_STATUS = 0x20,

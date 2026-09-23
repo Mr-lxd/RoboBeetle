@@ -68,6 +68,7 @@ static rbp2_result_t map_motion_manager_result(
             return RBP2_RESULT_BUSY;
 
         case MOTION_MANAGER_RESULT_INVALID_BACKEND:
+        case MOTION_MANAGER_RESULT_INVALID_COORDINATION:
             return RBP2_RESULT_INVALID_PAYLOAD;
 
         case MOTION_MANAGER_RESULT_HARDWARE_FAILURE:
@@ -437,6 +438,27 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
             manager_result = motion_manager_set_gait_backend(
                 dispatcher->motion_manager,
                 (motion_gait_backend_t)frame->payload[0]);
+            return complete_command(
+                dispatcher,
+                frame,
+                map_motion_manager_result(manager_result));
+        }
+
+        case RBP2_MSG_SET_FRONT_REAR_COORDINATION:
+        {
+            motion_manager_result_t manager_result;
+
+            if (frame->payload_length != 1U)
+            {
+                return complete_command(
+                    dispatcher,
+                    frame,
+                    RBP2_RESULT_INVALID_PAYLOAD);
+            }
+
+            manager_result = motion_manager_set_front_rear_coordination(
+                dispatcher->motion_manager,
+                (motion_front_rear_coordination_t)frame->payload[0]);
             return complete_command(
                 dispatcher,
                 frame,

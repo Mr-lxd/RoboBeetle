@@ -34,9 +34,17 @@ typedef enum
 {
     MOTION_GAIT_BACKEND_SIMPLE_GAIT = 0,
     MOTION_GAIT_BACKEND_CPG = 1,
+    MOTION_GAIT_BACKEND_EXPERIMENTAL_FLEX = 2,
     MOTION_GAIT_BACKEND_COUNT,
     MOTION_GAIT_BACKEND_UNSPECIFIED = 0xff
 } motion_gait_backend_t;
+
+typedef enum
+{
+    MOTION_FRONT_REAR_SAME_DIRECTION = 0,
+    MOTION_FRONT_REAR_OPPOSITE_DIRECTION = 1,
+    MOTION_FRONT_REAR_COORDINATION_COUNT
+} motion_front_rear_coordination_t;
 
 _Static_assert(MOTION_STOP == 0, "Motion STOP wire value must remain zero");
 _Static_assert(MOTION_FORWARD == 1, "Motion FORWARD wire value must remain one");
@@ -49,6 +57,12 @@ _Static_assert(MOTION_GAIT_BACKEND_SIMPLE_GAIT == 0,
                "SimpleGait backend value must remain zero");
 _Static_assert(MOTION_GAIT_BACKEND_CPG == 1,
                "CPG backend value must remain one");
+_Static_assert(MOTION_GAIT_BACKEND_EXPERIMENTAL_FLEX == 2,
+               "ExperimentalFlex backend value must remain two");
+_Static_assert(MOTION_FRONT_REAR_SAME_DIRECTION == 0,
+               "SameDirection coordination value must remain zero");
+_Static_assert(MOTION_FRONT_REAR_OPPOSITE_DIRECTION == 1,
+               "OppositeDirection coordination value must remain one");
 
 static inline bool motion_mode_is_valid(motion_mode_t mode)
 {
@@ -60,6 +74,13 @@ static inline bool motion_gait_backend_is_valid(
 {
     return backend >= MOTION_GAIT_BACKEND_SIMPLE_GAIT &&
            backend < MOTION_GAIT_BACKEND_COUNT;
+}
+
+static inline bool motion_front_rear_coordination_is_valid(
+    motion_front_rear_coordination_t coordination)
+{
+    return coordination >= MOTION_FRONT_REAR_SAME_DIRECTION &&
+           coordination < MOTION_FRONT_REAR_COORDINATION_COUNT;
 }
 
 #endif /* ROBOBEETLE_MOTION_TYPES_H */

@@ -3,6 +3,7 @@
 #include "motion_config.h"
 #include "motion_manager.h"
 #include "cpg_gait_generator.h"
+#include "experimental_flex_gait_generator.h"
 #include "simple_gait_generator.h"
 
 #include <stdbool.h>
@@ -77,6 +78,7 @@ typedef struct
     safety_supervisor_t safety_supervisor;
     simple_gait_generator_t generator;
     cpg_gait_generator_t cpg_generator;
+    experimental_flex_gait_generator_t flex_generator;
     motion_manager_t motion_manager;
     protocol_dispatcher_t dispatcher;
 } fixture_t;
@@ -93,12 +95,14 @@ static void fixture_init(fixture_t *fixture)
     safety_supervisor_init(&fixture->safety_supervisor);
     simple_gait_generator_init(&fixture->generator);
     cpg_gait_generator_init(&fixture->cpg_generator);
+    experimental_flex_gait_generator_init(&fixture->flex_generator);
     motion_manager_init_with_backends(
         &fixture->motion_manager,
         &fixture->servo_service,
         &fixture->safety_supervisor,
         simple_gait_generator_interface(&fixture->generator),
         cpg_gait_generator_interface(&fixture->cpg_generator),
+        experimental_flex_gait_generator_interface(&fixture->flex_generator),
         MOTION_GAIT_BACKEND_CPG);
     protocol_dispatcher_init(
         &fixture->dispatcher,
@@ -1167,6 +1171,9 @@ static void test_gait_backend_payload_precedence_and_side_effects(void)
     const uint8_t cpg_payload[1] = {
         MOTION_GAIT_BACKEND_CPG,
     };
+    const uint8_t flex_payload[1] = {
+        MOTION_GAIT_BACKEND_EXPERIMENTAL_FLEX,
+    };
     const uint8_t invalid_payload[1] = {0xffU};
     const uint8_t start_payload[3] = {
         1U,
@@ -1298,6 +1305,85 @@ static void test_gait_backend_payload_precedence_and_side_effects(void)
            "STOPPED selector should switch back to CPG");
     expect(fixture.driver.write_calls == writes_before,
            "post-STOP selector must not write Servo output");
+
+    frame = make_frame(
+        RBP2_MSG_SET_GAIT_BACKEND,
+        191U,
+        flex_payload,
+        sizeof(flex_payload));
+    outcome = handle(&fixture, &frame, 760U);
+    expect(outcome.result == RBP2_RESULT_OK &&
+               motion_manager_gait_backend(&fixture.motion_manager) ==
+                   MOTION_GAIT_BACKEND_EXPERIMENTAL_FLEX,
+           "ExperimentalFlex backend value 2 should be accepted over 0x16");
+}
+
+static void test_front_rear_coordination_protocol_contract(void)
+{
+    fixture_t fixture;
+    const uint8_t same_direction[1] = {0U};
+    const uint8_t opposite_direction[1] = {1U};
+    const uint8_t invalid_coordination[1] = {2U};
+    const uint8_t too_long[2] = {0U, 0U};
+    const uint8_t start_payload[3] = {
+        1U,
+        MOTION_FORWARD,
+        MOTION_ACTION_START,
+    };
+    rbp2_frame_t frame;
+    protocol_dispatcher_outcome_t outcome;
+    unsigned int writes_before;
+
+    fixture_init(&fixture);
+    accept_heartbeat(&fixture, 200U, 0U, 0U);
+    writes_before = fixture.driver.write_calls;
+
+    frame = make_frame(RBP2_MSG_SET_FRONT_REAR_COORDINATION, 201U,
+                       same_direction, sizeof(same_direction));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK &&
+               motion_manager_front_rear_coordination(&fixture.motion_manager) ==
+                   MOTION_FRONT_REAR_SAME_DIRECTION,
+           "0x17 value 0 should select SameDirection");
+    frame = make_frame(RBP2_MSG_SET_FRONT_REAR_COORDINATION, 202U,
+                       opposite_direction, sizeof(opposite_direction));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK &&
+               motion_manager_front_rear_coordination(&fixture.motion_manager) ==
+                   MOTION_FRONT_REAR_OPPOSITE_DIRECTION,
+           "0x17 value 1 should select OppositeDirection");
+    expect(fixture.driver.write_calls == writes_before &&
+               !servo_service_motion_is_active(&fixture.servo_service),
+           "coordination selection must not write Servos or start Motion");
+
+    frame = make_frame(RBP2_MSG_SET_FRONT_REAR_COORDINATION, 203U,
+                       invalid_coordination, sizeof(invalid_coordination));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_INVALID_PAYLOAD,
+           "invalid coordination value should return INVALID_PAYLOAD");
+    frame = make_frame(RBP2_MSG_SET_FRONT_REAR_COORDINATION, 204U, NULL, 0U);
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_INVALID_PAYLOAD,
+           "0x17 empty payload should return INVALID_PAYLOAD");
+    frame = make_frame(RBP2_MSG_SET_FRONT_REAR_COORDINATION, 205U,
+                       too_long, sizeof(too_long));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_INVALID_PAYLOAD,
+           "0x17 payload longer than one byte should return INVALID_PAYLOAD");
+
+    enable_paddles(&fixture);
+    frame = make_frame(RBP2_MSG_SET_MOTION_MODE, 206U,
+                       start_payload, sizeof(start_payload));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "coordination active-state setup should start Motion");
+    writes_before = fixture.driver.write_calls;
+    frame = make_frame(RBP2_MSG_SET_FRONT_REAR_COORDINATION, 207U,
+                       same_direction, sizeof(same_direction));
+    outcome = handle(&fixture, &frame, 0U);
+    expect(outcome.result == RBP2_RESULT_BUSY &&
+               fixture.driver.write_calls == writes_before,
+           "0x17 should return BUSY without output writes while Motion is active");
 }
 
 int main(void)
@@ -1322,6 +1408,7 @@ int main(void)
     test_servo_disable_intersects_mode_transition_ownership();
     test_stop_when_already_stopped_is_idempotent();
     test_gait_backend_payload_precedence_and_side_effects();
+    test_front_rear_coordination_protocol_contract();
 
     if (failures == 0)
     {
