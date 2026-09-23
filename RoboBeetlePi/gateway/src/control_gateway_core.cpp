@@ -285,7 +285,7 @@ void ControlGatewayCore::handle_command(const RemoteEnvelope &envelope,
                                            RobotCommandKind::EnableServos) &&
                                    request.command_kind <=
                                        static_cast<Byte>(
-                                           RobotCommandKind::SetServoPwm);
+                                           RobotCommandKind::SetFrontRearCoordination);
         if (known_command) {
             emit(GatewayOutbound{
                      envelope.source,

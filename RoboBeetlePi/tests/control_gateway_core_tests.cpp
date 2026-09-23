@@ -595,6 +595,23 @@ void local_rejections_and_backward_never_submit()
 
     sink.clear_outputs();
     core.process(envelope(
+                     13U, 6U,
+                     command(6U, RobotCommandKind::SetFrontRearCoordination,
+                             std::nullopt)),
+                 4U);
+    const auto *malformed_coordination =
+        find_output<CommandSubmittedMessage>(sink, 13U, 6U);
+    const auto *unsupported_coordination =
+        find_output<ServiceErrorMessage>(sink, 13U, 6U);
+    expect(application.submit_calls == 0U &&
+               malformed_coordination != nullptr &&
+               malformed_coordination->status ==
+                   CommandSubmittedStatus::InvalidArgument &&
+               unsupported_coordination == nullptr,
+           "malformed SetFrontRearCoordination is classified as InvalidArgument");
+
+    sink.clear_outputs();
+    core.process(envelope(
                      13U, 4U, command(4U, RobotCommandKind::StartMotion,
                                       StartMotion{MotionMode::Backward})),
                  4U);
