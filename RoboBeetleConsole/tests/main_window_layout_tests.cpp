@@ -227,6 +227,8 @@ void testCompactVisionSurfaceAndDetailsTree()
         auto *fpsSummary = videoCard->findChild<QLabel *>(QStringLiteral("videoFpsSummary"));
         auto *performance = videoCard->findChild<QLabel *>(QStringLiteral("inferencePerformanceSummary"));
         auto *detections = videoCard->findChild<QLabel *>(QStringLiteral("inferenceDetectionSummary"));
+        auto *memory = videoCard->findChild<QLabel *>(QStringLiteral("inferenceMemorySummary"));
+        auto *httpState = videoCard->findChild<QLabel *>(QStringLiteral("visionControlState"));
         auto *captureCounts = videoCard->findChild<QLabel *>(QStringLiteral("captureCountSummary"));
         expect(fpsSummary != nullptr
                    && fpsSummary->toolTip() == QStringLiteral(
@@ -241,6 +243,16 @@ void testCompactVisionSurfaceAndDetailsTree()
                "inference FPS/latency uses a second emphasized color while masking inactive values");
         expect(detections != nullptr && detections->text() == QStringLiteral("Detections --"),
                "absent inference detection count remains distinct from zero");
+        expect(memory != nullptr && memory->text() == QStringLiteral("Memory -- / --")
+                   && memory->toolTip() == QStringLiteral(
+                       "Vision process RSS / total system physical memory"),
+               "memory summary starts masked and identifies its process/system scope");
+        expect(detections != nullptr && memory != nullptr && httpState != nullptr
+                   && detections->mapTo(summaryPanel, QPoint(0, 0)).y()
+                       < memory->mapTo(summaryPanel, QPoint(0, 0)).y()
+                   && memory->mapTo(summaryPanel, QPoint(0, 0)).y()
+                       < httpState->mapTo(summaryPanel, QPoint(0, 0)).y(),
+               "memory summary is placed between detections and HTTP status");
         auto *captureState = videoCard->findChild<QLabel *>(QStringLiteral("captureState"));
         expect(captureCounts != nullptr
                    && captureState != nullptr

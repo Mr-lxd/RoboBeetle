@@ -304,6 +304,27 @@ QString inferenceDetectionText(const vision::VisionCaptureStatus &status,
                  : QStringLiteral("--"));
 }
 
+QString inferenceMemoryText(const vision::VisionCaptureStatus &status,
+                            bool showActiveMetrics)
+{
+    if (!showActiveMetrics) {
+        return QStringLiteral("Memory -- / --");
+    }
+    const QString rss = status.haveVisionProcessRss
+        ? QStringLiteral("%1 MiB")
+              .arg(QString::number(static_cast<double>(status.visionProcessRssBytes)
+                                        / (1024.0 * 1024.0),
+                                    'f', 1))
+        : QStringLiteral("--");
+    const QString total = status.haveSystemTotalMemory
+        ? QStringLiteral("%1 GiB")
+              .arg(QString::number(static_cast<double>(status.systemTotalMemoryBytes)
+                                        / (1024.0 * 1024.0 * 1024.0),
+                                    'f', 1))
+        : QStringLiteral("--");
+    return QStringLiteral("Memory %1 / %2").arg(rss, total);
+}
+
 QString captureDetailsText(const vision::VisionCaptureStatus &status,
                            bool fresh)
 {
@@ -965,6 +986,14 @@ QWidget *MainWindow::createVideoPlaceholder()
     inferenceDetectionSummary_->setObjectName(
         QStringLiteral("inferenceDetectionSummary"));
     summaryLayout->addWidget(inferenceDetectionSummary_);
+
+    inferenceMemorySummary_ = new QLabel(
+        QStringLiteral("Memory -- / --"), summary);
+    inferenceMemorySummary_->setObjectName(
+        QStringLiteral("inferenceMemorySummary"));
+    inferenceMemorySummary_->setToolTip(
+        QStringLiteral("Vision process RSS / total system physical memory"));
+    summaryLayout->addWidget(inferenceMemorySummary_);
 
     visionControlState_ = new QLabel(
         QStringLiteral("HTTP: Unavailable"), summary);
@@ -3599,6 +3628,10 @@ void MainWindow::refreshInferenceUi()
             inferenceDetectionSummary_->setText(
                 inferenceDetectionText(displayStatus, true));
         }
+    }
+    if (inferenceMemorySummary_ != nullptr) {
+        inferenceMemorySummary_->setText(
+            inferenceMemoryText(displayStatus, ui.showActiveMetrics));
     }
     if (inferenceDiagnostics_ != nullptr) {
         inferenceDiagnostics_->setText(inferenceDetailsText(rawStatus, fresh, ui.reason));
