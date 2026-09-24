@@ -1424,9 +1424,8 @@ QWidget *MainWindow::createActuatorPanel()
 
 QWidget *MainWindow::createServoFineControlTab()
 {
-    auto *page = new QGroupBox(QStringLiteral("Servo Fine Control"), this);
+    auto *page = new QWidget(this);
     page->setObjectName(QStringLiteral("servoFineControlPage"));
-    applySectionStyle(page);
 
     auto *grid = new QGridLayout(page);
     grid->setContentsMargins(8, 8, 8, 8);
@@ -1687,10 +1686,9 @@ QWidget *MainWindow::createServoFineControlTab()
 
 QWidget *MainWindow::createMotionPanel()
 {
-    auto *box = new QGroupBox(QStringLiteral("Motion / Gait"), this);
-    box->setObjectName(QStringLiteral("motionPage"));
-    applySectionStyle(box);
-    auto *outer = new QVBoxLayout(box);
+    auto *page = new QWidget(this);
+    page->setObjectName(QStringLiteral("motionPage"));
+    auto *outer = new QVBoxLayout(page);
     outer->setContentsMargins(6, 5, 6, 5);
     outer->setSpacing(4);
 
@@ -1714,7 +1712,7 @@ QWidget *MainWindow::createMotionPanel()
         "QPushButton:disabled { background: #F0F3F5; color: #8A98A2; border-color: #D2DAE0; }");
 
     // --- Motion Control ---
-    auto *motionGroup = new QGroupBox(QStringLiteral("Motion Control"), box);
+    auto *motionGroup = new QGroupBox(QStringLiteral("Motion Control"), page);
     applySubpanelStyle(motionGroup);
     auto *dpad = new QGridLayout(motionGroup);
     dpad->setContentsMargins(6, 6, 6, 6);
@@ -1771,7 +1769,7 @@ QWidget *MainWindow::createMotionPanel()
         motionButtons_[static_cast<std::size_t>(MotionMode::Backward)], 2, 1);
 
     // --- Gait / Vertical ---
-    auto *gaitGroup = new QGroupBox(QStringLiteral("Gait / Vertical"), box);
+    auto *gaitGroup = new QGroupBox(QStringLiteral("Gait / Vertical"), page);
     applySubpanelStyle(gaitGroup);
     auto *gaitLayout = new QGridLayout(gaitGroup);
     gaitLayout->setContentsMargins(4, 2, 4, 2);
@@ -1847,7 +1845,7 @@ QWidget *MainWindow::createMotionPanel()
     gaitLayout->setColumnStretch(1, 1);
 
     // --- Runtime Log ---
-    auto *logGroup = new QGroupBox(QStringLiteral("Log"), box);
+    auto *logGroup = new QGroupBox(QStringLiteral("Log"), page);
     applySubpanelStyle(logGroup);
     auto *logLayout = new QVBoxLayout(logGroup);
     logLayout->setContentsMargins(6, 8, 6, 6);
@@ -1858,9 +1856,10 @@ QWidget *MainWindow::createMotionPanel()
     log_->setMaximumBlockCount(1000);
     log_->setPlaceholderText(
         QStringLiteral("Runtime events and controller messages will appear here."));
+    log_->setFrameShape(QFrame::NoFrame);
     log_->setStyleSheet(QStringLiteral(
-        "QPlainTextEdit { background: #F8FAFC; border: 1px solid #D4DEE5;"
-        " border-radius: 5px; color: #405A6B; padding: 5px; font-size: 11px; }"));
+        "QPlainTextEdit { background: transparent; border: none;"
+        " color: #405A6B; padding: 5px; font-size: 11px; }"));
     logLayout->addWidget(log_, 1);
 
     content->addWidget(motionGroup, 1);
@@ -1908,7 +1907,7 @@ QWidget *MainWindow::createMotionPanel()
 
     refreshMotionUi();
     refreshGaitSelectorsUi();
-    return box;
+    return page;
 }
 
 QWidget *MainWindow::createDataPlotsTab()

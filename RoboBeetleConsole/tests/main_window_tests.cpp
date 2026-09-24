@@ -119,14 +119,9 @@ QGroupBox *leakPanel(rb::MainWindow &window)
     return nullptr;
 }
 
-QGroupBox *motionPanel(rb::MainWindow &window)
+QWidget *motionPanel(rb::MainWindow &window)
 {
-    for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
-        if (box->objectName() == QStringLiteral("motionPage")) {
-            return box;
-        }
-    }
-    return nullptr;
+    return window.findChild<QWidget *>(QStringLiteral("motionPage"));
 }
 
 QComboBox *gaitBackendCombo(const QWidget *root)
@@ -503,7 +498,7 @@ void testMotionPanelLifecycleAndManualArbitration()
     rb::RobotController controller(&transport, config);
     rb::MainWindow window(&controller);
 
-    QGroupBox *panel = motionPanel(window);
+    QWidget *panel = motionPanel(window);
     expect(panel != nullptr,
            "MainWindow must expose the Motion / Gait panel");
     if (panel == nullptr) {
@@ -725,7 +720,7 @@ void testGaitBackendPanelLifecycle()
     rb::RobotController controller(&transport, config);
     rb::MainWindow window(&controller);
 
-    QGroupBox *panel = motionPanel(window);
+    QWidget *panel = motionPanel(window);
     expect(panel != nullptr, "gait backend test must find the Motion / Gait panel");
     if (panel == nullptr) {
         return;
