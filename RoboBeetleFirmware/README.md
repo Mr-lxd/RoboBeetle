@@ -1,6 +1,6 @@
 # RoboBeetleFirmware
 
-RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for the Raspberry Pi primary-host → STM32 USART2 (PA2/PA3, 115200 8-N-1) → Protocol V2 host-link configuration, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, the PR #11 low-rate JY901S telemetry path, and the Motion / CPG foundation with a completed SimpleGait mechanical baseline. This README records the merged hardware-verified modularization baseline, the PR #8 wiring baseline, the PR #9 leak-status hardware acceptance, the PR #10/PR #11 JY901S evidence boundaries, the PR #13 final four-paddle calibration contract, the SimpleGait Front/Rear anti-phase hardware result, the latest CPG desktop gait exercise, and the bench-provisional STOP contract. The JY901S physical receive and end-to-end monitoring path, the SimpleGait mechanical baseline, and the recorded CPG-default desktop physical gait checks are hardware verified within their stated boundaries; the supplied PR #15 target evidence records ARM Build **[PASS]** and isolated CPG target performance, while Program Verify is **[Not supplied]** and system-level foreground timing remains a separate investigation. Separate ROVMAKER depth-sensor calibration, USART3 UART/checksum physical-link quality, body-frame mapping, water propulsion, Turn hydrodynamic effectiveness, Ascend/Descend hydrodynamics, and final magnetic/yaw calibration remain pending. The USART2 target build/flash and Raspberry Pi physical Heartbeat/ACK link for this binding are **[Hardware Verified]** in the 2026-09-16 acceptance record; Leak/IMU/Depth telemetry over the new link and new Pi-link Safety/Motion qualification remain **[Pending Target Verification]**.
+RoboBeetleFirmware is the current STM32F407VET6 Phase 1 firmware for the Raspberry Pi primary-host → STM32 USART2 (PA2/PA3, 115200 8-N-1) → Protocol V2 host-link configuration, the five-servo semantic descriptor path, the PR #9 leak-status telemetry path, the PR #11 low-rate JY901S telemetry path, and Motion with runtime-selectable SimpleGait, CPG, and Experimental Flex backends and shared coordination policies. This README records the merged hardware-verified modularization baseline, the PR #8 wiring baseline, the PR #9 leak-status hardware acceptance, the PR #10/PR #11 JY901S evidence boundaries, the PR #13 final four-paddle calibration contract, historical SimpleGait/CPG evidence, the current Motion/Gait architecture, and the 2026-09-24 hardware acceptance linked below. The JY901S physical receive and end-to-end monitoring path, the SimpleGait mechanical baseline, and the recorded CPG-default desktop physical gait checks are hardware verified within their stated boundaries. The 2026-09-24 Motion/Gait build and acceptance is recorded below. The supplied PR #15 ARM Build and isolated CPG timing are historical evidence for that earlier image; its Program Verify was **[Not supplied]**, and system-level foreground timing remains a separate investigation. Separate ROVMAKER depth-sensor calibration, USART3 UART/checksum physical-link quality, body-frame mapping, water propulsion, Turn hydrodynamic effectiveness, Ascend/Descend hydrodynamics, and final magnetic/yaw calibration remain pending. The USART2 target build/flash and Raspberry Pi physical Heartbeat/ACK link for this binding are **[Hardware Verified]** in the 2026-09-16 acceptance record; Leak/IMU/Depth telemetry over the new link and new Pi-link Safety/Motion qualification remain **[Pending Target Verification]**.
 
 The recorded recent Servo, LeakStatus, and JY901S hardware runs used the wired DAP UART/COM13 host path through USART1 before the USART2 primary-host binding. Those records are historical for that image. USART1 remains initialized for the retained APC220/legacy hardware path; it is not the active host transport or an already-available backup control link. USART1 bytes do not enter Protocol V2, produce Heartbeats, affect Safety, or have control authority.
 
@@ -34,41 +34,46 @@ The four paddle servos share one logical convention: `0 degrees` is mechanical n
 
 `FrontAxis/Depth` retains its raw envelope `1060–2430 us` and Neutral `1745 us`, with logical calibration `2430 us = -90 degrees`, `1745 us = 0 degrees`, and `1060 us = +90 degrees`. The desk-only mechanical direction `+10 degrees` downward / `-10 degrees` upward is **[Bench Mechanical Verified]**; post-fix end-to-end re-verification remains **[Pending Hardware Verification]**. This is the bench actuator, not the separate ROVMAKER depth sensor. It does not establish hydrodynamic optimization, installed trim, autonomous depth-control calibration, magnetic/yaw calibration, or final body-frame calibration. Waterproof capability is **[Unverified]**: the seller parameter page says “not waterproof,” while the product photo/shell says “Water proof Robot Servo.” Do not claim or test direct immersion without reliable IP/sealing evidence.
 
-PR #13 evidence is deliberately retained as a pre-remap historical baseline: former logical FrontRight `1450/1900 us` are **[Bench Measured]** and `1000 us` is **[Symmetry-Derived / User Accepted]**; former logical FrontLeft `1580/1140 us` are **[Bench Measured]** and `2020 us` is **[Symmetry-Derived / User Accepted]**; RearRight `1110/1570/2030 us` and RearLeft `1940/1450/960 us` are **[Bench Hardware Verified]** user bench results. The current front calibration contract and raw command bounds are **[Software Verified]** by host tests, and the 2026-09-22 bench check explicitly verified FrontRight = PA6 / TIM3_CH1 and FrontLeft = PA7 / TIM3_CH2. Logical angle sign after that side correction remains **[Pending post-fix +/-10 degree Hardware Verification]**. Turn effectiveness, true forward propulsion, and water behavior remain **[Pending]** in their respective evidence categories. The supplied PR #15 evidence records ARM Build **[PASS]** and isolated CPG target timing; Program Verify and FLASH/RAM deltas remain **[Not supplied]**. Do not copy prior PR or old-image PASS into this feature status.
+PR #13 evidence is deliberately retained as a pre-remap historical baseline: former logical FrontRight `1450/1900 us` are **[Bench Measured]** and `1000 us` is **[Symmetry-Derived / User Accepted]**; former logical FrontLeft `1580/1140 us` are **[Bench Measured]** and `2020 us` is **[Symmetry-Derived / User Accepted]**; RearRight `1110/1570/2030 us` and RearLeft `1940/1450/960 us` are **[Bench Hardware Verified]** user bench results. The current front calibration contract and raw command bounds are **[Software Verified]** by host tests, and the 2026-09-22 bench check explicitly verified FrontRight = PA6 / TIM3_CH1 and FrontLeft = PA7 / TIM3_CH2. Logical angle sign after that side correction remains **[Pending post-fix +/-10 degree Hardware Verification]**. Turn hydrodynamic effectiveness, true forward propulsion, and water behavior remain **[Pending]** in their respective water evidence categories. Current air-bench turn results are recorded in the 2026-09-24 acceptance section below. The historical PR #15 evidence records ARM Build **[PASS]** and isolated CPG target timing; Program Verify and FLASH/RAM deltas were **[Not supplied]** for that earlier report. The 2026-09-24 image evidence is recorded below; do not copy prior PR or old-image PASS into this feature status.
 
 The current Motion/gait foundation is documented in
 [`../docs/motion-simple-gait.md`](../docs/motion-simple-gait.md). It emits
 logical joint targets and passes them through `MotionManager →
-CPG or SimpleGait generator → ServoService Motion-owned angle API → Servo
+the selected SimpleGait, CPG, or Experimental Flex generator → ServoService Motion-owned angle API → Servo
 Calibration → PWM`. Neutral differences, mechanical remap, and PWM conversion
 stay in the Servo descriptor/calibration layer. Closed-loop feedback and
 water-tested gait calibration remain outside this feature. See
 [`../docs/cpg-gait-core.md`](../docs/cpg-gait-core.md) for the production CPG
 contract.
 
-## Current Motion / CPG foundation — [Implemented / Software Verified]
+## Current Motion/Gait architecture — [Implemented / Hardware Acceptance recorded 2026-09-24]
 
-Current normal bench image configuration:
+Current runtime-selectable backend values are:
 
-```text
-Motion backend: CPG (next target validation)
-SimpleGait diagnostic baseline: Front/Rear physical anti-phase [Hardware Verified]
-```
+| Value | Backend |
+| ---: | --- |
+| `0` | SimpleGait |
+| `1` | CPG |
+| `2` | ExperimentalFlex |
 
-`Core/App/app_main.c` defaults `MOTION_DEFAULT_GAIT_BACKEND_CPG` to `1`, so
-the normal Debug/bench build passes only
-`cpg_gait_generator_interface(&cpg_gait_generator)` to `MotionManager`.
-The explicit `-DMOTION_DEFAULT_GAIT_BACKEND_CPG=0` override reproduces the
-completed SimpleGait mechanical baseline. The CPG sources remain linked and
-all CPG and SimpleGait tests remain required; each build registers exactly one
-generator. The separate `ROBOBEETLE_CPG_TARGET_BENCHMARK` option remains OFF
-by default. See
-[`../docs/simple-gait-bench-remap-2026-09-14.md`](../docs/simple-gait-bench-remap-2026-09-14.md).
-The host-only `tests/tools/gait_trace_compare.c` utility compares the two
-production generators on a deterministic 10 ms timeline and writes raw
-logical-target, host guard-projection, and CPG internal-state CSVs. It is a
-test/tool source only and is not part of the STM32 production CMake target,
-Protocol V2 telemetry, or the Qt runtime path.
+The default startup backend remains CPG (`MOTION_DEFAULT_GAIT_BACKEND_CPG=1`). Firmware registers all three generators; Protocol V2 `Set Gait Backend` (`0x16`) selects one while Motion is STOPPED. An active Motion state returns `BUSY`.
+
+Experimental Flex uses a nominal ±1000 cdeg amplitude and a 2000 ms cycle: a continuous 1300 ms slow power segment followed by a 700 ms fast recovery segment, both half-cosine shaped. Reset starts at logical neutral. It drives a passive flexible paddle; there is no bend actuator.
+
+`FrontRearCoordination` is a common MotionManager output policy with physical-direction semantics:
+
+| Value | Coordination | Meaning |
+| ---: | --- | --- |
+| `0` | SameDirection | Front and rear move in the same physical direction |
+| `1` | OppositeDirection | Front and rear move in opposite physical directions; MotionManager negates rear logical targets only |
+
+Turning is also a common MotionManager policy: TurnLeft holds the left pair at logical neutral while the right side continues gait; TurnRight holds the right pair at logical neutral while the left side continues gait. The inactive pair remains Motion-owned. The former 50% reduced-side turn profile is historical and is not the current turn behavior.
+
+Protocol V2 selectors are `Set Motion Mode = 0x15`, `Set Gait Backend = 0x16`, and `Set Front/Rear Coordination = 0x17`; RBRP `SetFrontRearCoordination` uses kind `0x09`. Backend and coordination changes are accepted only while STOPPED; an active Motion request returns `BUSY`. A selector operation does not start Motion or directly move a Servo. Backward and Brake remain unchanged and unsupported for current bench Motion.
+
+The 2026-09-24 software, deployment, selector, and powered air-bench evidence is recorded in [`experimental-flex-gait-coordination-hardware-acceptance-2026-09-24.md`](../docs/experimental-flex-gait-coordination-hardware-acceptance-2026-09-24.md). Water propulsion and hydrodynamic effectiveness remain pending.
+
+The host-only `tests/tools/gait_trace_compare.c` utility compares SimpleGait and CPG on a deterministic 10 ms timeline and writes raw logical-target, host guard-projection, and CPG internal-state CSVs. It is a test/tool source only and is not part of the STM32 production CMake target or Protocol V2 telemetry.
 
 Protocol V2 `SetMotionMode` (`0x15`) uses the exact three-byte payload
 `schema=1, mode, action`. The stable mode order is `STOP`, `FORWARD`,
@@ -147,7 +152,7 @@ Enable accepts a multi-bit mask only with all-or-nothing semantics. Requested ch
 
 This is a hardware-layout compatibility break. The 2026-09-14 front assembly remap keeps logical IDs stable but binds logical FrontRight to the former FrontLeft physical actuator/channel and logical FrontLeft to the former FrontRight channel; FrontAxis keeps TIM3_CH3 while reversing logical-angle calibration. Historical v0.4 `Servo1`/PA6 bring-up referred to `RearLeft`; PR #8 formally assigns PA6/ID 0 to `FrontRight` and assigns `RearLeft` to PD13/TIM4_CH2. Do not mix a pre-PR8 or pre-remap Console/Firmware binary with the current harness. The Qt `Servo1` name is only a deprecated source-compatibility alias for `FrontRight`; new firmware code uses semantic names. See `../docs/front-assembly-remap-2026-09-14.md` for the exact current table and hardware checklist.
 
-PR #13 software descriptor, calibration, service, driver, dispatcher, and Console parity regressions are the implementation gate. For this feature, ARM Build: **[Pending]**; Program Verify: **[Pending]**; Hardware Verified: **[Pending]**. The earlier Servo1-only hardware milestones remain historical evidence for the old PR #8 wiring/layout.
+The PR #13 descriptor/calibration record is historical: its ARM Build, Program Verify, and Hardware Verified rows remain **[Pending]** for that earlier image. This status does not describe the 2026-09-24 Motion/Gait image documented above. The earlier Servo1-only hardware milestones remain historical evidence for the old PR #8 wiring/layout.
 
 ## PR #9 leak-status telemetry: leak D0 on PA11 — [Hardware Verified]
 
@@ -655,6 +660,43 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
+## Windows STM32 developer environment (workstation reference)
+
+These are verified paths on the development workstation. They are references for developers only and are not product or runtime dependencies.
+
+| Tool | Verified path / version |
+| --- | --- |
+| STM32CubeIDE | `D:\ST\STM32CubeIDE_2.2.0\STM32CubeIDE\stm32cubeide.exe` |
+| ARM GCC bin | `D:\ST\STM32CubeIDE_2.2.0\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.win32_1.0.100.202602081740\tools\bin` |
+| ARM GCC | GNU Tools for STM32 14.3.rel1 / GCC 14.3.1 |
+| OpenOCD | `D:\ST\STM32CubeIDE_2.2.0\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.openocd.win32_2.4.500.202604080855\tools\bin\openocd.exe` |
+| OpenOCD scripts | `D:\ST\STM32CubeIDE_2.2.0\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.debug.openocd_2.3.400.202606220929\resources\openocd\st_scripts` |
+| STM32CubeProgrammer CLI | `D:\ST\STM32CubeIDE_2.2.0\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.win32_2.2.500.202603051304\tools\bin\STM32_Programmer_CLI.exe` |
+| STM32CubeProgrammer | 2.23.0 |
+| Ninja | `C:\Users\laixindong\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\ninja.exe` (1.13.2) |
+
+Verified Debug build sequence from the repository root:
+
+```powershell
+cd RoboBeetleFirmware
+cmake --preset Debug
+cmake --build --preset Debug
+```
+
+Output: `build\Debug\RoboBeetleFirmware.elf`.
+
+Verified CMSIS-DAP / OpenOCD pattern:
+
+```text
+openocd
+-s "<OpenOCD scripts root>"
+-f interface/cmsis-dap.cfg
+-f target/stm32f4x.cfg
+-c "adapter speed 100; init; reset halt; program <ELF> verify; reset run; shutdown"
+```
+
+STM32CubeProgrammer reported no ST-Link because this bench uses CMSIS-DAP. The verified programming path is OpenOCD + CMSIS-DAP + SWD.
+
 ## Historical target build snapshots (Historical Reference)
 
 The following records refer to pre-PR8 or earlier modularization snapshots and are retained for traceability; they are not evidence that the current five-servo image has passed target build or hardware regression. The undefined angle calibration constants from the previous audit were replaced by one consistent Servo1 calibration set. A new-directory Debug configure/build using STM32CubeIDE's bundled CMake 4.3.1, Ninja 1.13.2, and GNU Tools for STM32 14.3.1 succeeded for that earlier snapshot.
@@ -666,7 +708,7 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Motion, Servo, Safety, and Sensors modules and their include directories. The reproducible Firmware host gate is `powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run_host_tests.ps1` from `RoboBeetleFirmware`; it compiles and runs all 29 executable test sources, including the SimpleGait, default/override app-main backend-selection, MotionManager, Motion-aware Protocol Dispatcher, CPG, PWM safe-stop, and host-only deterministic SimpleGait-versus-CPG CSV trace coverage, plus the four backend/benchmark app compile contracts and the CPG benchmark compile contract. The runner uses C11, `-Wall -Wextra -Werror`, host HAL stubs where required, and `-lm` for the deterministic sine gait. These host checks complement, but do not replace, the real ARM target build.
+The project uses C11, Ninja, `arm-none-eabi-gcc`, and the generated STM32CubeMX CMake target. The generated CubeMX CMake remains untouched; the user-maintained top-level CMake lists the App, Communication, Motion, Servo, Safety, and Sensors modules and their include directories. The reproducible Firmware host gate is `powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run_host_tests.ps1` from `RoboBeetleFirmware`; it compiles and runs 37 executable tests, including SimpleGait, default/override app-main backend selection, MotionManager, Motion-aware Protocol Dispatcher, CPG, PWM safe-stop, and host-only deterministic SimpleGait-versus-CPG CSV trace coverage, plus 13 compile-contract objects. The runner uses C11, `-Wall -Wextra -Werror`, host HAL stubs where required, and `-lm` for the deterministic sine gait. These host checks complement, but do not replace, the real ARM target build.
 
 ## App/Main maintainability audit（Historical Reference: PR #6 old image）
 

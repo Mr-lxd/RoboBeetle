@@ -4,7 +4,7 @@
 
 This document describes the production Legacy Source-Compatible CPG v1 core and its RoboBeetle semantic adapter.
 
-The approved runtime path is:
+The CPG backend path is:
 
 ~~~text
 Legacy Source-Compatible CPG v1
@@ -15,21 +15,13 @@ Legacy Source-Compatible CPG v1
     -> ServoCalibration
 ~~~
 
-SimpleGaitGenerator remains available as an alternate backend. Its Forward
-mechanical-remap baseline is **Hardware Verified**: the front pair and rear
-pair are each same-phase, and the installed front group is physically
-anti-phase to the rear group. Backward remains pending/disabled. The normal
-Debug/bench image now defaults to CPG with
-`MOTION_DEFAULT_GAIT_BACKEND_CPG=1`; an explicit `=0` build reproduces the
-completed SimpleGait diagnostic baseline. This does not add closed-loop CPG,
-IMU feedback, depth feedback, ROS2, Protocol V2, Qt gait selection, or legacy
-raw PWM/CCR mappings.
+SimpleGaitGenerator and ExperimentalFlex are runtime-selectable alongside CPG. The 2026-09-14 SimpleGait bench-remap result is documented in [its historical record](simple-gait-bench-remap-2026-09-14.md), and the CPG physical result below remains scoped to its recorded checks. The 2026-09-24 STM32 image and the listed selector/air-bench results are recorded in [the hardware acceptance document](experimental-flex-gait-coordination-hardware-acceptance-2026-09-24.md). Water propulsion and hydrodynamic effectiveness remain pending water validation. This CPG core still adds no closed-loop CPG, IMU/depth feedback, or raw PWM/CCR mapping; current selector semantics are in the [Firmware README](../RoboBeetleFirmware/README.md).
 
 ## Backend selection and debug boundary
 
-`app_main_init()` initializes both generator objects but registers exactly one
-`GaitGenerator` with MotionManager according to the compile-time backend
-selection. The default `=1` path is
+`app_main_init()` registers SimpleGait (`0`), CPG (`1`), and ExperimentalFlex (`2`) with MotionManager. CPG (`MOTION_DEFAULT_GAIT_BACKEND_CPG=1`) remains the startup default; Protocol V2 `Set Gait Backend` (`0x16`) selects among the registered backends while Motion is STOPPED. A selector request during active Motion returns `BUSY`.
+
+The CPG backend uses the same shared downstream pipeline as the other generators:
 
 ```text
 Qt -> Protocol Motion -> MotionManager -> CPGGaitGenerator
@@ -37,18 +29,13 @@ Qt -> Protocol Motion -> MotionManager -> CPGGaitGenerator
     -> ServoCalibration -> PWM
 ```
 
-The explicit `MOTION_DEFAULT_GAIT_BACKEND_CPG=0` path selects
-`SimpleGaitGenerator` through the same downstream pipeline and is retained as
-the installed mechanical baseline. If CPG later fails the physical
-Front/Rear anti-phase check while this SimpleGait result remains correct, the
-debug boundary is CPG state, semantic adapter, backend selection, transition,
-or actuator command path. Do not reopen Servo calibration or the front remap
-from a CPG-only symptom. The latest CPG desktop physical gait is
-**Hardware Verified** for the recorded Forward, synchrony, opposite-motion,
-Turn Left/Right, Ascend/Descend mechanical-direction, Stop, and Disable All
-checks. Water propulsion and hydrodynamic effectiveness remain pending.
+The `MOTION_DEFAULT_GAIT_BACKEND_CPG=0` build option still selects SimpleGait as the startup default for the recorded diagnostic baseline. Backend selection can also change at runtime while STOPPED. Current front/rear coordination and turning are applied by the common MotionManager policy; see the Firmware README for the selector values and behavior.
 
-## Latest CPG desktop verification
+The 2026-09-14 CPG desktop physical gait remains **[Hardware Verified]** for its recorded Forward, synchrony, opposite-motion, Turn Left/Right, Ascend/Descend mechanical-direction, Stop, and Disable All checks. This CPG-specific result is not a water validation. Water propulsion and hydrodynamic effectiveness remain pending.
+
+## Historical CPG desktop verification — 2026-09-14
+
+The 2026-09-24 target image and listed selector/air-bench acceptance are recorded in [the current acceptance document](experimental-flex-gait-coordination-hardware-acceptance-2026-09-24.md). That record does not add another CPG-specific air-bench result.
 
 The normal CPG-default Firmware image completed a real desktop hardware
 exercise on 2026-09-14. The observed Forward gait passed front-pair synchrony,
@@ -62,10 +49,7 @@ by eye. That similarity is expected and non-blocking; it does not establish
 numerical identity and does not justify changing the verified CPG. True water
 propulsion, Turn hydrodynamic effectiveness, and Ascend/Descend hydrodynamics
 remain **[Pending Water Verification]**. The DWT target-performance runbook is
-in [`cpg-gait-performance.md`](cpg-gait-performance.md). The current supplied
-STM32F407 evidence records ARM Build **[PASS]** and a nominal isolated CPG
-deadline **[PASS]**; Program Verify and system-level foreground timing remain
-separate evidence items.
+in [`cpg-gait-performance.md`](cpg-gait-performance.md). The PR #15 CPG timing rows in the linked runbook are historical isolated-target evidence. The 2026-09-24 image build, memory, programming, verify, reset/run, selector, and listed air-bench results are recorded in [the hardware acceptance document](experimental-flex-gait-coordination-hardware-acceptance-2026-09-24.md). System-level foreground timing remains a separate evidence item.
 
 ## Historical source provenance
 
@@ -212,7 +196,7 @@ The production Forward profile uses front and rear logical target amplitudes of 
 R = {-front_amplitude, +rear_amplitude, +rear_amplitude, -front_amplitude}
 ~~~
 
-This creates same-phase front and rear pairs and approximately pi-separated front versus rear output through the approved signed semantic mapping. The adapter converts logical degrees to centidegrees with double lround. For TURN_LEFT it installs the same signed vector with legacy nodes 3/2 (left front/rear) multiplied by the profile's 0.5 reduced-side scale; for TURN_RIGHT it multiplies nodes 0/1 (right front/rear). It does not post-scale the current raw output, so the next 10 ms advances move the core amplitude state toward the turn target. ASCEND/DESCEND add only the profile FrontAxis bias. FrontAxis is not a fifth oscillator.
+This creates same-phase front and rear pairs and approximately pi-separated front versus rear output through the approved signed semantic mapping. The adapter converts logical degrees to centidegrees with double lround. The earlier CPG adapter profile applies a 0.5 reduced-side scale to its generated TURN targets; current MotionManager output policy then holds the turning-side pair at logical neutral before ServoService, so that scale is not the current commanded turn behavior. ASCEND/DESCEND add only the profile FrontAxis bias. FrontAxis is not a fifth oscillator.
 
 Backward is rejected by cpg_gait_generator_is_mode_valid and sample; the adapter never fakes reverse motion by sign inversion. The adapter does not apply installed mechanical limits. MotionManager remains the sole owner of the operational front guard of -4500 to +2800 cdeg and rear guard of -3000 to +4500 cdeg.
 

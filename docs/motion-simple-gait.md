@@ -1,24 +1,8 @@
-# Motion / Gait — Bench-Provisional STOP Contract
+# Historical Motion / Gait — Bench-Provisional STOP Contract
 
-This document records the Motion / Gait control foundation carried into
-`feature/cpg-gait-core`. It is a host-test/software contract. The completed
-SimpleGait mechanical baseline has Hardware Verified Front/Rear physical
-anti-phase; the latest CPG desktop physical gait is also Hardware Verified for
-the recorded desktop checks. The supplied PR #15 evidence records ARM Build
-PASS and measured isolated CPG target performance; Program Verify and
-system-level foreground margin remain separate evidence categories. True water
-propulsion and hydrodynamic effectiveness remain pending.
+This document preserves the earlier Motion/Gait software contract and generator-profile evidence from the initial CPG/SimpleGait design. Compile-time single-generator selection, the old 50% reduced-side turn profile, and the earlier pending hardware statements are historical; current runtime selectors and MotionManager coordination/turn behavior are in the [Firmware README](../RoboBeetleFirmware/README.md). The 2026-09-24 build and listed real-link/air-bench acceptance results are in [the hardware acceptance record](experimental-flex-gait-coordination-hardware-acceptance-2026-09-24.md). Water propulsion, hydrodynamic efficiency, final power-stroke direction, flexible-paddle deformation effectiveness, and Turn effectiveness in water remain pending water validation.
 
-The normal Firmware default is `MOTION_DEFAULT_GAIT_BACKEND_CPG=1`. An
-explicit `MOTION_DEFAULT_GAIT_BACKEND_CPG=0` build retains SimpleGait as the
-mechanical baseline. Each build registers exactly one generator with
-MotionManager.
-
-The host-only comparison tool is
-`RoboBeetleFirmware/tests/tools/gait_trace_compare.c`; it produces deterministic
-SimpleGait/CPG integer-target CSVs and a separate CPG internal-state CSV. The
-trace is offline evidence only and adds no Protocol V2 telemetry or Qt runtime
-backend selector.
+Current backends are SimpleGait (`0`), CPG (`1`), and ExperimentalFlex (`2`); the `Set Gait Backend` (`0x16`) selector is accepted only while Motion is STOPPED. The host-only comparison tool `RoboBeetleFirmware/tests/tools/gait_trace_compare.c` remains an offline SimpleGait/CPG CSV utility and does not add Protocol V2 telemetry.
 
 ### Host-only SimpleGait versus CPG trace
 
@@ -202,8 +186,8 @@ FrontRight, FrontLeft, FrontAxis, RearRight, RearLeft
 
 The fallback `SimpleGaitGenerator` table uses 0.5 Hz, 1000 cdeg paddle
 amplitude, a π front/rear phase relation, same-phase front and rear pairs,
-50% amplitude on the reduced side for turning, and ±1000 cdeg FrontAxis bias
-for ASCEND/DESCEND candidates. `FORWARD` keeps the approved front/rear
+the historical 50% reduced-side amplitude for turning, and ±1000 cdeg FrontAxis bias
+for ASCEND/DESCEND candidates. Current MotionManager turning holds the selected side pair at logical neutral; the old 50% profile does not describe the current turn output. `FORWARD` keeps the approved front/rear
 approximately 180° phase relation; the larger rear paddle area is a mechanical
 fact only and does not establish a front/rear amplitude ratio. `BACKWARD` has no
 SimpleGait profile and remains Pending. Paddle modes drive the four paddles;
@@ -218,7 +202,7 @@ period parameter. Its measured steady-state period is not assumed to be exactly
 observed frequency. See [`cpg-gait-core.md`](cpg-gait-core.md) for the current
 long-run measurement.
 
-The normal target path is intentionally explicit:
+For a CPG backend selection, the logical target path is:
 
 ```text
 Motion command
@@ -230,9 +214,7 @@ Motion command
   → PWM driver
 ```
 
-The explicit `MOTION_DEFAULT_GAIT_BACKEND_CPG=0` diagnostic override replaces
-only the generator node with `SimpleGaitGenerator`; the downstream guard,
-ServoService, calibration, and PWM path are identical.
+The explicit `MOTION_DEFAULT_GAIT_BACKEND_CPG=0` option selects SimpleGait as the startup default. The runtime selector can later choose any registered backend while Motion is STOPPED; all three use the same downstream guard, ServoService, calibration, and PWM path.
 
 ## Qt behavior
 
@@ -270,7 +252,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
   -File .\RoboBeetleFirmware\tests\run_host_tests.ps1
 ```
 
-The runner compiles and executes 29 Firmware test programs with C11,
+The verified 2026-09-24 Firmware host gate passed 37 executable tests and 13 compile-contract objects (see the [acceptance record](experimental-flex-gait-coordination-hardware-acceptance-2026-09-24.md)). The detailed assertion list below is from the earlier snapshot. The runner used C11,
 `-Wall -Wextra -Werror`, and a separate `app_main_jy901s_api` compile
 contract. Motion-specific assertions cover:
 
@@ -291,8 +273,8 @@ contract. Motion-specific assertions cover:
 - manual Servo `BUSY` arbitration during STOPPING;
 - old/new ownership union through an acknowledged mode transition;
 - immediate Disable All and heartbeat/liveness takeover;
-- default CPG backend selection plus explicit SimpleGait (`=0`) and CPG (`=1`)
-  backend-selection tests, with exactly one registered generator per build;
+- historical default CPG selection and SimpleGait (`=0`) / CPG (`=1`) startup-override
+  tests; current three-backend runtime selection is described in the Firmware README;
 - CPG output beyond the installed front/rear limits is clamped by the common
   MotionManager sanitizer before ServoService observes it;
 - PWM1 safe-stop conservative active-running policy, including the
@@ -304,6 +286,4 @@ contract. Motion-specific assertions cover:
 - exact `0x15` payload, duplicate replay, invalid-payload rejection, and
   Protocol `BUSY` mapping.
 
-Qt verification uses the existing Console CMake/CTest targets and adds exact
-wire, controller, APC220 queue, and MainWindow lifecycle coverage. Hardware
-exercise remains a separate pending evidence category.
+The 2026-09-24 powered air-bench acceptance is recorded in the linked hardware acceptance document. Water validation remains pending, and physical no-jump PWM Disable remains pending as stated in the safe-stop section above.
