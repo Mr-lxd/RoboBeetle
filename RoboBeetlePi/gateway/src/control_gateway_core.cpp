@@ -27,7 +27,15 @@ bool is_valid_motion_mode(MotionMode mode) noexcept
 
 bool is_valid_gait_backend(GaitBackend backend) noexcept
 {
-    return static_cast<Byte>(backend) <= static_cast<Byte>(GaitBackend::CPG);
+    return static_cast<Byte>(backend) <=
+           static_cast<Byte>(GaitBackend::ExperimentalFlex);
+}
+
+bool is_valid_front_rear_coordination(
+    FrontRearCoordination coordination) noexcept
+{
+    return static_cast<Byte>(coordination) <=
+           static_cast<Byte>(FrontRearCoordination::OppositeDirection);
 }
 
 bool is_authority_dependent(RbrpMessageKind kind) noexcept
@@ -229,6 +237,9 @@ bool ControlGatewayCore::valid_command(const RobotCommand &command) const
                 return true;
             } else if constexpr (std::is_same_v<T, SetGaitBackend>) {
                 return is_valid_gait_backend(value.backend);
+            } else if constexpr (
+                std::is_same_v<T, SetFrontRearCoordination>) {
+                return is_valid_front_rear_coordination(value.coordination);
             } else {
                 return false;
             }
@@ -274,7 +285,7 @@ void ControlGatewayCore::handle_command(const RemoteEnvelope &envelope,
                                            RobotCommandKind::EnableServos) &&
                                    request.command_kind <=
                                        static_cast<Byte>(
-                                           RobotCommandKind::SetServoPwm);
+                                           RobotCommandKind::SetFrontRearCoordination);
         if (known_command) {
             emit(GatewayOutbound{
                      envelope.source,

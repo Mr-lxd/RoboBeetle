@@ -132,6 +132,14 @@ CommandSubmitResult OnboardApplication::set_gait_backend(GaitBackend backend)
     return submit(wire_type(protocol::MessageType::SetGaitBackend), encode_gait_backend(backend));
 }
 
+CommandSubmitResult OnboardApplication::set_front_rear_coordination(
+    FrontRearCoordination coordination)
+{
+    return submit(
+        wire_type(protocol::MessageType::SetFrontRearCoordination),
+        encode_front_rear_coordination(coordination));
+}
+
 CommandSubmitResult OnboardApplication::set_servo_pwm_maintenance(ServoId id, std::uint16_t pulse_us)
 {
     return submit(wire_type(protocol::MessageType::SetServoPwm), encode_servo_pwm(id, pulse_us));

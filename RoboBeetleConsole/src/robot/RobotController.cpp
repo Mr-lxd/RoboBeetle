@@ -64,6 +64,7 @@ bool isServoActuatorCommand(MessageType type)
     case MessageType::DepthSnapshot:
     case MessageType::SetMotionMode:
     case MessageType::SetGaitBackend:
+    case MessageType::SetFrontRearCoordination:
         return false;
     }
     return false;
@@ -130,10 +131,13 @@ RobotController::RobotController(ITransport *transport,
         emit logMessage(QStringLiteral("Transport error: %1").arg(message));
         if (config_.linkProfile != LinkProfile::Apc220HalfDuplex) {
             clearGaitBackendOutstanding();
+            clearFrontRearCoordinationOutstanding();
             return;
         }
 
         const std::optional<GaitBackend> confirmedBeforeError = confirmedGaitBackend_;
+        const std::optional<FrontRearCoordination> coordinationBeforeError =
+            confirmedFrontRearCoordination_;
         const bool wasConnected = state_ == TransportState::Connected;
         const bool wasAlreadyError = state_ == TransportState::Error;
         heartbeatTimer_.stop();
@@ -143,6 +147,10 @@ RobotController::RobotController(ITransport *transport,
         if (confirmedBeforeError.has_value()) {
             confirmedGaitBackend_ = confirmedBeforeError;
             emit gaitBackendStateChanged();
+        }
+        if (coordinationBeforeError.has_value()) {
+            confirmedFrontRearCoordination_ = coordinationBeforeError;
+            emit frontRearCoordinationStateChanged();
         }
         failClosedMotionState();
         monitor_.ackStatus = QStringLiteral("Transport error");
@@ -508,9 +516,15 @@ bool RobotController::setGaitBackend(GaitBackend backend)
         emit logMessage(QStringLiteral("Gait backend selection rejected: invalid backend"));
         return false;
     }
-    if (pendingGaitBackend_.has_value()) {
+    if (pendingGaitBackend_.has_value()
+        || pendingFrontRearCoordination_.has_value()) {
         emit logMessage(QStringLiteral(
             "Gait backend selection rejected: another selector is awaiting ACK (BUSY)"));
+        return false;
+    }
+    if (isMotionActive()) {
+        emit logMessage(QStringLiteral(
+            "Gait backend selection rejected: Motion is active (BUSY)"));
         return false;
     }
     if (!isConnected()) {
@@ -531,6 +545,48 @@ bool RobotController::setGaitBackend(GaitBackend backend)
         backend);
     if (!accepted) {
         clearGaitBackendPending();
+    }
+    return accepted;
+}
+
+bool RobotController::setFrontRearCoordination(
+    FrontRearCoordination coordination)
+{
+    if (!isValidFrontRearCoordination(coordination)) {
+        emit logMessage(QStringLiteral(
+            "Front/rear coordination selection rejected: invalid coordination"));
+        return false;
+    }
+    if (pendingGaitBackend_.has_value()
+        || pendingFrontRearCoordination_.has_value()) {
+        emit logMessage(QStringLiteral(
+            "Front/rear coordination selection rejected: another selector is awaiting ACK (BUSY)"));
+        return false;
+    }
+    if (isMotionActive()) {
+        emit logMessage(QStringLiteral(
+            "Front/rear coordination selection rejected: Motion is active (BUSY)"));
+        return false;
+    }
+    if (!isConnected()) {
+        emit logMessage(QStringLiteral(
+            "Front/rear coordination selection rejected: transport is not connected"));
+        return false;
+    }
+
+    pendingFrontRearCoordination_ = coordination;
+    emit frontRearCoordinationStateChanged();
+    const QByteArray payload(1, static_cast<char>(coordination));
+    const bool accepted = sendCommand(
+        MessageType::SetFrontRearCoordination,
+        payload,
+        0,
+        true,
+        std::nullopt,
+        std::nullopt,
+        coordination);
+    if (!accepted) {
+        clearFrontRearCoordinationPending();
     }
     return accepted;
 }
@@ -578,7 +634,8 @@ bool RobotController::sendCommand(MessageType type,
                                   quint16 affectedMask,
                                   bool expectAck,
                                   std::optional<MotionRequest> motionRequest,
-                                  std::optional<GaitBackend> gaitBackendRequest)
+                                  std::optional<GaitBackend> gaitBackendRequest,
+                                  std::optional<FrontRearCoordination> frontRearCoordinationRequest)
 {
     if (!isConnected()) {
         emit logMessage(QStringLiteral("Command rejected: transport is not connected"));
@@ -601,7 +658,8 @@ bool RobotController::sendCommand(MessageType type,
 
         refreshApc220HeartbeatDue();
         const QueuedCommand command{
-            type, payload, affectedMask, motionRequest, gaitBackendRequest};
+            type, payload, affectedMask, motionRequest, gaitBackendRequest,
+            frontRearCoordinationRequest};
         const bool isSafetyDisable = type == MessageType::ServoDisable;
         const bool isMotionStop = type == MessageType::SetMotionMode
             && motionRequest.has_value()
@@ -673,8 +731,9 @@ bool RobotController::sendCommand(MessageType type,
     emit txHexChanged(QString::fromLatin1(frame.toHex(' ').toUpper()));
     if (expectAck) {
         pending_.insert(sequence,
-                        {sequence, frame, type, affectedMask, nowMs(), 0,
-                         motionRequest, false, false, gaitBackendRequest});
+                         {sequence, frame, type, affectedMask, nowMs(), 0,
+                          motionRequest, false, false, gaitBackendRequest,
+                          frontRearCoordinationRequest});
         monitor_.ackStatus = QStringLiteral("Waiting for ACK seq=%1").arg(sequence);
     }
     updateMonitor();
@@ -689,6 +748,9 @@ bool RobotController::dispatchApc220Command(const QueuedCommand &command)
         if (command.gaitBackendRequest.has_value()) {
             clearGaitBackendPending();
         }
+        if (command.frontRearCoordinationRequest.has_value()) {
+            clearFrontRearCoordinationPending();
+        }
         noteWriteFailure(QStringLiteral("message 0x%1 sequence %2")
                              .arg(static_cast<quint8>(command.type), 2, 16, QLatin1Char('0'))
                              .arg(sequence));
@@ -696,9 +758,10 @@ bool RobotController::dispatchApc220Command(const QueuedCommand &command)
     }
 
     pending_.insert(sequence,
-                    {sequence, frame, command.type, command.affectedMask, nowMs(), 0,
-                     command.motionRequest, false, false,
-                     command.gaitBackendRequest});
+                     {sequence, frame, command.type, command.affectedMask, nowMs(), 0,
+                      command.motionRequest, false, false,
+                      command.gaitBackendRequest,
+                      command.frontRearCoordinationRequest});
     const bool writeSucceeded = transport_->write(frame);
     const bool stillConnected = isConnected();
     if (!writeSucceeded || !stillConnected) {
@@ -707,6 +770,9 @@ bool RobotController::dispatchApc220Command(const QueuedCommand &command)
         }
         if (command.gaitBackendRequest.has_value()) {
             clearGaitBackendPending();
+        }
+        if (command.frontRearCoordinationRequest.has_value()) {
+            clearFrontRearCoordinationPending();
         }
         noteWriteFailure(QStringLiteral("message 0x%1 sequence %2")
                              .arg(static_cast<quint8>(command.type), 2, 16, QLatin1Char('0'))
@@ -753,6 +819,10 @@ bool RobotController::dispatchApc220Retry(quint16 sequence)
         if (current->gaitBackendRequest.has_value()) {
             pending_.erase(current);
             clearGaitBackendPending();
+        }
+        if (current->frontRearCoordinationRequest.has_value()) {
+            pending_.erase(current);
+            clearFrontRearCoordinationPending();
         }
         updateMonitor();
         return false;
@@ -991,10 +1061,19 @@ void RobotController::handlePacket(const Packet &packet)
                     }
                     clearGaitBackendPending();
                 }
+                if (request->frontRearCoordinationRequest.has_value()) {
+                    if (it != pending_.end()) {
+                        pending_.erase(it);
+                    } else {
+                        deferredRetry_.reset();
+                    }
+                    clearFrontRearCoordinationPending();
+                }
                 monitor_.ackStatus = QStringLiteral("Error type mismatch seq=%1")
                                          .arg(sequence);
                 emit logMessage(monitor_.ackStatus);
-                if (request->gaitBackendRequest.has_value()) {
+                if (request->gaitBackendRequest.has_value()
+                    || request->frontRearCoordinationRequest.has_value()) {
                     pumpApc220Scheduler();
                 }
                 return;
@@ -1014,6 +1093,9 @@ void RobotController::handlePacket(const Packet &packet)
             }
             if (request->gaitBackendRequest.has_value()) {
                 clearGaitBackendPending();
+            }
+            if (request->frontRearCoordinationRequest.has_value()) {
+                clearFrontRearCoordinationPending();
             }
             if (request->type == MessageType::ServoDisable) {
                 setDisablePendingMask(
@@ -1121,10 +1203,15 @@ void RobotController::handleAck(const Packet &packet)
         }
     };
     const bool isGaitBackendRequest = request->gaitBackendRequest.has_value();
+    const bool isFrontRearCoordinationRequest =
+        request->frontRearCoordinationRequest.has_value();
     if (request->type != requestType) {
         clearDisablePending();
         if (isGaitBackendRequest) {
             clearGaitBackendPending();
+        }
+        if (isFrontRearCoordinationRequest) {
+            clearFrontRearCoordinationPending();
         }
         if (isApc220 && isHeartbeat) {
             heartbeatReady_ = false;
@@ -1143,6 +1230,9 @@ void RobotController::handleAck(const Packet &packet)
         clearDisablePending();
         if (isGaitBackendRequest) {
             clearGaitBackendPending();
+        }
+        if (isFrontRearCoordinationRequest) {
+            clearFrontRearCoordinationPending();
         }
         if (isApc220 && isHeartbeat) {
             heartbeatReady_ = false;
@@ -1180,6 +1270,11 @@ void RobotController::handleAck(const Packet &packet)
         pendingGaitBackend_.reset();
         confirmedGaitBackend_ = *request->gaitBackendRequest;
         emit gaitBackendStateChanged();
+    } else if (isFrontRearCoordinationRequest) {
+        pendingFrontRearCoordination_.reset();
+        confirmedFrontRearCoordination_ =
+            *request->frontRearCoordinationRequest;
+        emit frontRearCoordinationStateChanged();
     } else if (request->type == MessageType::SetMotionMode
                && !request->cancelled
                && !request->motionCancelled
@@ -1255,6 +1350,8 @@ void RobotController::checkTimeouts()
             const MessageType timedOutType = it->type;
             const quint16 sequence = it->sequence;
             const bool isGaitBackendRequest = it->gaitBackendRequest.has_value();
+            const bool isFrontRearCoordinationRequest =
+                it->frontRearCoordinationRequest.has_value();
             if (timedOutType == MessageType::ServoDisable) {
                 setDisablePendingMask(
                     static_cast<quint16>(disablePendingMask_ & ~it->servoMask));
@@ -1262,6 +1359,9 @@ void RobotController::checkTimeouts()
             pending_.erase(it);
             if (isGaitBackendRequest) {
                 clearGaitBackendPending();
+            }
+            if (isFrontRearCoordinationRequest) {
+                clearFrontRearCoordinationPending();
             }
             ++monitor_.timeoutCount;
             monitor_.ackStatus = QStringLiteral("ACK timeout seq=%1").arg(sequence);
@@ -1346,6 +1446,8 @@ void RobotController::checkTimeouts()
         if (it->retries >= config_.maxRetries) {
             const MessageType timedOutType = it->type;
             const bool isGaitBackendRequest = it->gaitBackendRequest.has_value();
+            const bool isFrontRearCoordinationRequest =
+                it->frontRearCoordinationRequest.has_value();
             if (timedOutType == MessageType::ServoDisable) {
                 setDisablePendingMask(
                     static_cast<quint16>(disablePendingMask_ & ~it->servoMask));
@@ -1353,6 +1455,9 @@ void RobotController::checkTimeouts()
             pending_.erase(it);
             if (isGaitBackendRequest) {
                 clearGaitBackendPending();
+            }
+            if (isFrontRearCoordinationRequest) {
+                clearFrontRearCoordinationPending();
             }
             ++monitor_.timeoutCount;
             monitor_.ackStatus = QStringLiteral("ACK timeout seq=%1").arg(sequence);
@@ -1382,6 +1487,9 @@ void RobotController::checkTimeouts()
             if (it->gaitBackendRequest.has_value()) {
                 pending_.erase(it);
                 clearGaitBackendPending();
+            } else if (it->frontRearCoordinationRequest.has_value()) {
+                pending_.erase(it);
+                clearFrontRearCoordinationPending();
             } else {
                 it->sentAtMs = now;
             }
@@ -1399,6 +1507,9 @@ void RobotController::resetSchedulerState()
 {
     const bool gaitStateWasKnown = confirmedGaitBackend_.has_value()
         || pendingGaitBackend_.has_value();
+    const bool coordinationStateWasKnown =
+        confirmedFrontRearCoordination_.has_value()
+        || pendingFrontRearCoordination_.has_value();
     motionStopTimer_.stop();
     motionModeTransitionTimer_.stop();
     pending_.clear();
@@ -1420,8 +1531,13 @@ void RobotController::resetSchedulerState()
     markApc220LivenessLost();
     confirmedGaitBackend_.reset();
     pendingGaitBackend_.reset();
+    confirmedFrontRearCoordination_.reset();
+    pendingFrontRearCoordination_.reset();
     if (gaitStateWasKnown) {
         emit gaitBackendStateChanged();
+    }
+    if (coordinationStateWasKnown) {
+        emit frontRearCoordinationStateChanged();
     }
 }
 
@@ -1429,6 +1545,9 @@ void RobotController::dropQueuedCommand(const QueuedCommand &command)
 {
     if (command.gaitBackendRequest.has_value()) {
         clearGaitBackendPending();
+    }
+    if (command.frontRearCoordinationRequest.has_value()) {
+        clearFrontRearCoordinationPending();
     }
 }
 
@@ -1631,6 +1750,7 @@ void RobotController::failClosedApc220Actuators()
     // Liveness fail-close destructively removes queued/deferred work; clear
     // the selector lifecycle first so a dropped request cannot remain pending.
     clearGaitBackendOutstanding();
+    clearFrontRearCoordinationOutstanding();
     priorityCommandQueue_.clear();
     commandQueue_.clear();
     deferredRetry_.reset();
@@ -1735,6 +1855,55 @@ void RobotController::clearGaitBackendOutstanding()
     if (changed) {
         pendingGaitBackend_.reset();
         emit gaitBackendStateChanged();
+    }
+}
+
+void RobotController::clearFrontRearCoordinationPending()
+{
+    if (!pendingFrontRearCoordination_.has_value()) {
+        return;
+    }
+    pendingFrontRearCoordination_.reset();
+    emit frontRearCoordinationStateChanged();
+}
+
+void RobotController::clearFrontRearCoordinationOutstanding()
+{
+    bool changed = pendingFrontRearCoordination_.has_value();
+    const QList<quint16> sequences = pending_.keys();
+    for (const quint16 sequence : sequences) {
+        const auto it = pending_.find(sequence);
+        if (it != pending_.end()
+            && it->frontRearCoordinationRequest.has_value()) {
+            pending_.erase(it);
+            changed = true;
+        }
+    }
+    if (deferredRetry_.has_value()
+        && deferredRetry_->frontRearCoordinationRequest.has_value()) {
+        deferredRetry_.reset();
+        changed = true;
+    }
+
+    const auto removeQueuedSelectors = [&changed](QQueue<QueuedCommand> &queue) {
+        QQueue<QueuedCommand> retained;
+        while (!queue.isEmpty()) {
+            const QueuedCommand command = queue.dequeue();
+            if (command.frontRearCoordinationRequest.has_value()) {
+                changed = true;
+            } else {
+                retained.enqueue(command);
+            }
+        }
+        queue = std::move(retained);
+    };
+    removeQueuedSelectors(priorityCommandQueue_);
+    removeQueuedSelectors(motionStopCommandQueue_);
+    removeQueuedSelectors(commandQueue_);
+
+    if (changed) {
+        pendingFrontRearCoordination_.reset();
+        emit frontRearCoordinationStateChanged();
     }
 }
 

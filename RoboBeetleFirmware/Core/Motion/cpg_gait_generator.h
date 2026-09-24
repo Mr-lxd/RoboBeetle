@@ -12,7 +12,6 @@ typedef struct
     double front_amplitude_deg;
     double rear_amplitude_deg;
     double nominal_period_s;
-    double turn_reduced_side_scale;
     double front_axis_bias_cdeg[MOTION_COUNT];
 } cpg_gait_profile_t;
 

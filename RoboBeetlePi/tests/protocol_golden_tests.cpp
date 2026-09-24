@@ -109,6 +109,14 @@ void test_new_canonical_vectors()
     expect_logical(gait, hex("524202163512010001a5a2"));
     expect_vector(gait, hex("08524202163512010401a5a200"));
 
+    const Frame coordination{0x17U, 0x1236U, hex("01")};
+    expect(robobeetle::protocol::is_known_message_type(
+               static_cast<std::uint8_t>(MessageType::SetFrontRearCoordination)),
+           "FrontRear coordination command type 0x17 is known");
+    expect(Codec::decodeLogical(Codec::encodeLogical(coordination)).frame ==
+               coordination,
+           "FrontRear coordination frame preserves its one-byte value");
+
     std::vector<std::uint8_t> imu_payload(56U, 0U);
     imu_payload[0] = 1U;
     expect(imu_payload.size() == 56U, "IMU canonical payload must be 56 bytes");

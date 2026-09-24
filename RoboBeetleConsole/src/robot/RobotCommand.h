@@ -72,6 +72,13 @@ enum class MotionState : quint8 {
 enum class GaitBackend : quint8 {
     SimpleGait = 0,
     CPG = 1,
+    ExperimentalFlex = 2,
+    Count,
+};
+
+enum class FrontRearCoordination : quint8 {
+    SameDirection = 0,
+    OppositeDirection = 1,
     Count,
 };
 
@@ -97,10 +104,26 @@ constexpr bool isValidGaitBackend(GaitBackend backend)
     return isValidGaitBackend(static_cast<quint8>(backend));
 }
 
+constexpr bool isValidFrontRearCoordination(quint8 value)
+{
+    return value < static_cast<quint8>(FrontRearCoordination::Count);
+}
+
+constexpr bool isValidFrontRearCoordination(FrontRearCoordination coordination)
+{
+    return isValidFrontRearCoordination(static_cast<quint8>(coordination));
+}
+
 static_assert(static_cast<quint8>(GaitBackend::SimpleGait) == 0,
               "SimpleGait backend value must remain zero");
 static_assert(static_cast<quint8>(GaitBackend::CPG) == 1,
               "CPG backend value must remain one");
+static_assert(static_cast<quint8>(GaitBackend::ExperimentalFlex) == 2,
+              "ExperimentalFlex backend value must remain two");
+static_assert(static_cast<quint8>(FrontRearCoordination::SameDirection) == 0,
+              "SameDirection coordination value must remain zero");
+static_assert(static_cast<quint8>(FrontRearCoordination::OppositeDirection) == 1,
+              "OppositeDirection coordination value must remain one");
 
 constexpr quint16 motionRequiredServoMask(MotionMode mode)
 {

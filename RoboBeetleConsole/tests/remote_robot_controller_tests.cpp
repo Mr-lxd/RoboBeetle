@@ -578,6 +578,114 @@ void testSafetySupersessionIgnoresLateOutcomes()
            "superseding STOP must settle at Stopped");
 }
 
+void testRemoteGaitSelectorsAndMotionGate()
+{
+    FakeGatewayPeer gateway;
+    rb::RemoteRobotController controller;
+    rb::ConsoleConnectionConfiguration config;
+    config.endpoint = QStringLiteral("127.0.0.1");
+    config.tcpPort = gateway.port();
+    controller.connectController(config);
+    expect(gateway.accept(), "selector test must connect to fake gateway");
+    completeHello(gateway);
+    expect(pumpUntil([&] { return controller.canAcquireControl(); }),
+           "selector test must complete Hello");
+    expect(controller.acquireControl(),
+           "selector test must acquire remote control");
+    completeAcquire(gateway);
+    expect(pumpUntil([&] { return controller.isControlActive(); }),
+           "selector test must reach active control");
+
+    expect(controller.setFrontRearCoordination(
+               rb::FrontRearCoordination::OppositeDirection),
+           "remote coordination selector should submit");
+    const auto coordination = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    expect(coordination.has_value()
+               && coordination->payload
+                   == Bytes({0x09, 0x01}),
+           "RBRP coordination request must contain kind 0x09 and one value byte");
+    expect(controller.isFrontRearCoordinationChangePending()
+               && !controller.confirmedFrontRearCoordination().has_value(),
+           "remote coordination remains pending until accepted outcome");
+    expect(!controller.setGaitBackend(rb::GaitBackend::ExperimentalFlex),
+           "remote gait selector must be blocked while coordination is pending");
+    if (coordination.has_value()) {
+        sendSubmitted(gateway, coordination->request_id, 10U);
+        sendOutcome(gateway, coordination->request_id,
+                    RobotCommandKind::SetFrontRearCoordination, 10U,
+                    GatewayCommandOutcome::Accepted);
+    }
+    expect(pumpUntil([&] {
+        return !controller.isFrontRearCoordinationChangePending()
+            && controller.confirmedFrontRearCoordination().has_value();
+    }), "accepted remote coordination outcome must confirm its value");
+    expect(*controller.confirmedFrontRearCoordination()
+               == rb::FrontRearCoordination::OppositeDirection,
+           "remote coordination outcome confirms Opposite Direction");
+
+    expect(controller.setGaitBackend(rb::GaitBackend::ExperimentalFlex),
+           "remote ExperimentalFlex selector should submit");
+    const auto backend = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    expect(backend.has_value() && backend->payload == Bytes({0x07, 0x02}),
+           "remote ExperimentalFlex request must preserve kind 0x07 and value two");
+    expect(!controller.setFrontRearCoordination(
+               rb::FrontRearCoordination::SameDirection),
+           "remote coordination selector must be blocked while gait is pending");
+    if (backend.has_value()) {
+        sendSubmitted(gateway, backend->request_id, 11U);
+        sendOutcome(gateway, backend->request_id,
+                    RobotCommandKind::SetGaitBackend, 11U,
+                    GatewayCommandOutcome::Accepted);
+    }
+    expect(pumpUntil([&] {
+        return !controller.isGaitBackendChangePending()
+            && controller.confirmedGaitBackend().has_value();
+    }), "accepted remote gait outcome must confirm its value");
+    expect(*controller.confirmedGaitBackend() == rb::GaitBackend::ExperimentalFlex,
+           "remote outcome confirms ExperimentalFlex");
+
+    const std::pair<rb::ServoId, quint16> motionServos[] = {
+        {rb::ServoId::FrontRight, 12U}, {rb::ServoId::FrontLeft, 13U},
+        {rb::ServoId::RearRight, 14U}, {rb::ServoId::RearLeft, 15U},
+    };
+    for (const auto &[servo, sequence] : motionServos) {
+        expect(controller.enableServo(servo),
+               "remote motion gate fixture must enable each paddle");
+        const auto enable = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        expect(enable.has_value(), "remote gateway must receive paddle enable");
+        if (enable.has_value()) {
+            sendSubmitted(gateway, enable->request_id, sequence);
+            sendOutcome(gateway, enable->request_id,
+                        RobotCommandKind::EnableServos, sequence,
+                        GatewayCommandOutcome::Accepted);
+            expect(pumpUntil([&] { return controller.isServoEnabled(servo); }),
+                   "remote paddle enable must be accepted before Motion");
+        }
+    }
+
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "remote gate fixture must submit Forward");
+    const auto start = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    expect(start.has_value(), "remote gateway must receive Forward request");
+    expect(controller.isMotionActive(),
+           "pending remote Motion is active for selector gating");
+    expect(!controller.setGaitBackend(rb::GaitBackend::CPG)
+               && !controller.setFrontRearCoordination(
+                   rb::FrontRearCoordination::SameDirection),
+           "both remote selectors must reject while Motion start is pending");
+    expect(!gateway.nextFrame(RbrpMessageKind::CommandRequest, 100).has_value(),
+           "rejected remote selectors must submit no RBRP command");
+    if (start.has_value()) {
+        sendSubmitted(gateway, start->request_id, 16U);
+        sendOutcome(gateway, start->request_id, RobotCommandKind::StartMotion,
+                    16U, GatewayCommandOutcome::Accepted);
+    }
+    expect(pumpUntil([&] {
+        return controller.motionState() == rb::MotionState::Running;
+    }), "accepted remote Motion start must retain selector gate");
+    gateway.disconnectPeer();
+}
+
 void testCommandTimeoutReleasesAuthority()
 {
     FakeGatewayPeer gateway;
@@ -625,6 +733,7 @@ int main(int argc, char **argv)
     testRemoteControllerAndUi();
     testUserReleaseDoesNotReportAuthorityLoss();
     testSafetySupersessionIgnoresLateOutcomes();
+    testRemoteGaitSelectorsAndMotionGate();
     testCommandTimeoutReleasesAuthority();
     if (failures == 0) {
         std::fprintf(stdout,

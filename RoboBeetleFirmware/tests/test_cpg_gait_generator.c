@@ -56,7 +56,6 @@ static void test_production_profile_and_initialization(void)
     assert(generator.profile.front_amplitude_deg == 10.0);
     assert(generator.profile.rear_amplitude_deg == 10.0);
     assert(generator.profile.nominal_period_s == 2.0);
-    assert(generator.profile.turn_reduced_side_scale == 0.5);
     assert(generator.profile.front_axis_bias_cdeg[MOTION_ASCEND] == 1000.0);
     assert(generator.profile.front_axis_bias_cdeg[MOTION_DESCEND] == -1000.0);
     assert(generator.core.params.period_s[0] == 2.0);
@@ -90,7 +89,7 @@ static void test_forward_mapping_and_phase_topology(void)
     assert_targets(&targets, -125, -125, 0, 250, 250);
 }
 
-static void test_turn_installs_target_amplitudes_without_output_jump(void)
+static void test_turn_keeps_full_target_amplitudes(void)
 {
     cpg_gait_generator_t generator;
     joint_targets_t targets;
@@ -106,12 +105,12 @@ static void test_turn_installs_target_amplitudes_without_output_jump(void)
     assert(cpg_gait_generator_sample(
         &generator, MOTION_TURN_LEFT, 1.0F, 1.0F, &targets));
     assert_targets(&targets, -125, -125, 0, 250, 250);
-    assert_target_amplitudes(&generator, -10.0, 10.0, 5.0, -5.0);
+    assert_target_amplitudes(&generator, -10.0, 10.0, 10.0, -10.0);
 
     assert(cpg_gait_generator_sample(
         &generator, MOTION_TURN_RIGHT, 1.0F, 1.0F, &targets));
     assert_targets(&targets, -125, -125, 0, 250, 250);
-    assert_target_amplitudes(&generator, -5.0, 5.0, 10.0, -10.0);
+    assert_target_amplitudes(&generator, -10.0, 10.0, 10.0, -10.0);
 
     assert(cpg_gait_generator_sample(
         &generator, MOTION_ASCEND, 1.0F, 1.0F, &targets));
@@ -123,34 +122,26 @@ static void test_turn_installs_target_amplitudes_without_output_jump(void)
     assert_target_amplitudes(&generator, -10.0, 10.0, 10.0, -10.0);
 }
 
-static void test_turn_target_drives_core_amplitude_dynamics(void)
+static void test_turn_does_not_scale_core_amplitude_dynamics(void)
 {
     cpg_gait_generator_t generator;
     joint_targets_t targets;
-    double initial_rear_distance;
-
     cpg_gait_generator_init(&generator);
-    generator.core.amplitude[0] = -10.0;
-    generator.core.amplitude[1] = 10.0;
-    generator.core.amplitude[2] = 10.0;
-    generator.core.amplitude[3] = -10.0;
+    generator.core.amplitude[0] = -5.0;
+    generator.core.amplitude[1] = 5.0;
+    generator.core.amplitude[2] = 5.0;
+    generator.core.amplitude[3] = -5.0;
 
     assert(cpg_gait_generator_sample(
         &generator, MOTION_TURN_LEFT, 1.0F, 1.0F, &targets));
-    initial_rear_distance = fabs(
-        generator.core.amplitude[2] -
-        generator.core.params.target_amplitude[2]);
+    assert_target_amplitudes(&generator, -10.0, 10.0, 10.0, -10.0);
 
     cpg_gait_generator_advance(&generator, 100U);
 
-    assert(generator.core.amplitude[2] < 10.0);
+    assert(generator.core.amplitude[0] < -5.0);
+    assert(generator.core.amplitude[1] > 5.0);
     assert(generator.core.amplitude[2] > 5.0);
-    assert(generator.core.amplitude[3] > -10.0);
     assert(generator.core.amplitude[3] < -5.0);
-    assert(fabs(
-               generator.core.amplitude[2] -
-               generator.core.params.target_amplitude[2]) <
-           initial_rear_distance);
 }
 
 static void test_dynamic_production_profile_topology_and_envelope(void)
@@ -323,7 +314,6 @@ static void test_reset_matches_fresh_profile_after_turn(void)
 
     cpg_gait_profile_production_default(&profile);
     profile.nominal_period_s = 1.25;
-    profile.turn_reduced_side_scale = 0.35;
     profile.front_axis_bias_cdeg[MOTION_TURN_LEFT] = 321.0;
 
     cpg_gait_generator_init_with_profile(&fresh, &profile);
@@ -348,8 +338,8 @@ int main(void)
 {
     test_production_profile_and_initialization();
     test_forward_mapping_and_phase_topology();
-    test_turn_installs_target_amplitudes_without_output_jump();
-    test_turn_target_drives_core_amplitude_dynamics();
+    test_turn_keeps_full_target_amplitudes();
+    test_turn_does_not_scale_core_amplitude_dynamics();
     test_dynamic_production_profile_topology_and_envelope();
     test_backward_is_disabled_and_stop_is_safe();
     test_adapter_does_not_apply_rear_clamp();

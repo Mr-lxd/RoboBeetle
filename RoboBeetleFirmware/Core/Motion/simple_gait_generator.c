@@ -9,8 +9,6 @@ typedef struct
 {
     float paddle_amplitude_cdeg;
     float front_axis_bias_cdeg;
-    float left_scale;
-    float right_scale;
     float rear_phase_offset_rad;
 } simple_profile_t;
 
@@ -18,43 +16,31 @@ static const simple_profile_t profiles[MOTION_COUNT] = {
     [MOTION_STOP] = {
         .paddle_amplitude_cdeg = 0.0F,
         .front_axis_bias_cdeg = 0.0F,
-        .left_scale = 0.0F,
-        .right_scale = 0.0F,
         .rear_phase_offset_rad = 0.0F,
     },
     [MOTION_FORWARD] = {
         .paddle_amplitude_cdeg = MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG,
         .front_axis_bias_cdeg = 0.0F,
-        .left_scale = 1.0F,
-        .right_scale = 1.0F,
         .rear_phase_offset_rad = MOTION_PI_F,
     },
     [MOTION_TURN_LEFT] = {
         .paddle_amplitude_cdeg = MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG,
         .front_axis_bias_cdeg = 0.0F,
-        .left_scale = MOTION_PROFILE_TURN_REDUCED_SIDE_SCALE,
-        .right_scale = 1.0F,
         .rear_phase_offset_rad = MOTION_PI_F,
     },
     [MOTION_TURN_RIGHT] = {
         .paddle_amplitude_cdeg = MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG,
         .front_axis_bias_cdeg = 0.0F,
-        .left_scale = 1.0F,
-        .right_scale = MOTION_PROFILE_TURN_REDUCED_SIDE_SCALE,
         .rear_phase_offset_rad = MOTION_PI_F,
     },
     [MOTION_ASCEND] = {
         .paddle_amplitude_cdeg = MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG,
         .front_axis_bias_cdeg = MOTION_PROFILE_ASCEND_FRONT_AXIS_BIAS_CDEG,
-        .left_scale = 1.0F,
-        .right_scale = 1.0F,
         .rear_phase_offset_rad = MOTION_PI_F,
     },
     [MOTION_DESCEND] = {
         .paddle_amplitude_cdeg = MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG,
         .front_axis_bias_cdeg = MOTION_PROFILE_DESCEND_FRONT_AXIS_BIAS_CDEG,
-        .left_scale = 1.0F,
-        .right_scale = 1.0F,
         .rear_phase_offset_rad = MOTION_PI_F,
     },
 };
@@ -68,13 +54,12 @@ static int32_t paddle_target(
     float phase_rad,
     float phase_offset_rad,
     const simple_profile_t *profile,
-    float side_scale,
     float amplitude_scale)
 {
     const float wave = sinf(phase_rad + phase_offset_rad);
     return rounded_cdeg(
         profile->paddle_amplitude_cdeg *
-        side_scale * amplitude_scale * wave);
+        amplitude_scale * wave);
 }
 
 static void simple_gait_generator_advance_interface(
@@ -194,13 +179,11 @@ bool simple_gait_generator_sample(
         generator->phase_rad,
         0.0F,
         profile,
-        profile->right_scale,
         amplitude_scale);
     targets->front_left_cdeg = paddle_target(
         generator->phase_rad,
         0.0F,
         profile,
-        profile->left_scale,
         amplitude_scale);
     targets->front_axis_cdeg = rounded_cdeg(
         profile->front_axis_bias_cdeg * bias_scale);
@@ -208,13 +191,11 @@ bool simple_gait_generator_sample(
         generator->phase_rad,
         profile->rear_phase_offset_rad,
         profile,
-        profile->right_scale,
         amplitude_scale);
     targets->rear_left_cdeg = paddle_target(
         generator->phase_rad,
         profile->rear_phase_offset_rad,
         profile,
-        profile->left_scale,
         amplitude_scale);
 
     return true;

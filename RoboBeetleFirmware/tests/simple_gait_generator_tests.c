@@ -123,9 +123,10 @@ static void test_backward_is_reserved_pending(void)
            "BACKWARD must not emit a fake sign-inverted gait candidate");
 }
 
-static void test_turn_scales_and_axis_bias(void)
+static void test_turn_samples_match_forward_and_axis_bias(void)
 {
     simple_gait_generator_t generator;
+    joint_targets_t forward;
     joint_targets_t turn_left;
     joint_targets_t turn_right;
     joint_targets_t ascend;
@@ -133,6 +134,12 @@ static void test_turn_scales_and_axis_bias(void)
 
     simple_gait_generator_init(&generator);
     simple_gait_generator_advance(&generator, 500U);
+    (void)simple_gait_generator_sample(
+        &generator,
+        MOTION_FORWARD,
+        1.0F,
+        1.0F,
+        &forward);
     (void)simple_gait_generator_sample(
         &generator,
         MOTION_TURN_LEFT,
@@ -146,16 +153,10 @@ static void test_turn_scales_and_axis_bias(void)
         1.0F,
         &turn_right);
 
-    expect(turn_left.front_right_cdeg ==
-               MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG &&
-               turn_left.front_left_cdeg ==
-                   (MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG / 2),
-           "TURN_LEFT should reduce the left side to 50 percent");
-    expect(turn_right.front_right_cdeg ==
-               (MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG / 2) &&
-               turn_right.front_left_cdeg ==
-                   MOTION_PROFILE_PADDLE_AMPLITUDE_CDEG,
-           "TURN_RIGHT should reduce the right side to 50 percent");
+    expect(targets_equal(&turn_left, &forward),
+           "TURN_LEFT generator output should match FORWARD before common turn policy");
+    expect(targets_equal(&turn_right, &forward),
+           "TURN_RIGHT generator output should match FORWARD before common turn policy");
 
     (void)simple_gait_generator_sample(
         &generator,
@@ -226,7 +227,7 @@ int main(void)
     test_modes_and_stop();
     test_forward_phase_relation_and_determinism();
     test_backward_is_reserved_pending();
-    test_turn_scales_and_axis_bias();
+    test_turn_samples_match_forward_and_axis_bias();
     test_phase_step();
     test_reset_returns_to_deterministic_initial_phase();
     test_sample_preserves_logical_targets_for_common_guard();

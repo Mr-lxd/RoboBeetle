@@ -15,6 +15,7 @@ enum class MessageType : std::uint8_t {
     Neutral = 0x14,
     SetMotionMode = 0x15,
     SetGaitBackend = 0x16,
+    SetFrontRearCoordination = 0x17,
     LeakStatus = 0x20,
     ImuSnapshot = 0x21,
     DepthSnapshot = 0x22,
@@ -44,6 +45,7 @@ constexpr bool is_known_message_type(std::uint8_t value)
     case MessageType::Neutral:
     case MessageType::SetMotionMode:
     case MessageType::SetGaitBackend:
+    case MessageType::SetFrontRearCoordination:
     case MessageType::LeakStatus:
     case MessageType::ImuSnapshot:
     case MessageType::DepthSnapshot:

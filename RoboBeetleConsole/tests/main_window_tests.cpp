@@ -17,6 +17,7 @@
 #include <QDoubleSpinBox>
 #include <QEventLoop>
 #include <QGroupBox>
+#include <QGridLayout>
 #include <QHostAddress>
 #include <QKeyEvent>
 #include <QJsonArray>
@@ -118,14 +119,9 @@ QGroupBox *leakPanel(rb::MainWindow &window)
     return nullptr;
 }
 
-QGroupBox *motionPanel(rb::MainWindow &window)
+QWidget *motionPanel(rb::MainWindow &window)
 {
-    for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
-        if (box->objectName() == QStringLiteral("motionPage")) {
-            return box;
-        }
-    }
-    return nullptr;
+    return window.findChild<QWidget *>(QStringLiteral("motionPage"));
 }
 
 QComboBox *gaitBackendCombo(const QWidget *root)
@@ -136,6 +132,33 @@ QComboBox *gaitBackendCombo(const QWidget *root)
         }
     }
     return nullptr;
+}
+
+QComboBox *frontRearCoordinationCombo(const QWidget *root)
+{
+    for (QComboBox *combo : root->findChildren<QComboBox *>()) {
+        if (combo->objectName() == QStringLiteral("frontRearCoordinationCombo")) {
+            return combo;
+        }
+    }
+    return nullptr;
+}
+
+int gridRowForWidget(const QGridLayout *layout, const QWidget *widget)
+{
+    if (layout == nullptr || widget == nullptr) {
+        return -1;
+    }
+    const int index = layout->indexOf(widget);
+    if (index < 0) {
+        return -1;
+    }
+    int row = -1;
+    int column = 0;
+    int rowSpan = 0;
+    int columnSpan = 0;
+    layout->getItemPosition(index, &row, &column, &rowSpan, &columnSpan);
+    return row;
 }
 
 bool hasLabelText(const QWidget *root, const QString &text)
@@ -475,7 +498,7 @@ void testMotionPanelLifecycleAndManualArbitration()
     rb::RobotController controller(&transport, config);
     rb::MainWindow window(&controller);
 
-    QGroupBox *panel = motionPanel(window);
+    QWidget *panel = motionPanel(window);
     expect(panel != nullptr,
            "MainWindow must expose the Motion / Gait panel");
     if (panel == nullptr) {
@@ -697,14 +720,17 @@ void testGaitBackendPanelLifecycle()
     rb::RobotController controller(&transport, config);
     rb::MainWindow window(&controller);
 
-    QGroupBox *panel = motionPanel(window);
+    QWidget *panel = motionPanel(window);
     expect(panel != nullptr, "gait backend test must find the Motion / Gait panel");
     if (panel == nullptr) {
         return;
     }
     QComboBox *combo = gaitBackendCombo(panel);
+    QComboBox *coordinationCombo = frontRearCoordinationCombo(panel);
     expect(combo != nullptr, "Motion panel must expose the gait backend combo");
-    if (combo == nullptr) {
+    expect(coordinationCombo != nullptr,
+           "Motion panel must expose the Front / Rear coordination combo");
+    if (combo == nullptr || coordinationCombo == nullptr) {
         return;
     }
 
@@ -714,13 +740,64 @@ void testGaitBackendPanelLifecycle()
            "gait backend combo must expose SimpleGait");
     expect(combo->findText(QStringLiteral("CPG")) >= 0,
            "gait backend combo must expose CPG");
+    expect(combo->findText(QStringLiteral("Experimental Flex")) >= 0,
+           "gait backend combo must expose Experimental Flex");
+    expect(coordinationCombo->findText(QStringLiteral("Unknown")) >= 0
+               && coordinationCombo->findText(QStringLiteral("Same Direction")) >= 0
+               && coordinationCombo->findText(QStringLiteral("Opposite Direction")) >= 0,
+           "Front / Rear combo must expose Unknown and both coordination values");
+    auto *selectorLayout = qobject_cast<QGridLayout *>(
+        combo->parentWidget()->layout());
+    QLabel *gaitConfirmed = panel->findChild<QLabel *>(
+        QStringLiteral("gaitBackendStatus"));
+    QLabel *coordinationConfirmed = panel->findChild<QLabel *>(
+        QStringLiteral("frontRearCoordinationStatus"));
+    QLabel *gaitCurrent = panel->findChild<QLabel *>(
+        QStringLiteral("gaitBackendCurrentLabel"));
+    QLabel *coordinationCurrent = panel->findChild<QLabel *>(
+        QStringLiteral("frontRearCoordinationCurrentLabel"));
+    QLabel *gaitLabel = nullptr;
+    QLabel *coordinationLabel = nullptr;
+    for (QLabel *label : panel->findChildren<QLabel *>()) {
+        if (label->text() == QStringLiteral("Gait")) {
+            gaitLabel = label;
+        } else if (label->text() == QStringLiteral("Front / Rear")) {
+            coordinationLabel = label;
+        }
+    }
+    expect(selectorLayout != nullptr && gaitLabel != nullptr
+               && gridRowForWidget(selectorLayout, gaitLabel)
+                   == gridRowForWidget(selectorLayout, combo),
+           "Gait label and backend combo must share one row");
+    expect(selectorLayout != nullptr && coordinationLabel != nullptr
+               && gridRowForWidget(selectorLayout, coordinationLabel)
+                   == gridRowForWidget(selectorLayout, coordinationCombo),
+           "Front / Rear label and coordination combo must share one row");
+    expect(selectorLayout != nullptr && gaitConfirmed != nullptr
+               && gaitCurrent != nullptr
+               && gridRowForWidget(selectorLayout, gaitConfirmed)
+                   == gridRowForWidget(selectorLayout, gaitCurrent)
+               && gridRowForWidget(selectorLayout, gaitConfirmed)
+                   > gridRowForWidget(selectorLayout, combo),
+           "gait confirmation status must follow its selector on a Current row");
+    expect(selectorLayout != nullptr && coordinationConfirmed != nullptr
+               && coordinationCurrent != nullptr
+               && gridRowForWidget(selectorLayout, coordinationConfirmed)
+                   == gridRowForWidget(selectorLayout, coordinationCurrent)
+               && gridRowForWidget(selectorLayout, coordinationConfirmed)
+                   > gridRowForWidget(selectorLayout, coordinationCombo),
+           "coordination confirmation status must follow its selector on Current row");
     expect(!combo->isEnabled(),
            "gait backend selection must be disabled while disconnected");
+    expect(!coordinationCombo->isEnabled(),
+           "coordination selection must be disabled while disconnected");
 
     controller.connectTransport({QStringLiteral("COM_TEST"), 9600});
     transport.simulateConnected();
     expect(combo->isEnabled(),
            "gait backend selection must enable after connection");
+    expect(coordinationCombo->isEnabled(),
+           "coordination selection must enable after connection");
 
     const int simpleIndex = combo->findData(
         static_cast<int>(rb::GaitBackend::SimpleGait));
@@ -738,12 +815,19 @@ void testGaitBackendPanelLifecycle()
            "backend UI selection must not confirm before ACK");
     expect(!combo->isEnabled(),
            "gait backend combo must reject a second selection while pending");
+    expect(!coordinationCombo->isEnabled(),
+           "a pending gait selector must also disable coordination selection");
+    expect(gaitConfirmed != nullptr
+               && gaitConfirmed->text() == QStringLiteral("Unknown"),
+           "backend confirmation label stays Unknown until ACK");
 
     acknowledgeLastWithResult(transport, rb::AckResult::Busy);
     expect(!controller.confirmedGaitBackend().has_value(),
            "BUSY must preserve the previous confirmed backend in the UI path");
     expect(combo->isEnabled(),
            "gait backend combo must re-enable after BUSY");
+    expect(coordinationCombo->isEnabled(),
+           "coordination combo must re-enable after gait BUSY");
 
     combo->setCurrentIndex(simpleIndex);
     acknowledgeLast(transport);
@@ -751,8 +835,59 @@ void testGaitBackendPanelLifecycle()
                && *controller.confirmedGaitBackend() == rb::GaitBackend::SimpleGait,
            "matching UI selector ACK must confirm SimpleGait");
     expect(combo->currentData().toInt()
-               == static_cast<int>(rb::GaitBackend::SimpleGait),
+                == static_cast<int>(rb::GaitBackend::SimpleGait),
            "UI combo must reflect the ACK-confirmed backend");
+    expect(gaitConfirmed != nullptr
+               && gaitConfirmed->text() == QStringLiteral("Confirmed — SimpleGait"),
+           "backend confirmation label shows only the ACK-confirmed value");
+
+    const int oppositeIndex = coordinationCombo->findData(
+        static_cast<int>(rb::FrontRearCoordination::OppositeDirection));
+    const qsizetype writesBeforeCoordination = transport.writes().size();
+    coordinationCombo->setCurrentIndex(oppositeIndex);
+    expect(transport.writes().size() == writesBeforeCoordination + 1,
+           "coordination selection must emit exactly one robot write");
+    expect(lastPacket(transport).type == rb::MessageType::SetFrontRearCoordination
+               && lastPacket(transport).payload == QByteArray(1, '\1'),
+           "coordination selector must send only Protocol V2 0x17 and one value byte");
+    expect(!combo->isEnabled() && !coordinationCombo->isEnabled(),
+           "a pending coordination selector must disable both selectors");
+    expect(coordinationConfirmed != nullptr
+               && coordinationConfirmed->text() == QStringLiteral("Unknown"),
+           "coordination confirmation label stays Unknown until ACK");
+    acknowledgeLast(transport);
+    expect(controller.confirmedFrontRearCoordination().has_value()
+               && *controller.confirmedFrontRearCoordination()
+                   == rb::FrontRearCoordination::OppositeDirection,
+           "matching UI selector ACK must confirm Opposite Direction");
+    expect(coordinationConfirmed != nullptr
+               && coordinationConfirmed->text()
+                   == QStringLiteral("Confirmed — Opposite Direction"),
+           "coordination confirmation label shows its ACK-confirmed value");
+    expect(combo->isEnabled() && coordinationCombo->isEnabled(),
+           "both selectors re-enable after the matching coordination ACK");
+
+    const rb::ServoId motionServos[] = {
+        rb::ServoId::FrontRight, rb::ServoId::FrontLeft,
+        rb::ServoId::RearRight, rb::ServoId::RearLeft,
+    };
+    for (const rb::ServoId servo : motionServos) {
+        expect(controller.enableServo(servo),
+               "Motion UI gate fixture must enable the four paddles");
+        acknowledgeLast(transport);
+    }
+    expect(controller.startMotion(rb::MotionMode::Forward),
+           "Motion UI gate fixture must start Forward");
+    acknowledgeLast(transport);
+    expect(!combo->isEnabled() && !coordinationCombo->isEnabled(),
+           "both selectors must disable during active Motion");
+    const qsizetype writesBeforeActiveRejection = transport.writes().size();
+    expect(!controller.setGaitBackend(rb::GaitBackend::CPG)
+               && !controller.setFrontRearCoordination(
+                   rb::FrontRearCoordination::SameDirection),
+           "controller must reject either selector during active Motion");
+    expect(transport.writes().size() == writesBeforeActiveRejection,
+           "active-Motion selector rejection must emit no robot writes");
 }
 
 QGroupBox *findGroupBox(const QWidget *root, const QString &title)

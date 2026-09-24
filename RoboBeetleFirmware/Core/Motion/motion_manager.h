@@ -19,7 +19,8 @@ typedef enum
     MOTION_MANAGER_RESULT_SERVO_NOT_ENABLED,
     MOTION_MANAGER_RESULT_BUSY,
     MOTION_MANAGER_RESULT_HARDWARE_FAILURE,
-    MOTION_MANAGER_RESULT_INVALID_BACKEND
+    MOTION_MANAGER_RESULT_INVALID_BACKEND,
+    MOTION_MANAGER_RESULT_INVALID_COORDINATION
 } motion_manager_result_t;
 
 typedef enum
@@ -36,6 +37,7 @@ typedef struct
     gait_generator_t generator;
     gait_generator_t registered_generators[MOTION_GAIT_BACKEND_COUNT];
     motion_gait_backend_t gait_backend;
+    motion_front_rear_coordination_t front_rear_coordination;
     bool backend_selector_available;
     motion_state_t state;
     motion_mode_t active_mode;
@@ -65,6 +67,7 @@ void motion_manager_init_with_backends(
     safety_supervisor_t *safety_supervisor,
     gait_generator_t simple_gait,
     gait_generator_t cpg,
+    gait_generator_t experimental_flex,
     motion_gait_backend_t initial_backend);
 
 motion_manager_result_t motion_manager_set_gait_backend(
@@ -72,6 +75,13 @@ motion_manager_result_t motion_manager_set_gait_backend(
     motion_gait_backend_t backend);
 
 motion_gait_backend_t motion_manager_gait_backend(
+    const motion_manager_t *manager);
+
+motion_manager_result_t motion_manager_set_front_rear_coordination(
+    motion_manager_t *manager,
+    motion_front_rear_coordination_t coordination);
+
+motion_front_rear_coordination_t motion_manager_front_rear_coordination(
     const motion_manager_t *manager);
 
 motion_manager_result_t motion_manager_start(

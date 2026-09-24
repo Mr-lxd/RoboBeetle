@@ -193,10 +193,16 @@ void testGaitBackendWireContract()
 {
     static_assert(static_cast<quint8>(rb::GaitBackend::SimpleGait) == 0);
     static_assert(static_cast<quint8>(rb::GaitBackend::CPG) == 1);
+    static_assert(static_cast<quint8>(rb::GaitBackend::ExperimentalFlex) == 2);
     static_assert(static_cast<quint8>(rb::MessageType::SetGaitBackend) == 0x16);
+    static_assert(static_cast<quint8>(rb::MessageType::SetFrontRearCoordination) == 0x17);
+    static_assert(static_cast<quint8>(rb::FrontRearCoordination::SameDirection) == 0);
+    static_assert(static_cast<quint8>(rb::FrontRearCoordination::OppositeDirection) == 1);
 
     expect(rb::isKnownMessageType(0x16),
            "SetGaitBackend must be a known message type");
+    expect(rb::isKnownMessageType(0x17),
+           "SetFrontRearCoordination must be a known message type");
 
     QByteArray payload;
     payload.append(static_cast<char>(rb::GaitBackend::SimpleGait));
@@ -212,6 +218,24 @@ void testGaitBackendWireContract()
     expect(decoded.ok(), "SetGaitBackend should encode and decode");
     expect(decoded.packet == packet && decoded.packet.payload.size() == 1,
            "SetGaitBackend payload must be exactly one byte");
+
+    QByteArray coordinationPayload;
+    coordinationPayload.append(
+        static_cast<char>(rb::FrontRearCoordination::OppositeDirection));
+    const rb::Packet coordinationPacket{
+        rb::MessageType::SetFrontRearCoordination,
+        0x1236,
+        coordinationPayload,
+    };
+    const QByteArray coordinationWire =
+        rb::PacketCodec::encodeWire(coordinationPacket);
+    const rb::DecodeResult decodedCoordination =
+        rb::PacketCodec::decodeWire(
+            coordinationWire.first(coordinationWire.size() - 1));
+    expect(decodedCoordination.ok()
+               && decodedCoordination.packet == coordinationPacket
+               && decodedCoordination.packet.payload.size() == 1,
+           "SetFrontRearCoordination must retain its one-byte value");
 }
 
 } // namespace

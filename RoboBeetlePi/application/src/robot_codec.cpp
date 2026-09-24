@@ -99,8 +99,19 @@ CodecResult encode_motion(MotionMode mode, MotionAction action)
 CodecResult encode_gait_backend(GaitBackend backend)
 {
     const auto value = static_cast<std::uint8_t>(backend);
-    if (value > static_cast<std::uint8_t>(GaitBackend::CPG)) {
+    if (value > static_cast<std::uint8_t>(GaitBackend::ExperimentalFlex)) {
         return {CodecStatus::InvalidGaitBackend, {}};
+    }
+    return {CodecStatus::Ok, {value}};
+}
+
+CodecResult encode_front_rear_coordination(
+    FrontRearCoordination coordination)
+{
+    const auto value = static_cast<std::uint8_t>(coordination);
+    if (value > static_cast<std::uint8_t>(
+                    FrontRearCoordination::OppositeDirection)) {
+        return {CodecStatus::InvalidFrontRearCoordination, {}};
     }
     return {CodecStatus::Ok, {value}};
 }

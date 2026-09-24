@@ -102,6 +102,10 @@ sudo reboot
 
 After reconnecting over SSH, repeat `systemctl is-active` and the `ss` check. RoboBeetleConsole should be able to complete RBRP Hello, but the Gateway must remain `Unowned` until the operator explicitly presses Acquire.
 
+## Recorded Linux verification — 2026-09-24
+
+The native aarch64 Release build passed, full CTest passed 10/10, and focused gateway/application tests passed 5/5. The installed service was active on `0.0.0.0:47000`, and the installed binary SHA256 matched the tested build binary. The complete hardware and STM32 record is in [the 2026-09-24 acceptance document](../../docs/experimental-flex-gait-coordination-hardware-acceptance-2026-09-24.md).
+
 ## Operations and diagnostics
 
 ```sh

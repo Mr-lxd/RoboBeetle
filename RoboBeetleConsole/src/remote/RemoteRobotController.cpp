@@ -47,6 +47,8 @@ QString commandKindText(robobeetle::gateway::RobotCommandKind kind)
     case Kind::StartMotion: return QStringLiteral("StartMotion");
     case Kind::StopMotion: return QStringLiteral("StopMotion");
     case Kind::SetGaitBackend: return QStringLiteral("SetGaitBackend");
+    case Kind::SetFrontRearCoordination:
+        return QStringLiteral("SetFrontRearCoordination");
     }
     return QStringLiteral("UnknownCommand");
 }
@@ -317,7 +319,9 @@ bool RemoteRobotController::stopMotion()
 bool RemoteRobotController::setGaitBackend(GaitBackend backend)
 {
     if (!isControlActive() || !isValidGaitBackend(backend)
-        || pendingGaitBackend_.has_value()) {
+        || pendingGaitBackend_.has_value()
+        || pendingFrontRearCoordination_.has_value()
+        || isMotionActive()) {
         return false;
     }
     QByteArray payload(1, static_cast<char>(backend));
@@ -330,6 +334,28 @@ bool RemoteRobotController::setGaitBackend(GaitBackend backend)
     }
     pendingGaitBackend_ = backend;
     emit gaitBackendStateChanged();
+    return true;
+}
+
+bool RemoteRobotController::setFrontRearCoordination(
+    FrontRearCoordination coordination)
+{
+    if (!isControlActive() || !isValidFrontRearCoordination(coordination)
+        || pendingGaitBackend_.has_value()
+        || pendingFrontRearCoordination_.has_value()
+        || isMotionActive()) {
+        return false;
+    }
+    const QByteArray payload(1, static_cast<char>(coordination));
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::SetFrontRearCoordination;
+    pending.frontRearCoordination = coordination;
+    const auto requestId = submitCommand(pending.kind, payload, pending);
+    if (!requestId.has_value()) {
+        return false;
+    }
+    pendingFrontRearCoordination_ = coordination;
+    emit frontRearCoordinationStateChanged();
     return true;
 }
 
@@ -544,6 +570,10 @@ void RemoteRobotController::handleCommandOutcome(
         pendingGaitBackend_.reset();
         emit gaitBackendStateChanged();
     }
+    if (pending.frontRearCoordination.has_value()) {
+        pendingFrontRearCoordination_.reset();
+        emit frontRearCoordinationStateChanged();
+    }
 
     const bool uncertain =
         outcome == static_cast<quint8>(
@@ -685,6 +715,13 @@ void RemoteRobotController::applyAcceptedCommand(
         pendingGaitBackend_.reset();
         emit gaitBackendStateChanged();
         break;
+    case Kind::SetFrontRearCoordination:
+        if (pending.frontRearCoordination.has_value()) {
+            confirmedFrontRearCoordination_ = pending.frontRearCoordination;
+        }
+        pendingFrontRearCoordination_.reset();
+        emit frontRearCoordinationStateChanged();
+        break;
     }
 }
 
@@ -708,6 +745,10 @@ void RemoteRobotController::terminalizePending(
     if (pending.gaitBackend.has_value()) {
         pendingGaitBackend_.reset();
         emit gaitBackendStateChanged();
+    }
+    if (pending.frontRearCoordination.has_value()) {
+        pendingFrontRearCoordination_.reset();
+        emit frontRearCoordinationStateChanged();
     }
     if (pending.kind == robobeetle::gateway::RobotCommandKind::StopMotion
         && isMotionActive()) {
@@ -764,6 +805,12 @@ void RemoteRobotController::failClosedControlState(const QString &reason)
         pendingGaitBackend_.reset();
         confirmedGaitBackend_.reset();
         emit gaitBackendStateChanged();
+    }
+    if (pendingFrontRearCoordination_.has_value()
+        || confirmedFrontRearCoordination_.has_value()) {
+        pendingFrontRearCoordination_.reset();
+        confirmedFrontRearCoordination_.reset();
+        emit frontRearCoordinationStateChanged();
     }
     if (hadMotion) {
         setMotionState(MotionState::Faulted, MotionMode::Stop);

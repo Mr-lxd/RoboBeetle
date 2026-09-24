@@ -11,7 +11,6 @@ static int32_t rounded_cdeg(double value)
 
 static void cpg_profile_target_amplitudes(
     const cpg_gait_profile_t *profile,
-    motion_mode_t mode,
     double target_amplitude[CPG_CORE_NODE_COUNT])
 {
     target_amplitude[0] = -profile->front_amplitude_deg;
@@ -19,16 +18,6 @@ static void cpg_profile_target_amplitudes(
     target_amplitude[2] = profile->rear_amplitude_deg;
     target_amplitude[3] = -profile->front_amplitude_deg;
 
-    if (mode == MOTION_TURN_LEFT)
-    {
-        target_amplitude[2] *= profile->turn_reduced_side_scale;
-        target_amplitude[3] *= profile->turn_reduced_side_scale;
-    }
-    else if (mode == MOTION_TURN_RIGHT)
-    {
-        target_amplitude[0] *= profile->turn_reduced_side_scale;
-        target_amplitude[1] *= profile->turn_reduced_side_scale;
-    }
 }
 
 static void cpg_profile_periods(
@@ -55,7 +44,6 @@ void cpg_gait_profile_production_default(
     profile->front_amplitude_deg = 10.0;
     profile->rear_amplitude_deg = 10.0;
     profile->nominal_period_s = 2.0;
-    profile->turn_reduced_side_scale = 0.5;
     profile->front_axis_bias_cdeg[MOTION_ASCEND] = 1000.0;
     profile->front_axis_bias_cdeg[MOTION_DESCEND] = -1000.0;
 }
@@ -84,7 +72,6 @@ void cpg_gait_generator_init_with_profile(
     cpg_legacy_source_compatible_default_params(&params);
     cpg_profile_target_amplitudes(
         profile,
-        MOTION_FORWARD,
         target_amplitude);
     cpg_profile_periods(profile, period_s);
     (void)memcpy(
@@ -165,7 +152,6 @@ bool cpg_gait_generator_sample(
 
     cpg_profile_target_amplitudes(
         &generator->profile,
-        mode,
         target_amplitude);
     cpg_core_set_target_amplitudes(
         &generator->core,

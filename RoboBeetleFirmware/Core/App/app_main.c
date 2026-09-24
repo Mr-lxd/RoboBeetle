@@ -19,6 +19,7 @@
 #include "depth_transport_stm32.h"
 #include "motion_manager.h"
 #include "cpg_gait_generator.h"
+#include "experimental_flex_gait_generator.h"
 #include "simple_gait_generator.h"
 #include "motion_timing_diagnostics.h"
 #if defined(ROBOBEETLE_CPG_TARGET_BENCHMARK) && \
@@ -68,6 +69,7 @@ static servo_driver_stm32_t servo_driver;
 static servo_service_t servo_service;
 static simple_gait_generator_t simple_gait_generator;
 static cpg_gait_generator_t cpg_gait_generator;
+static experimental_flex_gait_generator_t experimental_flex_gait_generator;
 static motion_manager_t motion_manager;
 static leak_sensor_t leak_sensor;
 static leak_sensor_stm32_t leak_sensor_reader;
@@ -578,6 +580,7 @@ void app_main_init(
         &servo_driver);
     simple_gait_generator_init(&simple_gait_generator);
     cpg_gait_generator_init(&cpg_gait_generator);
+    experimental_flex_gait_generator_init(&experimental_flex_gait_generator);
 #if defined(ROBOBEETLE_CPG_TARGET_BENCHMARK) && \
     ROBOBEETLE_CPG_TARGET_BENCHMARK
     cpg_target_benchmark_run(&cpg_gait_generator);
@@ -594,6 +597,8 @@ void app_main_init(
         &safety_supervisor,
         simple_gait_generator_interface(&simple_gait_generator),
         cpg_gait_generator_interface(&cpg_gait_generator),
+        experimental_flex_gait_generator_interface(
+            &experimental_flex_gait_generator),
         initial_backend);
 #if MOTION_TIMING_DIAGNOSTICS_ACTIVE
     motion_timing_diagnostics_init(

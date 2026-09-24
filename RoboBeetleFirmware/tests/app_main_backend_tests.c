@@ -1,5 +1,6 @@
 #include "app_main.h"
 #include "cpg_gait_generator.h"
+#include "experimental_flex_gait_generator.h"
 #include "gait_generator.h"
 #include "motion_manager.h"
 #include "simple_gait_generator.h"
@@ -17,6 +18,7 @@ static int failures = 0;
 static unsigned int motion_manager_init_calls = 0U;
 static gait_generator_t captured_simple_generator;
 static gait_generator_t captured_cpg_generator;
+static gait_generator_t captured_flex_generator;
 static motion_gait_backend_t captured_initial_backend;
 
 static void expect(bool condition, const char *message)
@@ -34,6 +36,7 @@ void __wrap_motion_manager_init_with_backends(
     safety_supervisor_t *safety_supervisor,
     gait_generator_t simple,
     gait_generator_t cpg,
+    gait_generator_t experimental_flex,
     motion_gait_backend_t initial_backend)
 {
     (void)manager;
@@ -41,6 +44,7 @@ void __wrap_motion_manager_init_with_backends(
     (void)safety_supervisor;
     captured_simple_generator = simple;
     captured_cpg_generator = cpg;
+    captured_flex_generator = experimental_flex;
     captured_initial_backend = initial_backend;
     ++motion_manager_init_calls;
 }
@@ -154,6 +158,7 @@ int main(void)
     TIM_HandleTypeDef tim4 = {0};
     simple_gait_generator_t expected_simple;
     cpg_gait_generator_t expected_cpg;
+    experimental_flex_gait_generator_t expected_flex;
     joint_targets_t targets = {0};
     gait_generator_t selected_generator;
 
@@ -172,6 +177,9 @@ int main(void)
     cpg_gait_generator_init(&expected_cpg);
     const gait_generator_t cpg_interface =
         cpg_gait_generator_interface(&expected_cpg);
+    experimental_flex_gait_generator_init(&expected_flex);
+    const gait_generator_t flex_interface =
+        experimental_flex_gait_generator_interface(&expected_flex);
 
     expect(motion_manager_init_calls == 1U,
            "app_main must initialize MotionManager exactly once");
@@ -181,6 +189,9 @@ int main(void)
     expect(captured_cpg_generator.ops == cpg_interface.ops &&
                captured_cpg_generator.context != NULL,
            "app_main must register the CPG generator");
+    expect(captured_flex_generator.ops == flex_interface.ops &&
+               captured_flex_generator.context != NULL,
+           "app_main must register the ExperimentalFlex generator");
 #if MOTION_DEFAULT_GAIT_BACKEND_CPG
     expect(captured_initial_backend == MOTION_GAIT_BACKEND_CPG,
            "selected app_main initial backend must be CPG");

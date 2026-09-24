@@ -299,6 +299,49 @@ void typed_commands_and_semantic_decode()
         }
     }
 
+    for (const Byte value : {0x00U, 0x01U}) {
+        const auto coordination = encode_frame(
+            RbrpMessageKind::CommandRequest,
+            static_cast<std::uint16_t>(46U + value),
+            bytes({0x09U, value}));
+        RbrpDecoder coordination_decoder;
+        std::vector<RbrpFrame> coordination_frames;
+        coordination_decoder.feed(coordination.wire.data(),
+                                  coordination.wire.size(),
+                                  coordination_frames);
+        const auto coordination_message =
+            decode_remote_message(coordination_frames[0]);
+        expect(coordination_message.message.has_value(),
+               "FrontRear coordination RBRP command remains a semantic message");
+        if (coordination_message.message) {
+            const auto *request = std::get_if<CommandRequest>(
+                &coordination_message.message->payload);
+            expect(request != nullptr && request->command.has_value(),
+                   "RBRP kind 0x09 plus one value decodes to a typed command");
+            if (request != nullptr && request->command) {
+                const auto *typed = std::get_if<SetFrontRearCoordination>(
+                    &*request->command);
+                expect(typed != nullptr &&
+                           static_cast<Byte>(typed->coordination) == value,
+                       "RBRP preserves coordination values zero and one");
+            }
+        }
+    }
+
+    const auto short_coordination = encode_frame(
+        RbrpMessageKind::CommandRequest, 48U, bytes({0x09U}));
+    RbrpDecoder short_coordination_decoder;
+    std::vector<RbrpFrame> short_coordination_frames;
+    short_coordination_decoder.feed(short_coordination.wire.data(),
+                                    short_coordination.wire.size(),
+                                    short_coordination_frames);
+    const auto short_coordination_message =
+        decode_remote_message(short_coordination_frames[0]);
+    expect(short_coordination_message.message.has_value() &&
+               !std::get<CommandRequest>(
+                    short_coordination_message.message->payload).command,
+           "RBRP kind 0x09 without its value does not form a command");
+
     const auto backward = encode_frame(
         RbrpMessageKind::CommandRequest, 44U, bytes({0x05U, 0x02U}));
     RbrpDecoder backward_decoder;

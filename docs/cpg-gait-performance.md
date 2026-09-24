@@ -7,7 +7,7 @@ states, intermediate arithmetic, and logical-output conversion. The historical
 source defines `real_T` as `double`; STM32F407 single-precision FPU hardware
 does not authorize changing this source-compatible implementation to `float`.
 
-### Latest CPG desktop physical evidence — 2026-09-14
+### Historical CPG desktop physical evidence — 2026-09-14
 
 The current Firmware image used the normal CPG backend default
 `MOTION_DEFAULT_GAIT_BACKEND_CPG=1`. The user completed a real desktop hardware
@@ -39,20 +39,11 @@ The evidence boundary remains explicit:
 
 ### Frozen production contract
 
-The following are unchanged and must remain source-compatible: `beta=0.75`,
-the phase-coupling factor `2*beta*(1-beta)`, Forward Euler `dt=0.01`, exact
-`theta_dot` semantics, phase coupling, signed target amplitudes, `double`
-precision, semantic node mapping, Motion operational guards, and Servo
-calibration. The normal backend is CPG (`=1`); explicit `=0` selects the
-retained SimpleGait baseline; each build registers exactly one generator/output
-path. This PR does not add a Qt runtime backend selector or Protocol V2
-trajectory telemetry.
+The CPG model contract remains source-compatible: `beta=0.75`, the phase-coupling factor `2*beta*(1-beta)`, Forward Euler `dt=0.01`, exact `theta_dot` semantics, signed target amplitudes, `double` precision, semantic node mapping, Motion operational guards, and Servo calibration. At startup CPG (`=1`) remains the default, while Firmware registers SimpleGait (`0`), CPG (`1`), and ExperimentalFlex (`2`) for runtime selection while STOPPED. This report is a CPG-only performance record; current selector and coordination behavior is documented in the [Firmware README](../RoboBeetleFirmware/README.md).
 
 ### Target evidence matrix
 
-The following values are the current real STM32F407 target evidence supplied
-for PR #15. They are recorded exactly; no host-executable timing, visual
-desktop result, or unconnected debugger estimate is substituted. The run used
+The following PR #15 values are historical real STM32F407 target evidence. They are recorded exactly and remain specific to that earlier benchmark image. The 2026-09-24 current-image build, memory, programming, and verify results are in [the hardware acceptance document](experimental-flex-gait-coordination-hardware-acceptance-2026-09-24.md). The run used
 `SystemCoreClock=16,000,000 Hz` and `repetitions=32`.
 
 | Evidence | Status | Recorded result |

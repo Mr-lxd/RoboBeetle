@@ -262,6 +262,12 @@ RbrpMessageDecodeResult decode_remote_message(const RbrpFrame &frame)
                     static_cast<GaitBackend>(frame.payload[1])};
             }
             break;
+        case RobotCommandKind::SetFrontRearCoordination:
+            if (frame.payload.size() == 2U) {
+                request.command = SetFrontRearCoordination{
+                    static_cast<FrontRearCoordination>(frame.payload[1])};
+            }
+            break;
         default:
             break;
         }

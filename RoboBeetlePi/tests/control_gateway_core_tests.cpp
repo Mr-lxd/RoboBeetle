@@ -595,6 +595,23 @@ void local_rejections_and_backward_never_submit()
 
     sink.clear_outputs();
     core.process(envelope(
+                     13U, 6U,
+                     command(6U, RobotCommandKind::SetFrontRearCoordination,
+                             std::nullopt)),
+                 4U);
+    const auto *malformed_coordination =
+        find_output<CommandSubmittedMessage>(sink, 13U, 6U);
+    const auto *unsupported_coordination =
+        find_output<ServiceErrorMessage>(sink, 13U, 6U);
+    expect(application.submit_calls == 0U &&
+               malformed_coordination != nullptr &&
+               malformed_coordination->status ==
+                   CommandSubmittedStatus::InvalidArgument &&
+               unsupported_coordination == nullptr,
+           "malformed SetFrontRearCoordination is classified as InvalidArgument");
+
+    sink.clear_outputs();
+    core.process(envelope(
                      13U, 4U, command(4U, RobotCommandKind::StartMotion,
                                       StartMotion{MotionMode::Backward})),
                  4U);
@@ -650,6 +667,75 @@ void set_servo_pwm_reaches_application_as_typed_command()
         expect(pwm != nullptr && pwm->servo_id == 0U && pwm->pulse_us == 1500U,
                "SetServoPwm preserves servo ID and pulse through gateway core");
     }
+}
+
+void coordination_and_experimental_flex_reach_application()
+{
+    FakeGatewayApplicationPort application;
+    application.submit_result = {
+        GatewayApplicationSubmitStatus::Submitted, 817U};
+    OutputSink sink;
+    ControlGatewayCore core(application, sink.callbacks());
+    core.source_connected(19U);
+    core.process(envelope(19U, 1U, hello(1U)), 1U);
+    core.process(envelope(19U, 2U, acquire(2U)), 2U);
+    sink.clear_outputs();
+
+    core.process(envelope(
+                     19U, 3U,
+                     command(3U, RobotCommandKind::SetFrontRearCoordination,
+                             SetFrontRearCoordination{
+                                 FrontRearCoordination::OppositeDirection})),
+                 3U);
+    expect(application.submit_calls == 1U &&
+               application.submitted_commands.size() == 1U,
+           "coordination command reaches the application port");
+    if (application.submitted_commands.size() == 1U) {
+        const auto *coordination = std::get_if<SetFrontRearCoordination>(
+            &application.submitted_commands.front());
+        expect(coordination != nullptr &&
+                   coordination->coordination ==
+                       FrontRearCoordination::OppositeDirection,
+               "gateway preserves the typed OppositeDirection value");
+    }
+
+    core.consume_application_run_result(
+        GatewayApplicationRunResult{
+            GatewayApplicationRunStatus::Progress,
+            {GatewayCommandOutcomeEvent{
+                GatewayCommandOutcome::Accepted, 817U, 0U}},
+            0},
+        4U);
+    const auto *accepted =
+        find_output<GatewayCommandOutcomeMessage>(sink, 19U, 3U);
+    expect(accepted != nullptr &&
+               accepted->command_kind ==
+                   RobotCommandKind::SetFrontRearCoordination &&
+               accepted->event.outcome == GatewayCommandOutcome::Accepted,
+           "coordination ACK outcome retains command kind and request correlation");
+
+    application.submit_result = {
+        GatewayApplicationSubmitStatus::NotActive, std::nullopt};
+    core.process(envelope(
+                     19U, 4U,
+                     command(4U, RobotCommandKind::SetFrontRearCoordination,
+                             SetFrontRearCoordination{
+                                 static_cast<FrontRearCoordination>(2)})),
+                 5U);
+    const auto *invalid =
+        find_output<CommandSubmittedMessage>(sink, 19U, 4U);
+    expect(application.submit_calls == 1U && invalid != nullptr &&
+               invalid->status == CommandSubmittedStatus::InvalidArgument,
+           "invalid coordination value is rejected before application submission");
+
+    core.process(envelope(
+                     19U, 5U,
+                     command(5U, RobotCommandKind::SetGaitBackend,
+                             SetGaitBackend{GaitBackend::ExperimentalFlex})),
+                 6U);
+    expect(application.submit_calls == 2U &&
+               application.submitted_commands.size() == 2U,
+           "ExperimentalFlex backend value 2 passes gateway validation");
 }
 
 void final_outcomes_correlate_only_by_live_sequence()
@@ -1188,6 +1274,7 @@ int main()
     request_ids_are_scoped_and_duplicate_safe();
     local_rejections_and_backward_never_submit();
     set_servo_pwm_reaches_application_as_typed_command();
+    coordination_and_experimental_flex_reach_application();
     final_outcomes_correlate_only_by_live_sequence();
     submitted_correlation_is_live_before_publish_failure();
     impossible_submitted_invariants_fail_safe();

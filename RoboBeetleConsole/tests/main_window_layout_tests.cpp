@@ -12,6 +12,7 @@
 #include <QGridLayout>
 #include <QLineEdit>
 #include <QLabel>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
@@ -292,6 +293,25 @@ void testMinimumToolPagesUseVerticalScrollOnly()
         expect(window.findChild<QWidget *>(pageName) != nullptr,
                "frozen operator page has its structural objectName");
     }
+    auto *motionPage =
+        window.findChild<QWidget *>(QStringLiteral("motionPage"));
+    expect(motionPage != nullptr,
+           "Motion / Gait page exists as a QWidget");
+    expect(motionPage == nullptr || qobject_cast<QGroupBox *>(motionPage) == nullptr,
+           "Motion / Gait page has no outer QGroupBox card");
+    auto *servoFineControlPage =
+        window.findChild<QWidget *>(QStringLiteral("servoFineControlPage"));
+    expect(servoFineControlPage != nullptr,
+           "Servo Fine Control page exists as a QWidget");
+    expect(servoFineControlPage == nullptr
+               || qobject_cast<QGroupBox *>(servoFineControlPage) == nullptr,
+           "Servo Fine Control page has no outer QGroupBox card");
+    auto *motionLog =
+        window.findChild<QPlainTextEdit *>(QStringLiteral("motionLog"));
+    expect(motionLog != nullptr, "Motion Log editor remains present");
+    expect(motionLog == nullptr
+               || motionLog->frameShape() == QFrame::NoFrame,
+           "Motion Log editor has no nested frame");
     const QStringList scrollAreas = {
         QStringLiteral("motionScrollArea"),
         QStringLiteral("servoFineControlScrollArea")};

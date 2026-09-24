@@ -9,7 +9,7 @@ namespace robobeetle::application {
 
 enum class CodecStatus {
     Ok, InvalidMask, InvalidServoId, InvalidMotionMode,
-    InvalidMotionAction, InvalidGaitBackend,
+    InvalidMotionAction, InvalidGaitBackend, InvalidFrontRearCoordination,
 };
 
 struct CodecResult {
@@ -26,6 +26,8 @@ CodecResult encode_servo_pwm(ServoId id, std::uint16_t pulse_us);
 // Wire-level codec accepts Backward; the production facade enforces qualification.
 CodecResult encode_motion(MotionMode mode, MotionAction action);
 CodecResult encode_gait_backend(GaitBackend backend);
+CodecResult encode_front_rear_coordination(
+    FrontRearCoordination coordination);
 
 // Exact Firmware wire validation, without freshness or physical-range policy.
 // If supplied, reason is set to None on success and a specific cause on failure.
