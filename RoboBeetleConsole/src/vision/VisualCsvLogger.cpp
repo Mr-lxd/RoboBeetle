@@ -8,7 +8,7 @@
 
 namespace rb::vision {
 namespace {
-const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video\n";
+const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets\n";
 
 QString escaped(QString field)
 {
@@ -107,7 +107,7 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
                                std::optional<qint64> arrivalMs) const
 {
     QStringList fields;
-    fields.reserve(21);
+    fields.reserve(30);
     fields << (transition ? QStringLiteral("transition") : QStringLiteral("frame"))
            << QString::number(s.localMonoMs)
            << (!transition && arrivalMs ? QString::number(*arrivalMs) : QString{});
@@ -129,6 +129,32 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
            << QString::fromLatin1(proposedCommandName(s.command.effective))
            << s.policyVersion << s.policyHash << QString::number(s.sessionId)
            << (s.awaitingVideo ? QStringLiteral("1") : QStringLiteral("0"));
+    fields << QString::fromLatin1(VisualCsvConfig::schema_version.data(),
+                                  static_cast<qsizetype>(VisualCsvConfig::schema_version.size()));
+    const bool evaluated = !transition && !s.awaitingVideo
+        && s.associationStatus != AssociationStatus::Unlocked;
+    fields << (transition || evaluated
+                   ? QString::fromLatin1(associationStatusName(s.associationStatus)) : QString{})
+           << (evaluated && s.associationDistancePx ? number(*s.associationDistancePx) : QString{});
+    if (evaluated && s.highestConfidenceTarget) {
+        const auto &hc = s.highestConfidenceTarget->target;
+        fields << number(hc.originalPoint.x()) << number(hc.originalPoint.y()) << number(hc.confidence);
+    } else {
+        fields << QString{} << QString{} << QString{};
+    }
+    if (!transition && s.detectionFrame) {
+        const auto &frame = *s.detectionFrame;
+        QStringList detections;
+        detections.reserve(frame.detections.size());
+        for (const auto &d : frame.detections) {
+            detections << (QString::number(d.classId) + ':' + number(d.confidence)
+                + ':' + number(d.originalPoint.x()) + ':' + number(d.originalPoint.y()));
+        }
+        fields << QString::number(frame.sourceSize.width()) << QString::number(frame.sourceSize.height())
+               << detections.join(';');
+    } else {
+        fields << QString{} << QString{} << QString{};
+    }
     for (QString &field : fields) field = escaped(std::move(field));
     return (fields.join(QLatin1Char(',')) + QLatin1Char('\n')).toUtf8();
 }

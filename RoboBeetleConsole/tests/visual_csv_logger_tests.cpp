@@ -16,7 +16,7 @@
 namespace {
 using namespace rb::vision;
 int failures = 0;
-const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video\n";
+const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets\n";
 void check(bool ok, const char *why) {
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", why); ++failures; }
 }
@@ -60,7 +60,7 @@ VisualDiagnosticSnapshot sample(quint64 id = 10, quint64 session = 1) {
     s.command.yaw_cmd = -0.25;
     s.command.proposed = ProposedCommand::TurnLeft;
     s.command.effective = ProposedCommand::TurnLeft;
-    s.policyVersion = QStringLiteral("visual-command-proposal-v1");
+    s.policyVersion = QStringLiteral("visual-command-proposal-v2");
     s.policyHash = QString(64, QLatin1Char('a'));
     return s;
 }
@@ -89,12 +89,12 @@ void defaultsAndFirstFrame() {
           "successful start emits one recording state change");
     logger.record(sample()); logger.flush();
     const auto bytes = contents(logger.filePath());
-    check(bytes.startsWith(header), "header has the exact ordered 21 columns");
+    check(bytes.startsWith(header), "header has the exact ordered 30 columns");
     const auto rows = csv(bytes);
     check(rows.size() == 2, "first target snapshot produces exactly one frame without initial transition");
     if (rows.size() >= 2) {
-        check(rows[1].size() == 21, "frame has exactly 21 columns");
-        if (rows[1].size() == 21) check(rows[1][0] == "frame" && rows[1][1] == "123"
+        check(rows[1].size() == 30, "frame has exactly 30 columns");
+        if (rows[1].size() == 30) check(rows[1][0] == "frame" && rows[1][1] == "123"
             && rows[1][3] == "10" && rows[1][4] == "1010" && rows[1][5] == "2"
             && rows[1][6] == "fish" && rows[1][7] == "0.875" && rows[1][8] == "120.5"
             && rows[1][9] == "240.25" && rows[1][12] == "-0.25"
@@ -132,7 +132,7 @@ void transitionsAndHold() {
     check(rows.size() == 4, "timer-only state/effective changes produce transitions; repeats/proposal-only changes do not");
     if (rows.size() == 4) {
         for (int r = 1; r < rows.size(); ++r) {
-            check(rows[r].size() == 21 && rows[r][0] == "transition", "transition retains exact column count");
+            check(rows[r].size() == 30 && rows[r][0] == "transition", "transition retains exact column count");
             for (int c = 2; c <= 11; ++c) check(rows[r][c].isEmpty(), "transition frame/target columns stay empty");
         }
         check(rows[1][15] == "HOLD" && rows[1][16] == "TURN_LEFT" && rows[1][12] == "-0.25",
@@ -157,7 +157,7 @@ void awaitingVideoAndMissingTarget() {
     logger.stop();
     const auto rows = csv(contents(logger.filePath()));
     check(rows.size() == 5, "awaiting-video ID records once, video catchup can still produce a true transition");
-    if (rows.size() == 5 && rows[2].size() == 21 && rows[4].size() == 21) {
+    if (rows.size() == 5 && rows[2].size() == 30 && rows[4].size() == 30) {
         check(rows[2][0] == "frame" && rows[2][3] == "11" && rows[2][20] == "0"
               && rows[2][6] == "fish" && rows[2][10].toDouble() == 0.5
               && std::abs(rows[2][12].toDouble() + 0.025) < 1e-12
@@ -188,7 +188,7 @@ void pendingReplacementAndInvalidation() {
         logger.record(s); logger.record(s); logger.stop();
         const auto rows = csv(contents(logger.filePath()));
         check(rows.size() == 3, "replacement or invalidation produces exactly two ordered rows");
-        if (rows.size() != 3 || rows[1].size() != 21 || rows[2].size() != 21) continue;
+        if (rows.size() != 3 || rows[1].size() != 30 || rows[2].size() != 30) continue;
         check(rows[1][0] == "frame" && rows[1][3] == "10" && rows[1][20] == "1"
               && rows[1][1] == "623" && rows[1][2] == "123",
               "fallback row precedes replacement/transition and retains original 500 ms arrival gap");
@@ -210,7 +210,7 @@ void pendingReplacementAndInvalidation() {
     auto next = sample(0, 2); next.localMonoMs = 150;
     logger.record(next); logger.stop();
     const auto rows = csv(contents(logger.filePath()));
-    check(rows.size() == 3 && rows[1].size() == 21 && rows[2].size() == 21 && rows[1][3] == "10" && rows[1][19] == "1"
+    check(rows.size() == 3 && rows[1].size() == 30 && rows[2].size() == 30 && rows[1][3] == "10" && rows[1][19] == "1"
           && rows[1][20] == "1" && rows[1][1] == "150" && rows[1][2] == "123"
           && rows[2][3] == "0" && rows[2][19] == "2",
           "session reset flushes the old pending ID before a low ID from the new session");
@@ -241,7 +241,7 @@ void csvReproducesEma() {
     int accepted = 0, awaiting = 0;
     for (qsizetype i = 1; i < rows.size(); ++i) {
         const auto &r = rows[i];
-        if (r.size() != 21 || r[0] != "frame") continue;
+        if (r.size() != 30 || r[0] != "frame") continue;
         if (r[20] == "1") { ++awaiting; continue; }
         bool exOk = false, filteredOk = false;
         const double ex = r[10].toDouble(&exOk), filtered = r[12].toDouble(&filteredOk);
@@ -268,7 +268,7 @@ void closingPendingFrame() {
             if (explicitStop) { logger.stop(); logger.stop(); }
         }
         const auto rows = csv(contents(path));
-        check(rows.size() == 2 && rows[1].size() == 21 && rows[1][20] == "1"
+        check(rows.size() == 2 && rows[1].size() == 30 && rows[1][20] == "1"
               && rows[1][1] == "133" && rows[1][2] == "123",
               "stop or destructor flushes unresolved pending frame once at the last evaluation time");
         check(changes == (explicitStop ? 1 : 0),
@@ -289,7 +289,7 @@ void arrivalBeforeRecording() {
         }
         logger.stop();
         const auto rows = csv(contents(logger.filePath()));
-        check(rows.size() == 2 && rows[1].size() == 21 && rows[1][2] == "123"
+        check(rows.size() == 2 && rows[1].size() == 30 && rows[1][2] == "123"
               && rows[1][1] == (awaiting ? "158" : "143"),
               "enabling CSV preserves the ID arrival already observed while recording was off");
     }
@@ -306,8 +306,8 @@ void escapingAndLocale() {
     const auto bytes = contents(logger.filePath()); const auto rows = csv(bytes);
     check(bytes.contains(QString::fromUtf8("鱼").toUtf8()) && bytes.contains("\"\"blue\"\""),
           "CSV is UTF-8 and doubles embedded quotes");
-    check(rows.size() == 2 && rows[1].size() == 21, "embedded commas/quotes/newlines preserve one CSV record");
-    if (rows.size() == 2 && rows[1].size() == 21) check(rows[1][6] == s.target->target.className
+    check(rows.size() == 2 && rows[1].size() == 30, "embedded commas/quotes/newlines preserve one CSV record");
+    if (rows.size() == 2 && rows[1].size() == 30) check(rows[1][6] == s.target->target.className
         && rows[1][17] == s.policyVersion && rows[1][18] == s.policyHash
         && rows[1][7] == "0.875" && rows[1][8] == "120.5", "escaped text roundtrips and numbers ignore system locale");
 }
@@ -417,8 +417,69 @@ void operatingSystemIoFailure(bool flushFailure) {
 #endif
 }
 } // namespace
+void associationRowsFromSession() {
+    QTemporaryDir dir; VisualCsvLogger logger;
+    if (!begin(logger,dir.path())) return;
+    qint64 now=0; VisualDiagnosticSession session({},[&]{return now;});
+    QObject::connect(&session,&VisualDiagnosticSession::diagnosticChanged,
+                     [&](const auto &s){logger.record(s);});
+    auto frame=[](quint64 id,double u=450) {
+        return DetectionFrame{id,1000+id,{640,480},{{0,"fish",.89,{u,240}},{1,"other",.85,{547,240}}}};
+    };
+    auto f=frame(1); session.onDetectionArrival(f,{DetectionDisplayState::Target,f});
+    now=40; f=frame(2); f.detections[0].confidence=.85; f.detections[1].confidence=.89;
+    session.onDetectionArrival(f,{DetectionDisplayState::AwaitingVideo,f});
+    now=55; session.refresh({DetectionDisplayState::Target,f});
+    session.refresh({DetectionDisplayState::Target,f});
+    now=80; f=frame(3,455); session.onDetectionArrival(f,{DetectionDisplayState::Target,f});
+    now=120; f=frame(4,460); session.onDetectionArrival(f,{DetectionDisplayState::AwaitingVideo,f});
+    now=160; f=frame(5,460); session.onDetectionArrival(f,{DetectionDisplayState::Target,f});
+    now=200; f=frame(6,547); f.detections.removeLast();
+    session.onDetectionArrival(f,{DetectionDisplayState::Target,f});
+    now=450; f=frame(7); session.onDetectionArrival(f,{DetectionDisplayState::AwaitingVideo,f});
+    now=950; session.refresh({DetectionDisplayState::AwaitingVideo,f});
+    logger.stop(); const auto rows=csv(contents(logger.filePath()));
+    std::optional<double> ema; int accepted=0,waiting=0,frame2=0;
+    for(qsizetype i=1;i<rows.size();++i) {
+        const auto &r=rows[i];
+        check(r.size()==30,"association schema has thirty columns");
+        if(r.size()!=30)continue;
+        check(r[21]=="visual-csv-v2","every row including transition identifies schema");
+        if(r[0]=="transition") {
+            for(int col=23;col<30;++col)check(r[col].isEmpty(),"transition excludes new frame fields");
+            continue;
+        }
+        check(r[27]=="640" && r[28]=="480" && !r[29].isEmpty(),"frame and discarded awaiting retain dimensions/all detections");
+        for(const auto &entry:r[29].split(';')) {
+            const auto values=entry.split(':');
+            check(values.size()==4,"dets entries are replayable classId:confidence:u:v");
+        }
+        if(r[20]=="1") {
+            ++waiting;
+            for(int col=22;col<=26;++col)check(r[col].isEmpty(),"unprocessed awaiting has no association or highest selection");
+            if(r[3]=="7")check(i+1<rows.size() && rows[i+1][0]=="transition"
+                              && rows[i+1][14]=="STALE","500 ms waiting row precedes STALE transition");
+            continue;
+        }
+        if(r[3]=="2") {
+            ++frame2;
+            check(r[22]=="ASSOCIATED" && r[8].toDouble()==450 && r[24].toDouble()==547
+                  && r[1].toLongLong()-r[2].toLongLong()==15,"15 ms catchup logs actual lock and jumping hc once");
+        }
+        if(r[3]=="6")check(r[22]=="MISS" && r[8].isEmpty() && r[10].isEmpty()
+                           && r[24].toDouble()==547 && r[15]=="HOLD","MISS logs hc but does not substitute target");
+        if(!r[10].isEmpty()) {
+            const double ex=r[10].toDouble(); ema=ema?.3*ex+.7*(*ema):ex;
+            check(std::abs(r[12].toDouble()-*ema)<1e-12,"actual association session CSV preserves EMA chain");
+            ++accepted;
+        }
+    }
+    check(frame2==1 && accepted==4 && waiting==2,"once-per-ID evaluated and discarded frame counts");
+}
+
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
+    associationRowsFromSession();
     defaultsAndFirstFrame(); frameDeduplicationAndSessionReset(); transitionsAndHold();
     awaitingVideoAndMissingTarget(); escapingAndLocale(); periodicAndDestructorFlush();
     pendingReplacementAndInvalidation(); csvReproducesEma(); closingPendingFrame();
