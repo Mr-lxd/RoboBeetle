@@ -37,6 +37,8 @@ class DetectionClient;
 class VideoView;
 class VisionClient;
 class VisionControlClient;
+class VisualDiagnosticSession;
+struct VisualViewContext;
 }
 
 class MainWindow final : public QMainWindow {
@@ -90,6 +92,7 @@ private:
     void refreshVisionEndpointUi();
     void syncDetectionStream();
     void refreshDetectionOverlay();
+    [[nodiscard]] vision::VisualViewContext visualDisplayContext() const;
     void resetDetectionSession();
     void reflowActuatorCards();
     void updateVideoSurfaceGeometry();
@@ -119,6 +122,9 @@ private:
     vision::VisionClient *visionClient_{nullptr};
     vision::VisionControlClient *visionControlClient_{nullptr};
     vision::DetectionClient *detectionClient_{nullptr};
+    vision::VisualDiagnosticSession *visualSession_{nullptr};
+    quint64 visualSessionId_{0};
+    QLabel *visualProposalDetails_{nullptr};
 
     // Vision card.
     QLineEdit *piHost_{nullptr};

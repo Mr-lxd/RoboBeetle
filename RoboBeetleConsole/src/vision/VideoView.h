@@ -2,6 +2,7 @@
 
 #include "vision/DetectionMetadata.h"
 #include "vision/TargetState.h"
+#include "vision/VisualDiagnosticSession.h"
 
 #include <QElapsedTimer>
 #include <QImage>
@@ -25,6 +26,11 @@ public:
     void clearFrame();
     void setDetectionOverlay(const DetectionFrame &frame);
     void clearDetectionOverlay(DetectionDisplayState reason = DetectionDisplayState::Stale);
+    void setVisualDiagnostic(const VisualDiagnosticSnapshot &snapshot);
+    [[nodiscard]] const std::optional<VisualDiagnosticSnapshot> &currentVisualDiagnostic() const noexcept
+    {
+        return visualDiagnostic_;
+    }
 
     [[nodiscard]] const std::optional<TargetState> &currentTargetState() const noexcept
     {
@@ -71,6 +77,7 @@ private:
     std::optional<DetectionFrame> detectionOverlay_;
     std::optional<TargetState> targetState_;
     DetectionDisplayState diagnosticState_{DetectionDisplayState::Stale};
+    std::optional<VisualDiagnosticSnapshot> visualDiagnostic_;
     quint64 replacedPendingFrames_{0};
     bool paintPending_{false};
     QElapsedTimer fpsTimer_;

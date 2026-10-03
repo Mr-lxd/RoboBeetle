@@ -18,9 +18,11 @@ DetectionDisplayState detectionOverlayState(
     if (!frame.sourceSize.isValid() || frame.sourceSize != currentVideoSize) {
         return DetectionDisplayState::Stale;
     }
-    if (frame.captureTimestampNs == 0U || currentVideoCaptureTimestampNs == 0U
-        || frame.captureTimestampNs > currentVideoCaptureTimestampNs) {
+    if (frame.captureTimestampNs == 0U || currentVideoCaptureTimestampNs == 0U) {
         return DetectionDisplayState::Stale;
+    }
+    if (frame.captureTimestampNs > currentVideoCaptureTimestampNs) {
+        return DetectionDisplayState::AwaitingVideo;
     }
     if (currentVideoCaptureTimestampNs - frame.captureTimestampNs
         > kDetectionOverlayFreshnessNs) {

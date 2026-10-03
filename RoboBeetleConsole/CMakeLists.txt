@@ -41,6 +41,13 @@ add_library(RoboBeetleCore
     src/vision/DetectionMetadata.cpp
     src/vision/TargetState.h
     src/vision/TargetState.cpp
+    src/vision/VisualPolicyConfig.h
+    src/vision/VisualTargetStateMachine.h
+    src/vision/VisualTargetStateMachine.cpp
+    src/vision/VisualCommandPolicy.h
+    src/vision/VisualCommandPolicy.cpp
+    src/vision/VisualDiagnosticSession.h
+    src/vision/VisualDiagnosticSession.cpp
     src/vision/DetectionStreamDecoder.h
     src/vision/DetectionStreamDecoder.cpp
     src/vision/DetectionClient.h
@@ -144,6 +151,20 @@ if(BUILD_TESTING)
     add_executable(target_state_tests tests/target_state_tests.cpp)
     target_link_libraries(target_state_tests PRIVATE RoboBeetleCore)
     add_test(NAME target_state_tests COMMAND target_state_tests)
+
+    add_executable(visual_policy_config_tests tests/visual_policy_config_tests.cpp)
+    target_include_directories(visual_policy_config_tests PRIVATE src)
+    add_test(NAME visual_policy_config_tests COMMAND visual_policy_config_tests)
+    add_executable(visual_target_state_machine_tests tests/visual_target_state_machine_tests.cpp)
+    target_link_libraries(visual_target_state_machine_tests PRIVATE RoboBeetleCore)
+    add_test(NAME visual_target_state_machine_tests COMMAND visual_target_state_machine_tests)
+    add_executable(visual_command_policy_tests tests/visual_command_policy_tests.cpp)
+    target_include_directories(visual_command_policy_tests PRIVATE src)
+    target_sources(visual_command_policy_tests PRIVATE src/vision/VisualCommandPolicy.cpp)
+    add_test(NAME visual_command_policy_tests COMMAND visual_command_policy_tests)
+    add_executable(visual_diagnostic_session_tests tests/visual_diagnostic_session_tests.cpp)
+    target_link_libraries(visual_diagnostic_session_tests PRIVATE RoboBeetleCore)
+    add_test(NAME visual_diagnostic_session_tests COMMAND visual_diagnostic_session_tests)
 
     add_executable(robot_controller_tests tests/robot_controller_tests.cpp)
     target_link_libraries(robot_controller_tests PRIVATE RoboBeetleCore)
