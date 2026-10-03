@@ -1,6 +1,6 @@
 # Visual error DRY_RUN validation — 2026-10-03
 
-Scope: Qt centroid/error display only. No physical camera, FOMO deployment, robot command, firmware flashing or water validation was performed. The screen/camera experiment remains pending. Existing manual controls retain their behavior.
+Scope: Qt centroid/error display only. The implementation engineer's original checks below used simulation/loopback and did not perform physical camera, FOMO deployment, robot command, firmware flashing or water validation. The subsequent user desktop result is recorded separately at the end of this document. Existing manual controls retain their behavior.
 
 ## Reproduction environment
 
@@ -83,3 +83,13 @@ This is a concrete interface/header-reference check, supported by the integratio
 ## Portable smoke check
 
 The new `D:\RoboBeetleConsole-portable-visual-error-dry-run-status-20261003` package is deployed with `windeployqt --release --no-translations --include-plugins qjpeg,qoffscreen`. With PATH restricted to Windows system directories, its EXE stays running for three seconds and loads its own `platforms/qoffscreen.dll`; its `imageformats/qjpeg.dll` is present. The check stops only the PID it launched. This verifies dependency deployment/startup, not live video or robot control.
+
+## 用户桌面实测（用户确认，2026-10-03）
+
+本节记录用户提供的实测结果，区别于上面的工程师自动化/loopback 验证；不代表下水或机器人运动验收。
+
+- 用户确认 T1–T8 桌面实测通过，T2–T8 均通过。
+- 用户核对测试 EXE 的 SHA-256 一致：`955BE5F63467653CE16F9892AA0D4833BA5DFA3B1D7C017A39985AAB94CD7821`。工程师本次也重新读取保留便携包的 EXE，核对该哈希一致；这是既有 Task 01 EXE，不是 Task 02 构建。
+- 图像尺寸为 **640×480**。示例 `u=386.7, v=82.4`：`ex=(386.7-320)/320=0.2084375`，`ey=(82.4-240)/240=-0.656666…`；界面显示 `ex=0.208, ey=-0.657`，与公式及三位小数显示一致。
+- **T9：拔摄像头**时，用户观察到视觉进程退出、视频断开、画面清空。用户提供的部署机制为 `vision_live.py` 的 CameraOwner 错误退出，加 systemd `Restart=on-failure`；本轮未修改或重新部署这条链路。
+- 此拔摄像头方式没有复现“read 卡住、Pi 时间戳冻结但 HTTP 状态仍新鲜”的场景，不能把画面清空当作本地墙钟看门狗已经存在的证据。该场景改由 Task 02 注入本地单调时间的单元测试覆盖：没有递增检测 frame_id 时进入 `STALE`，建议命令为 `STOP`；重复同一 frame_id 不续期。Task 02 实现与该测试尚未执行。
