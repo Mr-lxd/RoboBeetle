@@ -234,6 +234,22 @@ void freshnessGateMatchesFrozenUiContract()
            "stale HTTP status suppresses overlay");
 
     frame.detections.clear();
+    expect(detectionOverlayState(frame, QSize(640, 480),
+                                2'100'000'000ULL, true, true)
+               == DetectionDisplayState::NoTarget,
+           "fresh empty result is NO_TARGET");
+    expect(detectionOverlayState(frame, QSize(640, 480),
+                                3'500'000'001ULL, true, true)
+               == DetectionDisplayState::Stale,
+           "expired empty result is STALE rather than NO_TARGET");
+    expect(detectionOverlayState(frame, QSize(640, 480),
+                                2'100'000'000ULL, false, true)
+               == DetectionDisplayState::InferenceOff,
+           "fresh off inference is INFERENCE_OFF rather than NO_TARGET");
+    expect(detectionOverlayState(frame, QSize(640, 480),
+                                2'100'000'000ULL, false, false)
+               == DetectionDisplayState::Stale,
+           "stale HTTP status cannot assert authoritative INFERENCE_OFF");
     expect(!detectionOverlayRenderable(
                frame, QSize(640, 480),
                2'100'000'000ULL, true, true),

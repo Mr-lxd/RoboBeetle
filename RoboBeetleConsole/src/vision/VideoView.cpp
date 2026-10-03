@@ -5,6 +5,7 @@
 #include <QPaintEvent>
 #include <QPen>
 #include <QRect>
+#include <QStringList>
 
 namespace rb::vision {
 
@@ -28,6 +29,9 @@ void VideoView::setFrame(
         ++replacedPendingFrames_;
     }
     image_ = image;
+    if (detectionOverlay_ && detectionOverlay_->sourceSize != image_.size()) {
+        clearDetectionOverlay();
+    }
     frameId_ = frameId;
     captureTimestampNs_ = captureTimestampNs;
     paintPending_ = true;
@@ -40,28 +44,71 @@ void VideoView::clearFrame()
     frameId_ = 0U;
     captureTimestampNs_ = 0U;
     detectionOverlay_.reset();
+    targetState_.reset();
+    diagnosticState_ = DetectionDisplayState::Stale;
     paintPending_ = false;
     update();
 }
 
 void VideoView::setDetectionOverlay(const DetectionFrame &frame)
 {
-    if (image_.isNull() || frame.sourceSize != image_.size()
-        || frame.detections.isEmpty()) {
+    if (image_.isNull() || frame.sourceSize != image_.size()) {
+        clearDetectionOverlay();
+        return;
+    }
+    if (frame.detections.isEmpty()) {
+        clearDetectionOverlay(DetectionDisplayState::NoTarget);
+        return;
+    }
+    const auto state = selectTargetState(frame);
+    if (!state) {
         clearDetectionOverlay();
         return;
     }
     detectionOverlay_ = frame;
+    targetState_ = state;
+    diagnosticState_ = DetectionDisplayState::Target;
     update();
 }
 
-void VideoView::clearDetectionOverlay()
+void VideoView::clearDetectionOverlay(DetectionDisplayState reason)
 {
-    if (!detectionOverlay_.has_value()) {
+    if (!detectionOverlay_.has_value() && diagnosticState_ == reason) {
         return;
     }
     detectionOverlay_.reset();
+    targetState_.reset();
+    diagnosticState_ = reason;
     update();
+}
+
+QString VideoView::visualDiagnosticText() const
+{
+    if (!targetState_) {
+        QString reason = QStringLiteral("STALE");
+        if (diagnosticState_ == DetectionDisplayState::NoTarget) {
+            reason = QStringLiteral("NO_TARGET");
+        } else if (diagnosticState_ == DetectionDisplayState::InferenceOff) {
+            reason = QStringLiteral("INFERENCE_OFF");
+        }
+        return QStringLiteral(
+            "VISION DRY_RUN | %1\n"
+            "selection: highest confidence\n"
+            "u=-- v=--\n"
+            "ex=-- ey=--").arg(reason);
+    }
+    const TargetState &state = *targetState_;
+    return QStringLiteral(
+        "VISION DRY_RUN | TARGET\n"
+        "%1 | conf=%2 (highest)\n"
+        "u=%3 v=%4\n"
+        "ex=%5 ey=%6")
+        .arg(state.target.className)
+        .arg(state.target.confidence, 0, 'f', 3)
+        .arg(state.target.originalPoint.x(), 0, 'f', 1)
+        .arg(state.target.originalPoint.y(), 0, 'f', 1)
+        .arg(state.ex, 0, 'f', 3)
+        .arg(state.ey, 0, 'f', 3);
 }
 
 void VideoView::paintEvent(QPaintEvent *event)
@@ -82,6 +129,53 @@ void VideoView::paintEvent(QPaintEvent *event)
         scaled.width(),
         scaled.height());
     painter.drawImage(target, image_);
+
+    // This diagnostic path has no motion output. Reuse original-frame geometry.
+    painter.save();
+    painter.setClipRect(target);
+    const QColor errorColor(0x00, 0xE5, 0xFF);
+    painter.setPen(QPen(errorColor, 2));
+    const QPointF center(
+        target.left() + target.width() / 2.0,
+        target.top() + target.height() / 2.0);
+    if (targetState_) {
+        const QPointF point = targetState_->target.originalPoint;
+        painter.drawLine(center, QPointF(
+            target.left() + point.x() * target.width() / image_.width(),
+            target.top() + point.y() * target.height() / image_.height()));
+    }
+    constexpr int centerArm = 10;
+    painter.drawLine(center - QPointF(centerArm, 0), center + QPointF(centerArm, 0));
+    painter.drawLine(center - QPointF(0, centerArm), center + QPointF(0, centerArm));
+
+    QFont diagnosticFont = font();
+    diagnosticFont.setPointSizeF(9.0);
+    painter.setFont(diagnosticFont);
+    const QFontMetrics diagnosticMetrics(diagnosticFont);
+    const QStringList lines = visualDiagnosticText().split('\n');
+    int textWidth = 0;
+    for (const QString &line : lines) {
+        textWidth = qMax(textWidth, diagnosticMetrics.horizontalAdvance(line));
+    }
+    constexpr int padding = 5;
+    constexpr int margin = 6;
+    const int panelWidth = qMin(textWidth + 2 * padding, target.width() - 2 * margin);
+    const QRect panel(
+        target.right() - margin - panelWidth + 1,
+        target.top() + margin,
+        panelWidth,
+        static_cast<int>(lines.size()) * diagnosticMetrics.lineSpacing() + 2 * padding);
+    painter.fillRect(panel, QColor(0, 0, 0, 190));
+    painter.setPen(Qt::white);
+    for (qsizetype index = 0; index < lines.size(); ++index) {
+        painter.drawText(
+            panel.left() + padding,
+            panel.top() + padding + diagnosticMetrics.ascent()
+                + static_cast<int>(index) * diagnosticMetrics.lineSpacing(),
+            diagnosticMetrics.elidedText(
+                lines[index], Qt::ElideRight, panelWidth - 2 * padding));
+    }
+    painter.restore();
 
     if (detectionOverlay_.has_value()
         && detectionOverlay_->sourceSize == image_.size()) {

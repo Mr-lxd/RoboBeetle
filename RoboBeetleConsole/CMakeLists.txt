@@ -39,6 +39,8 @@ add_library(RoboBeetleCore
     src/vision/VisionControlClient.cpp
     src/vision/DetectionMetadata.h
     src/vision/DetectionMetadata.cpp
+    src/vision/TargetState.h
+    src/vision/TargetState.cpp
     src/vision/DetectionStreamDecoder.h
     src/vision/DetectionStreamDecoder.cpp
     src/vision/DetectionClient.h
@@ -136,8 +138,12 @@ if(BUILD_TESTING)
         src/vision/VideoView.cpp
     )
     target_include_directories(video_view_tests PRIVATE src)
-    target_link_libraries(video_view_tests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+    target_link_libraries(video_view_tests PRIVATE RoboBeetleCore Qt6::Widgets)
     add_test(NAME video_view_tests COMMAND video_view_tests)
+
+    add_executable(target_state_tests tests/target_state_tests.cpp)
+    target_link_libraries(target_state_tests PRIVATE RoboBeetleCore)
+    add_test(NAME target_state_tests COMMAND target_state_tests)
 
     add_executable(robot_controller_tests tests/robot_controller_tests.cpp)
     target_link_libraries(robot_controller_tests PRIVATE RoboBeetleCore)
@@ -168,6 +174,13 @@ if(BUILD_TESTING)
     )
     target_link_libraries(main_window_inference_controls_tests PRIVATE RoboBeetleCore Qt6::Widgets)
     add_test(NAME main_window_inference_controls_tests COMMAND main_window_inference_controls_tests)
+
+    add_executable(main_window_visual_error_tests
+        tests/main_window_visual_error_tests.cpp
+        ${RB_CONSOLE_UI_SOURCES}
+    )
+    target_link_libraries(main_window_visual_error_tests PRIVATE RoboBeetleCore Qt6::Widgets)
+    add_test(NAME main_window_visual_error_tests COMMAND main_window_visual_error_tests)
 
     add_executable(rbrp_client_session_tests
         tests/rbrp_client_session_tests.cpp
