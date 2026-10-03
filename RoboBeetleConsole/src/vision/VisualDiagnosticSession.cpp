@@ -102,9 +102,8 @@ void VisualDiagnosticSession::evaluate(std::optional<quint64> arrivedId)
     targetMemory_ = state.next;
     if (!state.awaitingVideo && (state.state == VisualState::Stale
         || state.state == VisualState::InferenceOff || state.state == VisualState::Lost)) {
-        // A skipped/overdue ID is consumed too: later video/status cannot resurrect it.
+        // Preserve IDs actually associated; raw gate rejection does not associate a frame.
         associationMemory_ = releaseTargetAssociationLock(associationMemory_);
-        if (snapshot_.frameId) associationMemory_.lastProcessedFrameId = snapshot_.frameId;
         snapshot_.highestConfidenceTarget.reset();
     }
     snapshot_.associationStatus = associationMemory_.cached.status;

@@ -161,6 +161,11 @@ void initialAwaitingVideo() {
     now=15; s.refresh(accepted(f));
     check(s.snapshot().target && s.snapshot().associationStatus==AssociationStatus::Acquired
           && s.snapshot().state==VisualState::Tracking,"initial pending ID acquires at first video catchup");
+    s.beginSession(2); now=20; f=frame(1);
+    s.onDetectionArrival(f,{DetectionDisplayState::Stale,f}); // No video dimensions yet.
+    now=35; s.refresh(accepted(f));
+    check(s.snapshot().target && s.snapshot().associationStatus==AssociationStatus::Acquired,
+          "never-associated startup frame can become usable before watchdog expires");
 }
 }
 int main(int argc,char **argv){QCoreApplication app(argc,argv);raceAndTimeout();automaticWakeup();configProvenance();associationAndMisses();overdueCatchupAndLost();initialAwaitingVideo();return failures?1:0;}
