@@ -50,7 +50,7 @@ void VideoView::clearFrame()
     update();
 }
 
-void VideoView::setDetectionOverlay(const DetectionFrame &frame)
+void VideoView::setDetectionOverlay(const DetectionFrame &frame, const std::optional<TargetState> &selected)
 {
     if (image_.isNull() || frame.sourceSize != image_.size()) {
         clearDetectionOverlay();
@@ -60,14 +60,19 @@ void VideoView::setDetectionOverlay(const DetectionFrame &frame)
         clearDetectionOverlay(DetectionDisplayState::NoTarget);
         return;
     }
-    const auto state = selectTargetState(frame);
-    if (!state) {
+    bool haveValidDetection = false;
+    for (qsizetype i = 0; i < frame.detections.size(); ++i) {
+        if (targetStateAt(frame, i)) { haveValidDetection = true; break; }
+    }
+    if (!haveValidDetection) {
         clearDetectionOverlay();
         return;
     }
     detectionOverlay_ = frame;
-    targetState_ = state;
-    diagnosticState_ = DetectionDisplayState::Target;
+    targetState_ = selected && selected->frameId == frame.frameId
+        && selected->captureTimestampNs == frame.captureTimestampNs
+        && selected->sourceSize == frame.sourceSize ? selected : std::nullopt;
+    diagnosticState_ = targetState_ ? DetectionDisplayState::Target : DetectionDisplayState::NoTarget;
     update();
 }
 
@@ -98,7 +103,7 @@ QString VideoView::visualDiagnosticText() const
             QStringLiteral("manual controls live | %1").arg(QString::fromLatin1(visualStateName(s.state)))};
         if (s.target) {
             const auto &t = *s.target;
-            lines << QStringLiteral("%1 conf=%2 (highest)").arg(t.target.className)
+            lines << QStringLiteral("%1 conf=%2 (associated)").arg(t.target.className)
                          .arg(t.target.confidence, 0, 'f', 3)
                   << QStringLiteral("u=%1 v=%2")
                          .arg(t.target.originalPoint.x(), 0, 'f', 1)
@@ -115,6 +120,14 @@ QString VideoView::visualDiagnosticText() const
                      .arg(QString::fromLatin1(proposedCommandName(c.proposed)))
               << QStringLiteral("turn_sign=%1 (实机符号未验证)").arg(s.turnSign);
         if (s.awaitingVideo) { lines << QStringLiteral("waiting for video"); }
+        QString lock = QStringLiteral("lock: %1").arg(QString::fromLatin1(associationStatusName(s.associationStatus)));
+        if (s.associationStatus == AssociationStatus::Associated) {
+            lock += QStringLiteral(" d=%1px").arg(s.associationDistancePx
+                ? QString::number(*s.associationDistancePx, 'f', 1) : QStringLiteral("--"));
+        } else if (s.associationStatus == AssociationStatus::Miss) {
+            lock += QStringLiteral(" %1ms").arg(s.associationMissMs.value_or(0));
+        }
+        lines << lock;
         if (c.proposed == ProposedCommand::Hold) {
             lines << QStringLiteral("retained / holding: %1")
                          .arg(QString::fromLatin1(proposedCommandName(c.effective)));
@@ -132,14 +145,14 @@ QString VideoView::visualDiagnosticText() const
         }
         return QStringLiteral(
             "VISION DRY_RUN | %1\n"
-            "selection: highest confidence\n"
+            "selection: supplied target\n"
             "u=-- v=--\n"
             "ex=-- ey=--").arg(reason);
     }
     const TargetState &state = *targetState_;
     return QStringLiteral(
         "VISION DRY_RUN | TARGET\n"
-        "%1 | conf=%2 (highest)\n"
+        "%1 | conf=%2 (selected)\n"
         "u=%3 v=%4\n"
         "ex=%5 ey=%6")
         .arg(state.target.className)
@@ -237,8 +250,9 @@ void VideoView::paintEvent(QPaintEvent *event)
         constexpr int markerDotRadiusPx = 3;
         constexpr int labelOffsetPx = 9;
 
-        for (const DetectionObservation &detection
-             : detectionOverlay_->detections) {
+        for (qsizetype index = 0; index < detectionOverlay_->detections.size(); ++index) {
+            if (!targetStateAt(*detectionOverlay_, index)) continue;
+            const auto &detection = detectionOverlay_->detections[index];
             const QString label = QStringLiteral("%1 %2")
                 .arg(detection.className)
                 .arg(detection.confidence, 0, 'f', 2);
@@ -294,6 +308,13 @@ void VideoView::paintEvent(QPaintEvent *event)
             painter.drawText(x + 1, baseline + 1, label);
             painter.setPen(overlayColor);
             painter.drawText(x, baseline, label);
+            if (targetState_ && visualDiagnostic_ && !visualDiagnostic_->awaitingVideo
+                && visualDiagnostic_->frameId == detectionOverlay_->frameId
+                && visualDiagnostic_->selectedDetectionIndex == index) {
+                painter.setPen(QPen(errorColor, 2));
+                painter.drawEllipse(QPointF(mappedX, mappedY), 11, 11);
+                painter.drawText(marker + QPoint(12, 17), QStringLiteral("LOCK"));
+            }
         }
         painter.restore();
     }
