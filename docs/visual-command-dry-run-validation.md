@@ -1,6 +1,6 @@
 # Task 02 — Visual Command Proposal (DRY_RUN) 验证记录
 
-2026-10-03；draft [PR #42](https://github.com/Mr-lxd/RoboBeetle/pull/42)，分支 `codex/visual-command-dry-run`。仅交付设计①–③，完成后停止等待 Claude Review 和用户实测；不合并。CSV 按 S1 简化方案留待 #42 合并后另开 PR，当前无 CSV 开关、文件写入或录制功能。
+2026-10-03；[PR #42](https://github.com/Mr-lxd/RoboBeetle/pull/42)，分支 `codex/visual-command-dry-run`。仅交付设计①–③；下文保留实现交付时的测试证据。用户已确认②③④并授权转 ready、以 merge commit 合并。CSV 按 S1 简化方案留待本地清理经用户逐项确认并完成后另开 PR #43，当前无 CSV 开关、文件写入或录制功能。
 
 ## ① 发现及本次修改
 
@@ -89,10 +89,22 @@ $env:QT_QPA_PLATFORM='offscreen'; $env:QT_QPA_FONTDIR='C:\Windows\Fonts'
 & D:\Qt\Tools\CMake_64\bin\ctest.exe --test-dir build/qt-visual-dry-run --output-on-failure --parallel 4
 ```
 
-| 当前用户清单（尚待实测） | 应观察 |
+| 原交付用户清单（结果见下方实测记录） | 应观察 |
 |---|---|
 | ② 左右缓慢移动屏幕目标 | ex/ex_f/yaw连续变化；超过门限切TURN，中心回FORWARD；滞回带不抖动，普通建议切换间隔≥1 s。只有PROPOSED变化，视觉不产生运动输出 |
 | ③ Stop Inference | ACK待核对先STALE/STOP；权威状态停止后INFERENCE_OFF/STOP，原始误差/目标线清空、ex_f=--、yaw=0 |
 | ④ 遮挡/移走 | 若新空帧持续到达：NO_TARGET/HOLD，约1.5 s LOST/STOP；如果新ID也停止：约0.5 s STALE/STOP；不要混同两种场景 |
 
-用户①“中心60 s并录CSV统计抖动”属于合并后的CSV PR，本版不能录CSV。Task 01 用户T1–T8记录仍保留；Task 02用户结果不得提前标为通过。当前交付后停止，等待Claude Review及用户实测。
+用户①“中心60 s并录CSV统计抖动”属于合并后的CSV PR，本版不能录CSV。Task 01 用户T1–T8记录仍保留。
+
+## 用户桌面实测（2026-10-03）
+
+以下结果由用户确认，属于摄像头拍摄电脑屏幕的桌面显示/建议验证，不是视觉运动发送或水下闭环验收。
+
+- EXE SHA-256 一致：`9190E73D48A8736E06CEF5F26EC10AF3657759FF7768C355FADFB2AE44D8D266`；对应源码 commit 仍为 `321f4b2d784052f7acb92fcffab4fcf945de31c1`。
+- **② 通过**：`u=466.7 → ex=0.458 → TURN_RIGHT`；`u=288.0 → ex=-0.100 → FORWARD`；`u=120.0 → ex=-0.625 → TURN_LEFT`。
+- **③ 通过**：`Stop Inference → STALE/STOP → INFERENCE_OFF/STOP`。
+- **④ 通过**：`NO_TARGET/HOLD`，保留 `TURN_LEFT`，ex_f 保留值 `-0.836`；约1.5 s后变为 `LOST/STOP`。
+- **②b 未验证**：多目标误检导致最高置信度选中的目标逐帧跳变，无法单独观察滞回。滞回由现有单元测试覆盖；桌面实机验证移到 PR #43，用CSV筛选“被选目标连续不变”的片段完成。本轮不改目标选择策略。
+
+用户授权 PR #42 转 ready 并以 merge commit 合并。后续先只读盘点并停止等待逐项清理确认；清理完成后才开始 CSV PR #43。
