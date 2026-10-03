@@ -100,8 +100,8 @@ void VisualDiagnosticSession::evaluate(std::optional<quint64> arrivedId)
     const auto state = advanceVisualTargetState(targetMemory_,
         {now, arrivedId, gate, selected}, config_);
     targetMemory_ = state.next;
-    if (state.state == VisualState::Stale || state.state == VisualState::InferenceOff
-        || state.state == VisualState::Lost) {
+    if (!state.awaitingVideo && (state.state == VisualState::Stale
+        || state.state == VisualState::InferenceOff || state.state == VisualState::Lost)) {
         // A skipped/overdue ID is consumed too: later video/status cannot resurrect it.
         associationMemory_ = releaseTargetAssociationLock(associationMemory_);
         if (snapshot_.frameId) associationMemory_.lastProcessedFrameId = snapshot_.frameId;

@@ -152,5 +152,15 @@ void overdueCatchupAndLost() {
     check(s.snapshot().state==VisualState::Lost && s.snapshot().associationStatus==AssociationStatus::Unlocked
           && s.snapshot().command.proposed==ProposedCommand::Stop,"continuous fresh empty frames become LOST and unlock");
 }
+void initialAwaitingVideo() {
+    qint64 now=0; VisualDiagnosticSession s({},[&]{return now;});
+    auto f=frame(1);
+    s.onDetectionArrival(f,{DetectionDisplayState::AwaitingVideo,f});
+    check(s.snapshot().awaitingVideo && s.snapshot().state==VisualState::Stale,
+          "initial awaiting retains initial state without consuming sample");
+    now=15; s.refresh(accepted(f));
+    check(s.snapshot().target && s.snapshot().associationStatus==AssociationStatus::Acquired
+          && s.snapshot().state==VisualState::Tracking,"initial pending ID acquires at first video catchup");
 }
-int main(int argc,char **argv){QCoreApplication app(argc,argv);raceAndTimeout();automaticWakeup();configProvenance();associationAndMisses();overdueCatchupAndLost();return failures?1:0;}
+}
+int main(int argc,char **argv){QCoreApplication app(argc,argv);raceAndTimeout();automaticWakeup();configProvenance();associationAndMisses();overdueCatchupAndLost();initialAwaitingVideo();return failures?1:0;}
