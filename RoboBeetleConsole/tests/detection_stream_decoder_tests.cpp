@@ -220,6 +220,13 @@ void freshnessGateMatchesFrozenUiContract()
                frame, QSize(640, 480),
                1'999'999'999ULL, true, true),
            "metadata newer than the displayed video frame is suppressed");
+    expect(detectionOverlayState(frame, QSize(640, 480),
+                                1'999'999'999ULL, true, true)
+               == DetectionDisplayState::AwaitingVideo,
+           "a valid detection ahead of video is waiting, not immediately stale");
+    expect(detectionOverlayState(frame, QSize(640, 480), 0U, true, true)
+               == DetectionDisplayState::Stale,
+           "zero video timestamp is not the ahead-of-video race");
     expect(!detectionOverlayRenderable(
                frame, QSize(320, 240),
                2'100'000'000ULL, true, true),

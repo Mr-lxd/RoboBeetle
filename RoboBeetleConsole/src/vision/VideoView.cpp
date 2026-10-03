@@ -82,8 +82,47 @@ void VideoView::clearDetectionOverlay(DetectionDisplayState reason)
     update();
 }
 
+void VideoView::setVisualDiagnostic(const VisualDiagnosticSnapshot &snapshot)
+{
+    visualDiagnostic_ = snapshot;
+    update();
+}
+
 QString VideoView::visualDiagnosticText() const
 {
+    if (visualDiagnostic_) {
+        const auto &s = *visualDiagnostic_;
+        const auto &c = s.command;
+        QStringList lines{
+            QStringLiteral("VISION DRY_RUN - no motion output"),
+            QStringLiteral("manual controls live | %1").arg(QString::fromLatin1(visualStateName(s.state)))};
+        if (s.target) {
+            const auto &t = *s.target;
+            lines << QStringLiteral("%1 conf=%2 (highest)").arg(t.target.className)
+                         .arg(t.target.confidence, 0, 'f', 3)
+                  << QStringLiteral("u=%1 v=%2")
+                         .arg(t.target.originalPoint.x(), 0, 'f', 1)
+                         .arg(t.target.originalPoint.y(), 0, 'f', 1)
+                  << QStringLiteral("ex=%1 ey=%2")
+                         .arg(t.ex, 0, 'f', 3).arg(t.ey, 0, 'f', 3);
+        } else {
+            lines << QStringLiteral("u=-- v=--") << QStringLiteral("ex=-- ey=--");
+        }
+        lines << QStringLiteral("ex_f=%1 yaw=%2")
+                     .arg(c.ex_f ? QString::number(*c.ex_f, 'f', 3) : QStringLiteral("--"))
+                     .arg(c.yaw_cmd, 0, 'f', 3)
+              << QStringLiteral("PROPOSED (not sent): %1")
+                     .arg(QString::fromLatin1(proposedCommandName(c.proposed)))
+              << QStringLiteral("turn_sign=%1 (实机符号未验证)").arg(s.turnSign);
+        if (s.awaitingVideo) { lines << QStringLiteral("waiting for video"); }
+        if (c.proposed == ProposedCommand::Hold) {
+            lines << QStringLiteral("retained / holding: %1")
+                         .arg(QString::fromLatin1(proposedCommandName(c.effective)));
+        }
+        if (c.dwellBlocked) { lines << QStringLiteral("min_dwell: holding proposal"); }
+        if (c.waitingForSample) { lines << QStringLiteral("waiting for new target sample"); }
+        return lines.join('\n');
+    }
     if (!targetState_) {
         QString reason = QStringLiteral("STALE");
         if (diagnosticState_ == DetectionDisplayState::NoTarget) {
@@ -160,18 +199,24 @@ void VideoView::paintEvent(QPaintEvent *event)
     constexpr int padding = 5;
     constexpr int margin = 6;
     const int panelWidth = qMin(textWidth + 2 * padding, target.width() - 2 * margin);
+    const int contentWidth = qMax(1, panelWidth - 2 * padding);
+    const int titleHeight = diagnosticMetrics.boundingRect(
+        QRect(0, 0, contentWidth, 1000), Qt::TextWordWrap, lines.front()).height();
     const QRect panel(
         target.right() - margin - panelWidth + 1,
         target.top() + margin,
         panelWidth,
-        static_cast<int>(lines.size()) * diagnosticMetrics.lineSpacing() + 2 * padding);
+        titleHeight + (static_cast<int>(lines.size()) - 1) * diagnosticMetrics.lineSpacing()
+            + 2 * padding);
     painter.fillRect(panel, QColor(0, 0, 0, 190));
     painter.setPen(Qt::white);
-    for (qsizetype index = 0; index < lines.size(); ++index) {
+    painter.drawText(QRect(panel.left() + padding, panel.top() + padding,
+                          contentWidth, titleHeight), Qt::TextWordWrap, lines.front());
+    for (qsizetype index = 1; index < lines.size(); ++index) {
         painter.drawText(
             panel.left() + padding,
-            panel.top() + padding + diagnosticMetrics.ascent()
-                + static_cast<int>(index) * diagnosticMetrics.lineSpacing(),
+            panel.top() + padding + titleHeight + diagnosticMetrics.ascent()
+                + (static_cast<int>(index) - 1) * diagnosticMetrics.lineSpacing(),
             diagnosticMetrics.elidedText(
                 lines[index], Qt::ElideRight, panelWidth - 2 * padding));
     }

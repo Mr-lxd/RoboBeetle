@@ -244,6 +244,29 @@ void visualErrorGeometryUsesImageRectangle()
            "a source-size change clears the previous coordinate interpretation");
 }
 
+void commandProposalDisplay()
+{
+    VideoView view;
+    rb::vision::VisualDiagnosticSnapshot s;
+    s.state = rb::vision::VisualState::Tracking;
+    s.command.ex_f = 0.4;
+    s.command.yaw_cmd = 0.4;
+    s.command.proposed = rb::vision::ProposedCommand::TurnRight;
+    s.command.effective = rb::vision::ProposedCommand::TurnRight;
+    view.setVisualDiagnostic(s);
+    expect(view.visualDiagnosticText().contains(QStringLiteral("manual controls live"))
+               && view.visualDiagnosticText().contains(QStringLiteral("no motion output"))
+               && view.visualDiagnosticText().contains(QStringLiteral("PROPOSED (not sent): TURN_RIGHT"))
+               && view.visualDiagnosticText().contains(QStringLiteral("ex_f=0.400 yaw=0.400")),
+           "proposal panel labels dry run and dimensionless suggestions");
+    s.state = rb::vision::VisualState::Stale;
+    s.command = {};
+    view.setVisualDiagnostic(s);
+    expect(view.visualDiagnosticText().contains(QStringLiteral("PROPOSED (not sent): STOP"))
+               && view.visualDiagnosticText().contains(QStringLiteral("ex_f=-- yaw=0.000")),
+           "invalid target does not masquerade as zero filtered error");
+}
+
 void saveDiagnosticPreviews(const QString &directory)
 {
     expect(QDir().mkpath(directory), "preview output directory can be created");
@@ -266,6 +289,12 @@ void saveDiagnosticPreviews(const QString &directory)
                 overlay.detections.clear();
             }
             view.setDetectionOverlay(overlay);
+            rb::vision::VisualDiagnosticSession diagnostic({}, [] { return 0; });
+            diagnostic.onDetectionArrival(overlay, {
+                item.detected ? rb::vision::DetectionDisplayState::Target
+                              : rb::vision::DetectionDisplayState::NoTarget,
+                rb::vision::selectTargetState(overlay)});
+            view.setVisualDiagnostic(diagnostic.snapshot());
             QImage rendered(view.size(), QImage::Format_ARGB32);
             view.render(&rendered);
             const QString name = QStringLiteral("%1-%2x%3.png")
@@ -287,6 +316,7 @@ int main(int argc, char **argv)
     textOverlayLifecycleIsIndependentFromVideoFrame();
     amberCentroidMarkersAndLabelsRenderForEveryDetection();
     visualErrorGeometryUsesImageRectangle();
+    commandProposalDisplay();
     const QStringList arguments = app.arguments();
     const int previewOption = arguments.indexOf(QStringLiteral("--preview-dir"));
     if (previewOption >= 0 && previewOption + 1 < arguments.size()) {

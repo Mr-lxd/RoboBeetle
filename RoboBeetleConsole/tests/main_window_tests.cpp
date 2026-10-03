@@ -2443,6 +2443,33 @@ void testSlice5DetectionTextOverlayLifecycle()
            "live metadata calculates original-pixel errors through the existing UI gate");
     expect(transport.writes().isEmpty(),
            "visual error calculation sends no robot commands");
+    expect(view->visualDiagnosticText().contains(QStringLiteral("TRACKING"))
+               && view->visualDiagnosticText().contains(QStringLiteral("PROPOSED (not sent): TURN_LEFT")),
+           "real metadata produces a display-only left proposal");
+
+    // Independent TCP streams: a newer detection may precede its video image.
+    if (detectionPeer) {
+        detectionPeer->write(slice5DetectionLine(11U, 1'200'000'000ULL,
+                                                QStringLiteral("fish"), 0.88, 480.0, 240.0));
+        detectionPeer->flush();
+    }
+    expect(waitUntil([&] { return detectionClient.lastFrameId() == 11U; }),
+           "ahead-of-video detection arrives on the independent stream");
+    expect(view->currentVisualDiagnostic() && view->currentVisualDiagnostic()->awaitingVideo
+               && view->currentVisualDiagnostic()->command.effective == rb::vision::ProposedCommand::TurnLeft
+               && !view->hasDetectionOverlay(),
+           "AwaitingVideo preserves the proposal but keeps original raw overlay suppression");
+    waitForMs(15);
+    visionClient.frameReady(live, 12U, 1'200'000'000ULL);
+    expect(view->currentVisualDiagnostic() && !view->currentVisualDiagnostic()->awaitingVideo
+               && view->currentVisualDiagnostic()->command.ex_f
+               && std::abs(*view->currentVisualDiagnostic()->command.ex_f + 0.2875) < 1e-9
+               && view->currentVisualDiagnostic()->command.effective == rb::vision::ProposedCommand::TurnLeft,
+           "15 ms video catchup makes one EMA update and never inserts STOP");
+    visionClient.frameReady(live, 12U, 1'200'000'000ULL);
+    expect(view->currentVisualDiagnostic()->command.ex_f
+               && std::abs(*view->currentVisualDiagnostic()->command.ex_f + 0.2875) < 1e-9,
+           "repeated video rendering does not repeat the EMA update");
 
     // Exercise the real Stop Inference button, POST ACK and authoritative GET.
     auto *inferenceToggle = window.findChild<QPushButton *>(
@@ -2507,18 +2534,18 @@ void testSlice5DetectionTextOverlayLifecycle()
            "a fresh authoritative running state restores valid retained metadata");
     if (detectionPeer) {
         QJsonObject empty = QJsonDocument::fromJson(
-            slice5DetectionLine(11U, 1'000'000'000ULL)).object();
+            slice5DetectionLine(12U, 1'000'000'000ULL)).object();
         empty.insert(QStringLiteral("detections"), QJsonArray{});
         detectionPeer->write(QJsonDocument(empty).toJson(QJsonDocument::Compact) + '\n');
         detectionPeer->flush();
     }
-    expect(waitUntil([&] { return detectionClient.lastFrameId() == 11U; }),
+    expect(waitUntil([&] { return detectionClient.lastFrameId() == 12U; }),
            "fresh empty detection result is received");
     expect(!view->currentTargetState()
                && view->visualDiagnosticText().contains(QStringLiteral("NO_TARGET")),
            "fresh empty detections have a distinct NO_TARGET reason");
     if (detectionPeer) {
-        detectionPeer->write(slice5DetectionLine(12U, 1'000'000'000ULL));
+        detectionPeer->write(slice5DetectionLine(13U, 1'000'000'000ULL));
         detectionPeer->flush();
     }
     expect(waitUntil([&] { return view->currentTargetState().has_value(); }),
@@ -2594,7 +2621,7 @@ void testSlice5DetectionTextOverlayLifecycle()
                && view->visualDiagnosticText().contains(QStringLiteral("ex=-- ey=--")),
            "fresh disabled inference is distinguished from empty detections and stale data");
 
-    // Running can expose a still-fresh retained detection again.
+    // Fresh HTTP alone cannot resurrect locally expired detection metadata.
     controlClient.refreshStatus();
     expect(waitUntil([&] { return controlServer.hasPendingConnections(); }),
            "running-inference status GET reaches loopback HTTP server");
@@ -2611,8 +2638,15 @@ void testSlice5DetectionTextOverlayLifecycle()
             && controlClient.status().inferenceState
                 == QStringLiteral("running");
     }), "running inference status becomes authoritative");
+    expect(!view->hasDetectionOverlay()
+               && view->visualDiagnosticText().contains(QStringLiteral("STALE")),
+           "running HTTP recovery cannot revive an expired local detection ID");
+    if (detectionPeer) {
+        detectionPeer->write(slice5DetectionLine(14U, 1'000'000'000ULL));
+        detectionPeer->flush();
+    }
     expect(waitUntil([&] { return view->hasDetectionOverlay(); }),
-           "fresh retained metadata is visible again only after Running is authoritative");
+           "a new detection ID restores errors after local timeout");
 
     // A newer live frame more than 1500 ms ahead must suppress stale metadata.
     visionClient.frameReady(
@@ -2628,14 +2662,14 @@ void testSlice5DetectionTextOverlayLifecycle()
     if (detectionPeer != nullptr) {
         detectionPeer->write(
             slice5DetectionLine(
-                13U,
+                15U,
                 2'500'000'000ULL,
                 QStringLiteral("penguin"),
                 0.91));
         detectionPeer->flush();
     }
     expect(waitUntil([&] {
-        return detectionClient.lastFrameId() == 13U
+        return detectionClient.lastFrameId() == 15U
             && view->hasDetectionOverlay();
     }), "new fresh metadata overlays the current latest video frame");
 
@@ -2662,12 +2696,48 @@ void testSlice5DetectionTextOverlayLifecycle()
         freshnessRecoveryPeer->deleteLater();
     }
     expect(waitUntil([&] {
-        return controlClient.hasFreshStatus()
-            && view->hasDetectionOverlay();
-    }), "fresh status recovery can redisplay still-fresh retained metadata");
+        return controlClient.hasFreshStatus();
+    }), "fresh status recovery reaches the original session");
+    expect(!view->hasDetectionOverlay(),
+           "fresh status cannot renew the old frame's local wall-clock lifetime");
+    if (detectionPeer) {
+        detectionPeer->write(slice5DetectionLine(16U, 2'500'000'000ULL));
+        detectionPeer->flush();
+    }
+    expect(waitUntil([&] { return view->hasDetectionOverlay(); }),
+           "new metadata is required after HTTP and local watchdog expiry");
     expect(detectionClient.isConnected()
                && !detectionServer.hasPendingConnections(),
            "freshness recovery reuses the original 47012 socket");
+
+    // Freeze both Pi timestamps while HTTP remains fresh: local timer must clear errors.
+    expect(waitUntil([&] {
+        return view->visualDiagnosticText().contains(QStringLiteral("STALE"))
+            && view->visualDiagnosticText().contains(QStringLiteral("PROPOSED (not sent): STOP"));
+    }, 700), "local 500 ms watchdog stops the proposal without a new video/status event");
+    expect(controlClient.hasFreshStatus() && !view->currentTargetState(),
+           "local expiry applies even with fresh HTTP and clears original errors");
+    for (quint64 id = 17U; id <= 33U; ++id) {
+        if (detectionPeer) {
+            QJsonObject empty = QJsonDocument::fromJson(
+                slice5DetectionLine(id, 2'500'000'000ULL)).object();
+            empty.insert(QStringLiteral("detections"), QJsonArray{});
+            detectionPeer->write(QJsonDocument(empty).toJson(QJsonDocument::Compact) + '\n');
+            detectionPeer->flush();
+        }
+        expect(waitUntil([&] { return detectionClient.lastFrameId() == id; }),
+               "continued empty results have advancing detection IDs");
+        if (id == 17U) {
+            expect(view->visualDiagnosticText().contains(QStringLiteral("NO_TARGET"))
+                       && view->visualDiagnosticText().contains(QStringLiteral("PROPOSED (not sent): HOLD")),
+                   "first fresh empty result holds the previous proposal");
+        }
+        waitForMs(100);
+    }
+    expect(view->visualDiagnosticText().contains(QStringLiteral("LOST"))
+               && view->visualDiagnosticText().contains(QStringLiteral("PROPOSED (not sent): STOP")),
+           "continued fresh empty frames reach LOST STOP after 1500 ms");
+    expect(transport.writes().isEmpty(), "all proposal states send zero robot bytes");
 
     // Losing only 47012 clears text but leaves video and HTTP state alive.
     if (detectionPeer != nullptr) {

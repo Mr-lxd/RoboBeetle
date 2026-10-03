@@ -30,7 +30,7 @@ struct DetectionFrame {
 };
 
 // Display validity reasons only; these are not motion-controller states.
-enum class DetectionDisplayState { Target, NoTarget, Stale, InferenceOff };
+enum class DetectionDisplayState { Target, NoTarget, Stale, InferenceOff, AwaitingVideo };
 
 [[nodiscard]] DetectionDisplayState detectionOverlayState(
     const DetectionFrame &frame,

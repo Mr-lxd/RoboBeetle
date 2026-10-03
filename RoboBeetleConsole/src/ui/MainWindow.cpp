@@ -7,6 +7,7 @@
 #include "vision/VisionClient.h"
 #include "vision/VisionControlClient.h"
 #include "vision/InferenceUiState.h"
+#include "vision/VisualDiagnosticSession.h"
 
 #include <QCloseEvent>
 #include <QAbstractSpinBox>
@@ -2111,6 +2112,12 @@ QWidget *MainWindow::createVisionDetailsTab()
     visionDiagnostics_->setTextFormat(Qt::PlainText);
     visionDiagnostics_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     videoForm->addRow(QStringLiteral("Video diagnostics"), visionDiagnostics_);
+    visualProposalDetails_ = new QLabel(QStringLiteral("VISION DRY_RUN - no motion output"), content);
+    visualProposalDetails_->setObjectName(QStringLiteral("visualProposalDetails"));
+    visualProposalDetails_->setWordWrap(true);
+    visualProposalDetails_->setTextFormat(Qt::PlainText);
+    visualProposalDetails_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    videoForm->addRow(QStringLiteral("Visual proposal"), visualProposalDetails_);
     layout->addLayout(videoForm);
 
     auto *inferenceForm = new QFormLayout;
@@ -2309,6 +2316,24 @@ QWidget *MainWindow::createOperatorTools()
 
 void MainWindow::bindVisionUi()
 {
+    visualSession_ = new vision::VisualDiagnosticSession({}, {}, this);
+    connect(visualSession_, &vision::VisualDiagnosticSession::diagnosticChanged, this,
+            [this](const vision::VisualDiagnosticSnapshot &snapshot) {
+        if (videoView_ == nullptr) { return; }
+        if (snapshot.target && latestDetectionFrame_) {
+            videoView_->setDetectionOverlay(*latestDetectionFrame_);
+        } else {
+            const auto reason = snapshot.state == vision::VisualState::InferenceOff
+                ? vision::DetectionDisplayState::InferenceOff
+                : snapshot.state == vision::VisualState::NoTarget
+                    ? vision::DetectionDisplayState::NoTarget : vision::DetectionDisplayState::Stale;
+            videoView_->clearDetectionOverlay(reason);
+        }
+        videoView_->setVisualDiagnostic(snapshot);
+        if (visualProposalDetails_) {
+            visualProposalDetails_->setText(videoView_->visualDiagnosticText());
+        }
+    });
     if (visionClient_ != nullptr) {
         connect(visionConnectButton_, &QPushButton::clicked, this, [this] {
             if (visionClient_->state() == vision::VisionConnectionState::Connected
@@ -2536,13 +2561,19 @@ void MainWindow::bindVisionUi()
         connect(detectionClient_, &vision::DetectionClient::metadataReady,
                 this, [this](vision::DetectionFrame frame) {
             latestDetectionFrame_ = std::move(frame);
-            refreshDetectionOverlay();
+            visualSession_->onDetectionArrival(*latestDetectionFrame_, visualDisplayContext());
         });
         connect(detectionClient_, &vision::DetectionClient::connectionStateChanged,
                 this, [this](vision::DetectionConnectionState state) {
+            if (state == vision::DetectionConnectionState::Connected) {
+                latestDetectionFrame_.reset();
+                visualSession_->beginSession(++visualSessionId_);
+                refreshDetectionOverlay();
+            }
             if (state == vision::DetectionConnectionState::Disconnected
                 || state == vision::DetectionConnectionState::Error) {
                 latestDetectionFrame_.reset();
+                visualSession_->beginSession(++visualSessionId_);
                 refreshDetectionOverlay();
             }
         });
@@ -2782,6 +2813,7 @@ void MainWindow::refreshVisionEndpointUi()
 void MainWindow::resetDetectionSession()
 {
     latestDetectionFrame_.reset();
+    if (visualSession_) { visualSession_->beginSession(++visualSessionId_); }
     detectionConnectAttempted_ = false;
     detectionAttemptHost_.clear();
     detectionAttemptPort_ = 0U;
@@ -2874,13 +2906,13 @@ void MainWindow::syncDetectionStream()
 
 void MainWindow::refreshDetectionOverlay()
 {
-    if (videoView_ == nullptr) {
-        return;
-    }
-    if (visionControlClient_ == nullptr) {
-        videoView_->clearDetectionOverlay();
-        return;
-    }
+    if (visualSession_) { visualSession_->refresh(visualDisplayContext()); }
+}
+
+vision::VisualViewContext MainWindow::visualDisplayContext() const
+{
+    vision::VisualViewContext context;
+    if (!videoView_ || !visionControlClient_) { return context; }
 
     const bool fresh = visionControlClient_->hasFreshStatus();
     const auto status = visionControlClient_->status();
@@ -2891,34 +2923,31 @@ void MainWindow::refreshDetectionOverlay()
         || status.inferenceState == QStringLiteral("error");
     if (!fresh || !status.haveInferenceState || !status.inferenceOperationValid
         || !knownWorkerState || visionControlClient_->inferenceReconcilePending()) {
-        videoView_->clearDetectionOverlay(vision::DetectionDisplayState::Stale);
-        return;
+        return context;
     }
     const bool inferenceRunning = status.inferenceState == QStringLiteral("running")
         && status.inferenceOperation.isEmpty();
     if (!inferenceRunning) {
-        videoView_->clearDetectionOverlay(vision::DetectionDisplayState::InferenceOff);
-        return;
+        context.gate = vision::DetectionDisplayState::InferenceOff;
+        return context;
     }
     if (detectionClient_ == nullptr || !detectionClient_->isConnected()
         || !latestDetectionFrame_.has_value()) {
-        videoView_->clearDetectionOverlay(vision::DetectionDisplayState::Stale);
-        return;
+        return context;
     }
 
-    if (!vision::detectionOverlayRenderable(
+    context.gate = vision::detectionOverlayState(*latestDetectionFrame_,
+        videoView_->currentFrameSize(), videoView_->currentCaptureTimestampNs(), inferenceRunning, fresh);
+    if (vision::detectionOverlayRenderable(
             *latestDetectionFrame_,
             videoView_->currentFrameSize(),
             videoView_->currentCaptureTimestampNs(),
             inferenceRunning,
             fresh)) {
-        videoView_->clearDetectionOverlay(vision::detectionOverlayState(
-            *latestDetectionFrame_, videoView_->currentFrameSize(),
-            videoView_->currentCaptureTimestampNs(), inferenceRunning, fresh));
-        return;
+        context.selected = vision::selectTargetState(*latestDetectionFrame_);
     }
 
-    videoView_->setDetectionOverlay(*latestDetectionFrame_);
+    return context;
 }
 
 void MainWindow::reflowActuatorCards()
