@@ -1,6 +1,6 @@
 # Task 04 — Target Temporal Association (DRY_RUN) 设计与实施顺序
 
-> 设计阶段：仅提交本文件，开 draft PR 后停止，等待 Claude Review；获准后才按下列 RED → GREEN 顺序实施。实现采用当前会话逐步执行，不创建其他用户任务。
+> 设计已获Claude批准（S1/M1/M2），实现及验证见 docs/target-temporal-association-dry-run-validation.md；交付仍保持draft、不合并。实现采用当前会话逐步执行，不创建其他用户任务。
 
 **Goal:** 在既有 DRY_RUN 链路中以原图像素距离关联锁定目标，减少最高置信度交替引起的跳变，同时记录同帧最高置信度基线供比较。
 
@@ -186,7 +186,7 @@ local_mono_ms仍表示写行使用的本地评估时间，arrival_mono_ms仍为�
 | A1 B段复现 / target_association_tests | 首帧450(.89)锁定，后续450/547的.85/.89交替领先，v相同；始终selected.u=450、ASSOCIATED且d=0；hc_u交替450/547 |
 | A2 移动100帧 | 640宽，初始u=20，每新帧+5 px，共100次关联（末u=520）；均ASSOCIATED、d=5，避免fixture越界被合法性过滤 |
 | A3 原目标消失 | 已锁450，仅547；首MISS无selected/d=97，NO_TARGET/HOLD且ex_f/effective保持；499 ms仍锁，500 ms释放，下一新ID ACQUIRED547；不存在同旧ID重选 |
-| A4 门限 | 锁点(100,100)，(148,100)→ASSOCIATED；独立memory下(148.01,100)→MISS；另用(128.8,138.4)验证二维hypot=48，不能只看Δu |
+| A4 门限 | 锁点(100,100)，(148,100)→ASSOCIATED；独立memory下(148.01,100)→MISS；另用整数偏移(28,36)门内、(36,36)门外验证二维hypot，轴向48精确边界保留，不能只看Δu |
 | A5 ties/classes/合法性 | 等距离高conf优先、再同conf原流序；false允许classId变，true不同class拒绝；空、NaN、inf、越界/非法confidence不遮蔽合法项，获取仍保留原最高置信度规则 |
 | A6 reset/非法参数 | gate NaN/0、max_miss_ms≤0、负/回退时钟拒绝；STALE/OFF/LOST解除锁；sourceSize变化重置；新会话低ID/0可获取 |
 | S1 单帧去重 / session | 重复/倒序ID/重复refresh不改变锁点、missSince、距离或EMA；超时释放后旧ID不重新ACQUIRED；MISS期间新帧仍刷新原watchdog |
@@ -205,13 +205,13 @@ local_mono_ms仍表示写行使用的本地评估时间，arrival_mono_ms仍为�
 
 ## 10. 实施顺序、交付与用户实验
 
-- [ ] Claude Review本设计；本次在此之前停止，只推送设计文档和draft PR。
-- [ ] 关联器/config：写A1–A6和hash RED，提取targetStateAt但保留原选择契约，最小实现GREEN，保存日志。
-- [ ] Session：写S1–S4 RED，接入完整帧与关联记忆/单次状态机，GREEN；原策略测试原样复跑。
-- [ ] 显示/CSV：先U1/C2–C4 RED，再实现selected标记/30列/pending字段，GREEN。
-- [ ] loopback：I1/I2 RED→GREEN；baseline/final完整CTest，保存真实日志，比较新增失败。
-- [ ] 沿用PR #41–#43的src新增行运动/舵机接口grep pattern；结合loopback零写入，不单凭grep证明运行时隔离。
-- [ ] Release新便携目录 `D:\RoboBeetleConsole-portable-target-temporal-association-dry-run-20261003\`，若已存在则使用新后缀，不覆盖旧包。验证依赖启动，不把offscreen当硬件实测。
+- [x] Claude已批准设计，S1/M1/M2已更新并先推送。
+- [x] 关联器/config：写A1–A6和hash RED，提取targetStateAt但保留原选择契约，最小实现GREEN，保存日志。
+- [x] Session：写S1–S4 RED，接入完整帧与关联记忆/单次状态机，GREEN；原策略测试原样复跑。
+- [x] 显示/CSV：先U1/C2–C4 RED，再实现selected标记/30列/pending字段，GREEN。
+- [x] loopback：I1/I2 RED→GREEN；baseline/final完整CTest，保存真实日志，比较新增失败。
+- [x] 沿用PR #41–#43的src新增行运动/舵机接口grep pattern；结合loopback零写入，不单凭grep证明运行时隔离。
+- [x] Release新便携目录 `D:\RoboBeetleConsole-portable-target-temporal-association-dry-run-20261003\`，若已存在则使用新后缀，不覆盖旧包。验证依赖启动，不把offscreen当硬件实测。
 - [ ] 源码提交C1后构建，记录完整C1和EXE SHA-256；后续docs-only C2记交付head，明确构建输入未变，draft PR保持不合并，停下等Review。设计阶段没有新EXE，不提前填写hash或测试结论。
 
 用户桌面实验：运行新包拍摄同一电脑屏幕，重复B段慢扫，放2–3个检测目标，同时观察LOCK标记和建议，录CSV。记录尺寸、持续时间/帧数、session/policy/schema，分别统计 `hc_u` 与关联后 `u` 的相邻新frame跳变 `abs(Δu)>30 px` 次数及可比较对数/比例（严格>30）。只对同session/policy、awaiting_video=0、两相邻frame行对应列都有值的配对统计，不跨MISS/awaiting缺样段拼接；另提供两列共同有值的配对对比、MISS次数/时长、重获取次数、awaiting占比。记录第一次ACQUIRED的对象，不能声称锁定450与输入顺序无关。
