@@ -31,7 +31,7 @@ PR #43 用户实测 B 段 7.84–8.05 s：u≈450/547 间切换四次，confiden
 | RoboBeetleConsole/src/vision/VisualDiagnosticSession.h / .cpp | 修改：完整帧 context、关联记忆、快照/参数 hash 和调用顺序 |
 | RoboBeetleConsole/src/ui/MainWindow.cpp | 修改：传完整帧；显示全部可渲染检测并传关联选中目标，MISS 不清掉合法的未选检测 |
 | RoboBeetleConsole/src/vision/VideoView.h / .cpp | 修改：不再自行最高置信度选目标；关联标记、误差线、lock 状态文字 |
-| RoboBeetleConsole/src/vision/VisualCsvLogger.cpp | 修改：28列 schema、序列化全部检测、pending/transition新字段规则；原记录/IO流程不改 |
+| RoboBeetleConsole/src/vision/VisualCsvLogger.cpp | 修改：30列 schema、序列化全部检测、pending/transition新字段规则；原记录/IO流程不改 |
 | RoboBeetleConsole/CMakeLists.txt | 修改：登记关联器和新测试目标 |
 | RoboBeetleConsole/tests/target_state_tests.cpp | 修改：helper 与原最高置信度规则一致 |
 | RoboBeetleConsole/tests/visual_policy_config_tests.cpp / visual_diagnostic_session_tests.cpp | 修改：参数/hash、单帧一次、超时释放和既有状态/EMA语义 |
@@ -103,7 +103,7 @@ TargetAssociationMemory releaseTargetAssociationLock(
 | max_miss_ms | 500 | 本地ms，>0；连续关联失败后释放锁，与视频新鲜度不是同一计时器 |
 | require_same_class | false | bool；允许同一物体标签变化 |
 | policy_version | visual-command-proposal-v2 | 对关联后样本应用原策略，版本/hash必须与v1区分 |
-| CSV schema_version | visual-csv-v2 | 独立格式常量；旧21列无schema_version，不与新28列混拼 |
+| CSV schema_version | visual-csv-v2 | 独立格式常量；旧21列无schema_version，不与新30列混拼 |
 
 原值不变：alpha=0.3，e_on=0.25，e_off=0.12，min_dwell_ms=1000，stale_ms=500，lost_ms=1500，K_yaw=1.0，turn_sign=+1，ui_tick_ms=50。CSV的32 MiB/250 ms不混入policy_hash。测试逐个改变三项新值验证hash随实际参数变化；参数越界显式拒绝并STALE/STOP。
 
@@ -130,17 +130,16 @@ TargetAssociationMemory releaseTargetAssociationLock(
 
 AwaitingVideo期间MISS计时不被新awaiting帧重置，但不执行关联/释放；首次追上时以当前注入时间先判安全gate及MISS超时，再最多关联一次。等待超过stale_ms直接安全释放。计时使用本地评估时间而非Pi capture_ts_ns。
 
-## 6. Session接入顺序与单ID一次
+## 6. Session接入顺序与单ID一次（Review S1）
 
-1. 到达事件只对递增ID记录本地到达时间和完整帧；沿用既有highestArrivedFrameId/lastAdvancedArrivalMs。只保留最新完整帧，无历史队列。
-2. 对现有纯 `advanceVisualTargetState` 做一次预检：raw gate仍来自`detectionOverlayState`；Target但全非法时映射NoTarget，合法最高置信度TargetState只供预检核对frameId。预检的next尚不提交，也不调用EMA，不能让其临时TRACKING重置实际noTargetSince。
-3. 预检STALE/OFF/LOST：提交安全状态，释放锁；AwaitingVideo：提交原watchdog到达/等待记忆，保持关联/state/effective/EMA，直接发等待快照。不得在合法性/本地超时判定前关联待写帧。
-4. 其余可用输入：先推进MISS释放；只对尚未消费的新ID调用associateTarget，已有ID取缓存。关联selected存在映射Target；MISS/无selected映射NoTarget，即使frame仍有其他检测，也不能把raw Target + null送入旧状态机触发STALE。
-5. 用原targetMemory、同一now/arrivedId和上述关联输入调用原状态机，提交一次next；最终LOST/STALE/OFF再次释放锁。预检为纯调用，没有两次提交到达或noTarget记忆。
-6. 原`evaluateVisualCommand`接收最终state和关联selected的frameId/ex；公式/去重/dwell不变。MISS不计算新EMA，HOLD保留值；重新ACQUIRED无需特别重置EMA。刷新只允许原策略时间推进，不重复关联或EMA。
-7. 发snapshot：目标/索引与完整帧同ID；hc基线、关联结果和dets均来自此ID。断流、安全状态清空当前选中目标；不得恢复仍在缓存的旧ID。重复到达使用上一次context，不用重复payload替换合法帧。
+1. 到达事件只对递增ID记录本地到达时间和完整帧；重复/倒序payload不能覆盖缓存。
+2. 原始gate为InferenceOff/Stale/AwaitingVideo时不关联、不推进MISS释放，直接作为原状态机输入。AwaitingVideo保持关联与EMA，安全状态在第4步释放。
+3. 原始gate为Target/NoTarget时先推进MISS超时，再仅对未消费的新ID关联一次；重复ID取缓存。关联selected存在映射Target，否则映射NoTarget。完整帧必须匹配highestArrivedFrameId；不匹配时映射Stale。
+4. 原advanceVisualTargetState只调用一次并提交；最终STALE/INFERENCE_OFF/LOST在同一次评估内释放锁，清空本次selected/关联诊断，原策略接收最终安全状态。超过500 ms才追上的帧可暂时关联，但最终STALE释放，不产生目标/EMA/建议输出。
+5. 仅对最终非AwaitingVideo结果调用原evaluateVisualCommand；EMA及其初始化/重置、去重、滞回、dwell保持不变。MISS为HOLD，不把hc基线当策略输入。
+6. snapshot的target、索引、hc和dets同ID；释放后旧ID不能重新获取。session既有QTimer只负责wakeup，纯函数内部无计时器。
 
-此两阶段预检方案复用已验证的纯状态机，避免拷贝其HTTP/本地冻结/视频等待语义；提交的最终状态只由关联可用性决定。session已有QTimer只负责外部wakeup；纯关联器和纯状态机内部仍无计时器。
+取消两阶段预检。若实施发现此单次顺序会产生不正确输出的具体场景，写复现测试并交回Review，不直接恢复预检。旧frame的去重与原状态机到达记忆仍独立保留。
 
 ## 7. 显示一致性
 
@@ -152,10 +151,10 @@ AwaitingVideo期间MISS计时不被新awaiting帧重置，但不执行关联/释
 
 ## 8. CSV schema与记录时机
 
-原21列顺序保留，尾部新增7列，总计28列；每行都写schema_version，首行仍为CSV header，不加破坏既有解析器的注释/额外元数据行：
+原21列顺序保留，尾部新增9列，总计30列；每行都写schema_version，首行仍为CSV header，不加破坏既有解析器的注释/额外元数据行：
 
 ```text
-row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,dets
+row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets
 ```
 
 | 新/变化字段 | frame行规则 |
@@ -165,13 +164,14 @@ row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_c
 | assoc_status | ACQUIRED/ASSOCIATED/MISS；未进行关联的帧为空，不能写成MISS |
 | assoc_dist_px | 第3节定义的距离，g17数字；没有可计算距离留空，不能当0 |
 | hc_u/hc_v/hc_conf | 同一已评估帧中原selectTargetState会选中的合法目标；MISS但有门外目标时仍可填，空/全非法时留空 |
+| src_w / src_h | 该ID原始DetectionFrame.sourceSize，单位px；含被放弃awaiting帧，transition空 |
 | dets | 本帧全部流内检测，保持原顺序：class:conf:u:v;...；空检测为空字符串；不只保留关联入门限的候选 |
 
-`dets`的class明确使用整数classId（避免className中的冒号/分号与内层格式冲突）；confidence/u/v使用locale无关g17，内部以冒号/分号分隔，之后整字段仍执行标准CSV双引号转义。保留收到的全部观测；关联排除的非法fixture可序列化为nan/inf等显式值，不默默删除/替换0。生产输入上限沿用既有256检测/64KiB协议限制。离线重放恢复classId/conf/u/v及流序；类名不是该紧凑列的内容。CSV没有新增W/H列，重放须显式提供原图尺寸（本次640×480），不得从像素最大值猜分辨率。
+`dets`的class明确使用整数classId（避免className中的冒号/分号与内层格式冲突）；confidence/u/v使用locale无关g17，内部以冒号/分号分隔，之后整字段仍执行标准CSV双引号转义。保留收到的全部观测；关联排除的非法fixture可序列化为nan/inf等显式值，不默默删除/替换0。生产输入上限沿用既有256检测/64KiB协议限制。离线重放恢复classId/conf/u/v及流序；类名不是该紧凑列的内容。CSV在dets之前新增src_w/src_h，记录该ID的原图宽高（px）；重放直接使用这两列，不从像素最大值猜分辨率。
 
 保留PR #43全部pending规则：awaiting的新ID先只保存一个pending；同ID第一次可用时写实际关联目标和本次新EMA；被新ID取代/STALE/OFF/会话切换/关闭录制时先写awaiting_video=1行，再处理新情况。放弃行的sel/误差/ex_f/yaw/assoc/hc全空，dets保留该ID原始检测以便统计未使用样本；不把上一帧关联状态塞入放弃行。
 
-transition触发条件仍只有state或effective变化；不因assoc状态或dets变化额外写transition。transition的原帧字段仍空，schema_version/policy照常填写，assoc_status记录当前锁诊断（安全释放为UNLOCKED）；assoc_dist_px、hc_*、dets空，禁止当作关联样本。
+transition触发条件仍只有state或effective变化；不因assoc状态或dets变化额外写transition。transition的原帧字段仍空，schema_version/policy照常填写，assoc_status记录当前锁诊断（安全释放为UNLOCKED）；assoc_dist_px、hc_*、src_w/src_h、dets空，禁止当作关联样本。
 
 local_mono_ms仍表示写行使用的本地评估时间，arrival_mono_ms仍为该ID首次到达时间；不改已有列时序含义或每会话每ID至多一行。默认关闭、Documents目录、NewOnly、32 MiB含header、250 ms GUI线程flush、错误停止及显示原因全部保留，不增加线程/队列/锁。更长行会更快达到原大小上限，不删除保护或截断dets假装完整。
 
@@ -191,15 +191,15 @@ local_mono_ms仍表示写行使用的本地评估时间，arrival_mono_ms仍为�
 | A6 reset/非法参数 | gate NaN/0、max_miss_ms≤0、负/回退时钟拒绝；STALE/OFF/LOST解除锁；sourceSize变化重置；新会话低ID/0可获取 |
 | S1 单帧去重 / session | 重复/倒序ID/重复refresh不改变锁点、missSince、距离或EMA；超时释放后旧ID不重新ACQUIRED；MISS期间新帧仍刷新原watchdog |
 | S2 检测领先15 ms | AwaitingVideo时关联与EMA均不变；视频追上首次关联一次，无中途STOP/dwell锁住；重paint不再关联或EMA |
-| S3 领先500 ms | 同ID视频不追上，安全预检先STALE/STOP并释放；晚到的视频不能复活已超时ID；新ID才恢复 |
+| S3 领先500 ms | 同ID视频不追上，最终状态机判STALE/STOP并在同次评估释放；晚到的视频不能复活已超时ID；新ID才恢复 |
 | S4 原状态边界 | 连续新空帧NO_TARGET→1500 ms LOST/STOP；Pi时间戳冻结、HTTP新鲜、无新ID→500 ms STALE/STOP；MISS500 ms与STALE优先级分别测试 |
 | C1 参数/hash | v2、每个新参数变化均改变SHA-256，默认hash稳定；原alpha/e_on/e_off/dwell不变，原VisualCommandPolicy测试原样运行 |
-| C2 schema/hc/dets / logger | 28列/每行schema版本；同帧u锁450但hc_u547；MISS raw目标空且hc/dets有值；全部检测按classId流序可重放；CSV转义/locale/大小上限/IO错误仍覆盖 |
+| C2 schema/hc/dets / logger | 30列/每行schema版本；同帧u锁450但hc_u547；MISS raw目标空且hc/dets有值；全部检测按classId流序可重放；CSV转义/locale/大小上限/IO错误仍覆盖 |
 | C3 awaiting日志 | 15 ms只有一行实际ASSOCIATED/ACQUIRED、ex/新ex_f齐全且评估−到达=15；替代/500 ms先awaiting行后新帧/transition，dets为旧ID，assoc/hc为空 |
 | C4 EMA复核 | 从真实session输出录CSV，排除awaiting/MISS空ex，按alpha=.3重算，连续接受样本与ex_f误差<1e−12；HOLD后获取不添加额外EMA重置 |
 | U1 VideoView | 所有点显示，关联目标与hc不同仍LOCK/误差线指向关联目标；MISS保留其他点但无旧锁点；letterbox坐标正确、安全/等待时清空 |
 | I1 真实loopback零写入 | 实际视频/检测独立TCP及HTTP：交替目标、MISS/HOLD、解锁再获取、LOST/STALE/OFF/新session/AwaitingVideo及CSV start/record/stop/error；每段保留FakeTransport.writes().isEmpty()断言 |
-| I2 旧B1/策略fixture | 旧测试存在单帧160→480等>48 px跳变；把专门验证B1/EMA的连续目标fixture改为门内移动并更新预期算术，或显式新session；不放宽门限默认、不删除旧时序/零写入/单次EMA断言 |
+| I2 旧B1/策略fixture | 旧测试存在单帧160→480等>48 px跳变；把专门验证B1/EMA的连续目标fixture改为门内移动并更新预期算术，或显式新session；不放宽门限默认、不删除旧时序/零写入/单次EMA断言；PR描述逐项列出原意图、修改内容和原因（Review M2） |
 
 完整CTest对比本次最新main的独立baseline，不新增失败目标。PR #43历史是24/26，仅main_window_tests原标签裁切、main_window_layout_tests原Motion/Gait可见性失败；robot_controller_tests历史时序失败在#43未复现。这是既有记录，不冒充本次已复跑结果；实施时保存当前baseline/final日志并列实际差异，不修/放宽无关布局或控制测试。
 
@@ -207,8 +207,8 @@ local_mono_ms仍表示写行使用的本地评估时间，arrival_mono_ms仍为�
 
 - [ ] Claude Review本设计；本次在此之前停止，只推送设计文档和draft PR。
 - [ ] 关联器/config：写A1–A6和hash RED，提取targetStateAt但保留原选择契约，最小实现GREEN，保存日志。
-- [ ] Session：写S1–S4 RED，接入完整帧与关联记忆/预检，GREEN；原策略测试原样复跑。
-- [ ] 显示/CSV：先U1/C2–C4 RED，再实现selected标记/28列/pending字段，GREEN。
+- [ ] Session：写S1–S4 RED，接入完整帧与关联记忆/单次状态机，GREEN；原策略测试原样复跑。
+- [ ] 显示/CSV：先U1/C2–C4 RED，再实现selected标记/30列/pending字段，GREEN。
 - [ ] loopback：I1/I2 RED→GREEN；baseline/final完整CTest，保存真实日志，比较新增失败。
 - [ ] 沿用PR #41–#43的src新增行运动/舵机接口grep pattern；结合loopback零写入，不单凭grep证明运行时隔离。
 - [ ] Release新便携目录 `D:\RoboBeetleConsole-portable-target-temporal-association-dry-run-20261003\`，若已存在则使用新后缀，不覆盖旧包。验证依赖启动，不把offscreen当硬件实测。
