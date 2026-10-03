@@ -21,7 +21,10 @@ struct VisualPolicyConfig {
     double K_yaw{1.0};
     int turn_sign{1}; // [Provisional] Physical turn direction remains unverified.
     int ui_tick_ms{50};
-    static constexpr std::string_view policy_version{"visual-command-proposal-v1"};
+    double gate_px{48.0}; // [Provisional] Original image pixels.
+    std::int64_t max_miss_ms{500}; // [Provisional] Local monotonic milliseconds.
+    bool require_same_class{false}; // [Provisional] Labels can change on one object.
+    static constexpr std::string_view policy_version{"visual-command-proposal-v2"};
 };
 
 // File recording limits are independent of command-policy provenance.
@@ -37,7 +40,8 @@ struct VisualCsvConfig {
         && c.e_off >= 0.0 && c.e_off < c.e_on && c.e_on <= 1.0
         && c.min_dwell_ms >= 0 && c.stale_ms > 0 && c.lost_ms > 0
         && std::isfinite(c.K_yaw) && c.K_yaw >= 0.0
-        && (c.turn_sign == 1 || c.turn_sign == -1) && c.ui_tick_ms > 0;
+        && (c.turn_sign == 1 || c.turn_sign == -1) && c.ui_tick_ms > 0
+        && std::isfinite(c.gate_px) && c.gate_px > 0.0 && c.max_miss_ms > 0;
 }
 
 } // namespace rb::vision

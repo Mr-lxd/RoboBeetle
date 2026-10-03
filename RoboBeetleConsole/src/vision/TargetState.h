@@ -16,6 +16,9 @@ struct TargetState {
     double ey{0.0};
 };
 
+[[nodiscard]] std::optional<TargetState> targetStateAt(
+    const DetectionFrame &frame, qsizetype detectionIndex);
+
 // Highest confidence among valid observations; first in stream on a tie.
 // Freshness and inference readiness remain the caller's existing responsibility.
 [[nodiscard]] std::optional<TargetState> selectTargetState(
