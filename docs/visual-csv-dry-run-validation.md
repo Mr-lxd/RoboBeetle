@@ -63,7 +63,7 @@ B1采样约定：检测领先视频的新ID按首次到达快照写frame行，�
 | main_window_tests | 失败 / 失败 | 原有IMU、Depth、Protocol、Leak标签纵向裁切四项断言 |
 | main_window_layout_tests | 失败 / 失败 | 原有Motion/Gait comfortable-window fully-visible；offscreen可用800×800，窗口1100×720 |
 
-使用`QT_QPA_FONTDIR=C:\Windows\Fonts`，未修改/放宽旧布局或控制断言。内部规格/代码质量复核仅辅助实现，不替代Claude Review。
+使用`QT_QPA_FONTDIR=C:\Windows\Fonts`，未修改/放宽旧布局或控制断言。内部规格与代码质量复核均通过，未发现需修复的问题；仅辅助实现，不替代Claude Review。
 
 ## ④ 范围及grep
 
@@ -81,7 +81,7 @@ $LASTEXITCODE # 1，无匹配
 
 ## ⑤ 构建、包及用户操作
 
-便携包：`D:\RoboBeetleConsole-portable-visual-csv-dry-run-20261003\RoboBeetleConsole.exe`，未覆盖两个保留包。EXE SHA-256：`8AD18554450064D65A5B850FEFB9324E780B0E7C464E6B77BF1ED984C1EE7772`，构建与包内一致。源码commit在交付后续docs-only提交中登记，包内BUILD_INFO.txt同时记录。
+便携包：`D:\RoboBeetleConsole-portable-visual-csv-dry-run-20261003\RoboBeetleConsole.exe`，未覆盖两个保留包。EXE SHA-256：`8AD18554450064D65A5B850FEFB9324E780B0E7C464E6B77BF1ED984C1EE7772`，构建与包内一致。EXE源码commit：`463d648891c3d7d23babec20fe2e4f1d880dda3b`。之后的交付提交仅更新docs，Console构建输入不变；包内BUILD_INFO.txt分别记录源码commit及交付head。
 
 windeployqt Release部署JPEG/windows/offscreen及运行库；仅系统目录PATH的offscreen启动检查持续3s，日志确认插件加载；仅结束本次检查新建PID23864，用户正在运行的旧包PID55132未停止。该检查证明依赖能启动，不证明真实摄像头、CSV60s数据或运动硬件实测。文档/测试中的模拟视频同样不是实机证据。
 
