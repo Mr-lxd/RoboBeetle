@@ -8,10 +8,13 @@
 #include "vision/VisionControlClient.h"
 #include "vision/InferenceUiState.h"
 #include "vision/VisualDiagnosticSession.h"
+#include "vision/VisualCsvLogger.h"
 
 #include <QCloseEvent>
 #include <QAbstractSpinBox>
 #include <QComboBox>
+#include <QCheckBox>
+#include <QFileDialog>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
@@ -2120,6 +2123,28 @@ QWidget *MainWindow::createVisionDetailsTab()
     videoForm->addRow(QStringLiteral("Visual proposal"), visualProposalDetails_);
     layout->addLayout(videoForm);
 
+    auto *csvForm = new QFormLayout;
+    visualCsvEnabled_ = new QCheckBox(QStringLiteral("Record visual CSV (no motion output)"), content);
+    visualCsvEnabled_->setObjectName(QStringLiteral("visualCsvEnabled"));
+    csvForm->addRow(QStringLiteral("CSV"), visualCsvEnabled_);
+    auto *csvDirectoryRow = new QWidget(content);
+    auto *csvDirectoryLayout = new QHBoxLayout(csvDirectoryRow);
+    csvDirectoryLayout->setContentsMargins(0, 0, 0, 0);
+    visualCsvDirectory_ = new QLineEdit(vision::VisualCsvLogger::defaultDirectory(), csvDirectoryRow);
+    visualCsvDirectory_->setObjectName(QStringLiteral("visualCsvDirectory"));
+    visualCsvBrowse_ = new QPushButton(QStringLiteral("Browse..."), csvDirectoryRow);
+    visualCsvBrowse_->setObjectName(QStringLiteral("visualCsvBrowse"));
+    csvDirectoryLayout->addWidget(visualCsvDirectory_, 1);
+    csvDirectoryLayout->addWidget(visualCsvBrowse_);
+    csvForm->addRow(QStringLiteral("CSV directory"), csvDirectoryRow);
+    visualCsvStatus_ = new QLabel(QStringLiteral("CSV OFF"), content);
+    visualCsvStatus_->setObjectName(QStringLiteral("visualCsvStatus"));
+    visualCsvStatus_->setWordWrap(true);
+    visualCsvStatus_->setTextFormat(Qt::PlainText);
+    visualCsvStatus_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    csvForm->addRow(QStringLiteral("CSV status"), visualCsvStatus_);
+    layout->addLayout(csvForm);
+
     auto *inferenceForm = new QFormLayout;
     inferenceArtifactValue_ = new QLineEdit(content);
     inferenceArtifactValue_->setObjectName(QStringLiteral("inferenceArtifactValue"));
@@ -2314,11 +2339,55 @@ QWidget *MainWindow::createOperatorTools()
     return pane;
 }
 
+MainWindow::~MainWindow()
+{
+    if (visualCsvLogger_) { visualCsvLogger_->stop(); }
+}
+
+void MainWindow::refreshVisualCsvUi()
+{
+    const bool recording = visualCsvLogger_->isRecording();
+    const QSignalBlocker blocker(visualCsvEnabled_);
+    visualCsvEnabled_->setChecked(recording);
+    visualCsvDirectory_->setEnabled(!recording);
+    visualCsvBrowse_->setEnabled(!recording);
+    if (!visualCsvLogger_->lastError().isEmpty()) {
+        visualCsvStatus_->setText(QStringLiteral("CSV Error - stopped: %1\n%2")
+            .arg(visualCsvLogger_->lastError(), visualCsvLogger_->filePath()));
+    } else if (recording) {
+        visualCsvStatus_->setText(QStringLiteral("CSV Recording (32 MiB limit):\n%1")
+            .arg(visualCsvLogger_->filePath()));
+    } else {
+        visualCsvStatus_->setText(QStringLiteral("CSV OFF%1")
+            .arg(visualCsvLogger_->filePath().isEmpty() ? QString{}
+                 : QStringLiteral(" - saved:\n") + visualCsvLogger_->filePath()));
+    }
+}
+
 void MainWindow::bindVisionUi()
 {
+    visualCsvLogger_ = new vision::VisualCsvLogger({}, this);
+    connect(visualCsvLogger_, &vision::VisualCsvLogger::recordingChanged,
+            this, &MainWindow::refreshVisualCsvUi);
+    connect(visualCsvEnabled_, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (enabled) {
+            if (visualCsvLogger_->start(visualCsvDirectory_->text())) {
+                visualCsvLogger_->record(visualSession_->snapshot());
+            }
+        } else {
+            visualCsvLogger_->stop();
+        }
+        refreshVisualCsvUi();
+    });
+    connect(visualCsvBrowse_, &QPushButton::clicked, this, [this] {
+        const auto directory = QFileDialog::getExistingDirectory(
+            this, QStringLiteral("Visual CSV directory"), visualCsvDirectory_->text());
+        if (!directory.isEmpty()) { visualCsvDirectory_->setText(directory); }
+    });
     visualSession_ = new vision::VisualDiagnosticSession({}, {}, this);
     connect(visualSession_, &vision::VisualDiagnosticSession::diagnosticChanged, this,
             [this](const vision::VisualDiagnosticSnapshot &snapshot) {
+        visualCsvLogger_->record(snapshot);
         if (videoView_ == nullptr) { return; }
         if (snapshot.target && latestDetectionFrame_) {
             videoView_->setDetectionOverlay(*latestDetectionFrame_);
@@ -3950,6 +4019,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
         visionClient_->shutdown();
     }
     controller_->shutdown();
+    if (visualCsvLogger_) { visualCsvLogger_->stop(); }
     event->accept();
 }
 

@@ -12,6 +12,7 @@
 
 class QCloseEvent;
 class QComboBox;
+class QCheckBox;
 class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
@@ -38,6 +39,7 @@ class VideoView;
 class VisionClient;
 class VisionControlClient;
 class VisualDiagnosticSession;
+class VisualCsvLogger;
 struct VisualViewContext;
 }
 
@@ -51,6 +53,7 @@ public:
         vision::VisionControlClient *visionControlClient = nullptr,
         vision::DetectionClient *detectionClient = nullptr,
         QWidget *parent = nullptr);
+    ~MainWindow() override;
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -85,6 +88,7 @@ private:
     QTabWidget *createOperatorToolsTabs();
     QWidget *createVisionDetailsTab();
     void bindVisionUi();
+    void refreshVisualCsvUi();
     void bindControllerUi();
     void refreshVideoDiagnosticsUi();
     void refreshProtocolUi(const ProtocolMonitor &monitor);
@@ -125,6 +129,11 @@ private:
     vision::VisualDiagnosticSession *visualSession_{nullptr};
     quint64 visualSessionId_{0};
     QLabel *visualProposalDetails_{nullptr};
+    vision::VisualCsvLogger *visualCsvLogger_{nullptr};
+    QCheckBox *visualCsvEnabled_{nullptr};
+    QLineEdit *visualCsvDirectory_{nullptr};
+    QPushButton *visualCsvBrowse_{nullptr};
+    QLabel *visualCsvStatus_{nullptr};
 
     // Vision card.
     QLineEdit *piHost_{nullptr};
