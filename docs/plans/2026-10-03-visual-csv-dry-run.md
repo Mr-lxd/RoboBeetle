@@ -17,9 +17,9 @@
 - [x] 先 RED：默认关闭、首帧/重复ID/新会话低ID、timer-only状态/effective转移、HOLD、frame/transition列、UTF-8/转义/locale、NewOnly、限额、open/flush错误及关闭flush。
 - [x] GREEN：默认目录 DocumentsLocation/RoboBeetle/visual-logs；唯一时间/UUID文件名、QIODevice::NewOnly；32 MiB含header，写前检查；错误停止并保留原因，不轮转、不覆盖。
 - [x] 每个新frame_id仅一行frame；按session重置ID下限。重复/倒序ID不重新记录。
-- [x] state或effective变化写transition，frame_id/capture_ts_ns/n_detections/sel_class/sel_conf/u/v/ex/ey空；起始快照作为初始转移基线。timer产生STALE/LOST/dwell变化也记。
-- [x] header：`row_kind,local_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video`。
-- [x] effective_command用于明确HOLD保留的建议；awaiting_video用于剔除领先视频而无法使用原始目标的样本。新ID到达时记录当时快照；等待视频的frame行原始目标字段空，视频追上后的重复ID不另写frame行，避免重复采样；后续真实state/effective变化仍记transition。
+- [x] state或effective变化写transition，arrival_mono_ms/frame_id/capture_ts_ns/n_detections/sel_class/sel_conf/u/v/ex/ey空；起始快照作为初始转移基线。timer产生STALE/LOST/dwell变化也记。
+- [x] header：`row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video`。
+- [x] effective_command用于明确HOLD保留的建议；awaiting_video用于剔除领先视频而无法使用原始目标的样本。Review修订：新ID领先视频时先保存单个pending及首次arrival时间；同ID首次可用时写实际评估结果。替代/STALE/OFF/会话切换/关闭录制时先写未评估awaiting行，选择/误差/滤波输出为空，再处理新情况。每ID仍一行；local_mono_ms为写入时的评估时间，arrival_mono_ms为首次到达时间；transition的arrival留空。
 - [x] 不自动声称同类别就是同一个物体。稳定目标片段需结合画面、class/u/v连续性检查，无追踪器/目标选择变化。
 
 ## ② GUI与loopback

@@ -2,12 +2,13 @@
 #include <QDateTime>
 #include <QDir>
 #include <QStandardPaths>
+#include <QSignalBlocker>
 #include <QStringList>
 #include <QUuid>
 
 namespace rb::vision {
 namespace {
-const QByteArray header = "row_kind,local_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video\n";
+const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video\n";
 
 QString escaped(QString field)
 {
@@ -34,12 +35,9 @@ VisualCsvLogger::VisualCsvLogger(VisualCsvConfig config, QObject *parent)
 
 VisualCsvLogger::~VisualCsvLogger()
 {
-    timer_.stop();
-    if (file_.isOpen()) {
-        // Destruction closes pending output without notifying a disappearing UI.
-        if (!file_.flush()) lastError_ = QStringLiteral("CSV flush failed: %1").arg(file_.errorString());
-        file_.close();
-    }
+    // Finalize an unresolved frame without notifying a disappearing UI.
+    const QSignalBlocker blocker(this);
+    stop();
 }
 
 QString VisualCsvLogger::defaultDirectory()
@@ -78,6 +76,9 @@ bool VisualCsvLogger::start(const QString &directory)
     bytesWritten_ = 0;
     sessionId_.reset();
     highestFrameId_.reset();
+    pendingFrame_.reset();
+    pendingArrivalMs_ = 0;
+    lastEvaluationMs_ = 0;
     previousState_.reset();
     previousEffective_.reset();
     if (!append(header)) return false;
@@ -102,12 +103,14 @@ bool VisualCsvLogger::append(const QByteArray &bytes)
     return true;
 }
 
-QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transition) const
+QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transition,
+                               std::optional<qint64> arrivalMs) const
 {
     QStringList fields;
-    fields.reserve(20);
+    fields.reserve(21);
     fields << (transition ? QStringLiteral("transition") : QStringLiteral("frame"))
-           << QString::number(s.localMonoMs);
+           << QString::number(s.localMonoMs)
+           << (!transition && arrivalMs ? QString::number(*arrivalMs) : QString{});
     fields << (!transition && s.frameId ? QString::number(*s.frameId) : QString{})
            << (!transition && s.captureTimestampNs ? QString::number(*s.captureTimestampNs) : QString{})
            << (!transition ? QString::number(s.nDetections) : QString{});
@@ -119,8 +122,8 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
     } else {
         for (int i = 0; i < 6; ++i) fields << QString{};
     }
-    fields << (s.command.ex_f ? number(*s.command.ex_f) : QString{})
-           << number(s.command.yaw_cmd)
+    fields << (!s.awaitingVideo && s.command.ex_f ? number(*s.command.ex_f) : QString{})
+           << (!s.awaitingVideo ? number(s.command.yaw_cmd) : QString{})
            << QString::fromLatin1(visualStateName(s.state))
            << QString::fromLatin1(proposedCommandName(s.command.proposed))
            << QString::fromLatin1(proposedCommandName(s.command.effective))
@@ -130,15 +133,53 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
     return (fields.join(QLatin1Char(',')) + QLatin1Char('\n')).toUtf8();
 }
 
+bool VisualCsvLogger::finishPending(qint64 evaluationMs)
+{
+    if (!pendingFrame_) return true;
+    // Keep this ID's arrival metadata, but timestamp the evaluation that ends its wait.
+    auto unfinished = *pendingFrame_;
+    unfinished.localMonoMs = evaluationMs;
+    if (!append(row(unfinished, false, pendingArrivalMs_))) return false;
+    pendingFrame_.reset();
+    return true;
+}
+
 void VisualCsvLogger::record(const VisualDiagnosticSnapshot &s)
 {
+    if (!observedSessionId_ || *observedSessionId_ != s.sessionId) {
+        observedSessionId_ = s.sessionId;
+        observedFrameId_.reset();
+    }
+    if (s.frameId && (!observedFrameId_ || *s.frameId > *observedFrameId_)) {
+        observedFrameId_ = s.frameId;
+        observedArrivalMs_ = s.localMonoMs;
+    }
     if (!recording_) return;
-    if (!sessionId_ || *sessionId_ != s.sessionId) {
+    lastEvaluationMs_ = s.localMonoMs;
+    const bool sessionChanged = sessionId_ && *sessionId_ != s.sessionId;
+    const bool replaced = pendingFrame_ && s.frameId
+        && *s.frameId > *pendingFrame_->frameId;
+    const bool invalidated = !s.awaitingVideo
+        && (s.state == VisualState::Stale || s.state == VisualState::InferenceOff);
+    if (pendingFrame_ && (sessionChanged || replaced || invalidated)) {
+        if (!finishPending(s.localMonoMs)) return;
+    }
+    if (!sessionId_ || sessionChanged) {
         sessionId_ = s.sessionId;
         highestFrameId_.reset();
     }
+    if (pendingFrame_ && s.frameId == pendingFrame_->frameId && !s.awaitingVideo) {
+        // The first evaluated snapshot for this ID carries the actual ex/EMA result.
+        if (!append(row(s, false, pendingArrivalMs_))) return;
+        pendingFrame_.reset();
+    }
     if (s.frameId && (!highestFrameId_ || *s.frameId > *highestFrameId_)) {
-        if (!append(row(s, false))) return;
+        if (s.awaitingVideo) {
+            pendingFrame_ = s;
+            pendingArrivalMs_ = observedArrivalMs_;
+        } else if (!append(row(s, false, observedArrivalMs_))) {
+            return;
+        }
         highestFrameId_ = s.frameId;
     }
     if (previousState_ && (*previousState_ != s.state || *previousEffective_ != s.command.effective)) {
@@ -154,6 +195,7 @@ void VisualCsvLogger::fail(const QString &reason)
     timer_.stop();
     file_.close();
     recording_ = false;
+    pendingFrame_.reset();
     emit recordingChanged();
 }
 
@@ -168,6 +210,7 @@ void VisualCsvLogger::stop()
 {
     if (!recording_) return;
     timer_.stop();
+    if (!finishPending(lastEvaluationMs_)) return;
     flush();
     if (!recording_) return; // Flush failure already closed and signalled.
     file_.close();

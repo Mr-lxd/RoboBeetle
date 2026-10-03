@@ -26,7 +26,9 @@ signals:
 private:
     bool append(const QByteArray &bytes);
     void fail(const QString &reason);
-    QByteArray row(const VisualDiagnosticSnapshot &snapshot, bool transition) const;
+    QByteArray row(const VisualDiagnosticSnapshot &snapshot, bool transition,
+                   std::optional<qint64> arrivalMs = std::nullopt) const;
+    bool finishPending(qint64 evaluationMs);
     VisualCsvConfig config_;
     QFile file_;
     QTimer timer_;
@@ -35,6 +37,14 @@ private:
     qint64 bytesWritten_{0};
     std::optional<quint64> sessionId_;
     std::optional<quint64> highestFrameId_;
+    // One unresolved frame. Its ID is already in highestFrameId_.
+    std::optional<VisualDiagnosticSnapshot> pendingFrame_;
+    qint64 pendingArrivalMs_{0};
+    qint64 lastEvaluationMs_{0};
+    // Observe arrival even while recording is off; enabling CSV must not retime a cached ID.
+    std::optional<quint64> observedSessionId_;
+    std::optional<quint64> observedFrameId_;
+    qint64 observedArrivalMs_{0};
     std::optional<VisualState> previousState_;
     std::optional<ProposedCommand> previousEffective_;
 };

@@ -14,17 +14,18 @@
 
 ## ② CSV 契约、符号及单位
 
-UTF-8，标准双引号CSV转义；数字使用 locale 无关的小数点、double g17，未提供的值留空，不能当作0。完整 **20列**（此前计划“19列”为计数笔误，实际列名未减少）：
+UTF-8，标准双引号CSV转义；数字使用 locale 无关的小数点、double g17，未提供的值留空，不能当作0。Review修订后完整 **21列**，在local_mono_ms之后新增arrival_mono_ms。旧包产生的20列历史CSV不能恢复漏记的评估结果，分析前应核对表头，勿与新格式直接拼接：
 
 ```text
-row_kind,local_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video
+row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video
 ```
 
 | 字段 | 约定 |
 |---|---|
-| row_kind=frame | 每会话内首次看到的递增frame_id写一行；重复/倒序不再写；新session允许低ID/0重新开始 |
-| row_kind=transition | state或effective变化写一行，frame_id至ey共9个帧字段留空；不因proposed单独变化写；第一份快照建立比较基线 |
-| local_mono_ms | Console既有QElapsedTimer的本地经过毫秒，不是UTC，也不是Pi采集时刻；一个Console实例内跨session仍使用同一本地时钟 |
+| row_kind=frame | 每会话内新递增ID只写一行；等待视频时延后到首次评估结果或明确放弃等待；重复/倒序不再写；新session允许低ID/0重新开始 |
+| row_kind=transition | state或effective变化写一行，arrival_mono_ms以及frame_id至ey共10个字段留空；不因proposed单独变化写；第一份快照建立比较基线 |
+| local_mono_ms | 写入该行时使用的本地评估时间，取当前诊断快照的QElapsedTimer经过毫秒；不是UTC或实际磁盘flush时间。放弃pending时使用触发放弃的评估时间；关闭录制使用最近一次评估时间 |
+| arrival_mono_ms | 该ID首次到达Console记录器的本地毫秒；重复渲染不刷新。CSV关闭时也仅观察ID及首次到达时间，不写文件，保证开启CSV时不把已有帧重新计时。transition留空 |
 | capture_ts_ns | 原Pi采集时间戳，纳秒；不能与local_mono_ms直接相减 |
 | session_id | Console检测会话ID；分段时与frame_id一起使用，不代表物理目标ID |
 | sel_class / sel_conf | 既有最高置信度选中的className与confidence；没有新增追踪/选择策略 |
@@ -33,11 +34,15 @@ row_kind,local_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,
 | ex_f / yaw_cmd | #42既有EMA误差及`clamp(K_yaw*ex_f,-1,1)`，均无量纲；不表示角度、角速度或PWM |
 | proposed_command / effective_command | FORWARD/TURN_LEFT/TURN_RIGHT/STOP/HOLD；HOLD时effective明确记录保留的上一条建议，全部仅用于显示 |
 | policy_version / policy_hash | 每行记录既有建议策略的版本及参数hash；CSV参数不混入运动策略hash |
-| awaiting_video | 1表示检测领先视频，0表示没有这种等待；不是第六种VisualState |
+| awaiting_video | 1表示该帧最终未等到可用评估；0表示已结束等待或无需等待，可记录实际评估结果；不是第六种VisualState |
 
 NO_TARGET/HOLD保留ex_f/effective，原始目标字段为空；LOST/STALE/INFERENCE_OFF为STOP，原始及滤波误差清空。timer-only状态转移仍记录transition，可看见无新检测时的STALE/STOP。具体状态条件仍见 [#42验证记录](visual-command-dry-run-validation.md)。
 
-B1采样约定：检测领先视频的新ID按首次到达快照写frame行，原始sel_class/conf/u/v/ex/ey为空，旧state/ex_f/effective保留，awaiting_video=1。视频追上后同ID不补第二行frame；真实state/effective改变仍记transition。因此不要把awaiting行的旧滤波值当作该帧已计算的新EMA，不要用这些行做原始抖动统计。
+B1采样约定（本次Review必改）：领先视频的新ID先保存一个pending帧和首次arrival_mono_ms，不立即写行。同一ID第一次awaitingVideo=0且未失效时，写该次实际评估结果（目标、ex/ey、新ex_f/yaw），awaiting_video=0。被更新ID替代、STALE/INFERENCE_OFF、会话切换时，先将旧pending写为awaiting_video=1，再处理新帧或transition；录制停止/销毁也会结束未完成pending。放弃行保留原ID、采集时间、检测数及待写时的state/建议上下文，sel_class/conf/u/v/ex/ey/ex_f/yaw_cmd全部留空，不能解释为旧EMA用于该帧。
+
+每个会话内的frame_id仍只写一行。统计使用awaiting_video=0且有有效目标/误差的frame行；另报告未评估awaiting行的占比及评估等待时间，防止遗漏样本被统计隐藏。`local_mono_ms - arrival_mono_ms`是本地从到达到此次评估/放弃的等待毫秒，不是网络单程延迟，也不含之后的250ms文件flush等待；两者使用同一Console时钟。
+
+EMA复核应取同session/policy、连续有效TRACKING的frame行并排除awaiting行，首个全新滤波段初始化ex_f=ex，随后逐行`ex_f=0.3*ex+0.7*previous_ex_f`。如果录制从已有滤波状态中途开始，先以首行实际ex_f作种子；STALE/LOST/OFF或会话重置后重新分段，不能跨重置套用旧滤波记忆。
 
 默认turn_sign=+1：正ex_f建议TURN_RIGHT，负建议TURN_LEFT；**实机符号未验证**。yaw仍遵循图像符号；将来发送连续yaw时，turn_sign必须同时作用于发送映射层。EMA按帧计算，时间常数随推理FPS变化，25 FPS约110 ms。
 
@@ -55,7 +60,7 @@ B1采样约定：检测领先视频的新ID按首次到达快照写frame行，�
 | task03-baseline-tests.log | git archive独立构建最新main：23/25 |
 | task03-final-tests.log | 最终24/26；仅与基线相同的两项布局失败；新增logger通过，扩展loopback通过 |
 
-单元测试覆盖20列顺序、首帧/重复/倒序、新session低ID/0、state/effective转换与空帧字段、HOLD保留、AwaitingVideo、UTF-8逗号/引号/CRLF转义、德国locale小数点、唯一文件保留、32MiB配置和小额度边界、open错误、250ms真实timer、stop/destructor flush及真实Windows write/flush故障。loopback录CSV时覆盖TRACKING、NO_TARGET/HOLD、LOST/STOP、STALE/STOP、INFERENCE_OFF/STOP，含冻结Pi时间戳而HTTP新鲜、B1单ID一行、实际Stop Inference；start/record/stop/error全过程保留FakeTransport零机器人写入断言。
+单元测试覆盖当前21列顺序、首帧/重复/倒序、新session低ID/0、state/effective转换与空帧字段、HOLD保留、AwaitingVideo、UTF-8逗号/引号/CRLF转义、德国locale小数点、唯一文件保留、32MiB配置和小额度边界、open错误、250ms真实timer、stop/destructor flush及真实Windows write/flush故障。loopback录CSV时覆盖TRACKING、NO_TARGET/HOLD、LOST/STOP、STALE/STOP、INFERENCE_OFF/STOP，含冻结Pi时间戳而HTTP新鲜、B1追上后的新ex/ex_f单ID一行、实际Stop Inference；start/record/stop/error全过程保留FakeTransport零机器人写入断言。
 
 | 三项已知基线 | 当前main / 最终 | 说明 |
 |---|---|---|
@@ -64,6 +69,24 @@ B1采样约定：检测领先视频的新ID按首次到达快照写frame行，�
 | main_window_layout_tests | 失败 / 失败 | 原有Motion/Gait comfortable-window fully-visible；offscreen可用800×800，窗口1100×720 |
 
 使用`QT_QPA_FONTDIR=C:\Windows\Fonts`，未修改/放宽旧布局或控制断言。内部规格与代码质量复核均通过，未发现需修复的问题；仅辅助实现，不替代Claude Review。
+
+### PR #43 Review 修订验证
+
+只修改生产VisualCsvLogger.h/.cpp；session、策略、config、MainWindow生产代码均未改。原日志作为首轮历史证据保留，本次结果使用独立review日志：
+
+| 场景 / 证据 | 结果 |
+|---|---|
+| task03-review-red.log | 旧代码可编译，logger与loopback两目标失败；包含延后写入/新21列表头/EMA样本完整性断言 |
+| task03-review-green.log | 初次修复后logger及真实loopback 2/2通过 |
+| 15ms追上 | 到达时不写，追上只写一行frame，awaiting=0，目标/ex/新ex_f齐全，arrival比评估时间早15ms |
+| 更新ID替代 / 500ms超时 | 旧awaiting行先写；然后新ID frame或STALE/STOP transition；transition的arrival及帧字段空 |
+| OFF / 会话切换 / 重复 / 关闭 | OFF和低ID新session先结束旧pending，重复不刷新到达；stop及仅析构都写一行awaiting，析构不发UI信号 |
+| task03-review-arrival-red.log | CSV开关开启前已有帧时，两个新增到达时间断言先RED；修复后纳入最终GREEN |
+| task03-review-destructor-red.log | 临时省略析构pending结束的mutation被新增用例检出；原实现恢复后GREEN |
+| CSV重算EMA | 输入来自真实evaluateVisualCommand，4个已使用样本全部记录、1个被替代awaiting排除；从CSV的ex以alpha=.3逐个重算，与ex_f误差小于1e−12 |
+| task03-review-final-build.log / task03-review-final-tests.log | 当前Release完整构建及完整CTest，仍24/26，只有与main相同的两项历史布局失败，控制器通过 |
+
+尚无本次用户60s CSV数据；不能提供或预填真实awaiting占比/等待分布。实测①要求同时提交上述两项统计，自动化fixture仅验证样本完整性和时间差，不代表摄像头实测。
 
 ## ④ 范围及grep
 
@@ -101,7 +124,7 @@ $env:QT_QPA_PLATFORM='offscreen'; $env:QT_QPA_FONTDIR='C:\Windows\Fonts'
 
 | 实验 | 操作及应观察 |
 |---|---|
-| ① 中心60s | 开始CSV，目标保持中心约60s，关开关。取frame行、TRACKING、awaiting_video=0、ex有值、同session连续片段，统计ex均值/标准差/峰峰值，结合画面剔除误检/跳目标 |
+| ① 中心60s | 开始CSV，目标保持中心约60s，关开关。抖动统计只取frame行、TRACKING、awaiting_video=0、ex有值、同session连续片段，统计ex均值/标准差/峰峰值，结合画面剔除误检/跳目标。另报告所有frame行中awaiting_video=1的行数及占比（不含transition），以及local_mono_ms−arrival_mono_ms的毫秒分布：样本数、min/median/mean/P95/max，分别列awaiting=0和1；不得把空字段当0 |
 | ②/②b 左中右、中心扰动 | CSV看ex→ex_f→建议，门限e_on=.25/e_off=.12、dwell≥1000ms；按sel_class/u/v连续性并结合视频人工确认同一目标片段，剔除awaiting/空目标及session改变。相同className不等于同一物体，本次没有追踪器，不能自动保证身份连续 |
 | ③ Stop Inference | 继续录制，操作Stop；transition应记录STALE/STOP→INFERENCE_OFF/STOP，原始/滤波清空。建议未发送 |
 | ④ 遮挡/移走 | 有新空帧：NO_TARGET/HOLD（effective保留上一建议、ex_f保留）→约1.5s LOST/STOP；若新ID停止则约0.5s STALE/STOP，不能混为LOST |

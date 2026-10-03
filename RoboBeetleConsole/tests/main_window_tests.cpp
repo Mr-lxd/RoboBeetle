@@ -2836,31 +2836,33 @@ void testSlice5DetectionTextOverlayLifecycle()
             QFile csv(QDir(csvDirectory.path()).filePath(files.front()));
             expect(csv.open(QIODevice::ReadOnly), "closed loopback CSV is readable");
             const auto lines = csv.readAll().split('\n');
-            expect(!lines.isEmpty() && lines.front().startsWith("row_kind,local_mono_ms,frame_id"),
+            expect(!lines.isEmpty() && lines.front().startsWith("row_kind,local_mono_ms,arrival_mono_ms,frame_id"),
                    "CSV publishes frame/transition schema");
             int aheadFrameCount = 0;
             bool tracking = false, noTarget = false, lost = false, stale = false, off = false;
             bool usableErrors = false;
             for (qsizetype i = 1; i < lines.size(); ++i) {
                 const auto columns = lines[i].trimmed().split(',');
-                if (columns.size() != 20) { continue; }
-                if (columns[0] == "frame" && columns[2] == "11") {
+                if (columns.size() != 21) { continue; }
+                if (columns[0] == "frame" && columns[3] == "11") {
                     ++aheadFrameCount;
-                    expect(columns[5].isEmpty() && columns[9].isEmpty() && columns[19] == "1",
-                           "ahead-of-video frame has blank raw target fields and explicit waiting flag");
+                    expect(columns[6] == "fish" && std::abs(columns[10].toDouble() - 0.5) < 1e-9
+                               && std::abs(columns[12].toDouble() + 0.2875) < 1e-9
+                               && columns[20] == "0" && columns[1].toLongLong() >= columns[2].toLongLong(),
+                           "caught-up frame includes the exact new ex/EMA and arrival/evaluation times");
                 }
-                if (columns[0] == "frame" && columns[2] == "13") {
-                    usableErrors = std::abs(columns[9].toDouble() + 0.625) < 1e-9;
+                if (columns[0] == "frame" && columns[3] == "13") {
+                    usableErrors = std::abs(columns[10].toDouble() + 0.625) < 1e-9;
                 }
                 if (columns[0] != "transition") { continue; }
-                for (int c = 2; c <= 10; ++c) {
+                for (int c = 2; c <= 11; ++c) {
                     expect(columns[c].isEmpty(), "transition CSV leaves frame-related fields blank");
                 }
-                tracking |= columns[13] == "TRACKING";
-                noTarget |= columns[13] == "NO_TARGET" && columns[14] == "HOLD";
-                lost |= columns[13] == "LOST" && columns[14] == "STOP";
-                stale |= columns[13] == "STALE" && columns[14] == "STOP";
-                off |= columns[13] == "INFERENCE_OFF" && columns[14] == "STOP";
+                tracking |= columns[14] == "TRACKING";
+                noTarget |= columns[14] == "NO_TARGET" && columns[15] == "HOLD";
+                lost |= columns[14] == "LOST" && columns[15] == "STOP";
+                stale |= columns[14] == "STALE" && columns[15] == "STOP";
+                off |= columns[14] == "INFERENCE_OFF" && columns[15] == "STOP";
             }
             expect(aheadFrameCount == 1, "video catchup does not duplicate CSV frame ID");
             expect(usableErrors, "accepted loopback frame records original normalized ex");

@@ -8,6 +8,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <cstdio>
+#include <cmath>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #endif
@@ -15,7 +16,7 @@
 namespace {
 using namespace rb::vision;
 int failures = 0;
-const QByteArray header = "row_kind,local_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video\n";
+const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video\n";
 void check(bool ok, const char *why) {
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", why); ++failures; }
 }
@@ -88,17 +89,17 @@ void defaultsAndFirstFrame() {
           "successful start emits one recording state change");
     logger.record(sample()); logger.flush();
     const auto bytes = contents(logger.filePath());
-    check(bytes.startsWith(header), "header has the exact ordered 20 columns");
+    check(bytes.startsWith(header), "header has the exact ordered 21 columns");
     const auto rows = csv(bytes);
     check(rows.size() == 2, "first target snapshot produces exactly one frame without initial transition");
     if (rows.size() >= 2) {
-        check(rows[1].size() == 20, "frame has exactly 20 columns");
-        if (rows[1].size() == 20) check(rows[1][0] == "frame" && rows[1][1] == "123"
-            && rows[1][2] == "10" && rows[1][3] == "1010" && rows[1][4] == "2"
-            && rows[1][5] == "fish" && rows[1][6] == "0.875" && rows[1][7] == "120.5"
-            && rows[1][8] == "240.25" && rows[1][11] == "-0.25"
-            && rows[1][13] == "TRACKING" && rows[1][14] == "TURN_LEFT"
-            && rows[1][15] == "TURN_LEFT" && rows[1][18] == "1" && rows[1][19] == "0",
+        check(rows[1].size() == 21, "frame has exactly 21 columns");
+        if (rows[1].size() == 21) check(rows[1][0] == "frame" && rows[1][1] == "123"
+            && rows[1][3] == "10" && rows[1][4] == "1010" && rows[1][5] == "2"
+            && rows[1][6] == "fish" && rows[1][7] == "0.875" && rows[1][8] == "120.5"
+            && rows[1][9] == "240.25" && rows[1][12] == "-0.25"
+            && rows[1][14] == "TRACKING" && rows[1][15] == "TURN_LEFT"
+            && rows[1][16] == "TURN_LEFT" && rows[1][19] == "1" && rows[1][20] == "0",
             "frame carries diagnostic values and policy/session provenance");
     }
     logger.stop(); logger.stop();
@@ -112,8 +113,8 @@ void frameDeduplicationAndSessionReset() {
     logger.record(sample(1, 2)); logger.stop();
     const auto rows = csv(contents(logger.filePath()));
     check(rows.size() == 5, "duplicate and old IDs are suppressed but a new session resets the ID floor including zero");
-    if (rows.size() == 5) check(rows[1][2] == "10" && rows[2][2] == "11"
-        && rows[3][2] == "0" && rows[3][18] == "2" && rows[4][2] == "1",
+    if (rows.size() == 5) check(rows[1][3] == "10" && rows[2][3] == "11"
+        && rows[3][3] == "0" && rows[3][19] == "2" && rows[4][3] == "1",
         "accepted frame rows preserve the actual frame/session IDs");
 }
 void transitionsAndHold() {
@@ -131,10 +132,10 @@ void transitionsAndHold() {
     check(rows.size() == 4, "timer-only state/effective changes produce transitions; repeats/proposal-only changes do not");
     if (rows.size() == 4) {
         for (int r = 1; r < rows.size(); ++r) {
-            check(rows[r].size() == 20 && rows[r][0] == "transition", "transition retains exact column count");
-            for (int c = 2; c <= 10; ++c) check(rows[r][c].isEmpty(), "transition frame/target columns stay empty");
+            check(rows[r].size() == 21 && rows[r][0] == "transition", "transition retains exact column count");
+            for (int c = 2; c <= 11; ++c) check(rows[r][c].isEmpty(), "transition frame/target columns stay empty");
         }
-        check(rows[1][14] == "HOLD" && rows[1][15] == "TURN_LEFT" && rows[1][11] == "-0.25",
+        check(rows[1][15] == "HOLD" && rows[1][16] == "TURN_LEFT" && rows[1][12] == "-0.25",
               "HOLD records the retained effective command and filtered error");
     }
 }
@@ -143,20 +144,154 @@ void awaitingVideoAndMissingTarget() {
     if (!begin(logger, dir.path())) return;
     auto s = sample(); logger.record(s);
     s.frameId = 11; s.captureTimestampNs = 1011; s.awaitingVideo = true;
-    logger.record(s); // Deliberately leave an old target in snapshot: logger must blank it.
-    s.awaitingVideo = false; logger.record(s); // same ID when video catches up
+    logger.record(s);
+    logger.flush();
+    check(csv(contents(logger.filePath())).size() == 2, "pending frame is not written at first arrival");
+    s.awaitingVideo = false; s.localMonoMs += 15;
+    s.target->frameId = 11;
+    s.target->ex = 0.5; s.target->target.originalPoint.setX(480.0);
+    s.command.ex_f = -0.025; s.command.yaw_cmd = -0.025;
+    logger.record(s); logger.record(s); // first catchup only, never a duplicate
     s.command.effective = ProposedCommand::Forward; logger.record(s);
     s.frameId = 12; s.target.reset(); logger.record(s);
     logger.stop();
     const auto rows = csv(contents(logger.filePath()));
     check(rows.size() == 5, "awaiting-video ID records once, video catchup can still produce a true transition");
-    if (rows.size() == 5) {
-        check(rows[2][0] == "frame" && rows[2][2] == "11" && rows[2][19] == "1"
-              && rows[2][11] == "-0.25" && rows[2][13] == "TRACKING",
-              "awaiting-video frame retains old state/filter and marks exclusion flag");
-        for (int c = 5; c <= 10; ++c) check(rows[2][c].isEmpty() && rows[4][c].isEmpty(),
-            "awaiting-video and null target frame raw target fields are blank");
-        check(rows[3][0] == "transition" && rows[3][15] == "FORWARD", "catchup effective change is retained");
+    if (rows.size() == 5 && rows[2].size() == 21 && rows[4].size() == 21) {
+        check(rows[2][0] == "frame" && rows[2][3] == "11" && rows[2][20] == "0"
+              && rows[2][6] == "fish" && rows[2][10].toDouble() == 0.5
+              && std::abs(rows[2][12].toDouble() + 0.025) < 1e-12
+              && rows[2][1].toLongLong() - rows[2][2].toLongLong() == 15,
+              "15 ms catchup writes one fully evaluated sample with first arrival time");
+        for (int c = 6; c <= 11; ++c) check(rows[4][c].isEmpty(),
+            "null target frame raw target fields are blank");
+        check(rows[3][0] == "transition" && rows[3][16] == "FORWARD", "catchup effective change is retained");
+    }
+}
+
+void pendingReplacementAndInvalidation() {
+    for (const auto state : {VisualState::Tracking, VisualState::Stale, VisualState::InferenceOff}) {
+        QTemporaryDir dir; VisualCsvLogger logger;
+        if (!begin(logger, dir.path())) return;
+        auto s = sample(); s.awaitingVideo = true;
+        logger.record(s);
+        s.localMonoMs += 200; logger.record(s); // repeat does not renew arrival
+        s.localMonoMs = 623;
+        s.awaitingVideo = false;
+        s.state = state;
+        if (state == VisualState::Tracking) {
+            s.frameId = 11; s.target->frameId = 11;
+        } else {
+            s.target.reset(); s.command.ex_f.reset(); s.command.yaw_cmd = 0;
+            s.command.proposed = s.command.effective = ProposedCommand::Stop;
+        }
+        logger.record(s); logger.record(s); logger.stop();
+        const auto rows = csv(contents(logger.filePath()));
+        check(rows.size() == 3, "replacement or invalidation produces exactly two ordered rows");
+        if (rows.size() != 3 || rows[1].size() != 21 || rows[2].size() != 21) continue;
+        check(rows[1][0] == "frame" && rows[1][3] == "10" && rows[1][20] == "1"
+              && rows[1][1] == "623" && rows[1][2] == "123",
+              "fallback row precedes replacement/transition and retains original 500 ms arrival gap");
+        for (int c = 6; c <= 12; ++c) check(rows[1][c].isEmpty(),
+            "unprocessed pending frame has no selection, raw errors or filtered error");
+        if (state == VisualState::Tracking) {
+            check(rows[2][0] == "frame" && rows[2][3] == "11" && rows[2][20] == "0"
+                  && rows[2][1] == rows[2][2], "new ID follows flushed pending ID at its own arrival");
+        } else {
+            check(rows[2][0] == "transition" && rows[2][14] == visualStateName(state)
+                  && rows[2][16] == "STOP", "expired pending row precedes STALE/OFF STOP transition");
+            for (int c = 2; c <= 11; ++c) check(rows[2][c].isEmpty(),
+                "transition leaves arrival timestamp and all frame fields empty");
+        }
+    }
+    QTemporaryDir dir; VisualCsvLogger logger;
+    if (!begin(logger, dir.path())) return;
+    auto s = sample(); s.awaitingVideo = true; logger.record(s);
+    auto next = sample(0, 2); next.localMonoMs = 150;
+    logger.record(next); logger.stop();
+    const auto rows = csv(contents(logger.filePath()));
+    check(rows.size() == 3 && rows[1].size() == 21 && rows[2].size() == 21 && rows[1][3] == "10" && rows[1][19] == "1"
+          && rows[1][20] == "1" && rows[1][1] == "150" && rows[1][2] == "123"
+          && rows[2][3] == "0" && rows[2][19] == "2",
+          "session reset flushes the old pending ID before a low ID from the new session");
+}
+
+void csvReproducesEma() {
+    QTemporaryDir dir; VisualCsvLogger logger;
+    if (!begin(logger, dir.path())) return;
+    VisualCommandMemory memory;
+    VisualPolicyConfig policy;
+    auto s = sample(1); s.localMonoMs = 0;
+    auto evaluated = [&](quint64 id, qint64 now, double ex) {
+        s.frameId = id; s.captureTimestampNs = 1000 + id; s.localMonoMs = now;
+        s.awaitingVideo = false; s.target = sample(id).target;
+        s.target->ex = ex; s.target->target.originalPoint.setX(320 * (1 + ex));
+        s.command = evaluateVisualCommand(memory, {now, VisualState::Tracking, id, ex}, policy);
+        memory = s.command.next; logger.record(s);
+    };
+    evaluated(1, 0, -0.6);
+    s.frameId = 2; s.localMonoMs = 40; s.awaitingVideo = true; logger.record(s);
+    evaluated(2, 55, -0.2);
+    evaluated(3, 80, 0.1);
+    s.frameId = 4; s.localMonoMs = 120; s.awaitingVideo = true; logger.record(s);
+    evaluated(5, 160, 0.8); // ID4 was never used by policy; exclude its fallback row.
+    logger.stop();
+    const auto rows = csv(contents(logger.filePath()));
+    std::optional<double> recomputed;
+    int accepted = 0, awaiting = 0;
+    for (qsizetype i = 1; i < rows.size(); ++i) {
+        const auto &r = rows[i];
+        if (r.size() != 21 || r[0] != "frame") continue;
+        if (r[20] == "1") { ++awaiting; continue; }
+        bool exOk = false, filteredOk = false;
+        const double ex = r[10].toDouble(&exOk), filtered = r[12].toDouble(&filteredOk);
+        recomputed = recomputed ? 0.3 * ex + 0.7 * *recomputed : ex;
+        check(exOk && filteredOk && std::abs(filtered - *recomputed) < 1e-12,
+              "CSV accepted ex sequence reproduces the controller EMA at alpha=0.3");
+        if (r[3] == "2") check(r[1].toLongLong() - r[2].toLongLong() == 15,
+            "EMA chain preserves arrival time for deferred evaluated frame");
+        ++accepted;
+    }
+    check(accepted == 4 && awaiting == 1, "all four controller-used samples exist once, plus one excluded awaiting frame");
+}
+
+void closingPendingFrame() {
+    for (bool explicitStop : {true, false}) {
+        QTemporaryDir dir; QString path; int changes = 0;
+        {
+            VisualCsvLogger logger;
+            if (!begin(logger, dir.path())) return;
+            QObject::connect(&logger, &VisualCsvLogger::recordingChanged, [&] { ++changes; });
+            path = logger.filePath();
+            auto s = sample(); s.awaitingVideo = true; logger.record(s);
+            s.localMonoMs += 10; logger.record(s);
+            if (explicitStop) { logger.stop(); logger.stop(); }
+        }
+        const auto rows = csv(contents(path));
+        check(rows.size() == 2 && rows[1].size() == 21 && rows[1][20] == "1"
+              && rows[1][1] == "133" && rows[1][2] == "123",
+              "stop or destructor flushes unresolved pending frame once at the last evaluation time");
+        check(changes == (explicitStop ? 1 : 0),
+              "explicit stop emits once; destructor-only pending finalization emits no UI signal");
+    }
+}
+
+void arrivalBeforeRecording() {
+    for (bool awaiting : {false, true}) {
+        QTemporaryDir dir; VisualCsvLogger logger;
+        auto s = sample(); s.awaitingVideo = awaiting;
+        logger.record(s); // Display remains active while CSV is off.
+        s.localMonoMs = 133; logger.record(s);
+        if (!begin(logger, dir.path())) return;
+        s.localMonoMs = 143; logger.record(s);
+        if (awaiting) {
+            s.localMonoMs = 158; s.awaitingVideo = false; logger.record(s);
+        }
+        logger.stop();
+        const auto rows = csv(contents(logger.filePath()));
+        check(rows.size() == 2 && rows[1].size() == 21 && rows[1][2] == "123"
+              && rows[1][1] == (awaiting ? "158" : "143"),
+              "enabling CSV preserves the ID arrival already observed while recording was off");
     }
 }
 void escapingAndLocale() {
@@ -171,10 +306,10 @@ void escapingAndLocale() {
     const auto bytes = contents(logger.filePath()); const auto rows = csv(bytes);
     check(bytes.contains(QString::fromUtf8("鱼").toUtf8()) && bytes.contains("\"\"blue\"\""),
           "CSV is UTF-8 and doubles embedded quotes");
-    check(rows.size() == 2 && rows[1].size() == 20, "embedded commas/quotes/newlines preserve one CSV record");
-    if (rows.size() == 2 && rows[1].size() == 20) check(rows[1][5] == s.target->target.className
-        && rows[1][16] == s.policyVersion && rows[1][17] == s.policyHash
-        && rows[1][6] == "0.875" && rows[1][7] == "120.5", "escaped text roundtrips and numbers ignore system locale");
+    check(rows.size() == 2 && rows[1].size() == 21, "embedded commas/quotes/newlines preserve one CSV record");
+    if (rows.size() == 2 && rows[1].size() == 21) check(rows[1][6] == s.target->target.className
+        && rows[1][17] == s.policyVersion && rows[1][18] == s.policyHash
+        && rows[1][7] == "0.875" && rows[1][8] == "120.5", "escaped text roundtrips and numbers ignore system locale");
 }
 void periodicAndDestructorFlush() {
     QTemporaryDir dir; QString path; int changes = 0;
@@ -286,6 +421,8 @@ int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
     defaultsAndFirstFrame(); frameDeduplicationAndSessionReset(); transitionsAndHold();
     awaitingVideoAndMissingTarget(); escapingAndLocale(); periodicAndDestructorFlush();
+    pendingReplacementAndInvalidation(); csvReproducesEma(); closingPendingFrame();
+    arrivalBeforeRecording();
     uniqueFilesPreserveExisting(); capAndErrors();
     operatingSystemIoFailure(true); operatingSystemIoFailure(false);
     std::fprintf(stdout, "visual_csv_logger_tests: %d failure(s)\n", failures);
