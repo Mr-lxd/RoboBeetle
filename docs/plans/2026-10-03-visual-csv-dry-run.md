@@ -36,7 +36,7 @@
 - [x] 内部先规格再质量复核，修复实质问题；复跑受影响测试和完整CTest。
 - [x] grep沿用#41运动/舵机接口pattern，对src新增行无匹配；logger还核对无线程/锁/队列/.git扫描。
 - [x] Release新便携包 `D:\RoboBeetleConsole-portable-visual-csv-dry-run-20261003`，不覆盖旧包；依赖启动检查。
-- [ ] 代码提交C1，后续docs-only C2记录C1和EXE SHA-256，验证构建输入相同。正常push、draft PR、attach，停下等Review，不合并。
+- [x] 代码提交C1，后续docs-only C2记录C1和EXE SHA-256，验证构建输入相同。正常push、draft PR、attach，停下等Review，不合并。
 - [ ] 用户：①居中60 s录CSV；②移动目标并筛选稳定目标片段观察滞回；③Stop Inference的transition；④NO_TARGET→LOST或断流STALE。实测结论不得提前填通过。
 
 GUI文件写入/flush可能有短暂磁盘延迟；这是Review明确批准的简化方案，不宣称非阻塞IO或硬实时。

@@ -104,9 +104,9 @@ $LASTEXITCODE # 1，无匹配
 
 ## ⑤ 构建、包及用户操作
 
-便携包：`D:\RoboBeetleConsole-portable-visual-csv-dry-run-20261003\RoboBeetleConsole.exe`，未覆盖两个保留包。EXE SHA-256：`8AD18554450064D65A5B850FEFB9324E780B0E7C464E6B77BF1ED984C1EE7772`，构建与包内一致。EXE源码commit：`463d648891c3d7d23babec20fe2e4f1d880dda3b`。之后的交付提交仅更新docs，Console构建输入不变；包内BUILD_INFO.txt分别记录源码commit及交付head。
+便携包：`D:\RoboBeetleConsole-portable-visual-csv-dry-run-review-20261003\RoboBeetleConsole.exe`，未覆盖两个保留包。EXE SHA-256：`27544B65763AEF73BA82C8850201E6D16145FCC7784C79D4DC6D0BF6439DB723`，构建与包内一致。EXE源码commit：`846d7688bda1ffca9d24a33d744d803d14aebef6`。之后的交付提交仅更新docs，Console构建输入不变；包内BUILD_INFO.txt分别记录源码commit及交付head。
 
-windeployqt Release部署JPEG/windows/offscreen及运行库；仅系统目录PATH的offscreen启动检查持续3s，日志确认插件加载；仅结束本次检查新建PID23864，用户正在运行的旧包PID55132未停止。该检查证明依赖能启动，不证明真实摄像头、CSV60s数据或运动硬件实测。文档/测试中的模拟视频同样不是实机证据。
+windeployqt Release部署JPEG/windows/offscreen及运行库；仅系统目录PATH的offscreen启动检查持续3s，日志确认插件加载；仅结束本次检查新建PID52484，用户正在运行的旧包PID55132未停止。该检查证明依赖能启动，不证明真实摄像头、CSV60s数据或运动硬件实测。文档/测试中的模拟视频同样不是实机证据。
 
 无需编译，运行新包并按既有操作连接Pi/Start Inference。进入下方 **Vision Details**，向下滚动到Visual proposal后的CSV区域；选择仓库外目录，勾选 **Record visual CSV (no motion output)**，观察 **CSV Recording** 和完整文件路径。关闭开关后应显示 **CSV OFF - saved**；文件错误/32MiB上限应显示 **CSV Error - stopped** 并取消勾选。
 
@@ -119,6 +119,8 @@ $env:PATH='D:\Qt\6.11.2\mingw_64\bin;D:\Qt\Tools\mingw1310_64\bin;'+$env:PATH
 $env:QT_QPA_PLATFORM='offscreen'; $env:QT_QPA_FONTDIR='C:\Windows\Fonts'
 & D:\Qt\Tools\CMake_64\bin\ctest.exe --test-dir build/qt-visual-csv-dry-run/feature-build --output-on-failure --parallel 4
 ```
+
+首轮CSV便携包保留在`D:\RoboBeetleConsole-portable-visual-csv-dry-run-20261003\`，旧EXE SHA-256仍为`8AD18554450064D65A5B850FEFB9324E780B0E7C464E6B77BF1ED984C1EE7772`，新包未覆盖它。
 
 ## ⑥ 用户桌面实测清单（待用户验证，不预填通过）
 
