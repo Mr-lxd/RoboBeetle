@@ -29,6 +29,16 @@ struct DetectionFrame {
     QVector<DetectionObservation> detections;
 };
 
+// Display validity reasons only; these are not motion-controller states.
+enum class DetectionDisplayState { Target, NoTarget, Stale, InferenceOff };
+
+[[nodiscard]] DetectionDisplayState detectionOverlayState(
+    const DetectionFrame &frame,
+    const QSize &currentVideoSize,
+    quint64 currentVideoCaptureTimestampNs,
+    bool inferenceRunning,
+    bool statusFresh) noexcept;
+
 [[nodiscard]] bool detectionOverlayRenderable(
     const DetectionFrame &frame,
     const QSize &currentVideoSize,

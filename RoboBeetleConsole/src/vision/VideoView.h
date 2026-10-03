@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vision/DetectionMetadata.h"
+#include "vision/TargetState.h"
 
 #include <QElapsedTimer>
 #include <QImage>
@@ -23,7 +24,13 @@ public:
         quint64 captureTimestampNs = 0U);
     void clearFrame();
     void setDetectionOverlay(const DetectionFrame &frame);
-    void clearDetectionOverlay();
+    void clearDetectionOverlay(DetectionDisplayState reason = DetectionDisplayState::Stale);
+
+    [[nodiscard]] const std::optional<TargetState> &currentTargetState() const noexcept
+    {
+        return targetState_;
+    }
+    [[nodiscard]] QString visualDiagnosticText() const;
 
     [[nodiscard]] bool hasFrame() const noexcept { return !image_.isNull(); }
     [[nodiscard]] quint64 currentFrameId() const noexcept { return frameId_; }
@@ -62,6 +69,8 @@ private:
     quint64 frameId_{0};
     quint64 captureTimestampNs_{0};
     std::optional<DetectionFrame> detectionOverlay_;
+    std::optional<TargetState> targetState_;
+    DetectionDisplayState diagnosticState_{DetectionDisplayState::Stale};
     quint64 replacedPendingFrames_{0};
     bool paintPending_{false};
     QElapsedTimer fpsTimer_;

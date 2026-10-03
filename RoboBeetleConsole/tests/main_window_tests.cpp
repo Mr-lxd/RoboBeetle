@@ -38,6 +38,7 @@
 #include <QTimer>
 
 #include <cstdio>
+#include <cmath>
 #include <functional>
 #include <memory>
 
@@ -2435,6 +2436,125 @@ void testSlice5DetectionTextOverlayLifecycle()
         return view->hasDetectionOverlay()
             && view->detectionOverlayCount() == 1;
     }), "fresh frame-associated detection text reaches VideoView");
+    expect(view->currentTargetState()
+               && std::abs(view->currentTargetState()->ex + 0.625) < 1e-9
+               && std::abs(view->currentTargetState()->ey + 1.0 / 3.0) < 1e-9
+               && view->visualDiagnosticText().contains(QStringLiteral("VISION DRY_RUN")),
+           "live metadata calculates original-pixel errors through the existing UI gate");
+    expect(transport.writes().isEmpty(),
+           "visual error calculation sends no robot commands");
+
+    // Exercise the real Stop Inference button, POST ACK and authoritative GET.
+    auto *inferenceToggle = window.findChild<QPushButton *>(
+        QStringLiteral("startInferenceButton"));
+    expect(inferenceToggle && inferenceToggle->isEnabled()
+               && inferenceToggle->text() == QStringLiteral("Stop Inference"),
+           "running inference exposes the existing Stop Inference action");
+    if (inferenceToggle) {
+        inferenceToggle->click();
+    }
+    expect(waitUntil([&] { return controlServer.hasPendingConnections(); }),
+           "Stop Inference reaches the Vision HTTP server");
+    QTcpSocket *stopInferencePeer = controlServer.nextPendingConnection();
+    if (stopInferencePeer) {
+        expect(readHttpRequest(stopInferencePeer).startsWith(
+                   "POST /api/v1/vision/inference/stop HTTP/1.1"),
+               "Stop Inference uses its existing dedicated endpoint");
+        sendHttpJson(stopInferencePeer, QByteArrayLiteral(
+            "{\"ok\":true,\"action\":\"inference/stop\","
+            "\"outcome\":\"already_stopping\"}"));
+        stopInferencePeer->deleteLater();
+    }
+    expect(waitUntil([&] { return controlClient.inferenceReconcilePending(); }),
+           "Stop ACK waits for authoritative inference status");
+    expect(!view->currentTargetState()
+               && view->visualDiagnosticText().contains(QStringLiteral("STALE")),
+           "Stop acknowledgement clears errors while awaiting reconciliation");
+    expect(waitUntil([&] { return controlServer.hasPendingConnections(); }),
+           "Stop acknowledgement triggers the existing status GET");
+    QTcpSocket *stopStatusPeer = controlServer.nextPendingConnection();
+    if (stopStatusPeer) {
+        expect(readHttpRequest(stopStatusPeer).startsWith(
+                   "GET /api/v1/vision/status HTTP/1.1"),
+               "Stop reconciliation reads authoritative status");
+        QJsonObject body = QJsonDocument::fromJson(
+            slice5StatusBody(detectionServer.serverPort())).object();
+        QJsonObject inference = body.value(QStringLiteral("inference")).toObject();
+        inference.insert(QStringLiteral("operation"), QStringLiteral("stopping"));
+        body.insert(QStringLiteral("inference"), inference);
+        sendHttpJson(stopStatusPeer, QJsonDocument(body).toJson(QJsonDocument::Compact));
+        stopStatusPeer->deleteLater();
+    }
+    expect(waitUntil([&] {
+        return controlClient.hasFreshStatus() && !controlClient.inferenceReconcilePending()
+            && controlClient.status().inferenceOperation == QStringLiteral("stopping");
+    }), "fresh stopping status becomes authoritative");
+    expect(!view->currentTargetState() && !view->hasDetectionOverlay()
+               && view->visualDiagnosticText().contains(QStringLiteral("INFERENCE_OFF"))
+               && view->visualDiagnosticText().contains(QStringLiteral("ex=-- ey=--")),
+           "Stop Inference clears errors before the worker finishes stopping");
+
+    controlClient.refreshStatus();
+    expect(waitUntil([&] { return controlServer.hasPendingConnections(); }),
+           "running status can be confirmed after Stop test");
+    QTcpSocket *resumePeer = controlServer.nextPendingConnection();
+    if (resumePeer) {
+        readHttpRequest(resumePeer);
+        sendHttpJson(resumePeer, slice5StatusBody(detectionServer.serverPort()));
+        resumePeer->deleteLater();
+    }
+    expect(waitUntil([&] { return view->currentTargetState().has_value(); }),
+           "a fresh authoritative running state restores valid retained metadata");
+    if (detectionPeer) {
+        QJsonObject empty = QJsonDocument::fromJson(
+            slice5DetectionLine(11U, 1'000'000'000ULL)).object();
+        empty.insert(QStringLiteral("detections"), QJsonArray{});
+        detectionPeer->write(QJsonDocument(empty).toJson(QJsonDocument::Compact) + '\n');
+        detectionPeer->flush();
+    }
+    expect(waitUntil([&] { return detectionClient.lastFrameId() == 11U; }),
+           "fresh empty detection result is received");
+    expect(!view->currentTargetState()
+               && view->visualDiagnosticText().contains(QStringLiteral("NO_TARGET")),
+           "fresh empty detections have a distinct NO_TARGET reason");
+    if (detectionPeer) {
+        detectionPeer->write(slice5DetectionLine(12U, 1'000'000'000ULL));
+        detectionPeer->flush();
+    }
+    expect(waitUntil([&] { return view->currentTargetState().has_value(); }),
+           "fresh nonempty result restores the diagnostic target");
+
+    controlClient.refreshStatus();
+    expect(waitUntil([&] { return controlServer.hasPendingConnections(); }),
+           "unknown-worker status GET reaches the HTTP server");
+    QTcpSocket *unknownStatePeer = controlServer.nextPendingConnection();
+    if (unknownStatePeer) {
+        readHttpRequest(unknownStatePeer);
+        sendHttpJson(unknownStatePeer, slice5StatusBody(
+            detectionServer.serverPort(), QStringLiteral("unsupported")));
+        unknownStatePeer->deleteLater();
+    }
+    expect(waitUntil([&] {
+        return controlClient.status().inferenceState == QStringLiteral("unsupported");
+    }), "unknown worker state is received without pretending it is disabled");
+    expect(!view->currentTargetState()
+               && view->visualDiagnosticText().contains(QStringLiteral("STALE"))
+               && !view->visualDiagnosticText().contains(QStringLiteral("INFERENCE_OFF")),
+           "unknown inference worker state is STALE rather than confirmed off");
+
+    controlClient.refreshStatus();
+    expect(waitUntil([&] { return controlServer.hasPendingConnections(); }),
+           "known running status can recover from an unknown state");
+    QTcpSocket *knownStatePeer = controlServer.nextPendingConnection();
+    if (knownStatePeer) {
+        readHttpRequest(knownStatePeer);
+        sendHttpJson(knownStatePeer, slice5StatusBody(detectionServer.serverPort()));
+        knownStatePeer->deleteLater();
+    }
+    expect(waitUntil([&] { return view->currentTargetState().has_value(); }),
+           "known running status restores an accepted target after unknown state");
+    expect(transport.writes().isEmpty(),
+           "Stop Inference and display reason transitions send zero robot bytes");
 
     // HTTP freshness controls visibility but must not tear down a healthy 47012.
     waitForMs(3600);
@@ -2442,6 +2562,9 @@ void testSlice5DetectionTextOverlayLifecycle()
            "Vision HTTP freshness expires without polling");
     expect(!view->hasDetectionOverlay(),
            "stale HTTP status immediately suppresses overlay text");
+    expect(!view->currentTargetState()
+               && view->visualDiagnosticText().contains(QStringLiteral("STALE")),
+           "stale inference status clears the selected target and visual errors");
     expect(detectionClient.isConnected(),
            "HTTP freshness expiry preserves the established 47012 socket");
 
@@ -2466,6 +2589,10 @@ void testSlice5DetectionTextOverlayLifecycle()
     }), "disabled inference status becomes authoritative");
     expect(waitUntil([&] { return !view->hasDetectionOverlay(); }),
            "non-running inference clears operator overlay text");
+    expect(!view->currentTargetState()
+               && view->visualDiagnosticText().contains(QStringLiteral("INFERENCE_OFF"))
+               && view->visualDiagnosticText().contains(QStringLiteral("ex=-- ey=--")),
+           "fresh disabled inference is distinguished from empty detections and stale data");
 
     // Running can expose a still-fresh retained detection again.
     controlClient.refreshStatus();
@@ -2494,6 +2621,8 @@ void testSlice5DetectionTextOverlayLifecycle()
         2'500'000'001ULL);
     expect(waitUntil([&] { return !view->hasDetectionOverlay(); }),
            "metadata older than 1500 ms is suppressed on the latest video frame");
+    expect(!view->currentTargetState(),
+           "expired metadata cannot keep stale visual errors");
 
     // New metadata for the current time becomes visible without replaying old video.
     if (detectionPeer != nullptr) {
@@ -2550,6 +2679,7 @@ void testSlice5DetectionTextOverlayLifecycle()
     }), "47012 peer disconnect is isolated to metadata client");
     expect(!view->hasDetectionOverlay(),
            "47012 disconnect clears retained overlay text");
+    expect(!view->currentTargetState(), "detection disconnect clears visual errors");
     expect(visionClient.isConnected(),
            "47012 disconnect does not disconnect RBVS video");
     expect(controlClient.hasFreshStatus(),
@@ -2871,6 +3001,8 @@ int main(int argc, char **argv)
     testTask02SuccessfulReconciliationClearsUncertaintyBeforeApplyHost();
     testTask02FailedReconciliationKeepsUncertaintyAndDoesNotRetry();
     testTask02RemoteAndDirectEndpointWidgetsStayDistinct();
+#elif defined(RB_MAIN_WINDOW_VISUAL_ERROR_ONLY)
+    testSlice5DetectionTextOverlayLifecycle();
 #else
     testImuPanelLifecycle();
     testDepthPanelLifecycle();

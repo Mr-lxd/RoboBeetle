@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QColor>
+#include <QDir>
 #include <QImage>
 #include <QRect>
 
@@ -114,6 +115,11 @@ void textOverlayLifecycleIsIndependentFromVideoFrame()
     expect(view.hasDetectionOverlay()
                && view.detectionOverlayCount() == 1,
            "VideoView accepts text-overlay metadata for matching source size");
+    expect(view.currentTargetState()
+               && view.currentTargetState()->ex == -0.5
+               && view.visualDiagnosticText().contains(QStringLiteral("VISION DRY_RUN"))
+               && view.visualDiagnosticText().contains(QStringLiteral("ex=-0.500")),
+           "accepted metadata exposes normalized errors and DRY_RUN diagnostics");
 
     QImage withOverlay(view.size(), QImage::Format_ARGB32);
     withOverlay.fill(Qt::transparent);
@@ -124,6 +130,10 @@ void textOverlayLifecycleIsIndependentFromVideoFrame()
            "overlay can clear without clearing live video");
     expect(view.hasFrame(),
            "clearing overlay does not clear live video");
+    expect(!view.currentTargetState()
+               && view.visualDiagnosticText().contains(QStringLiteral("STALE"))
+               && view.visualDiagnosticText().contains(QStringLiteral("ex=-- ey=--")),
+           "clearing detections removes errors instead of keeping stale numeric values");
 
     QImage withoutOverlay(view.size(), QImage::Format_ARGB32);
     withoutOverlay.fill(Qt::transparent);
@@ -136,11 +146,13 @@ void textOverlayLifecycleIsIndependentFromVideoFrame()
     view.setDetectionOverlay(wrongSize);
     expect(!view.hasDetectionOverlay(),
            "mismatched source dimensions fail closed in VideoView");
+    expect(!view.currentTargetState(), "mismatched dimensions cannot produce target errors");
 
     view.setDetectionOverlay(overlay);
     view.clearFrame();
     expect(!view.hasFrame()
                && !view.hasDetectionOverlay()
+               && !view.currentTargetState()
                && view.currentCaptureTimestampNs() == 0U,
            "clearing video also clears stale overlay and timestamp");
     view.hide();
@@ -187,6 +199,84 @@ void amberCentroidMarkersAndLabelsRenderForEveryDetection()
     view.hide();
 }
 
+void visualErrorGeometryUsesImageRectangle()
+{
+    VideoView view;
+    view.resize(400, 400);
+    QImage source(640, 480, QImage::Format_RGB32);
+    source.fill(qRgb(20, 20, 20));
+    view.setFrame(source, 20U, 20'000U);
+
+    QImage centered(view.size(), QImage::Format_ARGB32);
+    view.render(&centered);
+    const QColor cyan(0x00, 0xE5, 0xFF);
+    expect(containsColor(centered, QRect(197, 197, 7, 7), cyan),
+           "image-center cross renders before a target is detected");
+
+    DetectionFrame overlay;
+    overlay.frameId = 20U;
+    overlay.captureTimestampNs = 20'000U;
+    overlay.sourceSize = source.size();
+    overlay.detections.push_back(
+        DetectionObservation{0, QStringLiteral("fish"), 0.88,
+                             QPointF(160.0, 120.0)});
+    view.setDetectionOverlay(overlay);
+    QImage withTarget(view.size(), QImage::Format_ARGB32);
+    view.render(&withTarget);
+    expect(containsColor(withTarget, QRect(147, 159, 7, 7), cyan),
+           "error line maps original pixels through letterboxed video geometry");
+    expect(withTarget.pixelColor(100, 125) == QColor(0xFF, 0xB0, 0x00),
+           "error line retains the existing amber target marker");
+    expect(!containsColor(withTarget, QRect(0, 0, 400, 45), cyan),
+           "visual diagnostics do not draw into letterbox margins");
+
+    view.clearDetectionOverlay();
+    QImage cleared(view.size(), QImage::Format_ARGB32);
+    view.render(&cleared);
+    expect(!containsColor(cleared, QRect(147, 159, 7, 7), cyan),
+           "clearing detections also removes the target error line");
+
+    view.setDetectionOverlay(overlay);
+    QImage differentSize(1280, 720, QImage::Format_RGB32);
+    differentSize.fill(Qt::black);
+    view.setFrame(differentSize, 21U, 21'000U);
+    expect(!view.currentTargetState() && !view.hasDetectionOverlay(),
+           "a source-size change clears the previous coordinate interpretation");
+}
+
+void saveDiagnosticPreviews(const QString &directory)
+{
+    expect(QDir().mkpath(directory), "preview output directory can be created");
+    struct Case { const char *name; double u; bool detected; };
+    const Case cases[] = {
+        {"left", 160.0, true}, {"center", 320.0, true},
+        {"right", 480.0, true}, {"no-target", 320.0, false}};
+    for (const QSize displaySize : {QSize(640, 480), QSize(240, 180)}) {
+        VideoView view;
+        view.resize(displaySize);
+        QImage source(640, 480, QImage::Format_RGB32);
+        source.fill(qRgb(16, 24, 32));
+        view.setFrame(source, 42U, 1'000'000U);
+        for (const Case &item : cases) {
+            DetectionFrame overlay{
+                42U, 1'000'000U, source.size(),
+                {DetectionObservation{2, QStringLiteral("fish"), 0.88,
+                                      QPointF(item.u, 240.0)}}};
+            if (!item.detected) {
+                overlay.detections.clear();
+            }
+            view.setDetectionOverlay(overlay);
+            QImage rendered(view.size(), QImage::Format_ARGB32);
+            view.render(&rendered);
+            const QString name = QStringLiteral("%1-%2x%3.png")
+                .arg(QString::fromLatin1(item.name))
+                .arg(displaySize.width()).arg(displaySize.height());
+            expect(rendered.save(QDir(directory).filePath(name)),
+                   "simulated diagnostic preview can be saved");
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -196,5 +286,11 @@ int main(int argc, char **argv)
     paintingClearsPendingReplacementWindow();
     textOverlayLifecycleIsIndependentFromVideoFrame();
     amberCentroidMarkersAndLabelsRenderForEveryDetection();
+    visualErrorGeometryUsesImageRectangle();
+    const QStringList arguments = app.arguments();
+    const int previewOption = arguments.indexOf(QStringLiteral("--preview-dir"));
+    if (previewOption >= 0 && previewOption + 1 < arguments.size()) {
+        saveDiagnosticPreviews(arguments[previewOption + 1]);
+    }
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

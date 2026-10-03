@@ -2543,9 +2543,7 @@ void MainWindow::bindVisionUi()
             if (state == vision::DetectionConnectionState::Disconnected
                 || state == vision::DetectionConnectionState::Error) {
                 latestDetectionFrame_.reset();
-                if (videoView_ != nullptr) {
-                    videoView_->clearDetectionOverlay();
-                }
+                refreshDetectionOverlay();
             }
         });
         connect(detectionClient_, &vision::DetectionClient::logMessage,
@@ -2787,9 +2785,7 @@ void MainWindow::resetDetectionSession()
     detectionConnectAttempted_ = false;
     detectionAttemptHost_.clear();
     detectionAttemptPort_ = 0U;
-    if (videoView_ != nullptr) {
-        videoView_->clearDetectionOverlay();
-    }
+    refreshDetectionOverlay();
     if (detectionClient_ != nullptr
         && (detectionClient_->endpointBusy()
             || detectionClient_->state()
@@ -2816,9 +2812,7 @@ void MainWindow::syncDetectionStream()
     }
 
     if (!statusFresh) {
-        if (videoView_ != nullptr) {
-            videoView_->clearDetectionOverlay();
-        }
+        refreshDetectionOverlay();
         return;
     }
 
@@ -2832,9 +2826,7 @@ void MainWindow::syncDetectionStream()
 
     if (!supported) {
         latestDetectionFrame_.reset();
-        if (videoView_ != nullptr) {
-            videoView_->clearDetectionOverlay();
-        }
+        refreshDetectionOverlay();
         if (detectionClient_->endpointBusy()
             || detectionClient_->state()
                 != vision::DetectionConnectionState::Disconnected) {
@@ -2885,22 +2877,34 @@ void MainWindow::refreshDetectionOverlay()
     if (videoView_ == nullptr) {
         return;
     }
-    if (detectionClient_ == nullptr
-        || !detectionClient_->isConnected()
-        || visionControlClient_ == nullptr
-        || !latestDetectionFrame_.has_value()) {
+    if (visionControlClient_ == nullptr) {
         videoView_->clearDetectionOverlay();
         return;
     }
 
     const bool fresh = visionControlClient_->hasFreshStatus();
     const auto status = visionControlClient_->status();
-    const bool inferenceRunning =
-        fresh
-        && status.haveInferenceState
-        && status.inferenceState == QStringLiteral("running")
-        && status.inferenceOperationValid
+    const bool knownWorkerState = status.inferenceState == QStringLiteral("disabled")
+        || status.inferenceState == QStringLiteral("starting")
+        || status.inferenceState == QStringLiteral("running")
+        || status.inferenceState == QStringLiteral("failed")
+        || status.inferenceState == QStringLiteral("error");
+    if (!fresh || !status.haveInferenceState || !status.inferenceOperationValid
+        || !knownWorkerState || visionControlClient_->inferenceReconcilePending()) {
+        videoView_->clearDetectionOverlay(vision::DetectionDisplayState::Stale);
+        return;
+    }
+    const bool inferenceRunning = status.inferenceState == QStringLiteral("running")
         && status.inferenceOperation.isEmpty();
+    if (!inferenceRunning) {
+        videoView_->clearDetectionOverlay(vision::DetectionDisplayState::InferenceOff);
+        return;
+    }
+    if (detectionClient_ == nullptr || !detectionClient_->isConnected()
+        || !latestDetectionFrame_.has_value()) {
+        videoView_->clearDetectionOverlay(vision::DetectionDisplayState::Stale);
+        return;
+    }
 
     if (!vision::detectionOverlayRenderable(
             *latestDetectionFrame_,
@@ -2908,7 +2912,9 @@ void MainWindow::refreshDetectionOverlay()
             videoView_->currentCaptureTimestampNs(),
             inferenceRunning,
             fresh)) {
-        videoView_->clearDetectionOverlay();
+        videoView_->clearDetectionOverlay(vision::detectionOverlayState(
+            *latestDetectionFrame_, videoView_->currentFrameSize(),
+            videoView_->currentCaptureTimestampNs(), inferenceRunning, fresh));
         return;
     }
 
