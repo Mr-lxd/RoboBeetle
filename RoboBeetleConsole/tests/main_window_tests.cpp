@@ -13,6 +13,9 @@
 #include <QApplication>
 #include <QAbstractSpinBox>
 #include <QComboBox>
+#include <QCheckBox>
+#include <QDir>
+#include <QFile>
 #include <QElapsedTimer>
 #include <QDoubleSpinBox>
 #include <QEventLoop>
@@ -31,6 +34,8 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QSlider>
 #include <QTabWidget>
 #include <QTcpServer>
@@ -2325,6 +2330,27 @@ void testSlice5DetectionTextOverlayLifecycle()
         return;
     }
 
+    QTemporaryDir csvDirectory;
+    auto *csvEnabled = window.findChild<QCheckBox *>(QStringLiteral("visualCsvEnabled"));
+    auto *csvFolder = window.findChild<QLineEdit *>(QStringLiteral("visualCsvDirectory"));
+    auto *csvBrowse = window.findChild<QPushButton *>(QStringLiteral("visualCsvBrowse"));
+    auto *csvStatus = window.findChild<QLabel *>(QStringLiteral("visualCsvStatus"));
+    expect(csvEnabled && !csvEnabled->isChecked(), "CSV recording defaults to off");
+    expect(csvFolder && csvFolder->text() == QDir(
+               QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation))
+                   .filePath(QStringLiteral("RoboBeetle/visual-logs")),
+           "CSV defaults to the user's Documents/RoboBeetle/visual-logs");
+    expect(csvBrowse && csvBrowse->isEnabled(), "CSV directory is user selectable");
+    expect(csvStatus && csvStatus->text().contains(QStringLiteral("OFF")),
+           "CSV off state is explicit");
+    if (csvEnabled && csvFolder && csvBrowse && csvStatus && csvDirectory.isValid()) {
+        csvFolder->setText(csvDirectory.path());
+        csvEnabled->setChecked(true);
+        expect(csvEnabled->isChecked() && !csvFolder->isEnabled() && !csvBrowse->isEnabled()
+                   && csvStatus->text().contains(QStringLiteral("Recording")),
+               "CSV recording locks directory editing and displays active file");
+    }
+
     visionClient.connectToHost(
         QStringLiteral("127.0.0.1"),
         videoServer.serverPort());
@@ -2798,6 +2824,59 @@ void testSlice5DetectionTextOverlayLifecycle()
 
     expect(transport.writes().isEmpty(),
            "new detection session still emits zero Robot writes");
+
+    if (csvEnabled && csvFolder && csvBrowse && csvStatus) {
+        csvEnabled->setChecked(false);
+        expect(csvFolder->isEnabled() && csvBrowse->isEnabled()
+                   && csvStatus->text().contains(QStringLiteral("OFF")),
+               "stopping CSV closes/flushed output and enables directory editing");
+        const auto files = QDir(csvDirectory.path()).entryList({QStringLiteral("*.csv")}, QDir::Files);
+        expect(files.size() == 1, "loopback recording creates one CSV outside the repository");
+        if (files.size() == 1) {
+            QFile csv(QDir(csvDirectory.path()).filePath(files.front()));
+            expect(csv.open(QIODevice::ReadOnly), "closed loopback CSV is readable");
+            const auto lines = csv.readAll().split('\n');
+            expect(!lines.isEmpty() && lines.front().startsWith("row_kind,local_mono_ms,frame_id"),
+                   "CSV publishes frame/transition schema");
+            int aheadFrameCount = 0;
+            bool tracking = false, noTarget = false, lost = false, stale = false, off = false;
+            bool usableErrors = false;
+            for (qsizetype i = 1; i < lines.size(); ++i) {
+                const auto columns = lines[i].trimmed().split(',');
+                if (columns.size() != 20) { continue; }
+                if (columns[0] == "frame" && columns[2] == "11") {
+                    ++aheadFrameCount;
+                    expect(columns[5].isEmpty() && columns[9].isEmpty() && columns[19] == "1",
+                           "ahead-of-video frame has blank raw target fields and explicit waiting flag");
+                }
+                if (columns[0] == "frame" && columns[2] == "13") {
+                    usableErrors = std::abs(columns[9].toDouble() + 0.625) < 1e-9;
+                }
+                if (columns[0] != "transition") { continue; }
+                for (int c = 2; c <= 10; ++c) {
+                    expect(columns[c].isEmpty(), "transition CSV leaves frame-related fields blank");
+                }
+                tracking |= columns[13] == "TRACKING";
+                noTarget |= columns[13] == "NO_TARGET" && columns[14] == "HOLD";
+                lost |= columns[13] == "LOST" && columns[14] == "STOP";
+                stale |= columns[13] == "STALE" && columns[14] == "STOP";
+                off |= columns[13] == "INFERENCE_OFF" && columns[14] == "STOP";
+            }
+            expect(aheadFrameCount == 1, "video catchup does not duplicate CSV frame ID");
+            expect(usableErrors, "accepted loopback frame records original normalized ex");
+            expect(tracking && noTarget && lost && stale && off,
+                   "CSV records all five real loopback state transitions including timer expiry");
+        }
+        QFile blocker(QDir(csvDirectory.path()).filePath(QStringLiteral("not-a-directory")));
+        expect(blocker.open(QIODevice::WriteOnly), "error fixture is a regular file");
+        blocker.close();
+        csvFolder->setText(blocker.fileName());
+        csvEnabled->setChecked(true);
+        expect(!csvEnabled->isChecked() && csvFolder->isEnabled()
+                   && csvStatus->text().contains(QStringLiteral("Error")),
+               "open failure stops CSV and shows the reason without restarting");
+        expect(transport.writes().isEmpty(), "CSV start/record/stop/error emit zero robot bytes");
+    }
 
     window.hide();
     detectionClient.shutdown();

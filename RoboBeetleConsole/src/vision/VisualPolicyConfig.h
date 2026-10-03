@@ -24,6 +24,12 @@ struct VisualPolicyConfig {
     static constexpr std::string_view policy_version{"visual-command-proposal-v1"};
 };
 
+// File recording limits are independent of command-policy provenance.
+struct VisualCsvConfig {
+    std::int64_t max_file_bytes{32 * 1024 * 1024};
+    int flush_ms{250};
+};
+
 [[nodiscard]] inline bool validVisualPolicyConfig(const VisualPolicyConfig &c) noexcept
 {
     return std::isfinite(c.alpha) && c.alpha > 0.0 && c.alpha <= 1.0

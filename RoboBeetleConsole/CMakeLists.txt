@@ -48,6 +48,8 @@ add_library(RoboBeetleCore
     src/vision/VisualCommandPolicy.cpp
     src/vision/VisualDiagnosticSession.h
     src/vision/VisualDiagnosticSession.cpp
+    src/vision/VisualCsvLogger.h
+    src/vision/VisualCsvLogger.cpp
     src/vision/DetectionStreamDecoder.h
     src/vision/DetectionStreamDecoder.cpp
     src/vision/DetectionClient.h
@@ -165,6 +167,9 @@ if(BUILD_TESTING)
     add_executable(visual_diagnostic_session_tests tests/visual_diagnostic_session_tests.cpp)
     target_link_libraries(visual_diagnostic_session_tests PRIVATE RoboBeetleCore)
     add_test(NAME visual_diagnostic_session_tests COMMAND visual_diagnostic_session_tests)
+    add_executable(visual_csv_logger_tests tests/visual_csv_logger_tests.cpp)
+    target_link_libraries(visual_csv_logger_tests PRIVATE RoboBeetleCore)
+    add_test(NAME visual_csv_logger_tests COMMAND visual_csv_logger_tests)
 
     add_executable(robot_controller_tests tests/robot_controller_tests.cpp)
     target_link_libraries(robot_controller_tests PRIVATE RoboBeetleCore)
