@@ -8,7 +8,7 @@
 
 **Tech Stack:** 当前 Qt 6/C++20、QElapsedTimer 注入时钟、现有 GUI 线程 QFile/250 ms flush、CMake/CTest。
 
-基线：最新 `origin/main` = `8752700d0fb2fb423527692e8aec4272727b1631`（PR #43 merge commit，已核对 merged/closed）。新分支：`codex/target-temporal-association-dry-run`。本设计中的新增类型/接口均为提案，不表示已实现。
+基线：最新 `origin/main` = `8752700d0fb2fb423527692e8aec4272727b1631`（PR #43 merge commit，已核对 merged/closed）。新分支：`codex/target-temporal-association-dry-run`。以下类型/接口按批准设计实现；实际验证及交付信息见验证记录。
 
 ## 1. 现状、证据和范围
 
@@ -71,7 +71,7 @@ TargetAssociationMemory releaseTargetAssociationLock(
 | memory.lastProcessedFrameId | 本会话最后关联过的ID；解除锁定后仍保留，防止旧帧重新获取 |
 | memory.missSinceMs | 连续MISS起点；首次MISS设为当前本地评估时间，重复帧不刷新；成功关联/获取清空 |
 | memory.lastEvaluatedMs | 最近关联/超时推进的注入时间，用于拒绝回退时间 |
-| memory.cachedResult | 最近已评估ID的 selected/index/status/distance；不包含 next，避免递归类型；重复调用返回缓存，不重算 |
+| memory.cached | 最近已评估ID的 selected/index/status/distance；不包含 next，避免递归类型；重复调用返回缓存，不重算 |
 | TargetAssociationResult.next | 下一份关联记忆 |
 | result.selected / selectedDetectionIndex | optional TargetState及原frame.detections中的索引；仅ACQUIRED/ASSOCIATED有值 |
 | result.status | ACQUIRED、ASSOCIATED、MISS；UNLOCKED用于初始化、显式安全释放或无有效输入 |
@@ -199,7 +199,7 @@ local_mono_ms仍表示写行使用的本地评估时间，arrival_mono_ms仍为�
 | C4 EMA复核 | 从真实session输出录CSV，排除awaiting/MISS空ex，按alpha=.3重算，连续接受样本与ex_f误差<1e−12；HOLD后获取不添加额外EMA重置 |
 | U1 VideoView | 所有点显示，关联目标与hc不同仍LOCK/误差线指向关联目标；MISS保留其他点但无旧锁点；letterbox坐标正确、安全/等待时清空 |
 | I1 真实loopback零写入 | 实际视频/检测独立TCP及HTTP：交替目标、MISS/HOLD、解锁再获取、LOST/STALE/OFF/新session/AwaitingVideo及CSV start/record/stop/error；每段保留FakeTransport.writes().isEmpty()断言 |
-| I2 旧B1/策略fixture | 旧测试存在单帧160→480等>48 px跳变；把专门验证B1/EMA的连续目标fixture改为门内移动并更新预期算术，或显式新session；不放宽门限默认、不删除旧时序/零写入/单次EMA断言；PR描述逐项列出原意图、修改内容和原因（Review M2） |
+| I2 旧B1/策略fixture | 旧测试存在单帧120→480等>48 px跳变；把专门验证B1/EMA的连续目标fixture改为门内移动并更新预期算术，或显式新session；不放宽门限默认、不删除旧时序/零写入/单次EMA断言；PR描述逐项列出原意图、修改内容和原因（Review M2） |
 
 完整CTest对比本次最新main的独立baseline，不新增失败目标。PR #43历史是24/26，仅main_window_tests原标签裁切、main_window_layout_tests原Motion/Gait可见性失败；robot_controller_tests历史时序失败在#43未复现。这是既有记录，不冒充本次已复跑结果；实施时保存当前baseline/final日志并列实际差异，不修/放宽无关布局或控制测试。
 
@@ -212,7 +212,7 @@ local_mono_ms仍表示写行使用的本地评估时间，arrival_mono_ms仍为�
 - [x] loopback：I1/I2 RED→GREEN；baseline/final完整CTest，保存真实日志，比较新增失败。
 - [x] 沿用PR #41–#43的src新增行运动/舵机接口grep pattern；结合loopback零写入，不单凭grep证明运行时隔离。
 - [x] Release新便携目录 `D:\RoboBeetleConsole-portable-target-temporal-association-dry-run-20261003\`，若已存在则使用新后缀，不覆盖旧包。验证依赖启动，不把offscreen当硬件实测。
-- [ ] 源码提交C1后构建，记录完整C1和EXE SHA-256；后续docs-only C2记交付head，明确构建输入未变，draft PR保持不合并，停下等Review。设计阶段没有新EXE，不提前填写hash或测试结论。
+- [x] 源码提交C1后构建，已记录完整C1和EXE SHA-256；后续docs-only交付head在包内BUILD_INFO.txt记录，构建输入未变。draft PR保持不合并，停下等Review。
 
 用户桌面实验：运行新包拍摄同一电脑屏幕，重复B段慢扫，放2–3个检测目标，同时观察LOCK标记和建议，录CSV。记录尺寸、持续时间/帧数、session/policy/schema，分别统计 `hc_u` 与关联后 `u` 的相邻新frame跳变 `abs(Δu)>30 px` 次数及可比较对数/比例（严格>30）。只对同session/policy、awaiting_video=0、两相邻frame行对应列都有值的配对统计，不跨MISS/awaiting缺样段拼接；另提供两列共同有值的配对对比、MISS次数/时长、重获取次数、awaiting占比。记录第一次ACQUIRED的对象，不能声称锁定450与输入顺序无关。
 
