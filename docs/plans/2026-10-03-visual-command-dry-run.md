@@ -1,6 +1,6 @@
 # Task 02 — Visual Command Proposal (DRY_RUN) 设计说明
 
-**状态：Claude 有条件批准；本次修订落实 B1/S1/S2 后允许实施 PR #42 的①–③。** Codex 是实现工程师，Claude 负责方案与 Review，用户负责实测与最终决策。先推送本设计修订，再 RED→GREEN 实现；CSV 在 #42 合并后以独立后续 PR 开始（预期 #43，实际号码由 GitHub 分配）。
+**状态：B1/S1/S2 设计修订已先推送（`4e0bf2d7b1e5d883f4de2197fd39df48386b0767`）；PR #42 的①–③已 RED→GREEN 实现，保持 draft 等待 Claude Review。** Codex 是实现工程师，Claude 负责方案与 Review，用户负责实测与最终决策。CSV 在 #42 合并后以独立后续 PR 开始（预期 #43，实际号码由 GitHub 分配）。构建及测试证据见 [Task 02 验证记录](../visual-command-dry-run-validation.md)。
 
 **Goal：** 在现有最高置信度质心/误差显示之上，增加本地检测帧进展看门狗、纯逻辑建议命令、清楚的 DRY_RUN 显示和可选 CSV。建议不会发送给机器人。
 
@@ -13,7 +13,7 @@
 - Task 01 PR [#41](https://github.com/Mr-lxd/RoboBeetle/pull/41) 已由用户授权转 ready 并采用 merge commit 合并。
 - 合并后的 main/本分支起点：`3fa89cd5de246ade7da7a7a29c2bbd6df2108134`；PR #41 最后 head：`6c2cc45399561e2b78c9240514e8183ef3abb195`。
 - 用户桌面 T1–T8、640×480 数值例子、EXE 哈希一致及 T9 的限制已写入 [Task 01 验证记录](../visual-error-dry-run-validation.md#用户桌面实测用户确认2026-10-03)。T9 进程退出/视频断开不能证明 read 卡住时的墙钟超时已存在。
-- Task 01 EXE 代码 commit 为 `657d1262f7865be06b3b69caaa55c65f1ce03aba`，SHA-256 为 `955BE5F63467653CE16F9892AA0D4833BA5DFA3B1D7C017A39985AAB94CD7821`。这是旧版实测来源；**Task 02 没有实现、没有构建、没有新 EXE 哈希**。
+- Task 01 EXE 代码 commit 为 `657d1262f7865be06b3b69caaa55c65f1ce03aba`，SHA-256 为 `955BE5F63467653CE16F9892AA0D4833BA5DFA3B1D7C017A39985AAB94CD7821`。这是旧版实测来源；Task 02 构建来源另见验证记录，不能沿用 Task 01 用户通过结论。
 - 本分支 `codex/visual-command-dry-run` 对应 draft PR #42；设计修订推送后只实施① config/看门狗、②策略、③显示/loopback。完成交付便携包供用户②③④实测，然后停止等待 Review。CSV 开关、文件写入、用户实测①均不包含在 #42。
 - 只允许修改 `RoboBeetleConsole/` 和 `docs/`。不修改 Pi、Firmware、fomo-visual-servo；不引用/调用 IConsoleController 的运动、舵机接口；不修改最高置信度策略；不增加步态幅度或其他通信协议。
 
@@ -59,9 +59,12 @@ existing metadataReady + existing video/HTTP validity gate
 | 后续 PR 新增 | `src/vision/VisualCsvLogger.h/.cpp` | GUI线程QFile缓冲写入、定时flush、文件限额与错误状态 |
 | 新增 | `tests/visual_target_state_machine_tests.cpp` | 注入时间的状态/冻结/重复/重连测试 |
 | 新增 | `tests/visual_command_policy_tests.cpp` | 纯策略表驱动测试 |
+| 新增 | `tests/visual_policy_config_tests.cpp` | 默认值和无效配置验证 |
+| 新增 | `tests/visual_diagnostic_session_tests.cpp` | B1单次EMA、Qt唤醒、参数哈希 |
 | 后续 PR 新增 | `tests/visual_csv_logger_tests.cpp` | frame/transition、CSV转义、限额、错误/关闭 |
 | 修改 | `src/ui/MainWindow.h/.cpp` | 持有session，传事件/非视频状态标签；后续PR才加CSV；不触及手动控制handlers |
 | 修改 | `src/vision/DetectionMetadata.h/.cpp` | B1 AwaitingVideo 原因，布尔结果不放宽 |
+| 修改 | `tests/detection_stream_decoder_tests.cpp` | AwaitingVideo及零时间戳兼容性 |
 | 修改 | `src/vision/VideoView.h/.cpp` | 接收同一快照、扩展面板；停止/失效时数值清空，原有缩放几何保留 |
 | 修改 | `CMakeLists.txt` | 登记文件和测试，纯模块不增加机器人依赖 |
 | 修改 | `tests/main_window_tests.cpp`、`tests/video_view_tests.cpp` | 扩展原有视觉测试及独立 `main_window_visual_error_tests` wrapper 覆盖的新状态 |
@@ -84,11 +87,11 @@ existing metadataReady + existing video/HTTP validity gate
 | K_yaw | 1.0 | 归一化增益，有限且非负 |
 | turn_sign | +1 | 仅 ±1；+1 为 ex_f > 0 → TURN_RIGHT；实机符号未验证 |
 | ui_tick_ms | 50 | 外部 Qt 适配层最大常规检查间隔；正数 |
-| csv_max_file_bytes | 32×1024×1024 | bytes；写入前检查，包括 header；到限额停止记录，不自动无限轮转 |
+| csv_max_file_bytes（后续 PR） | 32×1024×1024 | bytes；写入前检查，包括 header；到限额停止记录，不自动无限轮转 |
 | csv_flush_ms（后续 PR） | 250 | GUI线程定时flush；文件IO可能产生短暂GUI延迟，采用Review指定的简化方案 |
 | policy_version | `visual-command-proposal-v1` | schema/行为版本字符串；参数哈希另按实际 config 计算 |
 
-参数验证失败时不启用建议运算：诊断为 STALE、建议 STOP，CSV 显示配置错误；不静默裁剪无效参数。验证函数是纯逻辑；哈希对固定顺序/固定精度序列化后的全部实际参数做 SHA-256，运行时写入每行，不哈希结构体内存。
+参数验证失败时不启用建议运算：诊断为 STALE、建议 STOP；不静默裁剪无效参数。验证函数是纯逻辑；Qt适配层对固定顺序/17位有效数字、UTF-8序列化的全部当前实际参数做 SHA-256，写入快照；后续CSV逐行记录，不哈希结构体内存。
 
 u/v/W/H 是原图像素，左上原点、右/下正；ex/ey/ex_f/yaw_cmd 都无量纲。`yaw_cmd=clamp(K_yaw*ex_f,-1,1)` 保留图像方向正号；**turn_sign 只映射离散左右建议**，不偷偷修改 ex 或 yaw_cmd 的图像符号。pitch/depth/距离控制本阶段不实现。
 
@@ -110,6 +113,7 @@ struct VisualTargetMemory {
     std::optional<std::uint64_t> highestArrivedFrameId;
     std::optional<std::int64_t> lastAdvancedArrivalMs;
     std::optional<std::int64_t> noTargetSinceMs;
+    std::optional<std::int64_t> awaitingVideoSinceMs;
     VisualState state{VisualState::Stale};
 };
 struct VisualTargetInput {
@@ -150,6 +154,7 @@ struct VisualCommandResult {
     ProposedCommand proposed;
     ProposedCommand effective;
     bool dwellBlocked;
+    bool waitingForSample;
 };
 VisualCommandResult evaluateVisualCommand(
     const VisualCommandMemory &previous, const VisualCommandInput &input,
@@ -167,8 +172,8 @@ VisualDiagnosticSession(VisualPolicyConfig config, NowMs nowMs,
 void beginSession(quint64 sessionId); // 清空两份纯逻辑记忆
 void onDetectionArrival(const DetectionFrame &frame, const VisualViewContext &context);
 void refresh(const VisualViewContext &context); // video/HTTP/tick；不传到达 ID
-VisualDiagnosticSnapshot snapshot() const;
-// signal: diagnosticChanged(VisualDiagnosticSnapshot snapshot)
+const VisualDiagnosticSnapshot &snapshot() const noexcept;
+// signal: diagnosticChanged(const VisualDiagnosticSnapshot &snapshot)
 
 // VisualViewContext 字段：DetectionDisplayState gate、optional<TargetState> selected。
 // MainWindow 用已有帧/HTTP/视频尺寸与时间戳构造，不把 QObject 传进纯函数。
@@ -201,7 +206,7 @@ gate=NoTarget 来自尺寸/时间戳有效的空帧，不由“没有 metadata�
 
 metadataReady 到达先记录本地ID进展。视频与检测独立TCP连接；检测时间戳领先当前视频时，gate=AwaitingVideo、布尔门控false，原始目标叠加仍抑制，但VisualState/effective/EMA保持。视频追上后对该ID评估一次。若500 ms未追上，或更早触发其他Stale/OFF条件，则失效/STOP。初始无有效样本时保持原初始STALE/STOP，不能凭空宣称TRACKING。严格递增ID即使Pi采集时间相同也续期，本步不推断ID递增但内容重复的质量问题。
 
-等待超时另以最早尚未追上视频的本地到达时间为deadline；不断有更大ID但视频一直没追上，不能无限刷新等待时长。视频追上并成功接受目标/空结果后结束这一等待窗口。AwaitingVideo只用于时间领先，不用于零时间戳、尺寸错、HTTP失效等。
+等待超时另以最早尚未追上视频的本地到达时间为deadline；不断有更大ID但视频一直没追上，不能无限刷新等待时长。接受追上视频的目标/空结果前也先检查deadline，避免晚到视频事件先于超时timer处理时绕过STALE/STOP；及时追上并接受后结束等待窗口。AwaitingVideo只用于时间领先，不用于零时间戳、尺寸错、HTTP失效等。
 
 新视频连接、Pi Host/端口切换、检测连接重建或断开触发 beginSession/reset；清空 ID 与 EMA/dwell 记忆，不允许用旧连接的 ID 或到达时间给新会话续期。同连接内 Stop ACK 立即输出 STALE/STOP；权威非运行状态输出 INFERENCE_OFF/STOP。恢复 running 仍须通过既有 gate 和本地年龄门控，没有新 ID 时不能绕过 500 ms。
 
@@ -259,7 +264,7 @@ CSV测试与用户居中60 s录CSV统计归后续PR；当前PR不创建logger、
 | 重复不续期 | t=400 重复 ID=10/timer/HTTP 更新，lastArrival 仍为 0；t=500 STALE；纯函数重复和实际客户端报错分别验证 |
 | 新 ID/会话 | ID=11 可续期；重连 session 重置后低 ID 可作新首帧，旧 session 值不泄漏；无帧启动 STALE |
 | NO_TARGET → LOST | t=0 首个空帧，此后每 100 ms 新空 ID；t=1499 NO_TARGET/HOLD，t=1500 LOST/STOP；若空帧之后断流，t=500 先 STALE/STOP |
-| 原 gate 优先级 | HTTP stale、尺寸错误、未知状态、未来/超龄采集时间都 STALE；权威 off 则 INFERENCE_OFF，即使没有 metadata；Stop ACK 待核对立即 STALE/STOP |
+| 原 gate 优先级 | HTTP stale、尺寸错误、未知状态、零/超龄采集时间都 STALE；非零检测时间领先视频仅 AwaitingVideo；权威 off 为 INFERENCE_OFF；Stop ACK 待核对立即 STALE/STOP |
 | EMA | 首帧 ex=0→0，下一帧 ex=1→0.3，再一帧→0.51；同 ID 重绘保持0.3；停止/reset 不重复滤波旧样本 |
 | 滞回 | alpha=1、dwell=0：0.24→FORWARD，0.26→TURN_RIGHT，0.20/0.12→仍右转，0.119→FORWARD；左右阈值与严格等号均覆盖 |
 | dwell/反向 | t=0 右转；t=999 反向大误差仍右转且blocked，t=1000 可左转；TURN→FORWARD同样遵守；HOLD不刷新switch时间 |
@@ -274,12 +279,12 @@ CSV测试与用户居中60 s录CSV统计归后续PR；当前PR不创建logger、
 
 后续构建用 Qt 6.11.2/MinGW Release，并设置测试字体 `QT_QPA_FONTDIR=C:\Windows\Fonts` 和 `QT_QPA_PLATFORM=offscreen`。完整 CTest 与合并后的 main 独立基线对照，已知名称为 `robot_controller_tests`、`main_window_tests`、`main_window_layout_tests`；记录时序敏感通过/失败，不得新增失败或弱化保护。
 
-## 9. 实现阶段交付与用户清单（本次尚未执行）
+## 9. 实现阶段交付与用户清单
 
-- 实现阶段维持 draft PR，先经 Claude Review 再由用户决定后续 ready/合并。此设计 draft PR 不代表实现已经完成。
-- 后续文档记录最终代码 commit 与新 EXE SHA-256；用后续 docs-only 提交记录代码 commit，避免自指哈希。设计阶段只有 commit，不伪造 EXE 哈希。
-- 新便携包拟为 `D:\RoboBeetleConsole-portable-visual-command-dry-run-20261003`；构建时若目录已存在，使用新后缀而不覆盖。所有既有包保留。
-- 沿用 PR #41 的完整 pattern，对 src 新增行用 GNU grep 检查无运动/舵机接口引用；配合 loopback 零机器人写入，覆盖全部新状态。当前 docs-only 变更没有 src 新增行，不作为未来实现扫描的替代。
+- draft PR #42 已实现①–③，先经 Claude Review 再由用户决定 ready/合并；当前不合并。
+- 源码 commit `321f4b2d784052f7acb92fcffab4fcf945de31c1`；EXE SHA-256 `9190E73D48A8736E06CEF5F26EC10AF3657759FF7768C355FADFB2AE44D8D266`。后续 docs-only 提交记录来源，避免自指哈希。
+- 新便携包 `D:\RoboBeetleConsole-portable-visual-command-dry-run-20261003` 已构建；所有既有包保留。240×180及640×480预览和独立依赖启动检查已完成；用户实测仍待执行。
+- 完整 CTest 23/25，本轮main基线19/21，同样两项布局失败；src新增行 GNU grep 无运动/舵机接口匹配，loopback零机器人写入。命令与解释见验证记录。
 
 | 用户桌面实测 | 应观察/记录 |
 |---|---|
