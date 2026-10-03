@@ -3007,14 +3007,7 @@ vision::VisualViewContext MainWindow::visualDisplayContext() const
 
     context.gate = vision::detectionOverlayState(*latestDetectionFrame_,
         videoView_->currentFrameSize(), videoView_->currentCaptureTimestampNs(), inferenceRunning, fresh);
-    if (vision::detectionOverlayRenderable(
-            *latestDetectionFrame_,
-            videoView_->currentFrameSize(),
-            videoView_->currentCaptureTimestampNs(),
-            inferenceRunning,
-            fresh)) {
-        context.selected = vision::selectTargetState(*latestDetectionFrame_);
-    }
+    context.frame = latestDetectionFrame_;
 
     return context;
 }
