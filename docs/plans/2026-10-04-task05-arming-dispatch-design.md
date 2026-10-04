@@ -74,5 +74,5 @@ requests (more bookkeeping) or RobotController reuse (live-transport coupling).
 - [x] Build Qt tree and run full baseline and feature CTest, preserving unrelated
   UI failures; source/link audit confirms application remains DRY_RUN.
 - [x] Commit tested source; package/hash and verify reduced-PATH execution; record provenance.
-- [ ] Normal push and draft PR; final PR status is recorded in the PR description.
+- [x] Normal push and draft PR #46 created; remains draft, no merge. Final head is recorded in the PR description.
   No merge or hardware operation is authorized by this slice.
