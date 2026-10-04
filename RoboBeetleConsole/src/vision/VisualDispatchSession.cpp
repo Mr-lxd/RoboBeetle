@@ -153,21 +153,6 @@ void VisualDispatchSession::disarm()
     emit statusChanged();
 }
 
-void VisualDispatchSession::selectTurnSign(std::optional<int> sign)
-{
-    if (sign && *sign != 1 && *sign != -1) sign.reset();
-    if (selectedSign_ == sign) return;
-    disarm();
-    selectedSign_ = sign;
-    confirmedSign_.reset();
-    emit statusChanged();
-}
-
-void VisualDispatchSession::confirmTurnSign()
-{
-    confirmedSign_ = selectedSign_;
-    emit statusChanged();
-}
 void VisualDispatchSession::manualInput(ManualInputKind kind)
 {
     if (kind == ManualInputKind::NonMotion) return;

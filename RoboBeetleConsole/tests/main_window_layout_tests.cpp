@@ -211,18 +211,16 @@ void testCompactVisionSurfaceAndDetailsTree()
                    && hiddenRecordingStop != nullptr && !hiddenRecordingStop->isVisible(),
                "normal operation presents one inference toggle and one recording toggle");
 
-        int previousY = -1;
-        for (const QString &name : visibleControlNames) {
-            auto *button = videoCard->findChild<QPushButton *>(name);
-            expect(button != nullptr && button->isVisible()
-                       && summaryPanel != nullptr
-                       && summaryPanel->isAncestorOf(button),
-                   "Vision Status owns every visible video/capture action");
-            if (button != nullptr) {
-                const int y = button->mapTo(summaryPanel, QPoint(0, 0)).y();
-                expect(y > previousY,
-                       "Vision Status actions are stacked vertically");
-                previousY = y;
+        for (int i=0; i<visibleControlNames.size(); ++i) {
+            auto *button=videoCard->findChild<QPushButton*>(visibleControlNames[i]);
+            expect(button && button->isVisible() && summaryPanel->isAncestorOf(button),"Vision column owns controls");
+            if(i%2==1) {
+                auto *left=videoCard->findChild<QPushButton*>(visibleControlNames[i-1]);
+                expect(button && left && button->y()==left->y() && button->x()>left->x(),"Vision controls form two columns");
+            }
+            if(i>=2) {
+                auto *above=videoCard->findChild<QPushButton*>(visibleControlNames[i-2]);
+                expect(button && above && button->y()>above->y(),"Vision controls form two rows");
             }
         }
         auto *fpsSummary = videoCard->findChild<QLabel *>(QStringLiteral("videoFpsSummary"));
@@ -248,12 +246,10 @@ void testCompactVisionSurfaceAndDetailsTree()
                    && memory->toolTip() == QStringLiteral(
                        "Vision process RSS / total system physical memory"),
                "memory summary starts masked and identifies its process/system scope");
-        expect(detections != nullptr && memory != nullptr && httpState != nullptr
-                   && detections->mapTo(summaryPanel, QPoint(0, 0)).y()
-                       < memory->mapTo(summaryPanel, QPoint(0, 0)).y()
-                   && memory->mapTo(summaryPanel, QPoint(0, 0)).y()
-                       < httpState->mapTo(summaryPanel, QPoint(0, 0)).y(),
-               "memory summary is placed between detections and HTTP status");
+        auto *videoRow=videoCard->findChild<QLabel*>(QStringLiteral("visionCompactVideo"));
+        auto *inferenceRow=videoCard->findChild<QLabel*>(QStringLiteral("visionCompactInference"));
+        auto *recordingRow=videoCard->findChild<QLabel*>(QStringLiteral("visionCompactRecording"));
+        expect(videoRow && inferenceRow && recordingRow && videoRow->y()<inferenceRow->y() && inferenceRow->y()<recordingRow->y(),"three compact status rows ordered Video/Inference/Recording");
         auto *captureState = videoCard->findChild<QLabel *>(QStringLiteral("captureState"));
         expect(captureCounts != nullptr
                    && captureState != nullptr

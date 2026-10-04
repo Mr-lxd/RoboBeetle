@@ -24,8 +24,6 @@ public:
     void setFeatureEnabled(bool enabled);
     ArmReason arm();
     void disarm();
-    void selectTurnSign(std::optional<int> sign);
-    void confirmTurnSign();
     void manualInput(ManualInputKind kind);
     void timerTick();
     bool featureEnabled() const { return enabled_; }
@@ -35,7 +33,6 @@ public:
     bool stopTimeoutAlert() const { return machine_.stopTimeoutAlert(); }
     std::optional<CommandTerminalResult> operatorStopResult() const { return operatorStopResult_; }
     QString poseMismatch() const { return poseMismatch_; }
-    std::optional<int> selectedTurnSign() const { return selectedSign_; }
     std::optional<int> confirmedTurnSign() const { return confirmedSign_; }
 signals:
     void statusChanged();
@@ -59,7 +56,7 @@ private:
     bool submitting_{false};
     bool evaluating_{false};
     ArmReason reason_{ArmReason::NotTracking};
-    std::optional<int> selectedSign_, confirmedSign_;
+    std::optional<int> confirmedSign_{VisualPolicyConfig::configuredTurnSign};
     std::optional<CommandTerminalResult> operatorStopResult_;
     QString poseMismatch_;
     QHash<quint32, Association> associations_;
