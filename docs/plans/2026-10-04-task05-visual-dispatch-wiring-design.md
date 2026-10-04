@@ -16,7 +16,7 @@ A +1/-1 selector has an unconfirmed placeholder and a separate Confirm button. N
 
 ## Evidence, evaluation and ownership
 
-At every 50ms tick the session samples controller link/authority/enabled and known-pose masks and the current complete VisualDiagnosticSnapshot; it passes suggestion and ex_f from that same snapshot.command. No separately cached raw target.ex can substitute. Awaiting-video/no valid fresh snapshot is STALE. Existing diagnostic watchdog still runs independently; session tick handles policy timeouts/retries even with no frame arrivals. Link/authority signals also trigger an immediate evaluation, preventing a delayed non-STOP after loss.
+At every 50ms tick the session samples controller link/authority/enabled and known-pose masks and the current complete VisualDiagnosticSnapshot; it passes suggestion and ex_f from that same snapshot.command. No separately cached raw target.ex can substitute. Dispatch uses snapshot.state directly, including during AwaitingVideo; it never overlays a second STALE decision based on awaitingVideo. VisualTargetStateMachine preserves its previous state within the 500ms video grace and then produces STALE. Only absence of a valid snapshot is treated as STALE. Existing diagnostic watchdog still runs independently; session tick handles policy timeouts/retries even with no frame arrivals. Link/authority signals also trigger an immediate evaluation, preventing a delayed non-STOP after loss.
 
 The firmware does not report logical_pose_known_mask. Qt infers it from correlated ACK OK according to RoboBeetleFirmware/Core/Servo/servo_service.c; UI values or enabled bits alone never establish evidence:
 
@@ -55,7 +55,7 @@ Retain v2 columns/row semantics and append policy_request_id, request_id (RBRP),
 
 ## RED to GREEN and integration gates
 
-1. Existing baseline28/28; write/observe failures for default-off, missing sign, paired ex_f, no-frame ticking/timeouts/STOP retries, and CSV v3.
+1. An armed, ACK-confirmed Forward session with AwaitingVideo must send no STOP and stay armed at400ms; the upstream snapshot transitions to STALE at500ms and dispatch then STOPs/disarms. Existing baseline28/28; write/observe failures for default-off, missing sign, paired ex_f, no-frame ticking/timeouts/STOP retries, and CSV v3.
 2. Loopback RBRP peer covers StartMotion/STOP wire kinds, IDs both ways, OK/Busy/Rejected/OutcomeUnknown (same payload emitted by terminalize_outstanding), repeated STOP and late/superseded ACKs, every pose inference row above, repeated Enable after accepted PWM, non-OK outcomes, session loss/reconstruction and ignored old-session ACKs; START HARDWARE_FAILURE mismatch wording must remain visible after safety STOP.
 3. Enumerated MainWindow actuation/edit/shortcut tests each arm first, invoke exactly that path, assert disarmed and no further automatic traffic; include pending ACK and dwell.
 4. End-to-end loopback: qualify controller+pose, choose and confirm direction, enable/arm, feed tracking, accepted motion, stop frame arrivals, observe STALE+STOP+disarm, then rearm and manual takeover. Default-off fixture proves existing diagnostics produce zero automatic robot writes.
@@ -68,4 +68,4 @@ All items require unloaded servos out of water. Record +1/-1 selection then expl
 
 ## Design review checkpoint
 
-2026-10-04: operator approved the preceding architecture with the pose inference and conditional feature-off adjustments captured above. Push this design-only branch before any RED tests or implementation edits. Await operator review of this remotely published revision. No application, test, firmware or transport implementation is changed by this document commit.
+2026-10-04: operator approved the preceding architecture with the pose inference and conditional feature-off adjustments captured above. Push this design-only branch before any RED tests or implementation edits. Operator review approved; 2026-10-04 clarification additionally requires direct snapshot VisualState use during AwaitingVideo. Implementation may now begin with RED tests. No application, test, firmware or transport implementation is changed by this document commit.
