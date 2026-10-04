@@ -4,6 +4,10 @@ Base: `dfd7972bf1c6102e83f406050c3f62730b046bca` (PR47 merged first, then rebase
 
 This record covers host tests and loopback simulation. Physical motion and water acceptance remain pending. The final source commit and application/test EXE SHA-256 are recorded in the draft PR and the portable package's BUILD_INFO.
 
+Delivered as [draft PR48](https://github.com/Mr-lxd/RoboBeetle/pull/48). Binary source commit: `7da3ede860981adead9beb5a34f819dc6e1cf726`; subsequent commits only finish documentation. Portable application: `D:/RoboBeetleConsole-portable-task05-visual-dispatch-wiring-20261004/`. Application EXE SHA-256: `85FBE358DE2FEC67A48859C3020694CF0132B114C71C944D1B9E98071BFBDCFB`. Test EXEs, all six artifact hashes, logs and manifest are retained in `D:/RoboBeetle-results/task05-pr3-wiring-20261004/`.
+
+windeployqt deployment and Windows startup passed with a system-only PATH, no Qt environment overrides, all nine Qt/MinGW runtime modules loaded from the package and empty stderr. The startup process was closed after verification; no hardware action occurred. Optional D3D12 dxcompiler/dxil files were unavailable and the optional OpenSSL plugin was omitted; Windows Widgets startup passed and Schannel is deployed.
+
 ## Activation and evidence contract
 
 - Every application instance starts with visual dispatch OFF. Enabling the switch requires a separate Arm action; no settings persist the switch or direction confirmation. OFF retains DRY_RUN diagnostics. Direct maintenance remains DRY_RUN.

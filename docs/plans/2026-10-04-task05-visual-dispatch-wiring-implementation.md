@@ -41,8 +41,8 @@ Files: ui/MainWindow.{h,cpp}; vision/VisualCsvLogger.{h,cpp}; vision/VisualPolic
 - [x] Run complete Qt build/regression offscreen with existing real-clock CTest isolation; require all tests green. New tests expand baseline28. Fix any failure using TDD, retain all existing assertions. Final root run:30/30 PASS,62.72s.
 - [x] Independent final spec review against all ten user requirements plus latest pose/off/AwaitingVideo corrections, then quality review. Approved implementation00beeed.
 - [x] Update existing ROBOBEETLE_HARDWARE_CONTROL_HANDOFF.md and create Task05PR3 validation document with RED/GREEN logs and explicit pending user-only unloaded/out-of-water checklist: direction two-step confirmation; unplug network legs soft/hold position (not zero); STALE STOP; manual takeover. No claimed hardware acceptance.
-- [ ] Build application/test EXEs, calculate SHA256 and record exact source commit. Package new app with windeployqt in a distinct Task05PR3 portable directory; startup smoke only, no robot connections. Keep prior portable packages untouched.
-- [ ] Commit/push branch normally, create and attach draft PR; record source/head and hashes in PR description and BUILD_INFO. Verify GitHub head/draft state and clean worktree. Do not merge PR3.
+- [x] Build application/test EXEs, calculate SHA256 and record exact source commit. Package new app with windeployqt in a distinct Task05PR3 portable directory; startup smoke only, no robot connections. Keep prior portable packages untouched. Build source7da3ede; Windows startup PASS with system-only PATH and empty stderr.
+- [x] Commit/push branch normally, create and attach draft PR; record source/head and hashes in PR description and BUILD_INFO. Verify GitHub head/draft state and clean worktree. Do not merge PR3. Delivered as [draft PR48](https://github.com/Mr-lxd/RoboBeetle/pull/48); final documentation closeout only follows the binary source commit.
 
 ## Commands
 

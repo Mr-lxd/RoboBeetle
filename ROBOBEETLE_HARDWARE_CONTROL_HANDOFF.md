@@ -19,7 +19,7 @@
 | 04 / PR #44 | 最近邻时间关联、LOCK/MISS/ACQUIRED 与 CSV v2；用户报告水平大跳变由 hc_u 的 108/997 降至关联 u 的 4/898，保留不同分母；桌面确认通过。视频等待/卡顿已记录，根因未确认。 | [target-temporal-association-dry-run-validation](docs/target-temporal-association-dry-run-validation.md) |
 | 05 / PR #45 | STM32 STOP 语义与 Qt 断线停止路径调研；两项 START/MODE 过渡特性测试通过，完整 Firmware host gate 37 executables + 13 compile-contract objects + USART2 source/config contract 全绿。 | [task05-stop-transition](docs/task05-stop-transition-red.md) |
 | 05 / PR #46 | 假发送接口的纯逻辑布防/下发状态机；NO_TARGET 保持已确认模式，LOST 才 STOP；Hold 未确认时 STOP。Qt 28/28 回归通过；当时应用仍 DRY_RUN。 | [task05-arming-dispatch-validation](docs/task05-arming-dispatch-validation.md) |
-| 05 / PR3 | 默认关闭的会话级视觉下发开关、远程 RBRP 适配、50 ms evaluate、手动接管、姿态证据及 CSV v3；RED→GREEN、回环验证和实测待办见专项记录，实机验收由操作员完成。 | [task05-visual-dispatch-wiring-validation](docs/task05-visual-dispatch-wiring-validation.md) |
+| 05 / [PR #48](https://github.com/Mr-lxd/RoboBeetle/pull/48)（draft） | 默认关闭的会话级视觉下发开关、远程 RBRP 适配、50 ms evaluate、手动接管、姿态证据及 CSV v3；RED→GREEN，完整 Qt 30/30 全绿；回环验证和实测待办见专项记录，实机验收由操作员完成。 | [task05-visual-dispatch-wiring-validation](docs/task05-visual-dispatch-wiring-validation.md) |
 
 ### Task 05 已确认的 STOP 语义与当前断线行为
 
@@ -83,6 +83,11 @@ PR47 的便携版（不含 PR46，保持 DRY_RUN）保留在
 `1E1177CEA3E5B703A334592CD53B04A58098BBD213A69701061D151E2C3662AE`。
 PR3 新 EXE 与测试 EXE 使用独立输出目录；最终源码 commit 和 SHA-256 记录于
 draft PR 描述及便携包 BUILD_INFO，不覆盖以上历史包。
+PR48 包位于 `D:\RoboBeetleConsole-portable-task05-visual-dispatch-wiring-20261004\`，
+二进制源码 `7da3ede860981adead9beb5a34f819dc6e1cf726`，EXE SHA-256
+`85FBE358DE2FEC67A48859C3020694CF0132B114C71C944D1B9E98071BFBDCFB`。
+Windows 便携启动检查通过；视觉开关每次启动默认关闭。后续交付收尾 commit
+仅修改文档，不改变已测试/打包的代码。
 
 当前 active/default Protocol V2 host transport 是 Raspberry Pi → STM32 USART2
 （PA2/PA3，115200 8-N-1）；2026-09-16 的 target link acceptance 见本文档末尾。
