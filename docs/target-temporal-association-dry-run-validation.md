@@ -1,6 +1,6 @@
 # Task 04 / PR #44 — Target Temporal Association (DRY_RUN) 验证记录
 
-2026-10-03；基线 `8752700d0fb2fb423527692e8aec4272727b1631`（PR #43已合并），分支 `codex/target-temporal-association-dry-run`。Claude设计批准后按S1/M1/M2实施，交付后保持draft，不合并，等待Review。以下自动化和模拟图像不代表摄像头、机器人或水下实测。
+2026-10-03；基线 `8752700d0fb2fb423527692e8aec4272727b1631`（PR #43已合并），分支 `codex/target-temporal-association-dry-run`。Claude设计批准后按S1/M1/M2实施，初次交付后保持draft等待Review；2026-10-04用户桌面实测结果见第⑦节。以下自动化和模拟图像不代表摄像头、机器人或水下实测。
 
 ## ① 发现、修改和原因
 
@@ -111,7 +111,7 @@ EXE SHA-256（构建与包内一致）：**`C6A525E920FC1DB7624F60967FF161AAC50C
 
 windeployqt Release部署运行库及qjpeg/qwindows/qoffscreen，旧包保留不覆盖。仅系统目录PATH的offscreen启动持续3 s，确认包内qoffscreen加载；只结束本次新PID20420，未停止用户进程。此检查仅证明依赖启动，不证明真实摄像头/CSV或控制方向。
 
-## ⑥ 如何运行与观察（等待用户实测）
+## ⑥ 如何运行与观察（交付时实测清单）
 
 无需自行编译：运行新包EXE，按原方式连接Pi摄像头并Start Inference。摄像头拍电脑屏幕，放2–3个检测目标，重复B段慢速扫动。观察初始ACQUIRED锁住哪个点，橙色全部检测与青色LOCK、ASSOCIATED距离；置信度交替时锁点应连续，门外目标不能立即替代。遮挡原目标：MISS/NO_TARGET/HOLD，约500 ms后下一新有效帧可获取别的目标；持续新空帧约1.5 s LOST/STOP，断新ID约0.5 s STALE/STOP。建议全部未发送，原手动控件仍可操作。
 
@@ -127,4 +127,16 @@ $env:QT_QPA_PLATFORM='offscreen'; $env:QT_QPA_FONTDIR='C:\Windows\Fonts'
 & D:\Qt\Tools\CMake_64\bin\ctest.exe --test-dir build/task04/feature --output-on-failure --parallel 4
 ```
 
-本次交付完成后停下，PR #44保持draft、不合并，等待Claude Review；不开始下一任务。
+初次交付时PR #44保持draft、不合并，等待Review。2026-10-04用户确认桌面实测通过，并授权追加以下结果后转为ready、以merge commit合并；合并后停下，不开始下一任务。
+
+## ⑦ 用户桌面实测（2026-10-04）
+
+以下为用户提供的桌面实测统计，用户确认本次实测通过；没有将这些结果作为机器人运动或水下测试证据。
+
+- 数据：59.3 s，1398个frame行；schema `visual-csv-v2`，30列；单一session；policy v2；原图640×480。
+- 关联效果：相邻帧水平跳变 `abs(Δu)>30 px`，最高置信度基线 `hc_u` 为108/997（10.8%），关联后 `u` 为4/898（0.45%）。两列有效配对数不同，分别保留分母，不当作同一组配对直接相减。
+- ASSOCIATED距离中位数0.8 px，p95为26.7 px，最大47.9 px，接近48 px门限。MISS有154行，最近候选距离中位数196 px。ACQUIRED共10次，其中5次在STALE之后。
+- HOLD使effective命令不随TRACKING/NO_TARGET的频繁切换而抖动；这里是本地建议命令，未发送运动命令。
+- 可选遮挡测试：因误检太多未单独完成；数据中已自然出现MISS → HOLD → 约520 ms后重新ACQUIRED。
+
+已知问题（不是本PR引入）：视频链路出现卡顿。`awaiting_video=1`占17%（用户对照的前天记录为0.1%）；42%的已评估帧需要等待视频；5次STALE均由连续等待视频超过500 ms引起；录制结束时视频连接被2 s的半帧超时断开。本PR未修改视频路径代码；用户已安排A/B对照和网络排查。本次仅记录现象，不推断具体根因，也不在本PR扩展排查或修改范围。
