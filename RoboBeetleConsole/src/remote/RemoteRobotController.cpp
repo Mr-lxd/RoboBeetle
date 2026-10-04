@@ -132,6 +132,14 @@ RemoteRobotController::RemoteRobotController(QObject *parent)
     updateMonitor(QStringLiteral("Disconnected"));
 }
 
+RemoteRobotController::~RemoteRobotController()
+{
+    // Socket closure can synchronously emit authority loss. Handle it while
+    // all controller fields exist, then fence signals during member teardown.
+    session_.disconnectFromHost();
+    disconnect(&session_, nullptr, this, nullptr);
+}
+
 void RemoteRobotController::refreshSerialPorts()
 {
     emit serialPortsChanged({});
@@ -290,6 +298,30 @@ bool RemoteRobotController::startMotion(MotionMode mode)
     return submitCommand(pending.kind, payload, pending).has_value();
 }
 
+std::optional<quint32> RemoteRobotController::submitVisualMotion(MotionMode mode)
+{
+    if (!isControlActive() || (mode != MotionMode::Stop && !isMotionReady(mode))) {
+        return std::nullopt;
+    }
+    if (mode != MotionMode::Stop && mode != MotionMode::Forward
+        && mode != MotionMode::TurnLeft && mode != MotionMode::TurnRight) {
+        return std::nullopt;
+    }
+    PendingCommand pending;
+    pending.kind = mode == MotionMode::Stop
+        ? robobeetle::gateway::RobotCommandKind::StopMotion
+        : robobeetle::gateway::RobotCommandKind::StartMotion;
+    if (mode != MotionMode::Stop) pending.motionMode = mode;
+    const auto id = submitCommand(pending.kind,
+        mode == MotionMode::Stop ? QByteArray{} : QByteArray(1, static_cast<char>(mode)),
+        pending);
+    if (id && mode == MotionMode::Stop) {
+        supersedePendingMotionStarts();
+        motionModeTransitionTimer_.stop();
+    }
+    return id;
+}
+
 bool RemoteRobotController::stopMotion()
 {
     if (!isControlActive()) {
@@ -423,6 +455,12 @@ std::optional<quint32> RemoteRobotController::submitCommand(
                             .arg(commandKindText(kind)));
         return std::nullopt;
     }
+    if (pending.servoMask != 0) {
+        for (auto it = pending_.begin(); it != pending_.end(); ++it)
+            if ((it->servoMask & pending.servoMask) != 0) it->superseded = true;
+        // No new pose is inferred before a correlated successful ACK.
+        poseKnownMask_ &= ~pending.servoMask;
+    }
     pending.sentAtMs = nowMs();
     pending_[*requestId] = pending;
     updateMonitor(QStringLiteral("%1 sent").arg(commandKindText(kind)));
@@ -543,6 +581,13 @@ void RemoteRobotController::handleCommandOutcome(
     monitor_.lastAckRttMs = rtt >= 0 ? rtt : -1;
     pending_.erase(it);
 
+    const quint8 rawResult = static_cast<quint8>(payload[4]);
+    CommandTerminalResult terminal = CommandTerminalResult::OutcomeUnknown;
+    if (outcome == static_cast<quint8>(robobeetle::gateway::GatewayCommandOutcome::Accepted) && rawResult == 0)
+        terminal = CommandTerminalResult::Ok;
+    else if (outcome == static_cast<quint8>(robobeetle::gateway::GatewayCommandOutcome::Rejected))
+        terminal = rawResult == 7 ? CommandTerminalResult::Busy : CommandTerminalResult::Rejected;
+    emit commandTerminal(requestId, pending.superseded ? CommandTerminalResult::OutcomeUnknown : terminal, rawResult, monitor_.lastAckRttMs);
     if (pending.superseded) {
         updateMonitor(QStringLiteral("%1 superseded outcome ignored")
                           .arg(commandKindText(pending.kind)));
@@ -554,7 +599,7 @@ void RemoteRobotController::handleCommandOutcome(
     }
 
     if (outcome == static_cast<quint8>(
-                       robobeetle::gateway::GatewayCommandOutcome::Accepted)) {
+                       robobeetle::gateway::GatewayCommandOutcome::Accepted) && rawResult == 0) {
         applyAcceptedCommand(pending);
         updateMonitor(QStringLiteral("%1 accepted")
                           .arg(commandKindText(pending.kind)));
@@ -674,10 +719,12 @@ void RemoteRobotController::applyAcceptedCommand(
     using Kind = robobeetle::gateway::RobotCommandKind;
     switch (pending.kind) {
     case Kind::EnableServos:
+        poseKnownMask_ |= pending.servoMask & ~enabledMask_;
         setEnabledMask(static_cast<quint16>(
             enabledMask_ | pending.servoMask));
         break;
     case Kind::DisableServos:
+        poseKnownMask_ &= ~pending.servoMask;
         setDisablePendingMask(static_cast<quint16>(
             disablePendingMask_ & ~pending.servoMask));
         setEnabledMask(static_cast<quint16>(
@@ -688,8 +735,11 @@ void RemoteRobotController::applyAcceptedCommand(
         }
         break;
     case Kind::SetServoAngle:
-    case Kind::SetServoPwm:
     case Kind::NeutralServos:
+        poseKnownMask_ |= pending.servoMask;
+        break;
+    case Kind::SetServoPwm:
+        poseKnownMask_ &= ~pending.servoMask;
         break;
     case Kind::StartMotion:
         if (pending.motionMode.has_value()) {
@@ -734,6 +784,7 @@ void RemoteRobotController::terminalizePending(
     }
     const PendingCommand pending = *it;
     pending_.erase(it);
+    emit commandTerminal(requestId, CommandTerminalResult::OutcomeUnknown, 0xff, nowMs() - pending.sentAtMs);
     if (pending.superseded) {
         emit logMessage(QStringLiteral("%1 (superseded)").arg(status));
         return;
@@ -798,7 +849,11 @@ void RemoteRobotController::failClosedControlState(const QString &reason)
     const bool hadMotion = isMotionActive();
     motionStopTimer_.stop();
     motionModeTransitionTimer_.stop();
+    const auto abandoned = pending_;
     pending_.clear();
+    for (auto it = abandoned.cbegin(); it != abandoned.cend(); ++it)
+        emit commandTerminal(it.key(), CommandTerminalResult::OutcomeUnknown, 0xff, nowMs() - it->sentAtMs);
+    poseKnownMask_ = 0;
     setDisablePendingMask(0U);
     setEnabledMask(0U);
     if (pendingGaitBackend_.has_value() || confirmedGaitBackend_.has_value()) {
@@ -857,6 +912,7 @@ void RemoteRobotController::refreshTelemetryStaleness()
             emit logMessage(QStringLiteral(
                 "Command request %1 became uncertain after %2 ms; releasing authority")
                                 .arg(it.key()).arg(kRemoteCommandTimeoutMs));
+            terminalizePending(it.key(), QStringLiteral("Remote command outcome timeout"));
             if (!session_.releaseControl()) {
                 session_.disconnectFromHost();
             }

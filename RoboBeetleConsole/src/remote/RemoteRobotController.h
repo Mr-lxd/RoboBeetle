@@ -15,6 +15,7 @@ class RemoteRobotController final : public IConsoleController {
 
 public:
     explicit RemoteRobotController(QObject *parent = nullptr);
+    ~RemoteRobotController() override;
 
     [[nodiscard]] ConsoleBackendKind backendKind() const noexcept override
     {
@@ -36,6 +37,8 @@ public:
     bool neutralServo(ServoId id) override;
     bool startMotion(MotionMode mode) override;
     bool stopMotion() override;
+    std::optional<quint32> submitVisualMotion(MotionMode mode) override;
+    [[nodiscard]] quint16 inferredPoseKnownMask() const override { return poseKnownMask_; }
     bool setGaitBackend(GaitBackend backend) override;
     bool setFrontRearCoordination(FrontRearCoordination coordination) override;
 
@@ -135,6 +138,7 @@ private:
 
     RbrpClientSession session_;
     quint16 enabledMask_{0};
+    quint16 poseKnownMask_{0};
     quint16 disablePendingMask_{0};
     LeakState leakState_{LeakState::Unknown};
     qint64 lastLeakTelemetryAtMs_{-1};

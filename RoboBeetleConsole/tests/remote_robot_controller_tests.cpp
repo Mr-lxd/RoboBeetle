@@ -725,11 +725,104 @@ void testCommandTimeoutReleasesAuthority()
            "uncertain command must never be automatically replayed");
 }
 
+void testVisualTerminalMapping()
+{
+    struct Row { GatewayCommandOutcome outcome; quint8 raw; rb::CommandTerminalResult terminal; };
+    const Row rows[]={{GatewayCommandOutcome::Accepted,0,rb::CommandTerminalResult::Ok},{GatewayCommandOutcome::Rejected,7,rb::CommandTerminalResult::Busy},{GatewayCommandOutcome::Rejected,6,rb::CommandTerminalResult::Rejected},{GatewayCommandOutcome::OutcomeUnknown,0,rb::CommandTerminalResult::OutcomeUnknown},{GatewayCommandOutcome::Cancelled,0,rb::CommandTerminalResult::OutcomeUnknown}};
+    for(const auto row:rows) {
+        FakeGatewayPeer gateway;rb::RemoteRobotController c;rb::ConsoleConnectionConfiguration cfg;
+        cfg.endpoint=QStringLiteral("127.0.0.1");cfg.tcpPort=gateway.port();c.connectController(cfg);gateway.accept();completeHello(gateway);
+        pumpUntil([&]{return c.canAcquireControl();});c.acquireControl();completeAcquire(gateway);pumpUntil([&]{return c.isControlActive();});
+        auto id=c.submitVisualMotion(rb::MotionMode::Stop);auto frame=gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        expect(id&&frame&&frame->request_id==*id,"typed outcome uses actual wire request ID");
+        std::optional<rb::CommandTerminalResult> observed;bool activeAtOutcome=false;quint8 raw=0xff;qint64 rtt=-1;
+        QObject::connect(&c,&rb::IConsoleController::commandTerminal,[&](quint32 received,rb::CommandTerminalResult result,quint8 resultByte,qint64 time){if(id&&received==*id){observed=result;raw=resultByte;rtt=time;activeAtOutcome=c.isControlActive();}});
+        if(id){sendSubmitted(gateway,*id,42);GatewayCommandOutcomeMessage m;m.command_kind=RobotCommandKind::StopMotion;m.event={row.outcome,42,row.raw};gateway.send({*id,m});}
+        expect(pumpUntil([&]{return observed.has_value();}),"validated outcome emits terminal");
+        expect(observed==row.terminal&&raw==row.raw&&rtt>=0,"terminal maps typed result/raw/RTT");
+        expect(activeAtOutcome,"terminal emitted while authority available");gateway.disconnectPeer();
+    }
+}
+
+void testActiveControllerDestruction()
+{
+    FakeGatewayPeer gateway;
+    {
+        rb::RemoteRobotController controller;
+        rb::ConsoleConnectionConfiguration cfg;cfg.endpoint=QStringLiteral("127.0.0.1");cfg.tcpPort=gateway.port();
+        controller.connectController(cfg);expect(gateway.accept(),"destruction loopback connects");completeHello(gateway);
+        pumpUntil([&]{return controller.canAcquireControl();});controller.acquireControl();completeAcquire(gateway);
+        expect(pumpUntil([&]{return controller.isControlActive();}),"destruction has active socket");
+        controller.enableServo(rb::ServoId::FrontRight);
+        gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        // Intentionally destroy while a correlated command is outstanding.
+    }
+    gateway.disconnectPeer();
+}
+
+void testVisualWireAndPoseInference()
+{
+    FakeGatewayPeer gateway;
+    rb::RemoteRobotController controller;
+    rb::ConsoleConnectionConfiguration config;
+    config.endpoint = QStringLiteral("127.0.0.1"); config.tcpPort = gateway.port();
+    controller.connectController(config); expect(gateway.accept(), "visual loopback connects");
+    completeHello(gateway); expect(pumpUntil([&]{return controller.canAcquireControl();}), "hello ready");
+    expect(controller.acquireControl(), "acquire visual loopback"); completeAcquire(gateway);
+    expect(pumpUntil([&]{return controller.isControlActive();}), "visual active");
+    const auto first = controller.submitVisualMotion(rb::MotionMode::Stop);
+    const auto second = controller.submitVisualMotion(rb::MotionMode::Stop);
+    expect(first && second && first != second, "visual STOP always sends fresh IDs even stopped/pending");
+    if (!first || !second) {gateway.disconnectPeer();return;}
+    for (auto id : {*first,*second}) {
+        auto frame=gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        expect(frame && frame->request_id==id && frame->payload==Bytes{static_cast<Byte>(RobotCommandKind::StopMotion)}, "visual STOP empty payload on existing socket");
+        sendSubmitted(gateway,id,static_cast<quint16>(id));
+        sendOutcome(gateway,id,RobotCommandKind::StopMotion,static_cast<quint16>(id),GatewayCommandOutcome::Accepted);
+    }
+    pumpUntil([&]{return controller.motionState()==rb::MotionState::Stopped;});
+    auto acceptServo=[&](const std::function<bool()> &action, RobotCommandKind kind, quint16 seq){
+        expect(action(), "pose command submitted"); auto f=gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        if(f){sendSubmitted(gateway,f->request_id,seq);sendOutcome(gateway,f->request_id,kind,seq,GatewayCommandOutcome::Accepted); QApplication::processEvents();}
+    };
+    acceptServo([&]{return controller.enableServo(rb::ServoId::FrontRight);},RobotCommandKind::EnableServos,100);
+    expect(pumpUntil([&]{return controller.inferredPoseKnownMask()==1;}), "new Enable ACK establishes neutral pose");
+    expect(controller.enableServo(rb::ServoId::FrontRight) && controller.inferredPoseKnownMask()==1,"repeated alreadyenabled Enable preserves known pose");
+    acceptServo([&]{return controller.setServoPwm(rb::ServoId::FrontRight,1500);},RobotCommandKind::SetServoPwm,101);
+    expect(pumpUntil([&]{return controller.inferredPoseKnownMask()==0;}), "PWM ACK invalidates pose even neutral pulse");
+    expect(controller.enableServo(rb::ServoId::FrontRight), "repeated Enable succeeds locally");
+    expect(controller.inferredPoseKnownMask()==0, "repeated Enable never restores unknown pose");
+    acceptServo([&]{return controller.neutralServo(rb::ServoId::FrontRight);},RobotCommandKind::NeutralServos,102);
+    expect(pumpUntil([&]{return controller.inferredPoseKnownMask()==1;}), "Neutral ACK establishes pose");
+    acceptServo([&]{return controller.setServoAngle(rb::ServoId::FrontRight,0);},RobotCommandKind::SetServoAngle,103);
+    expect(controller.inferredPoseKnownMask()==1, "Angle ACK establishes pose");
+    acceptServo([&]{return controller.disableServo(rb::ServoId::FrontRight);},RobotCommandKind::DisableServos,104);
+    expect(pumpUntil([&]{return controller.inferredPoseKnownMask()==0;}), "Disable ACK invalidates pose");
+    acceptServo([&]{return controller.enableServo(rb::ServoId::FrontRight);},RobotCommandKind::EnableServos,105);
+    expect(pumpUntil([&]{return controller.inferredPoseKnownMask()==1;}),"re-enable after Disable establishes pose");
+    controller.setServoAngle(rb::ServoId::FrontRight,100);auto angle=gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    controller.setServoPwm(rb::ServoId::FrontRight,1500);auto pwm=gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    if(angle){sendSubmitted(gateway,angle->request_id,106);sendOutcome(gateway,angle->request_id,RobotCommandKind::SetServoAngle,106,GatewayCommandOutcome::Accepted);}
+    if(pwm){sendSubmitted(gateway,pwm->request_id,107);sendOutcome(gateway,pwm->request_id,RobotCommandKind::SetServoPwm,107,GatewayCommandOutcome::Accepted);}
+    expect(pumpUntil([&]{return controller.inferredPoseKnownMask()==0;}),"stale superseded Angle cannot restore newer PWM unknown");
+    controller.neutralServo(rb::ServoId::FrontRight);auto rejected=gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    if(rejected){sendSubmitted(gateway,rejected->request_id,108);GatewayCommandOutcomeMessage m;m.command_kind=RobotCommandKind::NeutralServos;m.event={GatewayCommandOutcome::Rejected,108,6};gateway.send({rejected->request_id,m});}
+    expect(controller.inferredPoseKnownMask()==0,"nonOK Neutral never establishes known pose");
+    acceptServo([&]{return controller.neutralServo(rb::ServoId::FrontRight);},RobotCommandKind::NeutralServos,109);
+    expect(pumpUntil([&]{return controller.inferredPoseKnownMask()==1;}),"neutral restores pose before session loss");
+    gateway.disconnectPeer(); expect(controller.inferredPoseKnownMask()==0&&!controller.isServoEnabled(rb::ServoId::FrontRight),"disconnect invalidates pose and enabled inference");
+    controller.connectController(config);expect(gateway.accept(),"reconnect same controller socket");completeHello(gateway);pumpUntil([&]{return controller.canAcquireControl();});controller.acquireControl();completeAcquire(gateway);pumpUntil([&]{return controller.isControlActive();});
+    expect(controller.inferredPoseKnownMask()==0&&!controller.isServoEnabled(rb::ServoId::FrontRight),"reconstruction never restores previous pose/enabled");gateway.disconnectPeer();
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
+    testVisualTerminalMapping();
+    testActiveControllerDestruction();
+    testVisualWireAndPoseInference();
     testRemoteControllerAndUi();
     testUserReleaseDoesNotReportAuthorityLoss();
     testSafetySupersessionIgnoresLateOutcomes();

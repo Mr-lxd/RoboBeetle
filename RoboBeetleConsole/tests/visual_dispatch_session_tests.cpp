@@ -1,0 +1,383 @@
+#include "vision/VisualDispatchSession.h"
+#include "helpers/VisualControllerFixture.h"
+#include "remote/RemoteRobotController.h"
+#include "ui/MainWindow.h"
+
+#include "robobeetle/gateway/gateway_types.hpp"
+#include "robobeetle/gateway/rbrp_codec.hpp"
+
+#include <QApplication>
+#include <QElapsedTimer>
+#include <QGroupBox>
+#include <QHostAddress>
+#include <QLabel>
+#include <QPushButton>
+#include <QStringList>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QThread>
+
+#include <cstdio>
+#include <functional>
+#include <optional>
+#include <vector>
+
+namespace {
+
+using namespace robobeetle::gateway;
+
+int failures = 0;
+
+void expect(bool condition, const char *message)
+{
+    if (!condition) {
+        std::fprintf(stderr, "FAIL: %s\n", message);
+        ++failures;
+    }
+}
+
+bool pumpUntil(const std::function<bool()> &predicate, int timeoutMs = 1500)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < timeoutMs) {
+        QApplication::processEvents(QEventLoop::AllEvents, 10);
+        if (predicate()) {
+            return true;
+        }
+        QThread::msleep(1);
+    }
+    QApplication::processEvents(QEventLoop::AllEvents, 10);
+    return predicate();
+}
+
+QByteArray wireBytes(const Bytes &bytes)
+{
+    return QByteArray(reinterpret_cast<const char *>(bytes.data()),
+                      static_cast<qsizetype>(bytes.size()));
+}
+
+class FakeGatewayPeer {
+public:
+    FakeGatewayPeer()
+    {
+        expect(server_.listen(QHostAddress::LocalHost, 0),
+               "fake gateway must listen");
+    }
+
+    quint16 port() const { return server_.serverPort(); }
+
+    bool accept()
+    {
+        if (!pumpUntil([this] { return server_.hasPendingConnections(); })) {
+            return false;
+        }
+        peer_ = server_.nextPendingConnection();
+        decoder_.reset();
+        queued_.clear();
+        return peer_ != nullptr;
+    }
+
+    std::optional<RbrpFrame> nextFrame(RbrpMessageKind kind,
+                                       int timeoutMs = 1500)
+    {
+        std::optional<RbrpFrame> result;
+        const bool found = pumpUntil([&] {
+            for (auto it = queued_.begin(); it != queued_.end(); ++it) {
+                if (it->kind == kind) {
+                    result = *it;
+                    queued_.erase(it);
+                    return true;
+                }
+            }
+            if (peer_ == nullptr || peer_->bytesAvailable() == 0) {
+                return false;
+            }
+            const QByteArray bytes = peer_->readAll();
+            std::vector<RbrpFrame> decoded;
+            const auto status = decoder_.feed(
+                reinterpret_cast<const Byte *>(bytes.constData()),
+                static_cast<std::size_t>(bytes.size()), decoded);
+            expect(status == RbrpFeedStatus::Ok,
+                   "fake gateway must decode controller traffic");
+            queued_.insert(queued_.end(), decoded.begin(), decoded.end());
+            return false;
+        }, timeoutMs);
+        return found ? result : std::nullopt;
+    }
+
+    void send(const GatewayMessage &message)
+    {
+        const auto encoded = encode_gateway_message(message);
+        expect(encoded.status == RbrpEncodeStatus::Ok,
+               "fake gateway response must encode");
+        if (peer_ == nullptr || encoded.status != RbrpEncodeStatus::Ok) {
+            return;
+        }
+        peer_->write(wireBytes(encoded.wire));
+        peer_->flush();
+        QApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+
+    void disconnectPeer()
+    {
+        if (peer_ == nullptr) {
+            return;
+        }
+        peer_->disconnectFromHost();
+        (void)pumpUntil(
+            [this] { return peer_->state() == QAbstractSocket::UnconnectedState; });
+        peer_->deleteLater();
+        peer_ = nullptr;
+        decoder_.reset();
+        queued_.clear();
+    }
+
+private:
+    QTcpServer server_;
+    QTcpSocket *peer_{nullptr};
+    RbrpDecoder decoder_;
+    std::vector<RbrpFrame> queued_;
+};
+
+GatewayMessage helloReply(RequestId requestId)
+{
+    HelloReply reply;
+    reply.server_capabilities = 0;
+    reply.max_payload = 512;
+    reply.control_heartbeat_interval_ms = 250;
+    reply.authority_lease_timeout_ms = 1000;
+    return {requestId, reply};
+}
+
+GatewayMessage acquireReply(RequestId requestId)
+{
+    AcquireReply reply;
+    reply.result = AcquireResult::Granted;
+    reply.authority_state = AuthorityState::Owned;
+    reply.session_state = GatewayApplicationSessionState::SafetyQuiet;
+    reply.link_state = GatewayApplicationLinkState::Unconfirmed;
+    reply.lease_timeout_ms = 1000;
+    return {requestId, reply};
+}
+
+GatewayMessage activeState()
+{
+    ControlStateMessage state;
+    state.authority_state = AuthorityState::Owned;
+    state.session_state = GatewayApplicationSessionState::Online;
+    state.link_state = GatewayApplicationLinkState::Active;
+    state.reason = GatewayStateReason::Acquired;
+    state.lease_remaining_ms = 900;
+    return {0, state};
+}
+
+void sendSubmitted(FakeGatewayPeer &gateway,
+                   RequestId requestId, quint16 sequence)
+{
+    CommandSubmittedMessage submitted;
+    submitted.status = CommandSubmittedStatus::Submitted;
+    submitted.sequence = sequence;
+    gateway.send({requestId, submitted});
+}
+
+void sendOutcome(FakeGatewayPeer &gateway, RequestId requestId,
+                 RobotCommandKind kind, quint16 sequence,
+                 GatewayCommandOutcome outcome)
+{
+    GatewayCommandOutcomeMessage message;
+    message.command_kind = kind;
+    message.event.outcome = outcome;
+    message.event.sequence = sequence;
+    message.event.result = 0;
+    gateway.send({requestId, message});
+}
+
+QPushButton *buttonWithText(const QWidget *root, const QString &text)
+{
+    for (QPushButton *button : root->findChildren<QPushButton *>()) {
+        if (button->text() == text) {
+            return button;
+        }
+    }
+    return nullptr;
+}
+
+QGroupBox *groupWithTitle(const QWidget *root, const QString &title)
+{
+    for (QGroupBox *box : root->findChildren<QGroupBox *>()) {
+        if (box->title() == title) {
+            return box;
+        }
+    }
+    return nullptr;
+}
+
+void completeHello(FakeGatewayPeer &gateway)
+{
+    const auto hello = gateway.nextFrame(RbrpMessageKind::Hello);
+    expect(hello.has_value(), "remote controller must send Hello");
+    if (hello.has_value()) {
+        gateway.send(helloReply(hello->request_id));
+    }
+}
+
+void completeAcquire(FakeGatewayPeer &gateway)
+{
+    const auto acquire = gateway.nextFrame(RbrpMessageKind::AcquireControl);
+    expect(acquire.has_value(), "UI Acquire must emit AcquireControl");
+    if (acquire.has_value()) {
+        gateway.send(acquireReply(acquire->request_id));
+        gateway.send(activeState());
+    }
+}
+
+void testDeterministicRuntimeCases()
+{
+    using namespace rb::vision;
+    auto snapshot=[] {VisualDiagnosticSnapshot s;s.state=VisualState::Tracking;s.command.proposed=ProposedCommand::Forward;s.command.ex_f=0.5;return s;};
+    for(int sign:{-1,1}) {
+        rb::test::VisualControllerFixture c;qint64 now=0;auto snap=snapshot();snap.command.proposed=ProposedCommand::TurnLeft; snap.target=TargetState{};snap.target->ex=-0.8;
+        VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});
+        s.timerTick();expect(c.sends.empty(),"off default sends nothing");
+        s.setFeatureEnabled(true);s.selectTurnSign(sign);s.confirmTurnSign();expect(s.arm()==ArmReason::Ready,"paired turn sign arm");s.timerTick();
+        expect(c.sends.size()==1&&c.sends.back().second==(sign>0?rb::MotionMode::TurnRight:rb::MotionMode::TurnLeft),"filtered error and sign map command from same snapshot");
+        c.ack(c.sends.back().first,rb::CommandTerminalResult::Ok);expect(s.currentMode().has_value(),"ACK establishes visible mode");
+        s.selectTurnSign(-sign);expect(!s.armed()&&!s.currentMode()&&c.sends.size()==2&&c.sends.back().second==rb::MotionMode::Stop,"changing sign disarms and sends operator STOP");
+        c.ack(c.sends.back().first,rb::CommandTerminalResult::Busy,7);expect(s.operatorStopResult()==rb::CommandTerminalResult::Busy,"operator busy remains visible");
+        now=3000;s.timerTick();expect(c.sends.size()==2,"operator stop has no retries");
+    }
+    {
+        rb::test::VisualControllerFixture c;auto snap=snapshot();qint64 now=0;VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});
+        std::vector<VisualDispatchRecord> records;QObject::connect(&s,&VisualDispatchSession::dispatchRecorded,[&](auto record){records.push_back(record);});
+        s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();s.timerTick();auto old=c.sends.back().first;
+        c.disconnectController();
+        expect(!s.armed()&&records.size()>=3&&records[1].command==ProposedCommand::Stop,"loss attempts immediate policy safety STOP before clearing associations");
+        now=5000;s.timerTick();c.ack(old,rb::CommandTerminalResult::Ok);expect(c.sends.size()==1&&!s.currentMode(),"loss ends retries and stale ACK associations");
+    }
+    {
+        rb::test::VisualControllerFixture c;auto snap=snapshot();VisualDispatchSession s(&c,[&]{return std::optional{snap};},[]{return 0;});
+        s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();s.disarm();auto stop=c.sends.back().first;
+        s.setFeatureEnabled(false);c.ack(stop,rb::CommandTerminalResult::Ok);
+        expect(s.operatorStopResult()==rb::CommandTerminalResult::Ok&&c.sends.size()==1,"operator STOP correlation survives later feature off without extra STOP");
+    }
+    for(bool enabledOnly:{false,true}) {
+        rb::test::VisualControllerFixture c;auto snap=snapshot();VisualDispatchSession s(&c,[&]{return std::optional{snap};},[]{return 0;});
+        s.setFeatureEnabled(enabledOnly);s.setFeatureEnabled(false);expect(c.sends.empty(),"off never armed sends zero");
+    }
+    {
+        rb::test::VisualControllerFixture c;auto snap=snapshot();qint64 now=0;VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});
+        s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();s.timerTick();auto old=c.sends.back().first;
+        s.manualInput(ManualInputKind::Motion);s.setFeatureEnabled(false);c.ack(old,rb::CommandTerminalResult::Ok);expect(c.sends.size()==1&&!s.armed()&&!s.currentMode(),"manual pending takeover and late OK cannot revive mode or STOP on off");
+    }
+    {
+        rb::test::VisualControllerFixture c;auto snap=snapshot();qint64 now=0;VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});
+        s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();s.timerTick();c.ack(c.sends.back().first,rb::CommandTerminalResult::Rejected,6);
+        expect(s.poseMismatch()==QStringLiteral("可能是姿态未知（Qt 推断与固件不一致）"),"HardwareFailure diagnostic is inference only");expect(c.sends.size()==2&&c.sends.back().second==rb::MotionMode::Stop,"rejected START immediately safety stops");
+        c.ack(c.sends.back().first,rb::CommandTerminalResult::Ok);expect(!s.poseMismatch().isEmpty(),"STOP preserves hardware diagnostic");
+    }
+    {
+        rb::test::VisualControllerFixture c;c.synchronous=true;auto snap=snapshot();VisualDispatchSession s(&c,[&]{return std::optional{snap};},[]{return 0;});
+        s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();s.timerTick();QApplication::processEvents();expect(s.currentMode()==ProposedCommand::Forward,"synchronous callback deferred until mapping installed");
+        s.disarm();QApplication::processEvents();expect(s.operatorStopResult()==rb::CommandTerminalResult::Ok,"synchronous operator stop correlation");
+    }
+    {
+        rb::test::VisualControllerFixture c;c.backend=rb::ConsoleBackendKind::DirectSerial;auto snap=snapshot();VisualDispatchSession s(&c,[&]{return std::optional{snap};},[]{return 0;});
+        s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();expect(s.arm()==ArmReason::LinkDisconnected,"direct maintenance cannot arm despite mock active flags");s.timerTick();expect(c.sends.empty(),"direct maintenance always dry run");
+    }
+}
+
+void testTimerAndRealDiagnosticGrace()
+{
+    using namespace rb::vision;
+    {
+        rb::test::VisualControllerFixture c;qint64 now=0;VisualDiagnosticSnapshot snap;snap.state=VisualState::Tracking;snap.command.proposed=ProposedCommand::Forward;
+        VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();
+        expect(pumpUntil([&]{return c.sends.size()==1;},200),"50ms timer starts motion without manual tick");
+        now=1000;expect(pumpUntil([&]{return c.sends.size()==2;},200),"timer detects outstanding nonSTOP deadline without frames");
+        for(qint64 deadline:{2000,3000,4000}){now=deadline;auto count=c.sends.size();expect(pumpUntil([&]{return c.sends.size()>count;},200),"timer retries STOP without frames");}
+        expect(s.stopTimeoutAlert(),"timer alone latches three-timeout STOP alert");
+        s.setFeatureEnabled(false);auto n=c.sends.size();now=10000;QEventLoop loop;QTimer::singleShot(80,&loop,&QEventLoop::quit);loop.exec();expect(c.sends.size()==n,"off cancels timer automatic retries");
+    }
+    {
+        rb::test::VisualControllerFixture c;qint64 now=0;VisualDiagnosticSession diagnostic({},[&]{return now;});
+        DetectionFrame frame{1,1001,{640,480},{{0,"fish",.9,{320,240}}}};
+        diagnostic.onDetectionArrival(frame,{DetectionDisplayState::Target,frame});
+        VisualDispatchSession s(&c,[&]{return std::optional{diagnostic.snapshot()};},[&]{return now;});s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();expect(s.arm()==ArmReason::Ready,"real diagnostic tracking arms");s.timerTick();c.ack(c.sends.back().first,rb::CommandTerminalResult::Ok);
+        now=20;frame.frameId=2;diagnostic.onDetectionArrival(frame,{DetectionDisplayState::AwaitingVideo,frame});
+        now=420;diagnostic.refresh({DetectionDisplayState::AwaitingVideo,frame});s.timerTick();
+        expect(diagnostic.snapshot().awaitingVideo&&diagnostic.snapshot().state==VisualState::Tracking&&s.armed()&&c.sends.size()==1,"real diagnostic 400ms grace preserves ACKconfirmed Forward");
+        now=520;diagnostic.refresh({DetectionDisplayState::AwaitingVideo,frame});s.timerTick();
+        expect(diagnostic.snapshot().state==VisualState::Stale&&!s.armed()&&c.sends.size()==2&&c.sends.back().second==rb::MotionMode::Stop,"real diagnostic 500ms missing video propagates STALE STOP");
+    }
+    {
+        rb::test::VisualControllerFixture c;qint64 now=0;std::optional<VisualDiagnosticSnapshot> snapshot{VisualDiagnosticSnapshot{}};snapshot->state=VisualState::Tracking;snapshot->command.proposed=ProposedCommand::Forward;
+        VisualDispatchSession s(&c,[&]{return snapshot;},[&]{return now;});s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();s.timerTick();snapshot.reset();now=50;s.timerTick();expect(!s.armed()&&c.sends.size()==2&&c.sends.back().second==rb::MotionMode::Stop,"only missing snapshot produces adapter STALE");
+    }
+}
+
+void testWireFailureSafetyStop()
+{
+    using namespace rb::vision;
+    FakeGatewayPeer gateway;rb::RemoteRobotController c;rb::ConsoleConnectionConfiguration cfg;
+    cfg.endpoint=QStringLiteral("127.0.0.1");cfg.tcpPort=gateway.port();c.connectController(cfg);gateway.accept();completeHello(gateway);
+    pumpUntil([&]{return c.canAcquireControl();});c.acquireControl();completeAcquire(gateway);pumpUntil([&]{return c.isControlActive();});
+    int seq=10;
+    for(int i:{0,1,3,4}){c.enableServo(static_cast<rb::ServoId>(i));auto f=gateway.nextFrame(RbrpMessageKind::CommandRequest);if(f){sendSubmitted(gateway,f->request_id,seq);sendOutcome(gateway,f->request_id,RobotCommandKind::EnableServos,seq++,GatewayCommandOutcome::Accepted);pumpUntil([&]{return c.isServoEnabled(static_cast<rb::ServoId>(i));});}}
+    qint64 now=0;VisualDiagnosticSnapshot snap;snap.state=VisualState::Tracking;snap.command.proposed=ProposedCommand::Forward;
+    VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();expect(s.arm()==ArmReason::Ready,"wire failure session arm");s.timerTick();
+    auto start=gateway.nextFrame(RbrpMessageKind::CommandRequest);expect(start&&start->payload==Bytes{static_cast<Byte>(RobotCommandKind::StartMotion),1},"visual START maps modebyte on existing RBRP socket");
+    if(!start){gateway.disconnectPeer();return;}
+    sendSubmitted(gateway,start->request_id,50);GatewayCommandOutcomeMessage rejected;rejected.command_kind=RobotCommandKind::StartMotion;rejected.event={GatewayCommandOutcome::Rejected,50,6};gateway.send({start->request_id,rejected});
+    expect(pumpUntil([&]{return !s.poseMismatch().isEmpty();}),"wire raw HardwareFailure triggers Qt inferred mismatch diagnostic");
+    auto stop=gateway.nextFrame(RbrpMessageKind::CommandRequest);expect(stop&&stop->payload==Bytes{static_cast<Byte>(RobotCommandKind::StopMotion)},"wire rejected START sends empty safety STOP");
+    if(stop){sendSubmitted(gateway,stop->request_id,51);sendOutcome(gateway,stop->request_id,RobotCommandKind::StopMotion,51,GatewayCommandOutcome::Accepted);}
+    expect(pumpUntil([&]{return c.motionState()==rb::MotionState::Stopped;}),"wire safety STOP completes");
+    expect(s.poseMismatch()==QStringLiteral("可能是姿态未知（Qt 推断与固件不一致）"),"wire STOP preserves diagnostic exactly");
+    now=1500;expect(s.arm()==ArmReason::Ready,"explicit rearm after failed command");s.timerTick();auto uncertain=gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    if(uncertain){sendSubmitted(gateway,uncertain->request_id,52);sendOutcome(gateway,uncertain->request_id,RobotCommandKind::StartMotion,52,GatewayCommandOutcome::OutcomeUnknown);}
+    auto safety=gateway.nextFrame(RbrpMessageKind::CommandRequest);auto release=gateway.nextFrame(RbrpMessageKind::ReleaseControl);
+    expect(safety&&release&&safety->request_id<release->request_id&&safety->payload==Bytes{static_cast<Byte>(RobotCommandKind::StopMotion)},"wire unknown START submits immediate STOP before authority release");
+    expect(!s.armed()&&!s.currentMode(),"unknown and authority loss cannot retain confirmed mode");gateway.disconnectPeer();
+}
+
+void testSessionRuntime()
+{
+    using namespace rb::vision;
+    FakeGatewayPeer gateway; rb::RemoteRobotController c;
+    rb::ConsoleConnectionConfiguration cfg; cfg.endpoint=QStringLiteral("127.0.0.1");cfg.tcpPort=gateway.port();
+    c.connectController(cfg); expect(gateway.accept(),"runtime connects");completeHello(gateway);
+    pumpUntil([&]{return c.canAcquireControl();});c.acquireControl();completeAcquire(gateway);pumpUntil([&]{return c.isControlActive();});
+    int seq=10;
+    for (int i : {0,1,3,4}) {
+        c.enableServo(static_cast<rb::ServoId>(i)); auto f=gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        if(f){sendSubmitted(gateway,f->request_id,seq);sendOutcome(gateway,f->request_id,RobotCommandKind::EnableServos,seq++,GatewayCommandOutcome::Accepted);pumpUntil([&]{return c.isServoEnabled(static_cast<rb::ServoId>(i));});}
+    }
+    qint64 now=0; VisualDiagnosticSnapshot snap;snap.state=VisualState::Tracking;snap.command.proposed=ProposedCommand::Forward;
+    VisualDispatchSession session(&c,[&]{return std::optional{snap};},[&]{return now;});
+    std::vector<VisualDispatchRecord> records;QObject::connect(&session,&VisualDispatchSession::dispatchRecorded,[&](auto r){records.push_back(r);});
+    expect(!session.featureEnabled()&&!session.armed(),"runtime starts feature off and disarmed");
+    session.setFeatureEnabled(true);expect(session.arm()==ArmReason::TurnSignUnconfirmed,"sign confirmation required");
+    session.selectTurnSign(1);session.confirmTurnSign();expect(session.arm()==ArmReason::Ready,"explicit arming ready");
+    expect(session.armed(),"operator action arms runtime");
+    if(!session.armed()){gateway.disconnectPeer();return;}
+    session.timerTick();auto forward=gateway.nextFrame(RbrpMessageKind::CommandRequest);expect(forward.has_value(),"runtime forwards snapshot command");
+    if(!forward){gateway.disconnectPeer();return;}
+    sendSubmitted(gateway,forward->request_id,200);sendOutcome(gateway,forward->request_id,RobotCommandKind::StartMotion,200,GatewayCommandOutcome::Accepted);
+    expect(pumpUntil([&]{return session.currentMode()==ProposedCommand::Forward;}),"mode requires correlated OK");
+    now=400;snap.awaitingVideo=true;session.timerTick();expect(session.armed(),"AwaitingVideo 400ms preserves Tracking arming");
+    expect(!gateway.nextFrame(RbrpMessageKind::CommandRequest,20),"video grace sends no STOP");
+    now=500;snap.state=VisualState::Stale;session.timerTick();expect(!session.armed(),"upstream STALE disarms");
+    expect(gateway.nextFrame(RbrpMessageKind::CommandRequest).has_value(),"STALE sends safety STOP");
+    now=1500;session.timerTick();expect(gateway.nextFrame(RbrpMessageKind::CommandRequest).has_value(),"STOP timeout retries without frames");
+    now=2500;session.timerTick();gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    now=3500;session.timerTick();gateway.nextFrame(RbrpMessageKind::CommandRequest);expect(session.stopTimeoutAlert(),"three expiries latch alert");
+    session.setFeatureEnabled(false);auto op=gateway.nextFrame(RbrpMessageKind::CommandRequest);expect(op.has_value(),"off while automatic STOP awaits sends one operator STOP");
+    if(op){sendSubmitted(gateway,op->request_id,201);sendOutcome(gateway,op->request_id,RobotCommandKind::StopMotion,201,GatewayCommandOutcome::Accepted);expect(pumpUntil([&]{return session.operatorStopResult()==rb::CommandTerminalResult::Ok;}),"off retains operator STOP result");}
+    now=6000;session.timerTick();expect(!gateway.nextFrame(RbrpMessageKind::CommandRequest,20),"off never retries STOP");
+    session.setFeatureEnabled(true);session.manualInput(ManualInputKind::Motion);session.setFeatureEnabled(false);expect(!gateway.nextFrame(RbrpMessageKind::CommandRequest,20),"off after manual takeover sends zero commands");
+    expect(records.size()>=8,"runtime records sends and terminal outcomes");
+    gateway.disconnectPeer();
+}
+}
+int main(int argc,char **argv){QApplication app(argc,argv);testDeterministicRuntimeCases();testTimerAndRealDiagnosticGrace();testWireFailureSafetyStop();testSessionRuntime();return failures?1:0;}

@@ -7,7 +7,7 @@
 
 namespace rb::vision {
 
-// This policy has no application/transport adapter. Only tests instantiate it.
+// Transport-independent policy; the application supplies a send port.
 struct DispatchRequest {
     std::uint64_t id;
     ProposedCommand command;
@@ -56,6 +56,8 @@ public:
     void acknowledge(std::uint64_t id, DispatchOutcome outcome, std::int64_t nowMs);
     void manualInput(ManualInputKind kind);
 
+    [[nodiscard]] bool modeConfirmed() const noexcept { return modeConfirmed_; }
+    [[nodiscard]] bool stopAwaiting() const noexcept { return stopAwaiting_; }
     [[nodiscard]] bool armed() const noexcept { return armed_; }
     [[nodiscard]] std::optional<ProposedCommand> currentMode() const noexcept { return currentMode_; }
     [[nodiscard]] bool stopTimeoutAlert() const noexcept { return stopTimeoutAlert_; }

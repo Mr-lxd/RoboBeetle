@@ -9,6 +9,16 @@ set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Network SerialPort)
 
+add_library(VisualDispatchPolicy STATIC
+    src/vision/VisualDispatchStateMachine.h
+    src/vision/VisualDispatchStateMachine.cpp
+)
+target_include_directories(VisualDispatchPolicy PUBLIC src)
+set_target_properties(VisualDispatchPolicy PROPERTIES AUTOMOC OFF)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(VisualDispatchPolicy PRIVATE -Wall -Wextra -Werror)
+endif()
+
 add_library(RoboBeetleCore
     src/controller/IConsoleController.h
     src/protocol/Crc16.h
@@ -48,6 +58,8 @@ add_library(RoboBeetleCore
     src/vision/VisualTargetStateMachine.cpp
     src/vision/VisualCommandPolicy.h
     src/vision/VisualCommandPolicy.cpp
+    src/vision/VisualDispatchSession.h
+    src/vision/VisualDispatchSession.cpp
     src/vision/VisualDiagnosticSession.h
     src/vision/VisualDiagnosticSession.cpp
     src/vision/VisualCsvLogger.h
@@ -79,7 +91,7 @@ target_include_directories(RoboBeetleCore PUBLIC
     src
     ../RoboBeetlePi/gateway/include
 )
-target_link_libraries(RoboBeetleCore PUBLIC Qt6::Core Qt6::Gui Qt6::Network Qt6::SerialPort)
+target_link_libraries(RoboBeetleCore PUBLIC Qt6::Core Qt6::Gui Qt6::Network Qt6::SerialPort VisualDispatchPolicy)
 
 set(RB_CONSOLE_UI_SOURCES
     src/ui/MainWindow.h
@@ -99,23 +111,19 @@ target_link_libraries(RoboBeetleConsole PRIVATE RoboBeetleCore Qt6::Widgets)
 
 include(CTest)
 if(BUILD_TESTING)
-    # Deliberately test-only: no application wiring or live command adapter.
-    add_library(VisualDispatchPolicy STATIC
-        src/vision/VisualDispatchStateMachine.h
-        src/vision/VisualDispatchStateMachine.cpp
-    )
-    target_include_directories(VisualDispatchPolicy PUBLIC src)
-    set_target_properties(VisualDispatchPolicy PROPERTIES AUTOMOC OFF)
     add_executable(visual_dispatch_state_machine_tests
         tests/visual_dispatch_state_machine_tests.cpp
     )
     set_target_properties(visual_dispatch_state_machine_tests PROPERTIES AUTOMOC OFF)
     target_link_libraries(visual_dispatch_state_machine_tests PRIVATE VisualDispatchPolicy)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(VisualDispatchPolicy PRIVATE -Wall -Wextra -Werror)
         target_compile_options(visual_dispatch_state_machine_tests PRIVATE -Wall -Wextra -Werror)
     endif()
     add_test(NAME visual_dispatch_state_machine_tests COMMAND visual_dispatch_state_machine_tests)
+
+    add_executable(visual_dispatch_session_tests tests/visual_dispatch_session_tests.cpp)
+    target_link_libraries(visual_dispatch_session_tests PRIVATE RoboBeetleCore Qt6::Widgets)
+    add_test(NAME visual_dispatch_session_tests COMMAND visual_dispatch_session_tests)
 
     add_executable(protocol_tests tests/protocol_tests.cpp)
     target_link_libraries(protocol_tests PRIVATE RoboBeetleCore)
