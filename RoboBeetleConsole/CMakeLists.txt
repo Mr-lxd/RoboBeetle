@@ -99,6 +99,24 @@ target_link_libraries(RoboBeetleConsole PRIVATE RoboBeetleCore Qt6::Widgets)
 
 include(CTest)
 if(BUILD_TESTING)
+    # Deliberately test-only: no application wiring or live command adapter.
+    add_library(VisualDispatchPolicy STATIC
+        src/vision/VisualDispatchStateMachine.h
+        src/vision/VisualDispatchStateMachine.cpp
+    )
+    target_include_directories(VisualDispatchPolicy PUBLIC src)
+    set_target_properties(VisualDispatchPolicy PROPERTIES AUTOMOC OFF)
+    add_executable(visual_dispatch_state_machine_tests
+        tests/visual_dispatch_state_machine_tests.cpp
+    )
+    set_target_properties(visual_dispatch_state_machine_tests PROPERTIES AUTOMOC OFF)
+    target_link_libraries(visual_dispatch_state_machine_tests PRIVATE VisualDispatchPolicy)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(VisualDispatchPolicy PRIVATE -Wall -Wextra -Werror)
+        target_compile_options(visual_dispatch_state_machine_tests PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_test(NAME visual_dispatch_state_machine_tests COMMAND visual_dispatch_state_machine_tests)
+
     add_executable(protocol_tests tests/protocol_tests.cpp)
     target_link_libraries(protocol_tests PRIVATE RoboBeetleCore)
     add_test(NAME protocol_tests COMMAND protocol_tests)
