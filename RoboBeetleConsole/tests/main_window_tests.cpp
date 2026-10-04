@@ -2746,6 +2746,7 @@ void testSlice5DetectionTextOverlayLifecycle()
     }, 700), "local 500 ms watchdog stops the proposal without a new video/status event");
     expect(controlClient.hasFreshStatus() && !view->currentTargetState(),
            "local expiry applies even with fresh HTTP and clears original errors");
+    QElapsedTimer emptyResultsClock;
     for (quint64 id = 17U; id <= 33U; ++id) {
         if (detectionPeer) {
             QJsonObject empty = QJsonDocument::fromJson(
@@ -2757,11 +2758,16 @@ void testSlice5DetectionTextOverlayLifecycle()
         expect(waitUntil([&] { return detectionClient.lastFrameId() == id; }),
                "continued empty results have advancing detection IDs");
         if (id == 17U) {
+            emptyResultsClock.start();
             expect(view->visualDiagnosticText().contains(QStringLiteral("NO_TARGET"))
                        && view->visualDiagnosticText().contains(QStringLiteral("PROPOSED (not sent): HOLD")),
                    "first fresh empty result holds the previous proposal");
         }
-        waitForMs(100);
+        // Coarse timer wakeups may arrive early: count elapsed monotonic time,
+        // not seventeen nominal sleeps, while continuing fresh metadata.
+        const qint64 nextArrivalMs = static_cast<qint64>(id - 16U) * 100;
+        expect(waitUntil([&] { return emptyResultsClock.elapsed() >= nextArrivalMs; }),
+               "empty-result cadence reaches its monotonic deadline");
     }
     expect(view->visualDiagnosticText().contains(QStringLiteral("LOST"))
                && view->visualDiagnosticText().contains(QStringLiteral("PROPOSED (not sent): STOP")),
@@ -3176,7 +3182,10 @@ void testDashboardLayout()
             }
             const int required = label->minimumSizeHint().height();
             const int actual = label->height();
-            if (actual > 0 && actual < required) {
+            if (actual < required) {
+                std::fprintf(stderr, "clipped %s label=%s actual=%d required=%d card=%d hint=%d\n",
+                             qPrintable(title), qPrintable(label->text()), actual, required,
+                             box->height(), box->minimumSizeHint().height());
                 ok = false;
             }
         }
