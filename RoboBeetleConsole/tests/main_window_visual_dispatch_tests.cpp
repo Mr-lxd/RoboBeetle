@@ -385,7 +385,7 @@ void loopbackWindowAndCsv() {
     check(stop&&stop->payload==Bytes{static_cast<Byte>(RobotCommandKind::StopMotion)},"no frames: upstream STALE triggers timer STOP");if(!stop)return;
     check(!s->armed()&&w.findChild<VisualDiagnosticSession*>()->snapshot().state==VisualState::Stale,"MainWindow preserves upstream snapshot state");
     sendSubmitted(gateway,stop->request_id,seq);sendOutcome(gateway,stop->request_id,RobotCommandKind::StopMotion,seq++,GatewayCommandOutcome::Accepted);
-    check(pumpUntil([&]{return c.motionState()==MotionState::Stopped;}),"real STOP settles before requalification");
+    check(pumpUntil([&]{return c.motionState()==MotionState::Stopped && !c.isMotionActive();}),"real STOP settles before requalification");
     frame(w,2);click(w,"visualArmButton");check(s->armed(),"fresh source and explicit rearm qualify again");
     auto resumed=gateway.nextFrame(RbrpMessageKind::CommandRequest);if(!resumed)return;
     sendSubmitted(gateway,resumed->request_id,seq);sendOutcome(gateway,resumed->request_id,RobotCommandKind::StartMotion,seq++,GatewayCommandOutcome::Accepted);
@@ -394,7 +394,7 @@ void loopbackWindowAndCsv() {
     check(!s->armed(),"real manual input takes over before controller command");
     auto manual=gateway.nextFrame(RbrpMessageKind::CommandRequest);check(manual&&manual->payload==Bytes{static_cast<Byte>(RobotCommandKind::StopMotion)},"manual STOP reaches existing controller");if(!manual)return;
     sendSubmitted(gateway,manual->request_id,seq);sendOutcome(gateway,manual->request_id,RobotCommandKind::StopMotion,seq++,GatewayCommandOutcome::Accepted);
-    check(pumpUntil([&]{return c.motionState()==MotionState::Stopped;}),"manual STOP ACK settles");
+    check(pumpUntil([&]{return c.motionState()==MotionState::Stopped && !c.isMotionActive();}),"manual STOP ACK settles");
     child<QCheckBox>(w,"visualDispatchEnabled")->setChecked(false);
     check(!gateway.nextFrame(RbrpMessageKind::CommandRequest,1200),"manual takeover cancels automation and OFF emits no STOP");
     logger->stop();QFile file(logger->filePath());check(file.open(QIODevice::ReadOnly),"loopback CSV readable");
@@ -425,5 +425,18 @@ void negativeAndTimer() {
     check(direct.sends.empty()&&!dw.findChild<VisualDispatchSession*>()->armed(),"direct maintenance cannot arm or send");
     check(dw.findChild<VideoView*>()->visualDiagnosticText().contains("DRY_RUN"),"direct maintenance video always DRY_RUN");
 }
+void coveredOperatorStopUi()
+{
+    test::VisualControllerFixture controller;
+    MainWindow window(&controller);
+    auto *session = arm(window);
+    if (!session || !session->armed()) return;
+    session->disarm();
+    controller.ack(controller.sends.back().first, CommandTerminalResult::Ok, 0xff);
+    const auto text = child<QLabel>(window, "visualDispatchStatus")->text();
+    check(text.contains("operator STOP: OK (covered)") && !text.contains("OUTCOME_UNKNOWN"),
+          "UI distinguishes covered operator STOP from unconfirmed outcome");
 }
-int main(int argc,char **argv){QApplication app(argc,argv);controls();manualPaths();keyboardPaths();rawRejection();signAndOffMatrix();enableReleaseBranchesAndAlert();negativeAndTimer();loopbackWindowAndCsv();std::printf("main_window_visual_dispatch_tests: %d failures\n",failures);return failures?1:0;}
+
+}
+int main(int argc,char **argv){QApplication app(argc,argv);controls();coveredOperatorStopUi();manualPaths();keyboardPaths();rawRejection();signAndOffMatrix();enableReleaseBranchesAndAlert();negativeAndTimer();loopbackWindowAndCsv();std::printf("main_window_visual_dispatch_tests: %d failures\n",failures);return failures?1:0;}

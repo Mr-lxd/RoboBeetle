@@ -609,8 +609,9 @@ void RemoteRobotController::handleCommandOutcome(
         // Erase the whole selected set before callbacks. A new operator STOP
         // submitted reentrantly belongs to a later interval and stays pending.
         for (auto retired = retiredStops.cbegin(); retired != retiredStops.cend(); ++retired) {
-            emit commandTerminal(retired.key(), CommandTerminalResult::OutcomeUnknown,
-                                 0xff, terminalNow_() - retired->terminalSentMs);
+            // A confirmed STOP also covers these STOPs; 0xff means no individual ACK.
+            emit commandTerminal(retired.key(), CommandTerminalResult::Ok,
+                                 0xff, -1);
         }
     }
     emit commandTerminal(requestId, pending.superseded ? CommandTerminalResult::OutcomeUnknown : terminal, rawResult, monitor_.lastAckRttMs);

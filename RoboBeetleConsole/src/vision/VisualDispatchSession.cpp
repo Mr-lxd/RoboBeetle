@@ -33,7 +33,7 @@ DispatchOutcome policyOutcome(CommandTerminalResult result)
 }
 }
 VisualDispatchSession::VisualDispatchSession(IConsoleController *c, SnapshotProvider s, NowMs n, VisualDispatchConfig config, QObject *p)
-    : QObject(p), controller_(c), snapshot_(std::move(s)), now_(std::move(n)), machine_(*this,config)
+    : QObject(p), controller_(c), snapshot_(std::move(s)), now_(std::move(n)), machine_(*this,config), requiredServoMask_(config.requiredServoMask)
 {
     clock_.start();
     if (!now_) now_ = [this] { return clock_.elapsed(); };
@@ -203,13 +203,16 @@ void VisualDispatchSession::terminal(quint32 id, CommandTerminalResult result,
     const auto association = *it;
     associations_.erase(it);
     emit dispatchRecorded({now_(), association.policyId, id, association.command,
-                           terminalName(result), raw, rtt});
+                           (association.command == ProposedCommand::Stop
+                            && result == CommandTerminalResult::Ok && raw == 0xff)
+                               ? QStringLiteral("OK (covered)") : terminalName(result), raw, rtt});
     if (association.operatorStop) {
         operatorStopResult_ = result;
     } else {
         if (association.command != ProposedCommand::Stop && raw == 6
             && result == CommandTerminalResult::Rejected
-            && controller_->inferredPoseKnownMask() != 0) {
+            && requiredServoMask_ != 0
+            && (controller_->inferredPoseKnownMask() & requiredServoMask_) == requiredServoMask_) {
             poseMismatch_ = QStringLiteral("可能是姿态未知（Qt 推断与固件不一致）");
         }
         machine_.acknowledge(association.policyId, policyOutcome(result), now_());

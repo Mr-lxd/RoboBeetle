@@ -747,8 +747,8 @@ void testStopRetirementPreservesReentrantRequest()
     bool reentrantOk = false;
     const auto connection = QObject::connect(
         &controller, &rb::IConsoleController::commandTerminal,
-        [&](quint32 id, rb::CommandTerminalResult result, quint8, qint64) {
-            if (first && id == *first && result == rb::CommandTerminalResult::OutcomeUnknown)
+        [&](quint32 id, rb::CommandTerminalResult result, quint8 raw, qint64) {
+            if (first && id == *first && result == rb::CommandTerminalResult::Ok && raw == 0xff)
                 reentrant = controller.submitVisualMotion(rb::MotionMode::Stop);
             if (reentrant && id == *reentrant && result == rb::CommandTerminalResult::Ok)
                 reentrantOk = true;
@@ -898,6 +898,15 @@ void testVisualWireAndPoseInference()
     config.endpoint = QStringLiteral("127.0.0.1"); config.tcpPort = gateway.port();
     controller.connectController(config); expect(gateway.accept(), "visual loopback connects");
     completeHello(gateway); expect(pumpUntil([&]{return controller.canAcquireControl();}), "hello ready");
+    expect(controller.isConnected() && !controller.isControlActive(),
+           "no-authority submission test keeps TCP connected");
+    for (const auto mode : {rb::MotionMode::Stop, rb::MotionMode::Forward,
+                           rb::MotionMode::TurnLeft, rb::MotionMode::TurnRight})
+        expect(!controller.submitVisualMotion(mode),
+               "visual motion without control authority returns nullopt");
+    expect(!gateway.nextFrame(RbrpMessageKind::CommandRequest, 20),
+           "no-authority visual submissions never reach the wire");
+
     expect(controller.acquireControl(), "acquire visual loopback"); completeAcquire(gateway);
     expect(pumpUntil([&]{return controller.isControlActive();}), "visual active");
     const auto first = controller.submitVisualMotion(rb::MotionMode::Stop);
@@ -910,7 +919,7 @@ void testVisualWireAndPoseInference()
         sendSubmitted(gateway,id,static_cast<quint16>(id));
         sendOutcome(gateway,id,RobotCommandKind::StopMotion,static_cast<quint16>(id),GatewayCommandOutcome::Accepted);
     }
-    pumpUntil([&]{return controller.motionState()==rb::MotionState::Stopped;});
+    expect(pumpUntil([&]{return controller.motionState()==rb::MotionState::Stopped && !controller.isMotionActive();}), "visual STOP settlement waits for pending requests and ramp");
     auto acceptServo=[&](const std::function<bool()> &action, RobotCommandKind kind, quint16 seq){
         expect(action(), "pose command submitted"); auto f=gateway.nextFrame(RbrpMessageKind::CommandRequest);
         if (f) {

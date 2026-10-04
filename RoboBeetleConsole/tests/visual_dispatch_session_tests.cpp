@@ -361,7 +361,7 @@ void testWireFailureSafetyStop()
     expect(pumpUntil([&]{return !s.poseMismatch().isEmpty();}),"wire raw HardwareFailure triggers Qt inferred mismatch diagnostic");
     auto stop=gateway.nextFrame(RbrpMessageKind::CommandRequest);expect(stop&&stop->payload==Bytes{static_cast<Byte>(RobotCommandKind::StopMotion)},"wire rejected START sends empty safety STOP");
     if(stop){sendSubmitted(gateway,stop->request_id,51);sendOutcome(gateway,stop->request_id,RobotCommandKind::StopMotion,51,GatewayCommandOutcome::Accepted);}
-    expect(pumpUntil([&]{return c.motionState()==rb::MotionState::Stopped;}),"wire safety STOP completes");
+    expect(pumpUntil([&]{return c.motionState()==rb::MotionState::Stopped && !c.isMotionActive();}),"wire safety STOP completes");
     expect(s.poseMismatch()==QStringLiteral("可能是姿态未知（Qt 推断与固件不一致）"),"wire STOP preserves diagnostic exactly");
     now=1500;expect(s.arm()==ArmReason::Ready,"explicit rearm after failed command");s.timerTick();auto uncertain=gateway.nextFrame(RbrpMessageKind::CommandRequest);
     if(uncertain){sendSubmitted(gateway,uncertain->request_id,52);sendOutcome(gateway,uncertain->request_id,RobotCommandKind::StartMotion,52,GatewayCommandOutcome::OutcomeUnknown);}
@@ -504,5 +504,124 @@ void testSessionRuntime()
     expect(records.size()>=8,"runtime records sends and terminal outcomes");
     gateway.disconnectPeer();
 }
+void testAuthorityLossInSameEvent()
+{
+    using namespace rb::vision;
+    rb::test::VisualControllerFixture controller;
+    qint64 now = 0;
+    VisualDiagnosticSnapshot snapshot;
+    snapshot.state = VisualState::Tracking;
+    snapshot.command.proposed = ProposedCommand::Forward;
+    VisualDispatchSession session(&controller, [&] { return std::optional{snapshot}; },
+                                  [&] { return now; });
+    session.setFeatureEnabled(true);
+    session.selectTurnSign(1);
+    session.confirmTurnSign();
+    expect(session.arm() == ArmReason::Ready, "authority-loss fixture is armed");
+    session.timerTick();
+    controller.ack(controller.sends.back().first, rb::CommandTerminalResult::Ok);
+    controller.active = false;
+    emit controller.authorityStateChanged(rb::ControlAuthorityState::Unowned, false);
+    // No event pumping or timer tick: disarm must happen inside this signal.
+    expect(controller.isConnected() && !session.armed() && !session.currentMode(),
+           "authority loss disarms in the same event with TCP still connected");
+    const auto count = controller.sends.size();
+    controller.active = true;
+    emit controller.authorityStateChanged(rb::ControlAuthorityState::Owned, true);
+    now = 2000;
+    session.timerTick();
+    expect(!session.armed() && controller.sends.size() == count,
+           "authority restoration cannot rearm or revive old retries");
 }
-int main(int argc,char **argv){QApplication app(argc,argv);testDeterministicRuntimeCases();testTimerAndRealDiagnosticGrace();testWireFailureSafetyStop();testAcceptedStopRetiresRetryEpisode();testSessionRuntime();return failures?1:0;}
+
+void testPoseMismatchRequiresCompleteMask()
+{
+    using namespace rb::vision;
+    const quint16 required = 0x0003; // Also prove this follows configured requirements.
+    for (const quint16 known : {quint16(0), quint16(1), quint16(2), quint16(4), required}) {
+        rb::test::VisualControllerFixture controller;
+        controller.known = required;
+        VisualDiagnosticSnapshot snapshot;
+        snapshot.state = VisualState::Tracking;
+        snapshot.command.proposed = ProposedCommand::Forward;
+        VisualDispatchConfig config;
+        config.requiredServoMask = required;
+        VisualDispatchSession session(&controller, [&] { return std::optional{snapshot}; },
+                                      [] { return 0; }, config);
+        session.setFeatureEnabled(true);
+        session.selectTurnSign(1);
+        session.confirmTurnSign();
+        expect(session.arm() == ArmReason::Ready, "pose-mask rejection fixture arms");
+        session.timerTick();
+        controller.known = known;
+        controller.ack(controller.sends.back().first, rb::CommandTerminalResult::Rejected, 6);
+        expect(session.poseMismatch().isEmpty() == ((known & required) != required),
+               "pose mismatch explanation requires every configured required bit known");
+    }
+}
+
+void testAutomaticStopCoversOperatorStop()
+{
+    using namespace rb::vision;
+    FakeGatewayPeer gateway;
+    rb::RemoteRobotController controller;
+    rb::ConsoleConnectionConfiguration config;
+    config.endpoint = QStringLiteral("127.0.0.1"); config.tcpPort = gateway.port();
+    controller.connectController(config);
+    expect(gateway.accept(), "covered STOP loopback connects");
+    completeHello(gateway);
+    pumpUntil([&] { return controller.canAcquireControl(); });
+    controller.acquireControl(); completeAcquire(gateway);
+    pumpUntil([&] { return controller.isControlActive(); });
+    quint16 seq = 10;
+    for (int i : {0, 1, 3, 4}) {
+        controller.enableServo(static_cast<rb::ServoId>(i));
+        const auto request = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        if (!request) { expect(false, "covered STOP pose request exists"); return; }
+        sendSubmitted(gateway, request->request_id, seq);
+        sendOutcome(gateway, request->request_id, RobotCommandKind::EnableServos,
+                    seq++, GatewayCommandOutcome::Accepted);
+        expect(pumpUntil([&] { return controller.isServoEnabled(static_cast<rb::ServoId>(i)); }),
+               "covered STOP enable ACK establishes evidence");
+    }
+    VisualDiagnosticSnapshot snapshot;
+    snapshot.state = VisualState::Tracking;
+    snapshot.command.proposed = ProposedCommand::Hold;
+    VisualDispatchSession session(&controller, [&] { return std::optional{snapshot}; },
+                                  [] { return 0; });
+    std::vector<VisualDispatchRecord> records;
+    QObject::connect(&session, &VisualDispatchSession::dispatchRecorded,
+                     [&](const auto &record) { records.push_back(record); });
+    session.setFeatureEnabled(true); session.selectTurnSign(1); session.confirmTurnSign();
+    expect(session.arm() == ArmReason::Ready, "covered STOP session arms");
+    session.timerTick(); // Unconfirmed HOLD requests an automatic STOP.
+    const auto automatic = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    if (!automatic) { expect(false, "automatic STOP exists before feature off"); return; }
+    sendSubmitted(gateway, automatic->request_id, 50);
+    session.setFeatureEnabled(false);
+    const auto operatorStop = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    if (!operatorStop) { expect(false, "feature off sends operator STOP"); return; }
+    sendSubmitted(gateway, operatorStop->request_id, 51);
+    sendOutcome(gateway, automatic->request_id, RobotCommandKind::StopMotion, 50,
+                GatewayCommandOutcome::Accepted);
+    expect(pumpUntil([&] { return session.operatorStopResult().has_value(); }),
+           "automatic STOP produces covered operator result");
+    expect(session.operatorStopResult() == rb::CommandTerminalResult::Ok,
+           "automatic STOP OK covers the operator STOP instead of unknown");
+    bool covered = false;
+    for (const auto &record : records)
+        if (record.wireId == operatorStop->request_id && record.result == "OK (covered)")
+            covered = true;
+    expect(covered, "covered operator STOP has explicit audit/display result");
+    expect(pumpUntil([&] { return controller.motionState() == rb::MotionState::Stopped
+                                  && !controller.isMotionActive(); }),
+           "covered operator STOP leaves no pending readiness blocker");
+    sendOutcome(gateway, operatorStop->request_id, RobotCommandKind::StopMotion, 51,
+                GatewayCommandOutcome::Accepted);
+    expect(session.operatorStopResult() == rb::CommandTerminalResult::Ok,
+           "late operator STOP ACK cannot undo covered success");
+    gateway.disconnectPeer();
+}
+
+}
+int main(int argc,char **argv){QApplication app(argc,argv);testAuthorityLossInSameEvent();testPoseMismatchRequiresCompleteMask();testAutomaticStopCoversOperatorStop();testDeterministicRuntimeCases();testTimerAndRealDiagnosticGrace();testWireFailureSafetyStop();testAcceptedStopRetiresRetryEpisode();testSessionRuntime();return failures?1:0;}

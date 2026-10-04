@@ -52,6 +52,7 @@ private:
     QElapsedTimer clock_;
     QTimer timer_;
     VisualDispatchStateMachine machine_;
+    quint16 requiredServoMask_;
     bool enabled_{false};
     bool submitting_{false};
     ArmReason reason_{ArmReason::NotTracking};
