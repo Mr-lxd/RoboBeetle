@@ -135,8 +135,12 @@ attempt while transport is usable, and the watchdog fallback when it is not.
 
 Reviewed host test EXE (does not control a robot):
 `C:/Users/laixindong/.codex/worktrees/task05-stop-transition-red-build/review/protocol_dispatcher_tests.exe`.
-The fresh SHA-256 and source commit are recorded below after verification and
-in the PR description. No new Qt EXE is built. The retained Task 04 DRY_RUN EXE
+Test source commit: `ac1278df9a3ad8ca3a11700e98f061cc427c7a2b`.
+Fresh test EXE SHA-256:
+`223877EF4D7F2CFF9F25042421D03AFD19D7335EBBA7573661E36F05923C53AC`.
+Subsequent provenance edits are documentation-only; executable build inputs
+remain unchanged. The final delivery head is recorded in the PR description.
+No new Qt EXE is built. The retained Task 04 DRY_RUN EXE
 is `D:/RoboBeetleConsole-portable-target-temporal-association-dry-run-20261003/RoboBeetleConsole.exe`;
 original source `ec5841f30ace8eadc551b5893a849087c553aa67`, SHA-256
 `C6A525E920FC1DB7624F60967FF161AAC50C07C4678816A13C73A1405F6E1C78`.
