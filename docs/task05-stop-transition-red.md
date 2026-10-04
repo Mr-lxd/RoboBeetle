@@ -1,112 +1,157 @@
-# Task 05 — STOP transition investigation and RED tests
+# Task 05 — STOP transition characterization and disconnect investigation
 
-2026-10-04. Baseline: `99515ce563ee143c2a2a0224352ee0a9b6321a5a`
-(merged Task 04 / PR #44). This draft changes tests and this investigation only.
-No automatic command sender, arming, motion connection, firmware programming,
-or hardware operation is introduced. GREEN is deliberately deferred.
+2026-10-04; PR #45; baseline `99515ce563ee143c2a2a0224352ee0a9b6321a5a`.
+Only tests and documentation change. No automatic sender, arming, motion
+connection, firmware programming or hardware operation is introduced.
+The existing `ROBOBEETLE_HARDWARE_CONTROL_HANDOFF.md` holds the Task 01–05
+handoff summary; no `docs/HANDOFF.md` is created.
 
-## Background availability
+## Reviewed STOP semantics
 
-The requested `docs/HANDOFF.md` does not exist in the root checkout or baseline
-Git tree. The available background read for this investigation is
-`ROBOBEETLE_HARDWARE_CONTROL_HANDOFF.md`,
-`docs/target-temporal-association-dry-run-validation.md`, and
-`RoboBeetlePi/application/README.md`. This does not claim the missing handoff was
-read. Task 04 remains a proposal-only DRY_RUN; its existing `turn_sign=+1` must
-not become a default for a future armed sender.
+The operator review selects **acceptance immediately preempts the original
+transition, followed by a smooth return to zero bounded by 750 ms of elapsed
+stop-ramp time from acceptance**. Completion before the original mode-transition
+end is not required. The initial commit `42e55ec3e397e4c6e39ba7b13cf1162b60095815`
+recorded two RED assertions for that stricter interpretation; those assertions
+are superseded by characterization tests, with no production fix needed.
 
-## Source finding: STOP does not return Busy during a transition
+Production anchors (unchanged in this PR):
 
-Line anchors refer to the baseline production files, unchanged in this PR.
-
-| Location | Evidence |
+| Location | Finding |
 | --- | --- |
-| `RoboBeetleFirmware/Core/Motion/motion_config.h:5` | Transition duration is 750 ms. |
-| `RoboBeetleFirmware/Core/Communication/protocol_dispatcher.c:411` | START dispatches to `motion_manager_start`; STOP dispatches separately to `motion_manager_request_stop_at(manager, now_ms)`. |
-| `RoboBeetleFirmware/Core/Motion/motion_manager.c:755` | A different non-STOP mode during an active transition returns BUSY; this is not the STOP route. |
-| `RoboBeetleFirmware/Core/Motion/motion_manager.c:857` | STOP in STOPPED/FAULTED/STOPPING is idempotent OK. A running transition is accepted without a Busy check. |
-| `RoboBeetleFirmware/Core/Motion/motion_manager.c:876` | Captures last targets, resets stop elapsed, restarts its clock at acceptance, immediately sets STOPPING and returns OK. |
-| `RoboBeetleFirmware/Core/Motion/motion_manager.c:409` | STOPPING interpolates toward zero and returns before gait advance; original gait no longer advances. |
-| `RoboBeetleFirmware/Core/Motion/motion_manager.c:430` | STOPPED, MOTION_STOP and ownership release occur after a separate 750 ms stop ramp. |
-| `RoboBeetleFirmware/Core/Inc/rb_protocol_v2.h:55` | Wire Busy code is 7. |
+| `RoboBeetleFirmware/Core/Motion/motion_config.h:5` | 750 ms transition / stop ramp; tick cadence is 10 ms at line 4. |
+| `RoboBeetleFirmware/Core/Communication/protocol_dispatcher.c:411` | START calls `motion_manager_start`; STOP calls `motion_manager_request_stop_at(manager, now_ms)` separately. |
+| `RoboBeetleFirmware/Core/Motion/motion_manager.c:755` | Different non-STOP mode during a transition returns BUSY. |
+| `RoboBeetleFirmware/Core/Motion/motion_manager.c:857` | STOP is idempotent OK in STOPPED/FAULTED/STOPPING; running transitions do not reject STOP as Busy. |
+| `RoboBeetleFirmware/Core/Motion/motion_manager.c:876` | Captures last targets, resets stop elapsed and clock at acceptance, enters STOPPING and returns OK without servo writes. |
+| `RoboBeetleFirmware/Core/Motion/motion_manager.c:409` | STOPPING interpolates to zero and returns before gait advance. |
+| `RoboBeetleFirmware/Core/Motion/motion_manager.c:430` | At stop elapsed >=750 ms, enter STOPPED / MOTION_STOP and release ownership. |
+| `RoboBeetleFirmware/Core/Inc/rb_protocol_v2.h:55` | Wire Busy is 7. |
 
-Conclusion: STOP immediately **accepts and preempts** the original transition
-with ACK OK, rather than Busy=7. It does not immediately complete the physical
-stop or even the logical return-to-zero ramp. For example, a transition starting
-at t=0 and STOP accepted at t=250 completes its normal stop ramp at t=1000,
-later than the original t=750 deadline. ACK proves acceptance, not physical
-completion. Gateway retries after this OK cannot accelerate the stop ramp;
-duplicates replay ACK and fresh STOP while STOPPING is also idempotent.
+Thus normal STOP immediately ACKs OK and preempts, rather than returning Busy=7.
+ACK establishes acceptance, not physical stopping. Repeated STOP cannot restart
+or extend the return-to-zero ramp. The 750 ms is the logical ramp duration;
+completion is applied on an eligible `process()` call. The 10 ms cadence and
+foreground scheduling must be included in any actual wall-clock budget; a
+stalled main loop cannot provide a hard real-time or physical stopping guarantee.
 
-## RED contract and reproduction
+## Characterization tests and verification
 
-The phrase "effective before transition end" is ambiguous. The current firmware
-already satisfies acceptance/preemption. Pending operator clarification, these
-RED tests explicitly use the stricter interpretation: logical STOPPED,
-MOTION_STOP and released motion ownership before the original transition ends.
-This is a proposed completion deadline, not a claim that STOP is currently
-rejected, and not a physical-motion measurement. If acceptance/preemption is
-the intended requirement, these stricter RED assertions need revisiting.
+The startup and mode-transition tests in
+`RoboBeetleFirmware/tests/protocol_dispatcher_tests.c` send real typed Protocol
+V2 frames through the production dispatcher and MotionManager; only hardware
+servo operations are faked. They check:
 
-Two tests in `RoboBeetleFirmware/tests/protocol_dispatcher_tests.c` send actual
-typed Protocol V2 frames through the production dispatcher and MotionManager,
-with only the servo hardware driver faked:
-
-- Startup transition: Forward at t=0, STOP at t=250, observe at t=740.
-- Mode transition: complete Forward startup, start TurnLeft at t=760, STOP at
-  t=1010, observe at t=1500 (transition age 740 ms).
-
-Both verify the transition is active before injection, ACK OK, immediate
-STOPPING, and nonblocking acceptance without servo writes. They keep host
-heartbeat alive at each observation and require process OK, so watchdog faults
-cannot satisfy the deadline. Only the two final completion assertions fail.
+- STOP injected during START or MODE transition ACKs OK and immediately enters
+  STOPPING; ACK performs no servo writes.
+- Sample at acceptance +100, +300, +500, +700, +740, +749 and +750 ms; refresh
+  heartbeat at every observation and require `process()` OK.
+- A fresh-sequence STOP at +300 ms ACKs OK and remains nonblocking. Completion
+  remains at the original acceptance +750 ms, not repeated acceptance +750 ms.
+- All five logical joints' absolute distance to zero is monotonically
+  nonincreasing at the samples; all equal zero at completion.
+- +749 ms remains STOPPING; +750 ms is STOPPED / MOTION_STOP / ownership released.
+  The +740 sample establishes the last eligible tick, so +749 does not advance
+  it and +750 is eligible. The boundary test respects the production cadence.
 
 ```powershell
-./RoboBeetleFirmware/tests/run_host_tests.ps1 -BuildRoot C:/Users/laixindong/.codex/worktrees/task05-stop-transition-red-build/red
+./RoboBeetleFirmware/tests/run_host_tests.ps1 -BuildRoot C:/Users/laixindong/.codex/worktrees/task05-stop-transition-red-build/review
 ```
 
-Fresh baseline gate: **PASS**, 37 executables + 13 app/backend/benchmark/
-diagnostics compile-contract objects + USART2 source/config contract.
-After the new tests: compile succeeds with `-std=c11 -Wall -Wextra -Werror`;
-the unchanged MotionManager suite passes; the standard host gate stops at
-`protocol_dispatcher_tests` with exit 1. Direct execution confirms exactly:
+Full Firmware host gate: **PASS**, 37 executables + 13 app/backend/benchmark/
+diagnostics compile-contract objects + USART2 source/config contract. The
+compiler uses `-std=c11 -Wall -Wextra -Werror`. The reviewed tests and existing
+MotionManager suite pass. Log:
+`C:/Users/laixindong/.codex/worktrees/task05-stop-transition-review.log`.
+Original baseline/RED logs remain preserved outside the repo for provenance.
+This is host characterization, not hardware or water validation.
 
-```text
-FAIL: Task05 RED: start-transition STOP must complete before original 750 ms deadline
-FAIL: Task05 RED: mode-transition STOP must complete before original 750 ms deadline
-```
+## What Linux abort actually sends
 
-Logs are preserved outside the repo:
-`C:/Users/laixindong/.codex/worktrees/task05-stop-transition-red-baseline.log`
-and `C:/Users/laixindong/.codex/worktrees/task05-stop-transition-red-red.log`.
-This draft intentionally leaves the normal gate RED; do not treat it as ready
-to merge or as delivery of Task 05 movement.
+**No STOP frame is sent by `LinuxOnboardApplicationPort::abort()`.**
+
+| Location | Actual action |
+| --- | --- |
+| `RoboBeetlePi/gateway/linux/src/linux_onboard_application_port.cpp:304` | Delegates to `application_.abort()` and maps events. |
+| `RoboBeetlePi/application/src/onboard_application.cpp:71` | Delegates to `runtime_.abort()`. |
+| `RoboBeetlePi/runtime/src/link_runtime.cpp:56` | Delegates to `session_.abort(clock_fn_())`. |
+| `RoboBeetlePi/session/src/serial_session.cpp:131` | Abort enters teardown. Close TX admission, abort LinkCore, drop pending TX, `tcflush(TCOFLUSH)`, close fd, enter ReopenRequired. |
+| `RoboBeetlePi/link_core/src/link_core.cpp:123` | `abort_session()` enters Lost, not a motion command submission. |
+| `RoboBeetlePi/session/src/serial_session.cpp:13` | 575 ms SafetyQuiet is a reopening guard, not a STOP ACK or measured stopping time. |
+
+This stops future serial heartbeats. Bytes already on the wire, in the STM32
+receive queue or accepted before teardown can still update the final heartbeat
+time. Pending normal STOP cannot be assumed delivered after abort drops TX.
+
+## Qt disconnect path and timing budget
+
+Current active-authority path:
+
+1. TCP EOF/fatal read → `TcpAdapter::close_current(...Disconnected)`
+   (`RoboBeetlePi/gateway/linux/src/tcp_adapter.cpp:418`).
+2. Source loss is queued to the owner; its next bridge snapshot handles losses
+   first (`RoboBeetlePi/gateway/linux/src/gateway_owner.cpp:186`).
+3. `ControlGatewayCore::source_lost()` → `revoke()` → `abort_once()`
+   (`control_gateway_core.cpp:649`, `:798`, `:786`): revoke authority and abort
+   active serial session. No ordinary STOP frame is inserted.
+4. Heartbeats cease. STM32 `safety_supervisor_process()` detects
+   `now-last_heartbeat >500 ms` (`Core/Safety/safety_supervisor.c:35`, timeout
+   constant `safety_supervisor.h:7`): first integer-ms opportunity is +501 ms.
+5. `app_main.c:719` calls `app_main_apply_safety_stop()` (`:105`), invoking
+   `motion_manager_stop_immediate()` and `servo_service_disable_all()`.
+   This is an immediate safety abort, not the ordinary 750 ms graceful ramp.
+   Active PWM may finish at its falling edge (`Core/Servo/servo_driver_stm32.c:305`);
+   logical shutdown does not establish when a physical joint stops moving.
+
+Budget from Qt connection loss to logical safety shutdown:
+
+`D_tcp_detection + D_owner_dispatch + D_residual_heartbeat + 501 ms + D_firmware_loop`.
+Add PWM falling-edge / IRQ latency for electrical output cessation, and measured
+mechanical time for a physical stop. No finite TCP detection bound follows from
+silent network loss alone. If TCP stays connected but control heartbeats stop,
+lease expiry revokes authority after 1000 ms from the last accepted control
+heartbeat (`control_gateway_core.cpp:12`, `:854`), then uses the same abort path.
+
+With the default serial heartbeat interval 100 ms
+(`link_core/include/robobeetle/link_core/link_config.hpp:9`), an online owner
+normally returns from serial poll by the next LinkCore deadline and processes
+source losses before/after `run_once()` (`gateway_owner.cpp:249`). This gives a
+nominal owner dispatch allowance of up to about 100 ms plus processing/OS
+scheduling, not a hard upper bound: runtime polls to its dynamic deadline
+(`runtime/src/link_runtime.cpp:31`), and custom config/load can change the delay.
+After TCP loss notification, nominal budget is therefore about **601 ms plus
+residual-heartbeat and scheduling delays**. For silent loss caught by the lease,
+use **1000 + 100 + 501 = 1601 ms** from last accepted control heartbeat, plus the
+same residual/scheduling terms. These are code-derived budgets, not measurements.
+The 575 ms reopening guard neither adds to stopping time nor proves the machine
+has physically stopped.
+
+Consequently the existing disconnect fail-safe cannot be described as
+"Qt disconnect immediately transmits STOP". A later motion-sending PR must
+explicitly test default-OFF arming, immediate disarm on Qt/gateway loss, STOP
+attempt while transport is usable, and the watchdog fallback when it is not.
 
 ## Artifact provenance
 
-New host test EXE (not a robot-control executable):
-`C:/Users/laixindong/.codex/worktrees/task05-stop-transition-red-build/red/protocol_dispatcher_tests.exe`.
-SHA-256: `CE9ABAA95BC739AC7D3D50A97CEE29CF74B694E4A1179FA2A17702FCCB83A5AE`.
-Its source commit is recorded in the PR description after committing tests.
+Reviewed host test EXE (does not control a robot):
+`C:/Users/laixindong/.codex/worktrees/task05-stop-transition-red-build/review/protocol_dispatcher_tests.exe`.
+The fresh SHA-256 and source commit are recorded below after verification and
+in the PR description. No new Qt EXE is built. The retained Task 04 DRY_RUN EXE
+is `D:/RoboBeetleConsole-portable-target-temporal-association-dry-run-20261003/RoboBeetleConsole.exe`;
+original source `ec5841f30ace8eadc551b5893a849087c553aa67`, SHA-256
+`C6A525E920FC1DB7624F60967FF161AAC50C07C4678816A13C73A1405F6E1C78`.
+This is retained artifact provenance, not a motion-enabled Task 05 build.
 
-No new Qt EXE was built for this tests-only draft. The preserved Task 04 EXE
-was freshly hashed:
-`D:/RoboBeetleConsole-portable-target-temporal-association-dry-run-20261003/RoboBeetleConsole.exe`,
-SHA-256 `C6A525E920FC1DB7624F60967FF161AAC50C07C4678816A13C73A1405F6E1C78`.
-Its original build source is `ec5841f30ace8eadc551b5893a849087c553aa67`;
-Git comparison confirms Console inputs unchanged through this draft.
-It is a retained DRY_RUN artifact, not a Task 05 motion-enabled build.
+## Later motion PR requirements (pending)
 
-## Required later PR coverage (all pending)
-
-| Requirement | Required tests / acceptance |
+| Requirement | Coverage required |
 | --- | --- |
-| Arming defaults OFF | Startup/reconnect remain disarmed; Qt link loss and gateway link loss each disarm and request STOP. |
-| Manual takeover | Every manual input immediately takes authority and disarms automatic mode, including during dwell and in-flight commands. |
-| STALE / LOST / INFERENCE_OFF | Each triggers STOP in the same evaluation, including within dwell and during motion transitions. |
-| Non-STOP dwell | At least 1000 ms between sends; boundary tests at 999/1000 ms; Busy=7 causes no immediate retry. STOP bypasses dwell. |
-| `turn_sign` configuration | No default direction; unset/invalid/unconfirmed physical direction refuses arming; both explicitly confirmed signs tested. |
-| STOP completion semantics | Resolve acceptance versus completion before GREEN; tests must match the approved semantics. ACK must never be labelled physical completion. |
-| Desktop hardware validation | Only with servos unloaded and out of water. No hardware validation performed in this PR; physical direction remains unconfirmed. |
+| Arming defaults OFF | Startup/reconnect disarmed; Qt and gateway loss each disarm and request STOP with transport-loss fallback. |
+| Manual takeover | Every manual input immediately takes authority and disarms automatic mode, including dwell/in-flight cases. |
+| STALE / LOST / INFERENCE_OFF | Each immediately requests STOP in the same evaluation, bypassing dwell and transitions. |
+| Non-STOP dwell | At least 1000 ms between sends; 999/1000 boundary; Busy=7 causes no immediate retry; STOP bypasses dwell. |
+| `turn_sign` | No default; unset/invalid/unconfirmed direction refuses arming; both explicitly confirmed signs tested. |
+| STOP semantics | Reviewed acceptance +750 ms ramp contract covered here; ACK never labelled physical completion. |
+| Desktop hardware validation | Servos unloaded and out of water only; physical direction still unconfirmed. |
 
-No later requirement is declared implemented or covered by this initial draft.
+No automatic movement or arming is delivered by PR #45.

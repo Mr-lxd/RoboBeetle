@@ -843,8 +843,8 @@ static void test_motion_start_stop_ack_and_duplicate_semantics(void)
            "new START during STOPPING should map to Protocol BUSY");
 }
 
-/* Task 05 RED contract: acceptance is not completion. No hardware is used. */
-static void check_stop_completes_before_original_transition(bool mode_change)
+/* Task 05 reviewed contract: preempt on acceptance, then a 750 ms ramp. */
+static void check_stop_during_transition_has_bounded_idempotent_ramp(bool mode_change)
 {
     fixture_t fixture;
     const uint8_t start_payload[3] = {1U, MOTION_FORWARD, MOTION_ACTION_START};
@@ -852,7 +852,8 @@ static void check_stop_completes_before_original_transition(bool mode_change)
     const uint8_t stop_payload[3] = {1U, MOTION_STOP, MOTION_ACTION_STOP};
     uint32_t transition_start_ms = mode_change ? 760U : 0U;
     uint32_t stop_ms = transition_start_ms + 250U;
-    uint32_t before_deadline_ms = transition_start_ms + 740U;
+    static const uint32_t observations_ms[] = {100U, 300U, 500U, 700U, 740U, 749U, 750U};
+    joint_targets_t previous_targets;
     rbp2_frame_t frame;
     protocol_dispatcher_outcome_t outcome;
     unsigned int writes_at_acceptance;
@@ -896,27 +897,68 @@ static void check_stop_completes_before_original_transition(bool mode_change)
     expect(fixture.driver.write_calls == writes_at_acceptance,
            "STOP ACK must not block on servo writes or ramp completion");
 
-    /* Keep liveness fresh: a watchdog abort must not make this test pass. */
-    safety_supervisor_on_heartbeat(&fixture.safety_supervisor, before_deadline_ms);
-    expect(motion_manager_process(&fixture.motion_manager, before_deadline_ms) ==
-               MOTION_MANAGER_RESULT_OK,
-           "deadline observation must not be a safety or hardware failure");
+    previous_targets = *motion_manager_last_targets(&fixture.motion_manager);
+    for (size_t index = 0U;
+         index < sizeof(observations_ms) / sizeof(observations_ms[0]); ++index)
+    {
+        const uint32_t offset_ms = observations_ms[index];
+        const uint32_t now_ms = stop_ms + offset_ms;
+        const joint_targets_t *targets;
+
+        /* Refresh at every observation; watchdog abort cannot fake success. */
+        safety_supervisor_on_heartbeat(&fixture.safety_supervisor, now_ms);
+        expect(motion_manager_process(&fixture.motion_manager, now_ms) ==
+                   MOTION_MANAGER_RESULT_OK,
+               "every stop-ramp observation must process OK");
+        targets = motion_manager_last_targets(&fixture.motion_manager);
+#define EXPECT_CLOSER_TO_ZERO(joint) \
+        expect((targets->joint >= 0 ? targets->joint : -targets->joint) <= \
+                   (previous_targets.joint >= 0 ? previous_targets.joint : -previous_targets.joint), \
+               #joint " distance to zero must be monotonically nonincreasing")
+        EXPECT_CLOSER_TO_ZERO(front_right_cdeg);
+        EXPECT_CLOSER_TO_ZERO(front_left_cdeg);
+        EXPECT_CLOSER_TO_ZERO(front_axis_cdeg);
+        EXPECT_CLOSER_TO_ZERO(rear_right_cdeg);
+        EXPECT_CLOSER_TO_ZERO(rear_left_cdeg);
+#undef EXPECT_CLOSER_TO_ZERO
+        previous_targets = *targets;
+        if (offset_ms < 750U)
+        {
+            expect(motion_manager_state(&fixture.motion_manager) == MOTION_STATE_STOPPING,
+                   "accepted STOP must remain STOPPING through +749 ms");
+        }
+        if (offset_ms == 300U)
+        {
+            /* Fresh sequence exercises idempotence, not cached ACK replay. */
+            frame = make_frame(RBP2_MSG_SET_MOTION_MODE, 203U,
+                               stop_payload, sizeof(stop_payload));
+            writes_at_acceptance = fixture.driver.write_calls;
+            outcome = handle(&fixture, &frame, now_ms);
+            expect(outcome.result == RBP2_RESULT_OK,
+                   "fresh STOP while STOPPING must ACK OK");
+            expect(fixture.driver.write_calls == writes_at_acceptance &&
+                       motion_manager_state(&fixture.motion_manager) == MOTION_STATE_STOPPING,
+                   "repeated STOP must remain nonblocking and preserve STOPPING");
+        }
+    }
     expect(motion_manager_state(&fixture.motion_manager) == MOTION_STATE_STOPPED &&
                motion_manager_mode(&fixture.motion_manager) == MOTION_STOP &&
                !servo_service_motion_is_active(&fixture.servo_service),
-           mode_change
-               ? "Task05 RED: mode-transition STOP must complete before original 750 ms deadline"
-               : "Task05 RED: start-transition STOP must complete before original 750 ms deadline");
+           "STOP must complete at acceptance +750 ms despite repeated STOP at +300 ms");
+    expect(previous_targets.front_right_cdeg == 0 && previous_targets.front_left_cdeg == 0 &&
+               previous_targets.front_axis_cdeg == 0 && previous_targets.rear_right_cdeg == 0 &&
+               previous_targets.rear_left_cdeg == 0,
+           "all logical joints must reach zero at stop completion");
 }
 
-static void test_stop_during_start_transition_completes_before_deadline(void)
+static void test_stop_during_start_transition_has_bounded_idempotent_ramp(void)
 {
-    check_stop_completes_before_original_transition(false);
+    check_stop_during_transition_has_bounded_idempotent_ramp(false);
 }
 
-static void test_stop_during_mode_transition_completes_before_deadline(void)
+static void test_stop_during_mode_transition_has_bounded_idempotent_ramp(void)
 {
-    check_stop_completes_before_original_transition(true);
+    check_stop_during_transition_has_bounded_idempotent_ramp(true);
 }
 
 static void test_motion_unknown_raw_pwm_uses_existing_hardware_failure(void)
@@ -1477,8 +1519,8 @@ int main(void)
     test_result_mappings();
     test_unknown_messages_are_invalid_payload();
     test_motion_start_stop_ack_and_duplicate_semantics();
-    test_stop_during_start_transition_completes_before_deadline();
-    test_stop_during_mode_transition_completes_before_deadline();
+    test_stop_during_start_transition_has_bounded_idempotent_ramp();
+    test_stop_during_mode_transition_has_bounded_idempotent_ramp();
     test_motion_unknown_raw_pwm_uses_existing_hardware_failure();
     test_motion_payload_validation();
     test_motion_ownership_and_disable_preemption();

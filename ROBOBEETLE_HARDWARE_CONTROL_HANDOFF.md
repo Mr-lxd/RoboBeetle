@@ -1,5 +1,61 @@
 # RoboBeetle 硬件控制交接审计
 
+## 2026-10-04 — 视觉伺服 Task 01–05 交接摘要
+
+本节为当前视觉伺服交接入口；不新建 `docs/HANDOFF.md`。Task 01–04
+已合并到 main，Task 05 为 [PR #45](https://github.com/Mr-lxd/RoboBeetle/pull/45)
+的测试与调研阶段，未交付自动运动下发。以下桌面观察、host 测试与实际运动/
+水下验收分别记录，不互相替代。
+
+| Task | 已交付范围与证据 | 详细记录 |
+| --- | --- | --- |
+| 01 / PR #41 | Qt 目标质心、误差与 DRY_RUN 状态显示；用户 T1–T8 桌面确认通过。冻结 Pi 时间戳但 HTTP 仍新鲜的场景未由拔摄像头测试证明，后续本地看门狗在 Task 02 覆盖。 | [visual-error-dry-run-validation](docs/visual-error-dry-run-validation.md) |
+| 02 / PR #42 | 纯建议命令状态机、EMA、滞回、dwell 及本地检测新 frame_id 看门狗；建议不发送。用户确认指定检查，滞回桌面验收移至 Task 03。 | [visual-command-dry-run-validation](docs/visual-command-dry-run-validation.md) |
+| 03 / PR #43 | CSV 录制与参数/会话来源；用户中心 60 s 和扫动滞回验收通过。多目标最高置信度切换作为 Task 04 依据。 | [visual-csv-dry-run-validation](docs/visual-csv-dry-run-validation.md) |
+| 04 / PR #44 | 最近邻时间关联、LOCK/MISS/ACQUIRED 与 CSV v2；用户报告水平大跳变由 hc_u 的 108/997 降至关联 u 的 4/898，保留不同分母；桌面确认通过。视频等待/卡顿已记录，根因未确认。 | [target-temporal-association-dry-run-validation](docs/target-temporal-association-dry-run-validation.md) |
+| 05 / PR #45 | STM32 STOP 语义与 Qt 断线停止路径调研；两项 START/MODE 过渡特性测试通过，完整 Firmware host gate 37 executables + 13 compile-contract objects + USART2 source/config contract 全绿。自动下发仍待后续 PR。 | [task05-stop-transition](docs/task05-stop-transition-red.md) |
+
+### Task 05 已确认的 STOP 语义与当前断线行为
+
+普通 STOP：接受即抢占，ACK OK、立即 STOPPING，ACK 不等待舵机写入；从接受
+时刻计 750 ms 平滑回零，重复 STOP 不延长完成时刻。+749 ms STOPPING、
++750 ms STOPPED / MOTION_STOP / 释放舵机所有权及五关节零位距离单调不增
+已由真实 dispatcher + MotionManager 的 host 特性测试覆盖。逻辑 750 ms ramp
+在有效 foreground tick 上完成；仍需调度裕量，ACK 不代表物理停止完成。
+
+当前 Qt 断线（active authority）路径：TCP EOF/错误 → owner source_lost →
+ControlGatewayCore revoke/abort_once → LinuxOnboardApplicationPort::abort →
+串口 teardown/drop TX/TCOFLUSH/close → 停发心跳 → STM32 心跳超过 500 ms
+触发 `app_main_apply_safety_stop()` → immediate motion abort + disable_all。
+**abort 本身不发送 STOP 帧**；该安全停机不经过普通 STOP 的 750 ms 回零。
+精确代码锚点见 Task 05 调研文档。
+
+从 Qt 连接丢失到逻辑安全关闭的预算为 TCP 检测 + owner 分发 + 残余心跳 +
+501 ms + 固件主循环延迟；正常配置下 owner 分发名义留约 100 ms，因此 TCP
+失联通知后约 601 ms 加残余/调度延迟。若无 TCP 断线通知、由 control lease
+识别静默失联，则自最后有效 control heartbeat 起名义 1000+100+501=1601 ms
+加残余/调度延迟。它们是代码预算，未实机测量、不是硬实时上界；PWM 下降沿/
+中断和机械停止还需额外时间。575 ms SafetyQuiet 是重新打开串口的保护窗口，
+不能当作 STOP ACK 或物理停止证明。
+
+### 后续真实下发的必需安全门（尚未实现/验收）
+
+- 布防默认关闭；Qt/gateway 断线立即撤防并在可用链路尝试 STOP，链路不可用时
+  覆盖现有 watchdog fallback，不能宣称当前 abort 已经发了 STOP。
+- 任何手动输入立即接管并撤防自动模式；STALE / LOST / INFERENCE_OFF
+  立即 STOP，均不受 dwell 限制。
+- 非 STOP 下发 `min_dwell=1000 ms`；Busy=7 不立即重试。
+- `turn_sign` 为显式配置项，无默认方向；实机方向确认前拒绝布防。现有
+  DRY_RUN 的 `turn_sign=+1` 不构成运动布防默认值或方向确认。
+- 以上逐项要有测试覆盖；桌面实机验证仅限舵机空载、离水。当前 Task 05 未
+  连接硬件、未烧录、未做运动或水下测试。
+
+保留 Task 04 Qt EXE：
+`D:\RoboBeetleConsole-portable-target-temporal-association-dry-run-20261003\RoboBeetleConsole.exe`，
+源码 `ec5841f30ace8eadc551b5893a849087c553aa67`，SHA-256
+`C6A525E920FC1DB7624F60967FF161AAC50C07C4678816A13C73A1405F6E1C78`。
+本次没有新建 Qt EXE；Task 05 host 测试 EXE 来源与哈希见调研记录及 PR 描述。
+
 当前 active/default Protocol V2 host transport 是 Raspberry Pi → STM32 USART2
 （PA2/PA3，115200 8-N-1）；2026-09-16 的 target link acceptance 见本文档末尾。
 近期 Servo、LeakStatus、JY901S 与 Depth 实机运行使用过：
