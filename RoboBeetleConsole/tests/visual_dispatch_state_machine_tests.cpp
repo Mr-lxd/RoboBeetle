@@ -134,14 +134,14 @@ void disarmingSafety()
 
 void targetLossRecoveryAndStopGate()
 {
-    for (auto state : {VisualState::NoTarget, VisualState::Lost}) {
+    for (auto state : {VisualState::Lost}) {
         Fixture f; f.start(); f.ack();
         f.input.state = state; f.evaluate(100);
         const auto stop = f.port.last();
         expect(f.policy.armed() && stop.command == ProposedCommand::Stop, "target loss STOP keeps armed");
         expect(f.policy.currentMode() == ProposedCommand::Forward, "STOP submission does not update mode before OK");
         f.evaluate(101); f.input.state = VisualState::Lost; f.evaluate(102);
-        expect(f.port.requests.size() == 2, "continuous stop episode sends only once across NO_TARGET/LOST");
+        expect(f.port.requests.size() == 2, "continuous LOST stop episode sends only once");
         f.policy.acknowledge(stop.id, DispatchOutcome::Ok, 110);
         expect(f.policy.currentMode() == ProposedCommand::Stop, "STOP OK confirms current mode");
         f.input.state = VisualState::Tracking; f.evaluate(300);
@@ -151,6 +151,81 @@ void targetLossRecoveryAndStopGate()
         f.ack(1111); f.input.state = state; f.evaluate(1120);
         expect(f.port.requests.size() == 4 && f.port.last().command == ProposedCommand::Stop, "fresh stop episode sends again despite dwell");
     }
+}
+
+void noTargetHoldsConfirmedModeOnly()
+{
+    Fixture loss; loss.start(); loss.ack();
+    loss.input.state = VisualState::NoTarget;
+    loss.input.suggestion = ProposedCommand::Stop; // State takes precedence over suggestion.
+    for (auto time : {100, 500, 1599}) {
+        loss.evaluate(time);
+        expect(loss.port.requests.size() == 1 && loss.policy.armed() &&
+                   loss.policy.currentMode() == ProposedCommand::Forward,
+               "confirmed Forward holds through 1499 ms NO_TARGET without any send");
+    }
+    loss.input.state = VisualState::Lost; loss.input.suggestion = ProposedCommand::Hold; loss.evaluate(1600);
+    expect(loss.port.requests.size() == 2 && loss.port.last().command == ProposedCommand::Stop &&
+               loss.policy.armed(), "only LOST ends the grace period with STOP and preserves arming");
+
+    Fixture recover; recover.start(); recover.ack();
+    recover.input.state = VisualState::NoTarget; recover.turn(); recover.evaluate(100);
+    recover.evaluate(1599);
+    recover.input.state = VisualState::Tracking; recover.input.suggestion = ProposedCommand::Forward;
+    recover.evaluate(1600);
+    expect(recover.port.requests.size() == 1 && recover.policy.armed(),
+           "NO_TARGET recovery to unchanged confirmed Forward never resends");
+
+    for (bool noTarget : {true, false}) {
+        Fixture fresh;
+        expect(fresh.policy.arm(fresh.input) == ArmReason::Ready, "fresh eligible arming has no assumed confirmed mode");
+        fresh.input.state = noTarget ? VisualState::NoTarget : VisualState::Tracking;
+        fresh.input.suggestion = ProposedCommand::Hold;
+        fresh.evaluate(10);
+        expect(fresh.port.requests.size() == 1 && fresh.port.last().command == ProposedCommand::Stop && fresh.policy.armed(),
+               "NO_TARGET/HOLD without any confirmed mode immediately STOPs, never guesses");
+
+        Fixture manual; manual.start(); manual.ack(); manual.policy.manualInput(ManualInputKind::Stop);
+        manual.input = ready(10); expect(manual.policy.arm(manual.input) == ArmReason::Ready, "manual takeover requires explicit rearm");
+        manual.input.state = noTarget ? VisualState::NoTarget : VisualState::Tracking;
+        manual.input.suggestion = ProposedCommand::Hold; manual.evaluate(11);
+        expect(manual.port.requests.size() == 2 && manual.port.last().command == ProposedCommand::Stop,
+               "manual rearm invalidates old confirmed mode: NO_TARGET/HOLD STOP bypasses dwell");
+
+        Fixture reconnect; reconnect.start(); reconnect.ack(); reconnect.input.linkConnected = false; reconnect.evaluate(10);
+        reconnect.input = ready(11); expect(reconnect.policy.arm(reconnect.input) == ArmReason::Ready, "fresh post-disconnect evidence permits explicit rearm");
+        reconnect.input.state = noTarget ? VisualState::NoTarget : VisualState::Tracking;
+        reconnect.input.suggestion = ProposedCommand::Hold; reconnect.evaluate(12);
+        expect(reconnect.port.requests.size() == 3 && reconnect.port.last().command == ProposedCommand::Stop,
+               "link-loss rearm cannot HOLD old confirmed mode: sends immediate STOP");
+    }
+}
+
+void noTargetStillEnforcesPendingMotionTimeout()
+{
+    Fixture f; f.start(); f.ack(); f.turn(); f.evaluate(1000);
+    const auto motion = f.port.last();
+    f.input.state = VisualState::NoTarget; f.evaluate(1001); f.evaluate(1999);
+    expect(f.port.requests.size() == 2 && f.policy.armed(), "NO_TARGET holds confirmed mode before pending motion deadline");
+    f.evaluate(2000);
+    expect(f.port.requests.size() == 3 && f.port.last().command == ProposedCommand::Stop && !f.policy.armed(),
+           "pending motion timeout during NO_TARGET immediately STOPs and disarms");
+    f.policy.acknowledge(motion.id, DispatchOutcome::Ok, 2001);
+    expect(f.policy.currentMode() == ProposedCommand::Forward, "late motion OK after timeout STOP cannot replace confirmed Forward");
+}
+
+void disconnectedStopDoesNotSurviveReconnect()
+{
+    Fixture f; f.start(); f.ack(); f.input.state = VisualState::Lost; f.evaluate(10);
+    const auto oldStop = f.port.last();
+    f.input.linkConnected = false; f.input.controlOwned = false; f.evaluate(20);
+    f.input = ready(2000); // Reconnected + reacquired authority, not automatically armed.
+    f.policy.evaluate(f.input);
+    f.policy.acknowledge(oldStop.id, DispatchOutcome::Ok, 2001);
+    f.evaluate(4000);
+    expect(f.port.requests.size() == 2 && !f.policy.armed() &&
+               f.policy.currentMode() == ProposedCommand::Forward,
+           "reconnect past STOP timeout never revives its retries or accepts old STOP OK");
 }
 
 void manualTakeover()
@@ -193,7 +268,7 @@ void stopRetriesAnyOkAndStaleMotion()
 {
     for (bool ackFirst : {true, false}) {
         Fixture f; f.start(); const auto motion = f.port.last();
-        f.input.state = VisualState::NoTarget; f.evaluate(10); const auto first = f.port.last();
+        f.input.state = VisualState::Lost; f.evaluate(10); const auto first = f.port.last();
         f.policy.acknowledge(motion.id, DispatchOutcome::Ok, 20);
         expect(!f.policy.currentMode(), "STOP invalidates earlier non-STOP late OK");
         f.evaluate(1009); expect(f.port.requests.size() == 2, "STOP timeout waits its full configured interval");
@@ -214,12 +289,12 @@ void stopRetriesAnyOkAndStaleMotion()
     alert.ack(3011); alert.evaluate(10000);
     expect(alert.port.requests.size() == 5, "STOP OK ends retry even after safety disarm");
     for (bool authority : {true, false}) {
-        Fixture loss; loss.start(); loss.input.state = VisualState::NoTarget; loss.evaluate(10);
+        Fixture loss; loss.start(); loss.input.state = VisualState::Lost; loss.evaluate(10);
         if (authority) loss.input.controlOwned = false; else loss.input.linkConnected = false;
         loss.evaluate(1010); loss.evaluate(9000);
         expect(loss.port.requests.size() == 2 && !loss.policy.armed(), "link or authority loss terminates existing STOP retries");
     }
-    Fixture configured({200, 0x001b}); configured.start(); configured.input.state = VisualState::NoTarget; configured.evaluate(10); configured.evaluate(209);
+    Fixture configured({200, 0x001b}); configured.start(); configured.input.state = VisualState::Lost; configured.evaluate(10); configured.evaluate(209);
     expect(configured.port.requests.size() == 2, "custom STOP timeout waits boundary minus one");
     configured.evaluate(210); expect(configured.port.requests.size() == 3, "custom STOP timeout applies at boundary");
 }
@@ -281,7 +356,7 @@ void additionalAckAndStopBoundaries()
            "STOP timeout resends but still does not update mode");
 
     Fixture pendingStop; pendingStop.start(); pendingStop.ack();
-    pendingStop.input.state = VisualState::NoTarget; pendingStop.evaluate(100);
+    pendingStop.input.state = VisualState::Lost; pendingStop.evaluate(100);
     const auto firstStop = pendingStop.port.last();
     pendingStop.input.state = VisualState::Tracking; pendingStop.turn(); pendingStop.evaluate(1099);
     expect(pendingStop.port.requests.size() == 2, "pending STOP ACK blocks recovered non-STOP after previous dwell");
@@ -319,6 +394,7 @@ int main()
 {
     armingConditions(); ackModeDwellAndBusy(); disarmingSafety();
     targetLossRecoveryAndStopGate(); manualTakeover(); nonStopUnknownAndTimeout();
+    noTargetHoldsConfirmedModeOnly(); noTargetStillEnforcesPendingMotionTimeout(); disconnectedStopDoesNotSurviveReconnect();
     stopRetriesAnyOkAndStaleMotion(); directionMappingAndHold();
     additionalAckAndStopBoundaries();
     std::printf("Visual dispatch: %d checks, %d failures\n", checks, failures);

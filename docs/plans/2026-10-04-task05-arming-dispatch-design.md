@@ -28,9 +28,15 @@ requests (more bookkeeping) or RobotController reuse (live-transport coupling).
 - STALE/OFF/link/authority loss: same-evaluation STOP attempt and disarm.
   Servo/pose/direction invalidation also fails closed. Operator must rearm.
   Link/authority loss cancels pending retry and ACK association after the attempt.
-- NO_TARGET/LOST: STOP but stay armed. Each continuous stop episode emits one
-  initial STOP. NO_TARGET→LOST does not start a fresh episode without intervening
-  motion. TRACKING recovery may resume only after confirmed STOP and dwell.
+- NO_TARGET with a confirmed mode holds that mode, sends no command and stays
+  armed. It never initiates motion, even if the suggestion changes. TRACKING
+  recovery to the same confirmed suggestion does not resend. Only LOST initiates
+  the target-loss STOP episode (keep armed); recovery then needs STOP OK and dwell.
+- NO_TARGET or TRACKING/HOLD with modeConfirmed=false immediately requests STOP
+  without dwell, including fresh arm, manual-rearm and link-rearm. HOLD never
+  assumes that a stale historical ACK mode remains confirmed after invalidation.
+  Existing non-STOP timeout and pending safety STOP retry rules remain active.
+  LOST always takes precedence over a stale HOLD suggestion.
 - Only manual motion (including manual STOP) disarms/takes over. It cancels all
   automatic requests/retries, emits no automatic command and invalidates old ACKs.
   Non-motion input leaves arming unchanged.
@@ -76,3 +82,10 @@ requests (more bookkeeping) or RobotController reuse (live-transport coupling).
 - [x] Commit tested source; package/hash and verify reduced-PATH execution; record provenance.
 - [x] Normal push and draft PR #46 created; remains draft, no merge. Final head is recorded in the PR description.
   No merge or hardware operation is authorized by this slice.
+## Review follow-up: lost_ms evidence TODO
+
+- [ ] Using PR43/44 CSV, measure the distribution of contiguous NO_TARGET duration
+  during tracking as evidence for lost_ms grace. Preserve session boundaries and
+  monotonic row timing, exclude stale/inference-off/video-awaiting gaps, report
+  sample count, median/tails and censored runs. No CSV analysis or lost_ms change
+  is performed by this PR; current 1500 ms remains unchanged.

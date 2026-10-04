@@ -29,7 +29,7 @@ by the policy into the FakePort; they do not connect sockets or hardware.
 | --- | --- |
 | Default OFF; every arm gate / reason | `armingConditions`: disconnected, no authority, zero/incomplete enabled or known-pose mask, absent/invalid confirmed sign, each non-TRACKING state, invalid config/time; eligible arm. |
 | STALE / OFF / link / control loss STOP immediately + disarm | `disarmingSafety`: each loss during dwell and pending motion ACK; recovery never rearms; cleared masks prevent rearm. Also servo/pose/direction loss fail closed. |
-| NO_TARGET / LOST STOP but retain arming | `targetLossRecoveryAndStopGate`: both states, same continuous episode deduplicated; recovered same Forward waits STOP OK +1000 ms; fresh motion interruption starts new episode. |
+| NO_TARGET grace / LOST STOP | `noTargetHoldsConfirmedModeOnly`: confirmed Forward through 1499 ms NO_TARGET sends nothing; only LOST stops. NO_TARGET recovery unchanged does not resend. LOST recovery respects STOP OK+1000 ms. |
 | Only manual motion incl manual STOP takes over | `manualTakeover`: explicit Motion and Stop kinds during dwell and pending ACK; clear retries/ACK associations and prohibit later sends. NonMotion preserves arming. |
 | ACK OK only confirms mode | `ackModeDwellAndBusy`, `nonStopUnknownAndTimeout`, `additionalAckAndStopBoundaries`: submissions/Busy/STOP timeout never confirm; OK does. |
 | Dwell=max(last non-STOP send+1000,last STOP accepted+1000) | `ackModeDwellAndBusy`: 999/1000; `targetLossRecoveryAndStopGate` and additional boundaries: TRACKING during return-to-zero blocked until first STOP OK+1000, then last non-STOP gate separately enforced. |
@@ -39,7 +39,7 @@ by the policy into the FakePort; they do not connect sockets or hardware.
 | STOP episode once; configurable retry | `stopRetriesAnyOkAndStaleMotion`: 999/1000 timeout, new IDs, custom 200 ms boundary, no retry burst after long pause. STOP bypasses dwell and pending non-STOP. |
 | Any OK in one STOP episode confirms; old motion cannot overwrite | Both first and retry IDs tested; duplicate OK cannot extend acceptance dwell. Earlier motion or preceding episode ACK ignored. |
 | STOP retry terminates / three-timeout alert | OK, manual Stop, link/authority loss all tested. Three consecutive expiries expose alert state; successful OK ends retry. |
-| Mapping both confirmed signs | `directionMappingAndHold`: +1/-1 × positive/negative ex × both turn-intent labels; no reuse of DRY_RUN default sign. HOLD sends no command; invalid turn error fails closed. |
+| Mapping both confirmed signs | `directionMappingAndHold`: +1/-1 × positive/negative ex × both turn-intent labels; no reuse of DRY_RUN default sign. HOLD sends no command only with a confirmed mode; invalid turn error fails closed. |
 | Review edge cases | Decreasing-time arm while armed, rejected-arm time observation, disarmed pending STOP loss via arm rejection; stale ACK cannot revive cancelled episode. |
 
 STOP acceptance uses the local first-OK receipt time, conservatively no earlier
@@ -81,7 +81,7 @@ One intermediate parallel run additionally failed `robot_controller_tests`
 (scheduled 170 ms APC220 ACK budget). An isolated rerun and subsequent full serial
 run pass it; this timing-sensitive failure is recorded, not erased.
 
-New policy CTest passes independently with 246 assertions. Full Qt suite is
+Initial policy CTest passed independently with 246 assertions; revised policy passes 273 assertions. Full Qt suite is
 **not all green**; no unrelated UI or controller fixes are included. Baseline /
 parallel / serial logs: `task05-arming-baseline-ctest.log`,
 `task05-arming-feature-ctest.log`, `task05-arming-controller-rerun.log`,
@@ -116,3 +116,37 @@ No hardware connected, firmware flashed, servo movement or water verification.
 Physical direction remains unconfirmed. Later desktop hardware tests must use
 unloaded servos out of water; only a later separately reviewed adapter may
 connect this policy to a real command sender.
+## 2026-10-04 PR46 review correction — NO_TARGET is confirmed HOLD
+
+NO_TARGET is the single-frame-miss grace state, not a target-loss STOP state.
+The dispatcher preserves the confirmed mode and arming and initiates no command
+for 1499 ms. Only LOST issues the target-loss STOP. This matches PR42 HOLD and
+the existing VisualTargetStateMachine's 1500 ms loss grace. NO_TARGET recovery
+with unchanged confirmed suggestion never resends. A missing confirmed mode is
+an explicit exception: NO_TARGET/HOLD immediately requests STOP; tests cover
+fresh arm, manual STOP takeover/rearm and link loss/rearm (with fresh eligible
+servo/pose evidence), all within dwell. STALE/OFF, motion ACK timeout and already
+pending safety STOP retry retain their independent safety priority.
+
+Revision RED: 268 checks / 8 failures on the previous implementation. Separate
+LOST-with-HOLD precedence RED: 268 checks / 1 failure. Independent review added
+pending-motion timeout during NO_TARGET: RED 273 checks / 1 failure.
+Timeout checks now precede the visual-state send gate. Final GREEN:
+**273 checks / 0 failures**, warning-clean CMake build and standalone CTest.
+Tests also verify pending STOP invalidation through disconnection: reconnecting
+and reacquiring control beyond the timeout creates no retry, and the old OK
+cannot change current mode or rearm. No application or TCP wiring was added.
+
+Logs: `C:/Users/laixindong/.codex/worktrees/task05-arming-no-target-red.log`,
+`task05-arming-lost-hold-red.log`, `task05-arming-no-target-timeout-red.log`,
+`task05-arming-no-target-final.log`.
+CSV contiguous NO_TARGET duration analysis is a TODO in the design document,
+not an analysis result or reason to change lost_ms in this revision.
+
+Revised runnable test package (initial 246-check package remains preserved):
+`D:/RoboBeetle-results/task05-pr2-no-target-review-20261004/visual_dispatch_state_machine_tests.exe`.
+Revised EXE SHA-256:
+`AA6425E2DAEA7F56A66387B348FAC9FC1B2932CE07B213EC8BB30E1575D69FF1`.
+Revised source commit is recorded after committing the tested inputs; final head
+is in the PR description / new package BUILD_INFO.txt. The earlier source/hash
+above remain historical provenance, not the revised artifact.

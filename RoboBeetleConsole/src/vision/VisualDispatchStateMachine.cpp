@@ -120,18 +120,22 @@ void VisualDispatchStateMachine::evaluate(const VisualDispatchInput &input)
             failSafe(input.nowMs);
         } else if (reason != ArmReason::Ready && reason != ArmReason::NotTracking) {
             failSafe(input.nowMs); // Servo/pose/direction invalidation even in LOST.
-        } else if (input.state == VisualState::NoTarget || input.state == VisualState::Lost ||
-                   input.suggestion == ProposedCommand::Stop) {
+        } else if (input.state == VisualState::NoTarget ||
+                   (input.state == VisualState::Tracking && input.suggestion == ProposedCommand::Hold)) {
+            // A transient miss is HOLD, not LOST. Never assume an old mode
+            // after arming, manual takeover or link-loss invalidation.
+            if (!modeConfirmed_) beginStop(input.nowMs);
+        } else if (input.state == VisualState::Lost || input.suggestion == ProposedCommand::Stop) {
             beginStop(input.nowMs);
         }
     }
     if (stopAwaiting_) { retryStop(input.nowMs); return; }
     if (!armed_) return;
-    if (input.state != VisualState::Tracking || input.suggestion == ProposedCommand::Stop) return;
     if (pendingMotion_) {
         if (input.nowMs - pendingMotion_->sentMs >= config_.ackTimeoutMs) failSafe(input.nowMs);
         return;
     }
+    if (input.state != VisualState::Tracking || input.suggestion == ProposedCommand::Stop) return;
     if (input.suggestion == ProposedCommand::Hold) return;
     auto command = input.suggestion;
     if (command == ProposedCommand::TurnLeft || command == ProposedCommand::TurnRight) {
