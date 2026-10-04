@@ -24,7 +24,7 @@ public:
         quint64 frameId,
         quint64 captureTimestampNs = 0U);
     void clearFrame();
-    void setDetectionOverlay(const DetectionFrame &frame);
+    void setDetectionOverlay(const DetectionFrame &frame, const std::optional<TargetState> &selected);
     void clearDetectionOverlay(DetectionDisplayState reason = DetectionDisplayState::Stale);
     void setVisualDiagnostic(const VisualDiagnosticSnapshot &snapshot);
     [[nodiscard]] const std::optional<VisualDiagnosticSnapshot> &currentVisualDiagnostic() const noexcept

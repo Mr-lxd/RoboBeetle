@@ -17,7 +17,10 @@ QString configHash(const VisualPolicyConfig &c)
         + QString::number(c.lost_ms) + '\n'
         + QString::number(c.K_yaw, 'g', 17) + '\n'
         + QString::number(c.turn_sign) + '\n'
-        + QString::number(c.ui_tick_ms) + '\n').toUtf8();
+        + QString::number(c.ui_tick_ms) + '\n'
+        + QString::number(c.gate_px, 'g', 17) + '\n'
+        + QString::number(c.max_miss_ms) + '\n'
+        + QString::number(c.require_same_class ? 1 : 0) + '\n').toUtf8();
     return QString::fromLatin1(QCryptographicHash::hash(canonical,
         QCryptographicHash::Sha256).toHex());
 }
@@ -37,6 +40,7 @@ void VisualDiagnosticSession::beginSession(quint64 sessionId)
 {
     targetMemory_ = {};
     commandMemory_ = {};
+    associationMemory_ = {};
     context_ = {};
     snapshot_ = {};
     snapshot_.sessionId = sessionId;
@@ -56,7 +60,9 @@ void VisualDiagnosticSession::onDetectionArrival(const DetectionFrame &frame,
     snapshot_.frameId = frame.frameId;
     snapshot_.captureTimestampNs = frame.captureTimestampNs;
     snapshot_.nDetections = frame.detections.size();
+    snapshot_.detectionFrame = frame;
     context_ = context;
+    context_.frame = frame;
     evaluate(frame.frameId);
 }
 void VisualDiagnosticSession::refresh(const VisualViewContext &context)
@@ -67,9 +73,44 @@ void VisualDiagnosticSession::refresh(const VisualViewContext &context)
 void VisualDiagnosticSession::evaluate(std::optional<quint64> arrivedId)
 {
     const auto now = nowMs_();
+    auto gate = context_.gate;
+    std::optional<TargetState> selected;
+    snapshot_.highestConfidenceTarget.reset();
+    // Review S1: raw safety/wait gates bypass association; one state-machine call below.
+    if (gate == DetectionDisplayState::Target || gate == DetectionDisplayState::NoTarget) {
+        if (!context_.frame || !snapshot_.detectionFrame
+            || context_.frame->frameId != snapshot_.frameId) {
+            gate = DetectionDisplayState::Stale;
+        } else {
+            associationMemory_ = expireTargetAssociation(associationMemory_, now, config_);
+            const auto &frame = *snapshot_.detectionFrame;
+            if (!associationMemory_.lastProcessedFrameId
+                || frame.frameId > *associationMemory_.lastProcessedFrameId) {
+                const auto associated = associateTarget(associationMemory_, frame, now, config_);
+                associationMemory_ = associated.next;
+                if (!associated.valid) gate = DetectionDisplayState::Stale;
+            }
+            if (gate != DetectionDisplayState::Stale) {
+                selected = associationMemory_.cached.selected;
+                gate = selected ? DetectionDisplayState::Target : DetectionDisplayState::NoTarget;
+                snapshot_.highestConfidenceTarget = selectTargetState(frame);
+            }
+        }
+    }
     const auto state = advanceVisualTargetState(targetMemory_,
-        {now, arrivedId, context_.gate, context_.selected}, config_);
+        {now, arrivedId, gate, selected}, config_);
     targetMemory_ = state.next;
+    if (!state.awaitingVideo && (state.state == VisualState::Stale
+        || state.state == VisualState::InferenceOff || state.state == VisualState::Lost)) {
+        // Preserve IDs actually associated; raw gate rejection does not associate a frame.
+        associationMemory_ = releaseTargetAssociationLock(associationMemory_);
+        snapshot_.highestConfidenceTarget.reset();
+    }
+    snapshot_.associationStatus = associationMemory_.cached.status;
+    snapshot_.associationDistancePx = associationMemory_.cached.distancePx;
+    snapshot_.selectedDetectionIndex = associationMemory_.cached.selectedDetectionIndex;
+    snapshot_.associationMissMs = associationMemory_.missSinceMs && now >= *associationMemory_.missSinceMs
+        ? std::optional<qint64>(now - *associationMemory_.missSinceMs) : std::nullopt;
     snapshot_.localMonoMs = now;
     snapshot_.state = state.state;
     snapshot_.awaitingVideo = state.awaitingVideo;
@@ -87,6 +128,11 @@ void VisualDiagnosticSession::evaluate(std::optional<quint64> arrivedId)
     qint64 delay = tick;
     if (state.nextDeadlineMs && *state.nextDeadlineMs > now) {
         delay = std::min(delay, *state.nextDeadlineMs - now);
+    }
+    if (!state.awaitingVideo && associationMemory_.missSinceMs
+        && now >= *associationMemory_.missSinceMs) {
+        const auto remaining = config_.max_miss_ms - (now - *associationMemory_.missSinceMs);
+        if (remaining > 0) delay = std::min<qint64>(delay, remaining);
     }
     wakeup_.start(static_cast<int>(std::max<qint64>(1, delay)));
 }

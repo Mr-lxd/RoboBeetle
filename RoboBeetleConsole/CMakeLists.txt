@@ -41,6 +41,8 @@ add_library(RoboBeetleCore
     src/vision/DetectionMetadata.cpp
     src/vision/TargetState.h
     src/vision/TargetState.cpp
+    src/vision/TargetAssociation.h
+    src/vision/TargetAssociation.cpp
     src/vision/VisualPolicyConfig.h
     src/vision/VisualTargetStateMachine.h
     src/vision/VisualTargetStateMachine.cpp
@@ -153,6 +155,9 @@ if(BUILD_TESTING)
     add_executable(target_state_tests tests/target_state_tests.cpp)
     target_link_libraries(target_state_tests PRIVATE RoboBeetleCore)
     add_test(NAME target_state_tests COMMAND target_state_tests)
+    add_executable(target_association_tests tests/target_association_tests.cpp)
+    target_link_libraries(target_association_tests PRIVATE RoboBeetleCore)
+    add_test(NAME target_association_tests COMMAND target_association_tests)
 
     add_executable(visual_policy_config_tests tests/visual_policy_config_tests.cpp)
     target_include_directories(visual_policy_config_tests PRIVATE src)

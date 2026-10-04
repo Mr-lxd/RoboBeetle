@@ -111,7 +111,7 @@ void textOverlayLifecycleIsIndependentFromVideoFrame()
             0.88,
             QPointF(1.0, 1.0)});
 
-    view.setDetectionOverlay(overlay);
+    view.setDetectionOverlay(overlay, rb::vision::selectTargetState(overlay));
     expect(view.hasDetectionOverlay()
                && view.detectionOverlayCount() == 1,
            "VideoView accepts text-overlay metadata for matching source size");
@@ -143,12 +143,12 @@ void textOverlayLifecycleIsIndependentFromVideoFrame()
 
     DetectionFrame wrongSize = overlay;
     wrongSize.sourceSize = QSize(640, 480);
-    view.setDetectionOverlay(wrongSize);
+    view.setDetectionOverlay(wrongSize, rb::vision::selectTargetState(wrongSize));
     expect(!view.hasDetectionOverlay(),
            "mismatched source dimensions fail closed in VideoView");
     expect(!view.currentTargetState(), "mismatched dimensions cannot produce target errors");
 
-    view.setDetectionOverlay(overlay);
+    view.setDetectionOverlay(overlay, rb::vision::selectTargetState(overlay));
     view.clearFrame();
     expect(!view.hasFrame()
                && !view.hasDetectionOverlay()
@@ -181,7 +181,7 @@ void amberCentroidMarkersAndLabelsRenderForEveryDetection()
             QStringLiteral("stingray"),
             0.82,
             QPointF(3.0, 2.0)});
-    view.setDetectionOverlay(overlay);
+    view.setDetectionOverlay(overlay, rb::vision::selectTargetState(overlay));
 
     QImage rendered(view.size(), QImage::Format_ARGB32);
     rendered.fill(Qt::transparent);
@@ -220,7 +220,7 @@ void visualErrorGeometryUsesImageRectangle()
     overlay.detections.push_back(
         DetectionObservation{0, QStringLiteral("fish"), 0.88,
                              QPointF(160.0, 120.0)});
-    view.setDetectionOverlay(overlay);
+    view.setDetectionOverlay(overlay, rb::vision::selectTargetState(overlay));
     QImage withTarget(view.size(), QImage::Format_ARGB32);
     view.render(&withTarget);
     expect(containsColor(withTarget, QRect(147, 159, 7, 7), cyan),
@@ -236,7 +236,7 @@ void visualErrorGeometryUsesImageRectangle()
     expect(!containsColor(cleared, QRect(147, 159, 7, 7), cyan),
            "clearing detections also removes the target error line");
 
-    view.setDetectionOverlay(overlay);
+    view.setDetectionOverlay(overlay, rb::vision::selectTargetState(overlay));
     QImage differentSize(1280, 720, QImage::Format_RGB32);
     differentSize.fill(Qt::black);
     view.setFrame(differentSize, 21U, 21'000U);
@@ -267,6 +267,32 @@ void commandProposalDisplay()
            "invalid target does not masquerade as zero filtered error");
 }
 
+void associatedSelectionDisplay()
+{
+    qint64 now=0;
+    rb::vision::VisualDiagnosticSession session({},[&]{return now;});
+    DetectionFrame f{1,1000,{640,480},{{0,"fish",.89,{450,300}},{1,"other",.85,{547,300}}}};
+    session.onDetectionArrival(f,{rb::vision::DetectionDisplayState::Target,f});
+    now=40; f.frameId=2; f.detections[0].confidence=.85; f.detections[1].confidence=.89;
+    session.onDetectionArrival(f,{rb::vision::DetectionDisplayState::Target,f});
+    VideoView view; view.resize(640,480);
+    QImage source(640,480,QImage::Format_RGB32); source.fill(Qt::black);
+    view.setFrame(source,2,1000);
+    view.setDetectionOverlay(f,session.snapshot().target); view.setVisualDiagnostic(session.snapshot());
+    expect(view.currentTargetState() && view.currentTargetState()->target.originalPoint.x()==450,
+           "view must use associated target rather than higher-confidence target");
+    expect(view.visualDiagnosticText().contains("lock: ASSOCIATED d=0.0px")
+           && !view.visualDiagnosticText().contains("(highest)"),"panel identifies associated lock and distance");
+    QImage rendered(view.size(),QImage::Format_ARGB32); view.render(&rendered);
+    expect(rendered.pixelColor(461,300)==QColor(0,0xE5,0xFF),"associated point has distinct cyan ring");
+    expect(rendered.pixelColor(547,300)==QColor(0xFF,0xB0,0),"unselected detection remains amber");
+    now=80; f.frameId=3; f.detections.removeFirst(); session.onDetectionArrival(f,{rb::vision::DetectionDisplayState::Target,f});
+    view.setDetectionOverlay(f,session.snapshot().target); view.setVisualDiagnostic(session.snapshot());
+    expect(view.hasDetectionOverlay() && view.detectionOverlayCount()==1 && !view.currentTargetState(),
+           "MISS retains other detections without a target error line");
+    expect(view.visualDiagnosticText().contains("lock: MISS 0ms"),"MISS elapsed time is shown");
+}
+
 void saveDiagnosticPreviews(const QString &directory)
 {
     expect(QDir().mkpath(directory), "preview output directory can be created");
@@ -288,12 +314,12 @@ void saveDiagnosticPreviews(const QString &directory)
             if (!item.detected) {
                 overlay.detections.clear();
             }
-            view.setDetectionOverlay(overlay);
+            view.setDetectionOverlay(overlay, rb::vision::selectTargetState(overlay));
             rb::vision::VisualDiagnosticSession diagnostic({}, [] { return 0; });
             diagnostic.onDetectionArrival(overlay, {
                 item.detected ? rb::vision::DetectionDisplayState::Target
                               : rb::vision::DetectionDisplayState::NoTarget,
-                rb::vision::selectTargetState(overlay)});
+                overlay});
             view.setVisualDiagnostic(diagnostic.snapshot());
             QImage rendered(view.size(), QImage::Format_ARGB32);
             view.render(&rendered);
@@ -317,6 +343,7 @@ int main(int argc, char **argv)
     amberCentroidMarkersAndLabelsRenderForEveryDetection();
     visualErrorGeometryUsesImageRectangle();
     commandProposalDisplay();
+    associatedSelectionDisplay();
     const QStringList arguments = app.arguments();
     const int previewOption = arguments.indexOf(QStringLiteral("--preview-dir"));
     if (previewOption >= 0 && previewOption + 1 < arguments.size()) {

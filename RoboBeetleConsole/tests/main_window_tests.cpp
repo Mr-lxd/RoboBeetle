@@ -2476,7 +2476,7 @@ void testSlice5DetectionTextOverlayLifecycle()
     // Independent TCP streams: a newer detection may precede its video image.
     if (detectionPeer) {
         detectionPeer->write(slice5DetectionLine(11U, 1'200'000'000ULL,
-                                                QStringLiteral("fish"), 0.88, 480.0, 240.0));
+                                                QStringLiteral("fish"), 0.88, 135.0, 175.0));
         detectionPeer->flush();
     }
     expect(waitUntil([&] { return detectionClient.lastFrameId() == 11U; }),
@@ -2489,12 +2489,12 @@ void testSlice5DetectionTextOverlayLifecycle()
     visionClient.frameReady(live, 12U, 1'200'000'000ULL);
     expect(view->currentVisualDiagnostic() && !view->currentVisualDiagnostic()->awaitingVideo
                && view->currentVisualDiagnostic()->command.ex_f
-               && std::abs(*view->currentVisualDiagnostic()->command.ex_f + 0.2875) < 1e-9
+               && std::abs(*view->currentVisualDiagnostic()->command.ex_f + 0.6109375) < 1e-9
                && view->currentVisualDiagnostic()->command.effective == rb::vision::ProposedCommand::TurnLeft,
            "15 ms video catchup makes one EMA update and never inserts STOP");
     visionClient.frameReady(live, 12U, 1'200'000'000ULL);
     expect(view->currentVisualDiagnostic()->command.ex_f
-               && std::abs(*view->currentVisualDiagnostic()->command.ex_f + 0.2875) < 1e-9,
+               && std::abs(*view->currentVisualDiagnostic()->command.ex_f + 0.6109375) < 1e-9,
            "repeated video rendering does not repeat the EMA update");
 
     // Exercise the real Stop Inference button, POST ACK and authoritative GET.
@@ -2556,8 +2556,10 @@ void testSlice5DetectionTextOverlayLifecycle()
         sendHttpJson(resumePeer, slice5StatusBody(detectionServer.serverPort()));
         resumePeer->deleteLater();
     }
-    expect(waitUntil([&] { return view->currentTargetState().has_value(); }),
-           "a fresh authoritative running state restores valid retained metadata");
+    expect(waitUntil([&] { return controlClient.status().inferenceState == QStringLiteral("running")
+               && controlClient.status().inferenceOperation.isEmpty(); }),
+           "fresh authoritative running state is received after stopping");
+    expect(!view->currentTargetState(), "running status cannot reacquire a released old ID after Stop");
     if (detectionPeer) {
         QJsonObject empty = QJsonDocument::fromJson(
             slice5DetectionLine(12U, 1'000'000'000ULL)).object();
@@ -2604,8 +2606,9 @@ void testSlice5DetectionTextOverlayLifecycle()
         sendHttpJson(knownStatePeer, slice5StatusBody(detectionServer.serverPort()));
         knownStatePeer->deleteLater();
     }
-    expect(waitUntil([&] { return view->currentTargetState().has_value(); }),
-           "known running status restores an accepted target after unknown state");
+    expect(waitUntil([&] { return controlClient.status().inferenceState == QStringLiteral("running"); }),
+           "known running status recovers after unknown state");
+    expect(!view->currentTargetState(), "known status cannot reacquire a released old ID after STALE");
     expect(transport.writes().isEmpty(),
            "Stop Inference and display reason transitions send zero robot bytes");
 
@@ -2765,6 +2768,61 @@ void testSlice5DetectionTextOverlayLifecycle()
            "continued fresh empty frames reach LOST STOP after 1500 ms");
     expect(transport.writes().isEmpty(), "all proposal states send zero robot bytes");
 
+    // Task04: actual NDJSON on the established independent TCP detection socket.
+    controlClient.refreshStatus();
+    expect(waitUntil([&]{return controlServer.hasPendingConnections();}), "association experiment refreshes HTTP freshness");
+    if(auto *peer=controlServer.nextPendingConnection()) {
+        readHttpRequest(peer); sendHttpJson(peer,slice5StatusBody(detectionServer.serverPort())); peer->deleteLater();
+    }
+    expect(waitUntil([&]{return controlClient.hasFreshStatus();}), "association experiment has fresh status");
+    auto sendAssociated=[&](quint64 id,double ca,double cb,bool onlyOther=false,quint64 ts=2'500'000'000ULL) {
+        QJsonObject a=QJsonDocument::fromJson(slice5DetectionLine(id,ts,"fish",ca,450,240)).object();
+        const auto b=QJsonDocument::fromJson(slice5DetectionLine(id,ts,"other",cb,547,240)).object();
+        QJsonArray detections;
+        if(!onlyOther)detections.append(a.value("detections").toArray().first());
+        detections.append(b.value("detections").toArray().first());
+        a.insert("detections",detections);
+        if(detectionPeer){detectionPeer->write(QJsonDocument(a).toJson(QJsonDocument::Compact)+'\n');detectionPeer->flush();}
+        expect(waitUntil([&]{return detectionClient.lastFrameId()==id;}), "association fixture arrives over TCP");
+    };
+    sendAssociated(34,.89,.85);
+    expect(view->currentTargetState() && view->currentTargetState()->target.originalPoint.x()==450
+           && view->currentVisualDiagnostic()->associationStatus==rb::vision::AssociationStatus::Acquired,
+           "fresh target after LOST acquires 450");
+    for(quint64 id=35;id<=40;++id) {
+        sendAssociated(id,id%2?.85:.89,id%2?.89:.85);
+        expect(view->currentTargetState() && view->currentTargetState()->target.originalPoint.x()==450
+               && view->currentVisualDiagnostic()->highestConfidenceTarget
+               && view->currentVisualDiagnostic()->highestConfidenceTarget->target.originalPoint.x()==(id%2?547:450)
+               && view->currentVisualDiagnostic()->associationStatus==rb::vision::AssociationStatus::Associated,
+               "loopback confidence alternation keeps lock and records jumping highest baseline");
+        expect(transport.writes().isEmpty(),"associated suggestions send zero robot bytes");
+    }
+    sendAssociated(41,.85,.89,true);
+    const auto missStart=view->currentVisualDiagnostic()->localMonoMs;
+    expect(view->hasDetectionOverlay() && !view->currentTargetState()
+           && view->currentVisualDiagnostic()->state==rb::vision::VisualState::NoTarget
+           && view->currentVisualDiagnostic()->command.proposed==rb::vision::ProposedCommand::Hold,
+           "out-of-gate candidate remains visible and maps to HOLD");
+    std::optional<qint64> reacquiredAt;
+    for(quint64 id=42;id<=47;++id) {
+        waitForMs(100); sendAssociated(id,.85,.89,true);
+        if(!reacquiredAt && view->currentVisualDiagnostic()->target)
+            reacquiredAt=view->currentVisualDiagnostic()->localMonoMs;
+    }
+    expect(reacquiredAt && *reacquiredAt-missStart>=500 && *reacquiredAt-missStart<800
+           && view->currentTargetState() && view->currentTargetState()->target.originalPoint.x()==547,
+           "new advancing ID reacquires other target after local MISS timeout");
+    sendAssociated(48,.85,.89,true,3'000'000'000ULL);
+    expect(view->currentVisualDiagnostic()->awaitingVideo,"new association metadata waits for video");
+    expect(waitUntil([&]{return view->currentVisualDiagnostic()->state==rb::vision::VisualState::Stale;},700),
+           "awaiting association metadata expires at local 500 ms watchdog");
+    visionClient.frameReady(live,49,3'000'000'000ULL);
+    expect(!view->currentTargetState() && view->currentVisualDiagnostic()->associationStatus==rb::vision::AssociationStatus::Unlocked
+           && view->currentVisualDiagnostic()->command.effective==rb::vision::ProposedCommand::Stop,
+           "late video cannot resurrect association or produce output");
+    expect(transport.writes().isEmpty(),"MISS/reacquire/awaiting expiry emit zero robot bytes");
+
     // Losing only 47012 clears text but leaves video and HTTP state alive.
     if (detectionPeer != nullptr) {
         detectionPeer->disconnectFromHost();
@@ -2843,11 +2901,12 @@ void testSlice5DetectionTextOverlayLifecycle()
             bool usableErrors = false;
             for (qsizetype i = 1; i < lines.size(); ++i) {
                 const auto columns = lines[i].trimmed().split(',');
-                if (columns.size() != 21) { continue; }
+                if (columns.size() != 30) { continue; }
+                expect(columns[21]=="visual-csv-v2","loopback CSV rows identify new schema");
                 if (columns[0] == "frame" && columns[3] == "11") {
                     ++aheadFrameCount;
-                    expect(columns[6] == "fish" && std::abs(columns[10].toDouble() - 0.5) < 1e-9
-                               && std::abs(columns[12].toDouble() + 0.2875) < 1e-9
+                    expect(columns[6] == "fish" && std::abs(columns[10].toDouble() + 0.578125) < 1e-9
+                               && std::abs(columns[12].toDouble() + 0.6109375) < 1e-9
                                && columns[20] == "0" && columns[1].toLongLong() >= columns[2].toLongLong(),
                            "caught-up frame includes the exact new ex/EMA and arrival/evaluation times");
                 }

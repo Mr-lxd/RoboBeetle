@@ -2,6 +2,7 @@
 
 #include "vision/VisualCommandPolicy.h"
 #include "vision/VisualTargetStateMachine.h"
+#include "vision/TargetAssociation.h"
 #include <QElapsedTimer>
 #include <QObject>
 #include <QTimer>
@@ -11,7 +12,7 @@ namespace rb::vision {
 
 struct VisualViewContext {
     DetectionDisplayState gate{DetectionDisplayState::Stale};
-    std::optional<TargetState> selected;
+    std::optional<DetectionFrame> frame;
 };
 
 struct VisualDiagnosticSnapshot {
@@ -27,6 +28,12 @@ struct VisualDiagnosticSnapshot {
     int turnSign{1};
     QString policyVersion;
     QString policyHash;
+    AssociationStatus associationStatus{AssociationStatus::Unlocked};
+    std::optional<double> associationDistancePx;
+    std::optional<qint64> associationMissMs;
+    std::optional<qsizetype> selectedDetectionIndex;
+    std::optional<TargetState> highestConfidenceTarget;
+    std::optional<DetectionFrame> detectionFrame;
 };
 
 class VisualDiagnosticSession final : public QObject {
@@ -49,6 +56,7 @@ private:
     QTimer wakeup_;
     VisualTargetMemory targetMemory_;
     VisualCommandMemory commandMemory_;
+    TargetAssociationMemory associationMemory_;
     VisualViewContext context_;
     VisualDiagnosticSnapshot snapshot_;
 };

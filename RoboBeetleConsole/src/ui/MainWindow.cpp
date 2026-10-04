@@ -2389,8 +2389,12 @@ void MainWindow::bindVisionUi()
             [this](const vision::VisualDiagnosticSnapshot &snapshot) {
         visualCsvLogger_->record(snapshot);
         if (videoView_ == nullptr) { return; }
-        if (snapshot.target && latestDetectionFrame_) {
-            videoView_->setDetectionOverlay(*latestDetectionFrame_);
+        const auto gate = visualDisplayContext().gate;
+        if (latestDetectionFrame_ && latestDetectionFrame_->frameId == snapshot.frameId
+            && !snapshot.awaitingVideo
+            && (gate == vision::DetectionDisplayState::Target || gate == vision::DetectionDisplayState::NoTarget)
+            && (snapshot.state == vision::VisualState::Tracking || snapshot.state == vision::VisualState::NoTarget)) {
+            videoView_->setDetectionOverlay(*latestDetectionFrame_, snapshot.target);
         } else {
             const auto reason = snapshot.state == vision::VisualState::InferenceOff
                 ? vision::DetectionDisplayState::InferenceOff
@@ -3007,14 +3011,7 @@ vision::VisualViewContext MainWindow::visualDisplayContext() const
 
     context.gate = vision::detectionOverlayState(*latestDetectionFrame_,
         videoView_->currentFrameSize(), videoView_->currentCaptureTimestampNs(), inferenceRunning, fresh);
-    if (vision::detectionOverlayRenderable(
-            *latestDetectionFrame_,
-            videoView_->currentFrameSize(),
-            videoView_->currentCaptureTimestampNs(),
-            inferenceRunning,
-            fresh)) {
-        context.selected = vision::selectTargetState(*latestDetectionFrame_);
-    }
+    context.frame = latestDetectionFrame_;
 
     return context;
 }
