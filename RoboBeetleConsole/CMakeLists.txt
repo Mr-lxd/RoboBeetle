@@ -218,6 +218,11 @@ if(BUILD_TESTING)
     target_link_libraries(depth_monitor_tests PRIVATE RoboBeetleCore)
     add_test(NAME depth_monitor_tests COMMAND depth_monitor_tests)
 
+    add_executable(main_window_visual_dispatch_tests tests/main_window_visual_dispatch_tests.cpp ${RB_CONSOLE_UI_SOURCES})
+    target_link_libraries(main_window_visual_dispatch_tests PRIVATE RoboBeetleCore Qt6::Widgets)
+    add_test(NAME main_window_visual_dispatch_tests COMMAND main_window_visual_dispatch_tests)
+    set_tests_properties(main_window_visual_dispatch_tests PROPERTIES RUN_SERIAL TRUE)
+
     add_executable(main_window_tests
         tests/main_window_tests.cpp
         ${RB_CONSOLE_UI_SOURCES}

@@ -9,6 +9,7 @@
 #include "vision/InferenceUiState.h"
 #include "vision/VisualDiagnosticSession.h"
 #include "vision/VisualCsvLogger.h"
+#include "vision/VisualDispatchSession.h"
 
 #include <QCloseEvent>
 #include <QAbstractSpinBox>
@@ -1579,6 +1580,7 @@ QWidget *MainWindow::createServoFineControlTab()
         connect(pwmSpins_[index],
                 qOverload<int>(&QSpinBox::valueChanged),
                 this, [this, id, index](int value) {
+            if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
             const ServoDescriptor *descriptor = servoDescriptor(id);
             if (descriptor == nullptr) {
                 return;
@@ -1597,6 +1599,7 @@ QWidget *MainWindow::createServoFineControlTab()
         });
         connect(pwmSliders_[index], &QSlider::valueChanged,
                 this, [this, id, index](int value) {
+            if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
             const ServoDescriptor *descriptor = servoDescriptor(id);
             if (descriptor == nullptr) {
                 return;
@@ -1616,6 +1619,7 @@ QWidget *MainWindow::createServoFineControlTab()
         connect(angleSpins_[index],
                 qOverload<double>(&QDoubleSpinBox::valueChanged),
                 this, [this, id, index](double degrees) {
+            if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
             const ServoDescriptor *descriptor = servoDescriptor(id);
             if (descriptor == nullptr) {
                 return;
@@ -1635,6 +1639,7 @@ QWidget *MainWindow::createServoFineControlTab()
 
         connect(applyButtons_[index], &QPushButton::clicked,
                 this, [this, id, index] {
+            if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
             if (pwmSpins_[index] == nullptr || applyButtons_[index] == nullptr) {
                 return;
             }
@@ -1653,6 +1658,7 @@ QWidget *MainWindow::createServoFineControlTab()
         });
         connect(angleApplyButtons_[index], &QPushButton::clicked,
                 this, [this, id, index] {
+            if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
             if (angleSpins_[index] == nullptr
                 || angleApplyButtons_[index] == nullptr) {
                 return;
@@ -1672,6 +1678,8 @@ QWidget *MainWindow::createServoFineControlTab()
         });
         connect(enableButtons_[index], &QPushButton::clicked,
                 this, [this, id, index] {
+            if (visualDispatch_) visualDispatch_->manualInput(controller_->isServoEnabled(id)
+                ? vision::ManualInputKind::Stop : vision::ManualInputKind::Motion);
             if (controller_->isServoEnabled(id)) {
                 controller_->disableServo(id);
             } else {
@@ -1681,6 +1689,7 @@ QWidget *MainWindow::createServoFineControlTab()
         });
         connect(neutralButtons_[index], &QPushButton::clicked,
                 this, [this, id, index] {
+            if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
             controller_->neutralServo(id);
             refreshServoUi(index);
         });
@@ -1734,6 +1743,7 @@ QWidget *MainWindow::createMotionPanel()
     };
     for (const MotionMode mode : dpadModes) {
         auto *button = new QPushButton(motionModeText(mode), motionGroup);
+        button->setObjectName(QStringLiteral("motionModeButton%1").arg(static_cast<int>(mode)));
         button->setCheckable(true);
         button->setAutoExclusive(false);
         button->setProperty("consoleActionRole", "secondary");
@@ -1745,6 +1755,7 @@ QWidget *MainWindow::createMotionPanel()
                 "Brake control is pending water-tank verification; no motion command is emitted."));
         }
         connect(button, &QPushButton::clicked, this, [this, mode] {
+            if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
             controller_->startMotion(mode);
             refreshMotionUi();
         });
@@ -1767,6 +1778,7 @@ QWidget *MainWindow::createMotionPanel()
         "QPushButton:pressed { background: #AAB7C0; }"));
     motionStopButton_->setToolTip(QStringLiteral("Stop the active motion."));
     connect(motionStopButton_, &QPushButton::clicked, this, [this] {
+        if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Stop);
         controller_->stopMotion();
         refreshMotionUi();
     });
@@ -1789,12 +1801,14 @@ QWidget *MainWindow::createMotionPanel()
     };
     for (const MotionMode mode : verticalModes) {
         auto *button = new QPushButton(motionModeText(mode), gaitGroup);
+        button->setObjectName(QStringLiteral("motionModeButton%1").arg(static_cast<int>(mode)));
         button->setCheckable(true);
         button->setAutoExclusive(false);
         button->setProperty("consoleActionRole", "secondary");
         button->setStyleSheet(commandButtonStyle);
         motionButtons_[static_cast<std::size_t>(mode)] = button;
         connect(button, &QPushButton::clicked, this, [this, mode] {
+            if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
             controller_->startMotion(mode);
             refreshMotionUi();
         });
@@ -1888,6 +1902,7 @@ QWidget *MainWindow::createMotionPanel()
                     refreshGaitSelectorsUi();
                     return;
                 }
+                if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
                 controller_->setGaitBackend(
                     static_cast<GaitBackend>(value.toInt()));
                 refreshGaitSelectorsUi();
@@ -1908,6 +1923,7 @@ QWidget *MainWindow::createMotionPanel()
                     refreshGaitSelectorsUi();
                     return;
                 }
+                if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
                 controller_->setFrontRearCoordination(
                     static_cast<FrontRearCoordination>(value.toInt()));
                 refreshGaitSelectorsUi();
@@ -2127,6 +2143,43 @@ QWidget *MainWindow::createVisionDetailsTab()
     videoForm->addRow(QStringLiteral("Visual proposal"), visualProposalDetails_);
     layout->addLayout(videoForm);
 
+    auto *dispatchForm = new QFormLayout;
+    visualDispatchEnabled_ = new QCheckBox(QStringLiteral("Enable visual dispatch"), content);
+    visualDispatchEnabled_->setObjectName(QStringLiteral("visualDispatchEnabled"));
+    // Deliberately session-only; neither gate nor turn confirmation uses settings.
+    dispatchForm->addRow(QStringLiteral("Visual dispatch"), visualDispatchEnabled_);
+    auto *signRow = new QWidget(content);
+    auto *signLayout = new QHBoxLayout(signRow);
+    signLayout->setContentsMargins(0, 0, 0, 0);
+    visualTurnSign_ = new QComboBox(signRow);
+    visualTurnSign_->setObjectName(QStringLiteral("visualTurnSign"));
+    visualTurnSign_->addItem(QStringLiteral("Select turn sign (unconfirmed)"));
+    visualTurnSign_->addItem(QStringLiteral("+1"), 1);
+    visualTurnSign_->addItem(QStringLiteral("-1"), -1);
+    visualTurnSignConfirm_ = new QPushButton(QStringLiteral("Confirm turn sign"), signRow);
+    visualTurnSignConfirm_->setObjectName(QStringLiteral("visualTurnSignConfirm"));
+    signLayout->addWidget(visualTurnSign_);
+    signLayout->addWidget(visualTurnSignConfirm_);
+    dispatchForm->addRow(QStringLiteral("Turn direction"), signRow);
+    auto *armRow = new QWidget(content);
+    auto *armLayout = new QHBoxLayout(armRow);
+    armLayout->setContentsMargins(0, 0, 0, 0);
+    auto *arm = new QPushButton(QStringLiteral("Arm"), armRow);
+    arm->setObjectName(QStringLiteral("visualArmButton"));
+    auto *disarm = new QPushButton(QStringLiteral("Disarm"), armRow);
+    disarm->setObjectName(QStringLiteral("visualDisarmButton"));
+    armLayout->addWidget(arm);
+    armLayout->addWidget(disarm);
+    dispatchForm->addRow(QStringLiteral("Automatic control"), armRow);
+    visualDispatchStatus_ = new QLabel(content);
+    visualDispatchStatus_->setObjectName(QStringLiteral("visualDispatchStatus"));
+    visualDispatchStatus_->setWordWrap(true);
+    visualDispatchStatus_->setTextFormat(Qt::PlainText);
+    dispatchForm->addRow(QStringLiteral("Dispatch status"), visualDispatchStatus_);
+    layout->addLayout(dispatchForm);
+    connect(arm, &QPushButton::clicked, this, [this] { if (visualDispatch_) visualDispatch_->arm(); });
+    connect(disarm, &QPushButton::clicked, this, [this] { if (visualDispatch_) visualDispatch_->disarm(); });
+
     auto *csvForm = new QFormLayout;
     visualCsvEnabled_ = new QCheckBox(QStringLiteral("Record visual CSV (no motion output)"), content);
     visualCsvEnabled_->setObjectName(QStringLiteral("visualCsvEnabled"));
@@ -2229,6 +2282,7 @@ QWidget *MainWindow::createOperatorActionBar()
     enableAllButton_->setProperty("consoleActionRole", "secondary");
     layout->addWidget(enableAllButton_);
     connect(enableAllButton_, &QPushButton::clicked, this, [this] {
+        if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
         if (!controller_->isControlActive() || controller_->isMotionActive()) {
             return;
         }
@@ -2252,6 +2306,7 @@ QWidget *MainWindow::createOperatorActionBar()
     disableAllButton_->setProperty("consoleActionRole", "stop");
     layout->addWidget(disableAllButton_);
     connect(disableAllButton_, &QPushButton::clicked, this, [this] {
+        if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Stop);
         controller_->disableAll();
         for (int index = 0; index < kServoCount; ++index) {
             refreshServoUi(index);
@@ -2368,6 +2423,36 @@ void MainWindow::refreshVisualCsvUi()
     }
 }
 
+void MainWindow::refreshVisualDispatchUi()
+{
+    if (!visualDispatch_) return;
+    const bool enabled = visualDispatch_->featureEnabled()
+        && controller_->backendKind() == ConsoleBackendKind::RemoteRbrp;
+    QString status = QStringLiteral("%1 | %2 | %3\nACK-confirmed: %4\nturn sign: %5")
+        .arg(enabled ? QStringLiteral("DISPATCH ON") : QStringLiteral("DRY_RUN"))
+        .arg(visualDispatch_->armed() ? QStringLiteral("ARMED") : QStringLiteral("DISARMED"))
+        .arg(QString::fromLatin1(vision::armReasonName(visualDispatch_->armReason())))
+        .arg(visualDispatch_->currentMode()
+             ? QString::fromLatin1(vision::proposedCommandName(*visualDispatch_->currentMode()))
+             : QStringLiteral("--"))
+        .arg(visualDispatch_->confirmedTurnSign()
+             ? QStringLiteral("%1 confirmed").arg(*visualDispatch_->confirmedTurnSign())
+             : QStringLiteral("UNCONFIRMED"));
+    if (visualDispatch_->stopTimeoutAlert()) status += QStringLiteral("\nSTOP TIMEOUT ALERT");
+    if (!visualOperatorStopStatus_.isEmpty())
+        status += QStringLiteral("\noperator STOP: %1").arg(visualOperatorStopStatus_);
+    if (!visualDispatchRejection_.isEmpty()) status += '\n' + visualDispatchRejection_;
+    if (!visualDispatch_->poseMismatch().isEmpty()) status += '\n' + visualDispatch_->poseMismatch();
+    visualDispatchStatus_->setText(status);
+    visualTurnSignConfirm_->setEnabled(visualTurnSign_->currentData().isValid());
+    visualCsvEnabled_->setText(enabled ? QStringLiteral("Record visual CSV (diagnostics + dispatch)")
+                                      : QStringLiteral("Record visual CSV (no motion output)"));
+    if (videoView_) {
+        videoView_->setVisualDispatchPresentation(enabled, visualDispatch_->armed(), status);
+        if (visualProposalDetails_) visualProposalDetails_->setText(videoView_->visualDiagnosticText());
+    }
+}
+
 void MainWindow::bindVisionUi()
 {
     visualCsvLogger_ = new vision::VisualCsvLogger({}, this);
@@ -2389,6 +2474,37 @@ void MainWindow::bindVisionUi()
         if (!directory.isEmpty()) { visualCsvDirectory_->setText(directory); }
     });
     visualSession_ = new vision::VisualDiagnosticSession({}, {}, this);
+    visualDispatch_ = new vision::VisualDispatchSession(controller_,
+        [this]() -> std::optional<vision::VisualDiagnosticSnapshot> {
+            if (!visualSession_) return std::nullopt;
+            return visualSession_->snapshot();
+        }, [this] { return visualSession_->monotonicNowMs(); }, {}, this);
+    connect(visualDispatch_, &vision::VisualDispatchSession::dispatchRecorded,
+            visualCsvLogger_, &vision::VisualCsvLogger::recordDispatch);
+    connect(visualDispatch_, &vision::VisualDispatchSession::dispatchRecorded, this,
+            [this](const vision::VisualDispatchRecord &record) {
+        if (record.policyId == 0 && record.command == vision::ProposedCommand::Stop)
+            visualOperatorStopStatus_ = record.result;
+        if (record.command != vision::ProposedCommand::Stop
+            && record.rawResult != 0xff && record.rawResult != 0) {
+            visualDispatchRejection_ = QStringLiteral("%1 %2 | raw result: %3")
+                .arg(QString::fromLatin1(vision::proposedCommandName(record.command)), record.result)
+                .arg(record.rawResult);
+        }
+    });
+    connect(visualDispatch_, &vision::VisualDispatchSession::statusChanged,
+            this, &MainWindow::refreshVisualDispatchUi);
+    connect(visualDispatchEnabled_, &QCheckBox::toggled,
+            visualDispatch_, &vision::VisualDispatchSession::setFeatureEnabled);
+    connect(visualTurnSign_, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int index) {
+        const auto value = visualTurnSign_->itemData(index);
+        visualDispatch_->selectTurnSign(value.isValid()
+            ? std::optional<int>(value.toInt()) : std::nullopt);
+    });
+    connect(visualTurnSignConfirm_, &QPushButton::clicked,
+            visualDispatch_, &vision::VisualDispatchSession::confirmTurnSign);
+    refreshVisualDispatchUi();
     connect(visualSession_, &vision::VisualDiagnosticSession::diagnosticChanged, this,
             [this](const vision::VisualDiagnosticSnapshot &snapshot) {
         visualCsvLogger_->record(snapshot);

@@ -40,6 +40,7 @@ class VisionClient;
 class VisionControlClient;
 class VisualDiagnosticSession;
 class VisualCsvLogger;
+class VisualDispatchSession;
 struct VisualViewContext;
 }
 
@@ -89,6 +90,7 @@ private:
     QWidget *createVisionDetailsTab();
     void bindVisionUi();
     void refreshVisualCsvUi();
+    void refreshVisualDispatchUi();
     void bindControllerUi();
     void refreshVideoDiagnosticsUi();
     void refreshProtocolUi(const ProtocolMonitor &monitor);
@@ -128,6 +130,13 @@ private:
     vision::DetectionClient *detectionClient_{nullptr};
     vision::VisualDiagnosticSession *visualSession_{nullptr};
     quint64 visualSessionId_{0};
+    vision::VisualDispatchSession *visualDispatch_{nullptr};
+    QCheckBox *visualDispatchEnabled_{nullptr};
+    QComboBox *visualTurnSign_{nullptr};
+    QPushButton *visualTurnSignConfirm_{nullptr};
+    QLabel *visualDispatchStatus_{nullptr};
+    QString visualDispatchRejection_;
+    QString visualOperatorStopStatus_;
     QLabel *visualProposalDetails_{nullptr};
     vision::VisualCsvLogger *visualCsvLogger_{nullptr};
     QCheckBox *visualCsvEnabled_{nullptr};

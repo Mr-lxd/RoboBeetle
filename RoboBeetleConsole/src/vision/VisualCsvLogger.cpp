@@ -8,7 +8,7 @@
 
 namespace rb::vision {
 namespace {
-const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets\n";
+const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets,policy_request_id,request_id,dispatch_command,dispatch_result,ack_rtt_ms\n";
 
 QString escaped(QString field)
 {
@@ -107,7 +107,7 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
                                std::optional<qint64> arrivalMs) const
 {
     QStringList fields;
-    fields.reserve(30);
+    fields.reserve(35);
     fields << (transition ? QStringLiteral("transition") : QStringLiteral("frame"))
            << QString::number(s.localMonoMs)
            << (!transition && arrivalMs ? QString::number(*arrivalMs) : QString{});
@@ -155,8 +155,32 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
     } else {
         fields << QString{} << QString{} << QString{};
     }
+    for (int i = 0; i < 5; ++i) fields << QString{};
     for (QString &field : fields) field = escaped(std::move(field));
     return (fields.join(QLatin1Char(',')) + QLatin1Char('\n')).toUtf8();
+}
+
+void VisualCsvLogger::recordDispatch(const VisualDispatchRecord &record)
+{
+    if (!recording_) return;
+    // Dispatch events do not consume or finalize diagnostic frames, nor alter
+    // their session, deduplication floor or transition baseline.
+    QStringList fields;
+    for (int i = 0; i < 35; ++i) fields << QString{};
+    fields[0] = record.result == QStringLiteral("SENT")
+        || record.result == QStringLiteral("LOCAL_REJECTED")
+        ? QStringLiteral("dispatch") : QStringLiteral("outcome");
+    fields[1] = QString::number(record.nowMs);
+    fields[21] = QString::fromLatin1(VisualCsvConfig::schema_version.data(),
+        static_cast<qsizetype>(VisualCsvConfig::schema_version.size()));
+    // Policy ID zero denotes the one-shot operator STOP.
+    fields[30] = QString::number(record.policyId);
+    if (record.wireId) fields[31] = QString::number(*record.wireId);
+    fields[32] = QString::fromLatin1(proposedCommandName(record.command));
+    fields[33] = record.result;
+    if (record.ackRttMs >= 0) fields[34] = QString::number(record.ackRttMs);
+    for (QString &field : fields) field = escaped(std::move(field));
+    append((fields.join(QLatin1Char(',')) + QLatin1Char('\n')).toUtf8());
 }
 
 bool VisualCsvLogger::finishPending(qint64 evaluationMs)

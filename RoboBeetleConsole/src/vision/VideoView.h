@@ -26,6 +26,7 @@ public:
     void clearFrame();
     void setDetectionOverlay(const DetectionFrame &frame, const std::optional<TargetState> &selected);
     void clearDetectionOverlay(DetectionDisplayState reason = DetectionDisplayState::Stale);
+    void setVisualDispatchPresentation(bool enabled, bool armed, const QString &status);
     void setVisualDiagnostic(const VisualDiagnosticSnapshot &snapshot);
     [[nodiscard]] const std::optional<VisualDiagnosticSnapshot> &currentVisualDiagnostic() const noexcept
     {
@@ -71,6 +72,9 @@ protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
+    bool dispatchEnabled_{false};
+    bool dispatchArmed_{false};
+    QString dispatchStatus_;
     QImage image_;
     quint64 frameId_{0};
     quint64 captureTimestampNs_{0};

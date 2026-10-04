@@ -93,13 +93,22 @@ void VideoView::setVisualDiagnostic(const VisualDiagnosticSnapshot &snapshot)
     update();
 }
 
+void VideoView::setVisualDispatchPresentation(bool enabled, bool armed, const QString &status)
+{
+    dispatchEnabled_ = enabled;
+    dispatchArmed_ = armed;
+    dispatchStatus_ = status;
+    update();
+}
+
 QString VideoView::visualDiagnosticText() const
 {
     if (visualDiagnostic_) {
         const auto &s = *visualDiagnostic_;
         const auto &c = s.command;
         QStringList lines{
-            QStringLiteral("VISION DRY_RUN - no motion output"),
+            dispatchEnabled_ ? QStringLiteral("VISION DISPATCH - %1").arg(dispatchArmed_ ? QStringLiteral("ARMED") : QStringLiteral("DISARMED"))
+                             : QStringLiteral("VISION DRY_RUN - no motion output"),
             QStringLiteral("manual controls live | %1").arg(QString::fromLatin1(visualStateName(s.state)))};
         if (s.target) {
             const auto &t = *s.target;
@@ -116,7 +125,7 @@ QString VideoView::visualDiagnosticText() const
         lines << QStringLiteral("ex_f=%1 yaw=%2")
                      .arg(c.ex_f ? QString::number(*c.ex_f, 'f', 3) : QStringLiteral("--"))
                      .arg(c.yaw_cmd, 0, 'f', 3)
-              << QStringLiteral("PROPOSED (not sent): %1")
+              << (dispatchEnabled_ ? QStringLiteral("PROPOSED: %1") : QStringLiteral("PROPOSED (not sent): %1"))
                      .arg(QString::fromLatin1(proposedCommandName(c.proposed)))
               << QStringLiteral("turn_sign=%1 (实机符号未验证)").arg(s.turnSign);
         if (s.awaitingVideo) { lines << QStringLiteral("waiting for video"); }
@@ -134,6 +143,7 @@ QString VideoView::visualDiagnosticText() const
         }
         if (c.dwellBlocked) { lines << QStringLiteral("min_dwell: holding proposal"); }
         if (c.waitingForSample) { lines << QStringLiteral("waiting for new target sample"); }
+        if (dispatchEnabled_) lines << dispatchStatus_;
         return lines.join('\n');
     }
     if (!targetState_) {
