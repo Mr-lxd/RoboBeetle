@@ -852,7 +852,7 @@ static void check_stop_during_transition_has_bounded_idempotent_ramp(bool mode_c
     const uint8_t stop_payload[3] = {1U, MOTION_STOP, MOTION_ACTION_STOP};
     uint32_t transition_start_ms = mode_change ? 760U : 0U;
     uint32_t stop_ms = transition_start_ms + 250U;
-    static const uint32_t observations_ms[] = {100U, 300U, 500U, 700U, 740U, 749U, 750U};
+    static const uint32_t observations_ms[] = {100U, 300U, 500U, 700U, 739U, 749U, 759U};
     joint_targets_t previous_targets;
     rbp2_frame_t frame;
     protocol_dispatcher_outcome_t outcome;
@@ -927,6 +927,12 @@ static void check_stop_during_transition_has_bounded_idempotent_ramp(bool mode_c
             expect(motion_manager_state(&fixture.motion_manager) == MOTION_STATE_STOPPING,
                    "accepted STOP must remain STOPPING through +749 ms");
         }
+        if (offset_ms == 749U)
+        {
+            expect(fixture.motion_manager.last_tick_ms == now_ms &&
+                       motion_manager_stop_elapsed_ms(&fixture.motion_manager) == 749U,
+                   "+749 ms must execute an eligible tick, not a skipped observation");
+        }
         if (offset_ms == 300U)
         {
             /* Fresh sequence exercises idempotence, not cached ACK replay. */
@@ -944,7 +950,10 @@ static void check_stop_during_transition_has_bounded_idempotent_ramp(bool mode_c
     expect(motion_manager_state(&fixture.motion_manager) == MOTION_STATE_STOPPED &&
                motion_manager_mode(&fixture.motion_manager) == MOTION_STOP &&
                !servo_service_motion_is_active(&fixture.servo_service),
-           "STOP must complete at acceptance +750 ms despite repeated STOP at +300 ms");
+           "STOP must complete at +759 ms despite repeated STOP at +300 ms");
+    expect(observations_ms[sizeof(observations_ms) / sizeof(observations_ms[0]) - 1U] <=
+               MOTION_TRANSITION_DURATION_MS + MOTION_GAIT_TICK_MS,
+           "completion observation must fit the transition duration plus one tick bound");
     expect(previous_targets.front_right_cdeg == 0 && previous_targets.front_left_cdeg == 0 &&
                previous_targets.front_axis_cdeg == 0 && previous_targets.rear_right_cdeg == 0 &&
                previous_targets.rear_left_cdeg == 0,

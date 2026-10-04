@@ -19,9 +19,9 @@
 
 普通 STOP：接受即抢占，ACK OK、立即 STOPPING，ACK 不等待舵机写入；从接受
 时刻计 750 ms 平滑回零，重复 STOP 不延长完成时刻。+749 ms STOPPING、
-+750 ms STOPPED / MOTION_STOP / 释放舵机所有权及五关节零位距离单调不增
++759 ms STOPPED / MOTION_STOP / 释放舵机所有权及五关节零位距离单调不增
 已由真实 dispatcher + MotionManager 的 host 特性测试覆盖。逻辑 750 ms ramp
-在有效 foreground tick 上完成；仍需调度裕量，ACK 不代表物理停止完成。
+在有效 foreground tick 上完成；上界为 `MOTION_TRANSITION_DURATION_MS + MOTION_GAIT_TICK_MS`（760 ms，按周期调度的前提）。+739→+749→+759 均为有效 tick，ACK 不代表物理停止完成。
 
 当前 Qt 断线（active authority）路径：TCP EOF/错误 → owner source_lost →
 ControlGatewayCore revoke/abort_once → LinuxOnboardApplicationPort::abort →

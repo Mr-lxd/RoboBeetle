@@ -9,7 +9,7 @@ handoff summary; no `docs/HANDOFF.md` is created.
 ## Reviewed STOP semantics
 
 The operator review selects **acceptance immediately preempts the original
-transition, followed by a smooth return to zero bounded by 750 ms of elapsed
+transition, followed by a smooth return to zero with a 750 ms logical duration of elapsed
 stop-ramp time from acceptance**. Completion before the original mode-transition
 end is not required. The initial commit `42e55ec3e397e4c6e39ba7b13cf1162b60095815`
 recorded two RED assertions for that stricter interpretation; those assertions
@@ -44,15 +44,16 @@ servo operations are faked. They check:
 
 - STOP injected during START or MODE transition ACKs OK and immediately enters
   STOPPING; ACK performs no servo writes.
-- Sample at acceptance +100, +300, +500, +700, +740, +749 and +750 ms; refresh
+- Sample at acceptance +100, +300, +500, +700, +739, +749 and +759 ms; refresh
   heartbeat at every observation and require `process()` OK.
 - A fresh-sequence STOP at +300 ms ACKs OK and remains nonblocking. Completion
-  remains at the original acceptance +750 ms, not repeated acceptance +750 ms.
+  remains bounded by the original acceptance +750 ms plus one tick, not repeated acceptance +750 ms.
 - All five logical joints' absolute distance to zero is monotonically
   nonincreasing at the samples; all equal zero at completion.
-- +749 ms remains STOPPING; +750 ms is STOPPED / MOTION_STOP / ownership released.
-  The +740 sample establishes the last eligible tick, so +749 does not advance
-  it and +750 is eligible. The boundary test respects the production cadence.
+- +749 ms remains STOPPING on a real eligible tick (verified by last_tick_ms and stop elapsed); +759 ms is STOPPED / MOTION_STOP / ownership released.
+  Samples +739 -> +749 -> +759 each execute eligible ticks. The completion
+  upper bound is `MOTION_TRANSITION_DURATION_MS + MOTION_GAIT_TICK_MS`
+  (750 + 10 = 760 ms), assuming the foreground is serviced every tick.
 
 ```powershell
 ./RoboBeetleFirmware/tests/run_host_tests.ps1 -BuildRoot C:/Users/laixindong/.codex/worktrees/task05-stop-transition-red-build/review
