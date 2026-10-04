@@ -216,12 +216,15 @@ void controls() {
     if(!c.sends.empty())c.ack(c.sends.back().first,CommandTerminalResult::Ok);
     check(status->text().contains("ACK-confirmed: FORWARD"),"UI displays ACK confirmed actual mode");
     auto *v=w.findChild<VideoView*>();check(v&&!v->visualDiagnosticText().contains("no motion output")&&!v->visualDiagnosticText().contains("not sent"),"enabled video text is truthful");
+    check(v&&v->visualDiagnosticText().contains("turn sign: -1 confirmed")
+          &&!v->visualDiagnosticText().contains("turn_sign="),"active sign shows operator-confirmed -1 without conflicting preview default");
     check(!child<QCheckBox>(w,"visualCsvEnabled")->text().contains("no motion output"),"enabled CSV label truthful");
     const auto n=c.sends.size();click(w,"visualDisarmButton");check(!s->armed()&&c.sends.size()==n+1,"distinct Disarm sends one operator STOP");
     check(status->text().contains("operator STOP: SENT"),"operator STOP submission shown before terminal ACK");
     c.ack(c.sends.back().first,CommandTerminalResult::Busy,7);
     check(status->text().contains("operator STOP: BUSY"),"operator STOP terminal result shown");
     gate->setChecked(false);check(c.sends.size()==n+1,"OFF after completed disarm emits no extra STOP");
+    check(v->visualDiagnosticText().contains(QStringLiteral("turn_sign=1 (\u5b9e\u673a\u7b26\u53f7\u672a\u9a8c\u8bc1)")),"OFF preserves exact legacy diagnostic sign line");
     MainWindow second(&c);check(!child<QCheckBox>(second,"visualDispatchEnabled")->isChecked(),"second instance never persists gate");
 }
 void manualPaths() {
