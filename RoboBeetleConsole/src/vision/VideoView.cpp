@@ -93,11 +93,12 @@ void VideoView::setVisualDiagnostic(const VisualDiagnosticSnapshot &snapshot)
     update();
 }
 
-void VideoView::setVisualDispatchPresentation(bool enabled, bool armed, const QString &status)
+void VideoView::setVisualDispatchPresentation(bool enabled, bool armed, const QString &status, const QString &confirmedMode)
 {
     dispatchEnabled_ = enabled;
     dispatchArmed_ = armed;
     dispatchStatus_ = status;
+    dispatchConfirmedMode_ = confirmedMode;
     update();
 }
 
@@ -330,6 +331,16 @@ void VideoView::paintEvent(QPaintEvent *event)
         painter.restore();
     }
 
+    if (dispatchEnabled_ && dispatchArmed_) {
+        painter.setPen(QPen(QColor("#22c55e"), 5));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(rect().adjusted(3,3,-3,-3));
+        const QString badge=QStringLiteral("AUTO \u00b7 ARMED \u00b7 %1").arg(dispatchConfirmedMode_);
+        QFont badgeFont=font(); badgeFont.setBold(true); painter.setFont(badgeFont);
+        const QRect badgeRect(8,8,qMin(width()-16,QFontMetrics(badgeFont).horizontalAdvance(badge)+18),28);
+        painter.fillRect(badgeRect,QColor("#166534")); painter.setPen(Qt::white);
+        painter.drawText(badgeRect.adjusted(7,0,-7,0),Qt::AlignVCenter|Qt::AlignLeft,badge);
+    }
     paintPending_ = false;
     if (!fpsTimer_.isValid()) {
         fpsTimer_.start();

@@ -1078,14 +1078,87 @@ QWidget *MainWindow::createVideoPlaceholder()
     stopRecordingButton_->setProperty("consoleActionRole", "stop");
     stopRecordingButton_->setVisible(false);
 
-    for (QPushButton *button :
-         {visionConnectButton_, startInferenceButton_,
-          stopInferenceButton_, snapshotButton_,
-          startRecordingButton_}) {
-        button->setMinimumHeight(34);
-        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        summaryLayout->addWidget(button);
+    // Compact presentation; retain the original evidence widgets for diagnostics/tooltips.
+    while (auto *item = summaryLayout->takeAt(0)) {
+        if (item->layout()) delete item->layout();
+        else delete item;
     }
+    for (auto *widget : summary->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly))
+        widget->hide();
+    summary->setTitle(QStringLiteral("Vision"));
+    summary->setMinimumWidth(240);
+    visionCompactVideo_ = new QLabel(summary);
+    visionCompactInference_ = new QLabel(summary);
+    visionCompactRecording_ = new QLabel(summary);
+    visionCompactVideo_->setObjectName(QStringLiteral("visionCompactVideo"));
+    visionCompactInference_->setObjectName(QStringLiteral("visionCompactInference"));
+    visionCompactRecording_->setObjectName(QStringLiteral("visionCompactRecording"));
+    for (auto *row : {visionCompactVideo_, visionCompactInference_, visionCompactRecording_}) {
+        row->setStyleSheet(QStringLiteral("color:#36556b;font-size:11px;font-weight:600;"));
+        row->setWordWrap(true);
+        summaryLayout->addWidget(row);
+    }
+    auto *autoCard = new QGroupBox(QStringLiteral("Auto follow"), summary);
+    autoCard->setObjectName(QStringLiteral("autoFollowCard"));
+    applySubpanelStyle(autoCard);
+    auto *autoLayout = new QVBoxLayout(autoCard);
+    autoLayout->setContentsMargins(8, 12, 8, 8);
+    autoLayout->setSpacing(6);
+    autoFollowFault_ = new QLabel(autoCard);
+    autoFollowFault_->setObjectName(QStringLiteral("autoFollowFault"));
+    autoFollowFault_->setWordWrap(true);
+    autoFollowFault_->setStyleSheet(QStringLiteral("background:#ffe4e6;color:#991b1b;padding:7px;border:1px solid #fca5a5;border-radius:4px;font-weight:700;"));
+    autoFollowFault_->hide();
+    autoLayout->addWidget(autoFollowFault_);
+    visualDispatchEnabled_ = new QCheckBox(QStringLiteral("Visual dispatch"), autoCard);
+    visualDispatchEnabled_->setObjectName(QStringLiteral("visualDispatchEnabled"));
+    autoLayout->addWidget(visualDispatchEnabled_);
+    autoFollowState_ = new QLabel(QStringLiteral("DRY RUN"), autoCard);
+    autoFollowState_->setObjectName(QStringLiteral("autoFollowState"));
+    autoLayout->addWidget(autoFollowState_);
+    autoFollowChecklist_ = new QLabel(autoCard);
+    autoFollowChecklist_->setObjectName(QStringLiteral("autoFollowChecklist"));
+    autoFollowChecklist_->setWordWrap(true);
+    autoLayout->addWidget(autoFollowChecklist_);
+    visualArmButton_ = new QPushButton(QStringLiteral("Arm"), autoCard);
+    visualArmButton_->setObjectName(QStringLiteral("visualArmButton"));
+    visualArmButton_->setMinimumHeight(52);
+    autoLayout->addWidget(visualArmButton_);
+    visualDispatchStatus_ = new QLabel(autoCard);
+    visualDispatchStatus_->setObjectName(QStringLiteral("visualDispatchStatus"));
+    visualDispatchStatus_->setWordWrap(true);
+    visualDispatchStatus_->setTextFormat(Qt::PlainText);
+    visualDispatchStatus_->setStyleSheet(QStringLiteral("font-size:10px;color:#566b79;"));
+    autoLayout->addWidget(visualDispatchStatus_);
+    auto *turn = new QLabel(QStringLiteral("Turn +%1 (config)").arg(vision::VisualPolicyConfig{}.turn_sign), autoCard);
+    turn->setObjectName(QStringLiteral("autoFollowTurn"));
+    turn->setStyleSheet(QStringLiteral("font-size:10px;color:#667c8c;"));
+    autoLayout->addWidget(turn);
+    connect(visualArmButton_, &QPushButton::clicked, this, [this] {
+        if (!visualDispatch_) return;
+        if (visualDispatch_->armed()) visualDispatch_->disarm();
+        else visualDispatch_->arm();
+    });
+    summaryLayout->addWidget(autoCard);
+    summaryLayout->addStretch(1);
+    controlsLabel->show();
+    summaryLayout->addWidget(controlsLabel);
+    auto *controlsGrid = new QGridLayout;
+    controlsGrid->setObjectName(QStringLiteral("visionControlsGrid"));
+    const QList<QPushButton*> buttons{visionConnectButton_, startInferenceButton_, snapshotButton_, startRecordingButton_};
+    for (int i=0; i<buttons.size(); ++i) {
+        buttons[i]->setMinimumHeight(44);
+        buttons[i]->setStyleSheet(QStringLiteral("min-height:44px;"));
+        buttons[i]->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        buttons[i]->show();
+        controlsGrid->addWidget(buttons[i], i/2, i%2);
+    }
+    // Existing failed-inference recovery action keeps its original signal path.
+    stopInferenceButton_->setMinimumHeight(44);
+    controlsGrid->addWidget(stopInferenceButton_, 2, 0, 1, 2);
+    summaryLayout->addLayout(controlsGrid);
+    summaryLayout->addWidget(visionControlMessage_);
+    visionControlMessage_->show();
 
     content->addWidget(summary, 1);
     layout->addWidget(videoContentHost_, 1);
@@ -2143,43 +2216,6 @@ QWidget *MainWindow::createVisionDetailsTab()
     videoForm->addRow(QStringLiteral("Visual proposal"), visualProposalDetails_);
     layout->addLayout(videoForm);
 
-    auto *dispatchForm = new QFormLayout;
-    visualDispatchEnabled_ = new QCheckBox(QStringLiteral("Enable visual dispatch"), content);
-    visualDispatchEnabled_->setObjectName(QStringLiteral("visualDispatchEnabled"));
-    // Deliberately session-only; neither gate nor turn confirmation uses settings.
-    dispatchForm->addRow(QStringLiteral("Visual dispatch"), visualDispatchEnabled_);
-    auto *signRow = new QWidget(content);
-    auto *signLayout = new QHBoxLayout(signRow);
-    signLayout->setContentsMargins(0, 0, 0, 0);
-    visualTurnSign_ = new QComboBox(signRow);
-    visualTurnSign_->setObjectName(QStringLiteral("visualTurnSign"));
-    visualTurnSign_->addItem(QStringLiteral("Select turn sign (unconfirmed)"));
-    visualTurnSign_->addItem(QStringLiteral("+1"), 1);
-    visualTurnSign_->addItem(QStringLiteral("-1"), -1);
-    visualTurnSignConfirm_ = new QPushButton(QStringLiteral("Confirm turn sign"), signRow);
-    visualTurnSignConfirm_->setObjectName(QStringLiteral("visualTurnSignConfirm"));
-    signLayout->addWidget(visualTurnSign_);
-    signLayout->addWidget(visualTurnSignConfirm_);
-    dispatchForm->addRow(QStringLiteral("Turn direction"), signRow);
-    auto *armRow = new QWidget(content);
-    auto *armLayout = new QHBoxLayout(armRow);
-    armLayout->setContentsMargins(0, 0, 0, 0);
-    auto *arm = new QPushButton(QStringLiteral("Arm"), armRow);
-    arm->setObjectName(QStringLiteral("visualArmButton"));
-    auto *disarm = new QPushButton(QStringLiteral("Disarm"), armRow);
-    disarm->setObjectName(QStringLiteral("visualDisarmButton"));
-    armLayout->addWidget(arm);
-    armLayout->addWidget(disarm);
-    dispatchForm->addRow(QStringLiteral("Automatic control"), armRow);
-    visualDispatchStatus_ = new QLabel(content);
-    visualDispatchStatus_->setObjectName(QStringLiteral("visualDispatchStatus"));
-    visualDispatchStatus_->setWordWrap(true);
-    visualDispatchStatus_->setTextFormat(Qt::PlainText);
-    dispatchForm->addRow(QStringLiteral("Dispatch status"), visualDispatchStatus_);
-    layout->addLayout(dispatchForm);
-    connect(arm, &QPushButton::clicked, this, [this] { if (visualDispatch_) visualDispatch_->arm(); });
-    connect(disarm, &QPushButton::clicked, this, [this] { if (visualDispatch_) visualDispatch_->disarm(); });
-
     auto *csvForm = new QFormLayout;
     visualCsvEnabled_ = new QCheckBox(QStringLiteral("Record visual CSV (no motion output)"), content);
     visualCsvEnabled_->setObjectName(QStringLiteral("visualCsvEnabled"));
@@ -2428,27 +2464,63 @@ void MainWindow::refreshVisualDispatchUi()
     if (!visualDispatch_) return;
     const bool enabled = visualDispatch_->featureEnabled()
         && controller_->backendKind() == ConsoleBackendKind::RemoteRbrp;
-    QString status = QStringLiteral("%1 | %2 | %3\nACK-confirmed: %4\nturn sign: %5")
-        .arg(enabled ? QStringLiteral("DISPATCH ON") : QStringLiteral("DRY_RUN"))
-        .arg(visualDispatch_->armed() ? QStringLiteral("ARMED") : QStringLiteral("DISARMED"))
-        .arg(QString::fromLatin1(vision::armReasonName(visualDispatch_->armReason())))
-        .arg(visualDispatch_->currentMode()
-             ? QString::fromLatin1(vision::proposedCommandName(*visualDispatch_->currentMode()))
-             : QStringLiteral("--"))
-        .arg(visualDispatch_->confirmedTurnSign()
-             ? QStringLiteral("%1 confirmed").arg(*visualDispatch_->confirmedTurnSign())
-             : QStringLiteral("UNCONFIRMED"));
-    if (visualDispatch_->stopTimeoutAlert()) status += QStringLiteral("\nSTOP TIMEOUT ALERT");
-    if (!visualOperatorStopStatus_.isEmpty())
-        status += QStringLiteral("\noperator STOP: %1").arg(visualOperatorStopStatus_);
-    if (!visualDispatchRejection_.isEmpty()) status += '\n' + visualDispatchRejection_;
-    if (!visualDispatch_->poseMismatch().isEmpty()) status += '\n' + visualDispatch_->poseMismatch();
+    const bool armed = visualDispatch_->armed();
+    const bool control = controller_->backendKind() == ConsoleBackendKind::RemoteRbrp
+        && controller_->isConnected() && controller_->isControlActive();
+    quint16 enabledMask = 0;
+    for (int i=0;i<kServoCount;++i) {
+        const auto id=static_cast<ServoId>(i);
+        if (controller_->isServoEnabled(id) && !controller_->isServoDisablePending(id)) enabledMask |= 1U<<i;
+    }
+    const auto required=vision::VisualDispatchConfig{}.requiredServoMask;
+    const bool pose=(enabledMask & required)==required
+        && (controller_->inferredPoseKnownMask() & required)==required;
+    const bool tracking=visualSession_ && visualSession_->snapshot().state==vision::VisualState::Tracking;
+    const int missing=(!control)+(!pose)+(!tracking);
+    QString fault;
+    if (visualDispatch_->stopTimeoutAlert()) fault=QStringLiteral("STOP TIMEOUT ALERT");
+    if (!visualDispatch_->poseMismatch().isEmpty()) {
+        if (!fault.isEmpty()) fault+='\n';
+        fault+=visualDispatch_->poseMismatch();
+    }
+    const QString state=!fault.isEmpty()?QStringLiteral("FAULT"):armed?QStringLiteral("ARMED")
+        :!enabled?QStringLiteral("DRY RUN"):missing?QStringLiteral("NOT READY"):QStringLiteral("READY");
+    autoFollowState_->setText(state);
+    const QString colors=state==QStringLiteral("FAULT")?QStringLiteral("background:#991b1b;color:white;")
+        :armed?QStringLiteral("background:#166534;color:white;")
+        :state==QStringLiteral("READY")?QStringLiteral("background:#dcfce7;color:#166534;")
+        :state==QStringLiteral("NOT READY")?QStringLiteral("background:#fef3c7;color:#854d0e;")
+        :QStringLiteral("background:#e8edf2;color:#536779;");
+    autoFollowState_->setStyleSheet(colors+QStringLiteral("font-size:14px;font-weight:800;padding:6px;border-radius:4px;"));
+    autoFollowFault_->setText(fault);
+    autoFollowFault_->setVisible(!fault.isEmpty());
+    autoFollowChecklist_->setText(QStringLiteral("%1 Control acquired\n%2 Servos enabled + pose known\n%3 Tracking target")
+        .arg(control?QStringLiteral("[OK]"):QStringLiteral("[--]"))
+        .arg(pose?QStringLiteral("[OK]"):QStringLiteral("[--]"))
+        .arg(tracking?QStringLiteral("[OK]"):QStringLiteral("[--]")));
+    autoFollowChecklist_->setVisible(enabled && !armed && missing!=0);
+    visualArmButton_->setEnabled(armed || (enabled && missing==0 && fault.isEmpty()));
+    visualArmButton_->setText(armed?QStringLiteral("Disarm"):missing?QStringLiteral("Arm (%1 not ready)").arg(missing):QStringLiteral("Arm"));
+    visualArmButton_->setStyleSheet(armed?QStringLiteral("background:#b91c1c;color:white;min-height:52px;font-size:14px;font-weight:700;")
+        :QStringLiteral("min-height:52px;font-size:14px;font-weight:700;"));
+    const auto mode=visualDispatch_->currentMode()?QString::fromLatin1(vision::proposedCommandName(*visualDispatch_->currentMode())):QStringLiteral("--");
+    QString status=QStringLiteral("%1 | %2\nACK-confirmed: %3\nTurn +%4 (config)")
+        .arg(enabled?QStringLiteral("DISPATCH ON"):QStringLiteral("DRY_RUN"))
+        .arg(state)
+        .arg(mode).arg(vision::VisualPolicyConfig{}.turn_sign);
+    if (!visualOperatorStopStatus_.isEmpty()) status+=QStringLiteral("\noperator STOP: %1").arg(visualOperatorStopStatus_);
+    if (!visualDispatchRejection_.isEmpty()) status+='\n'+visualDispatchRejection_;
+    if (!fault.isEmpty()) status+='\n'+fault;
     visualDispatchStatus_->setText(status);
-    visualTurnSignConfirm_->setEnabled(visualTurnSign_->currentData().isValid());
-    visualCsvEnabled_->setText(enabled ? QStringLiteral("Record visual CSV (diagnostics + dispatch)")
-                                      : QStringLiteral("Record visual CSV (no motion output)"));
+    visualCsvEnabled_->setText(enabled?QStringLiteral("Record visual CSV (diagnostics + dispatch)"):QStringLiteral("Record visual CSV (no motion output)"));
+    visionCompactVideo_->setText(QStringLiteral("Video · ") + visionState_->text());
+    visionCompactVideo_->setToolTip(videoFpsSummary_->text()+QStringLiteral(" | ")+videoResolutionSummary_->text());
+    visionCompactInference_->setText(inferenceState_->text());
+    visionCompactInference_->setToolTip(inferencePerformanceSummary_->text()+QStringLiteral(" | ")+inferenceMemorySummary_->text());
+    visionCompactRecording_->setText(QString(captureState_->text()).replace(QStringLiteral("Capture"),QStringLiteral("Recording")));
+    visionCompactRecording_->setToolTip(captureCountSummary_->text()+QStringLiteral(" | ")+storageFreeSummary_->text());
     if (videoView_) {
-        videoView_->setVisualDispatchPresentation(enabled, visualDispatch_->armed(), status);
+        videoView_->setVisualDispatchPresentation(enabled,armed,status,mode);
         if (visualProposalDetails_) visualProposalDetails_->setText(videoView_->visualDiagnosticText());
     }
 }
@@ -2492,17 +2564,10 @@ void MainWindow::bindVisionUi()
             this, &MainWindow::refreshVisualDispatchUi);
     connect(visualDispatchEnabled_, &QCheckBox::toggled,
             visualDispatch_, &vision::VisualDispatchSession::setFeatureEnabled);
-    connect(visualTurnSign_, qOverload<int>(&QComboBox::currentIndexChanged), this,
-            [this](int index) {
-        const auto value = visualTurnSign_->itemData(index);
-        visualDispatch_->selectTurnSign(value.isValid()
-            ? std::optional<int>(value.toInt()) : std::nullopt);
-    });
-    connect(visualTurnSignConfirm_, &QPushButton::clicked,
-            visualDispatch_, &vision::VisualDispatchSession::confirmTurnSign);
     refreshVisualDispatchUi();
     connect(visualSession_, &vision::VisualDiagnosticSession::diagnosticChanged, this,
             [this](const vision::VisualDiagnosticSnapshot &snapshot) {
+        refreshVisualDispatchUi();
         visualCsvLogger_->record(snapshot);
         if (videoView_ == nullptr) { return; }
         const auto gate = visualDisplayContext().gate;

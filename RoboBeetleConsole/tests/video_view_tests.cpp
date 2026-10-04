@@ -293,6 +293,23 @@ void associatedSelectionDisplay()
     expect(view.visualDiagnosticText().contains("lock: MISS 0ms"),"MISS elapsed time is shown");
 }
 
+void armedPresentationIsVisibleAndClearsOnDisarm()
+{
+    VideoView view; view.resize(640,480);
+    QImage source(640,480,QImage::Format_RGB32); source.fill(Qt::black);
+    view.setFrame(source,1,1000);
+    view.setVisualDispatchPresentation(true,true,QStringLiteral("ACK-confirmed: FORWARD"),QStringLiteral("FORWARD"));
+    QImage rendered(view.size(),QImage::Format_ARGB32); view.render(&rendered);
+    const QColor green("#22c55e");
+    for(const auto point:{QPoint(3,240),QPoint(636,240),QPoint(320,3),QPoint(320,476)})
+        expect(rendered.pixelColor(point)==green,"armed green border surrounds all four video edges");
+    expect(containsColor(rendered,QRect(8,8,240,28),QColor("#166534"))
+           && containsColor(rendered,QRect(8,8,240,28),Qt::white),"armed top-left badge has dark green background and visible text");
+    view.setVisualDispatchPresentation(true,false,QStringLiteral("ACK-confirmed: FORWARD"),QStringLiteral("FORWARD"));
+    view.render(&rendered);
+    expect(rendered.pixelColor(3,240)!=green && !containsColor(rendered,QRect(8,8,240,28),QColor("#166534")),
+           "disarming removes green border and armed badge");
+}
 void saveDiagnosticPreviews(const QString &directory)
 {
     expect(QDir().mkpath(directory), "preview output directory can be created");
@@ -344,6 +361,7 @@ int main(int argc, char **argv)
     visualErrorGeometryUsesImageRectangle();
     commandProposalDisplay();
     associatedSelectionDisplay();
+    armedPresentationIsVisibleAndClearsOnDisarm();
     const QStringList arguments = app.arguments();
     const int previewOption = arguments.indexOf(QStringLiteral("--preview-dir"));
     if (previewOption >= 0 && previewOption + 1 < arguments.size()) {

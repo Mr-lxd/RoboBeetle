@@ -132,8 +132,9 @@ private:
     quint64 visualSessionId_{0};
     vision::VisualDispatchSession *visualDispatch_{nullptr};
     QCheckBox *visualDispatchEnabled_{nullptr};
-    QComboBox *visualTurnSign_{nullptr};
-    QPushButton *visualTurnSignConfirm_{nullptr};
+    QPushButton *visualArmButton_{nullptr};
+    QLabel *autoFollowState_{nullptr}, *autoFollowFault_{nullptr}, *autoFollowChecklist_{nullptr};
+    QLabel *visionCompactVideo_{nullptr}, *visionCompactInference_{nullptr}, *visionCompactRecording_{nullptr};
     QLabel *visualDispatchStatus_{nullptr};
     QString visualDispatchRejection_;
     QString visualOperatorStopStatus_;
