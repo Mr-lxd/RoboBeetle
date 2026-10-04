@@ -261,6 +261,35 @@ void testDeterministicRuntimeCases()
         s.setFeatureEnabled(false);c.ack(stop,rb::CommandTerminalResult::Ok);
         expect(s.operatorStopResult()==rb::CommandTerminalResult::Ok&&c.sends.size()==1,"operator STOP correlation survives later feature off without extra STOP");
     }
+    for (auto result : {rb::CommandTerminalResult::Ok,
+                        rb::CommandTerminalResult::Busy,
+                        rb::CommandTerminalResult::Rejected,
+                        rb::CommandTerminalResult::OutcomeUnknown}) {
+        rb::test::VisualControllerFixture controller;
+        auto snap = snapshot();
+        qint64 now = 0;
+        VisualDispatchSession session(&controller, [&] { return std::optional{snap}; },
+                                      [&] { return now; });
+        session.setFeatureEnabled(true);
+        session.selectTurnSign(1);
+        session.confirmTurnSign();
+        session.arm();
+        session.timerTick();
+        const auto oldStart = controller.sends.back().first;
+        session.setFeatureEnabled(false);
+        expect(controller.sends.size() == 2 && !session.armed(),
+               "off during pending START sends exactly one operator STOP");
+        controller.ack(oldStart, rb::CommandTerminalResult::Ok);
+        expect(!session.armed() && !session.currentMode(),
+               "direct off pending START late OK cannot revive confirmed mode");
+        controller.ack(controller.sends.back().first, result);
+        expect(session.operatorStopResult() == result,
+               "off retains every operator STOP terminal result");
+        now = 5000;
+        session.timerTick();
+        expect(controller.sends.size() == 2,
+               "operator STOP terminal matrix never triggers automatic retries");
+    }
     for(bool enabledOnly:{false,true}) {
         rb::test::VisualControllerFixture c;auto snap=snapshot();VisualDispatchSession s(&c,[&]{return std::optional{snap};},[]{return 0;});
         s.setFeatureEnabled(enabledOnly);s.setFeatureEnabled(false);expect(c.sends.empty(),"off never armed sends zero");

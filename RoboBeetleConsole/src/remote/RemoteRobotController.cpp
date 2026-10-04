@@ -55,10 +55,12 @@ QString commandKindText(robobeetle::gateway::RobotCommandKind kind)
 
 } // namespace
 
-RemoteRobotController::RemoteRobotController(QObject *parent)
+RemoteRobotController::RemoteRobotController(QObject *parent, TerminalNowMs terminalNow)
     : IConsoleController(parent),
-      session_(this)
+      session_(this), terminalNow_(std::move(terminalNow))
 {
+    terminalClock_.start();
+    if (!terminalNow_) terminalNow_ = [this] { return terminalClock_.elapsed(); };
     motionStopTimer_.setSingleShot(true);
     motionModeTransitionTimer_.setSingleShot(true);
     telemetryTimer_.setInterval(500);
@@ -462,6 +464,7 @@ std::optional<quint32> RemoteRobotController::submitCommand(
         poseKnownMask_ &= ~pending.servoMask;
     }
     pending.sentAtMs = nowMs();
+    pending.terminalSentMs = terminalNow_();
     pending_[*requestId] = pending;
     updateMonitor(QStringLiteral("%1 sent").arg(commandKindText(kind)));
     return requestId;
@@ -548,7 +551,8 @@ void RemoteRobotController::handleCommandSubmitted(
     terminalizePending(
         requestId,
         QStringLiteral("%1 not submitted (status %2)")
-            .arg(commandKindText(it->kind)).arg(status));
+            .arg(commandKindText(it->kind)).arg(status),
+        CommandTerminalResult::Rejected);
 }
 
 void RemoteRobotController::handleCommandOutcome(
@@ -577,7 +581,7 @@ void RemoteRobotController::handleCommandOutcome(
     }
 
     const PendingCommand pending = *it;
-    const qint64 rtt = nowMs() - pending.sentAtMs;
+    const qint64 rtt = terminalNow_() - pending.terminalSentMs;
     monitor_.lastAckRttMs = rtt >= 0 ? rtt : -1;
     pending_.erase(it);
 
@@ -776,7 +780,7 @@ void RemoteRobotController::applyAcceptedCommand(
 }
 
 void RemoteRobotController::terminalizePending(
-    quint32 requestId, const QString &status)
+    quint32 requestId, const QString &status, CommandTerminalResult result)
 {
     auto it = pending_.find(requestId);
     if (it == pending_.end()) {
@@ -784,7 +788,7 @@ void RemoteRobotController::terminalizePending(
     }
     const PendingCommand pending = *it;
     pending_.erase(it);
-    emit commandTerminal(requestId, CommandTerminalResult::OutcomeUnknown, 0xff, nowMs() - pending.sentAtMs);
+    emit commandTerminal(requestId, result, 0xff, terminalNow_() - pending.terminalSentMs);
     if (pending.superseded) {
         emit logMessage(QStringLiteral("%1 (superseded)").arg(status));
         return;
@@ -852,7 +856,7 @@ void RemoteRobotController::failClosedControlState(const QString &reason)
     const auto abandoned = pending_;
     pending_.clear();
     for (auto it = abandoned.cbegin(); it != abandoned.cend(); ++it)
-        emit commandTerminal(it.key(), CommandTerminalResult::OutcomeUnknown, 0xff, nowMs() - it->sentAtMs);
+        emit commandTerminal(it.key(), CommandTerminalResult::OutcomeUnknown, 0xff, terminalNow_() - it->terminalSentMs);
     poseKnownMask_ = 0;
     setDisablePendingMask(0U);
     setEnabledMask(0U);

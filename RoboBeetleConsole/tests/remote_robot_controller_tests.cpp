@@ -725,6 +725,83 @@ void testCommandTimeoutReleasesAuthority()
            "uncertain command must never be automatically replayed");
 }
 
+void testMonotonicTerminalRtt()
+{
+    FakeGatewayPeer gateway;
+    qint64 monotonicNow = 10;
+    rb::RemoteRobotController controller(nullptr, [&] { return monotonicNow; });
+    rb::ConsoleConnectionConfiguration config;
+    config.endpoint = QStringLiteral("127.0.0.1");
+    config.tcpPort = gateway.port();
+    controller.connectController(config);
+    gateway.accept();
+    completeHello(gateway);
+    pumpUntil([&] { return controller.canAcquireControl(); });
+    controller.acquireControl();
+    completeAcquire(gateway);
+    pumpUntil([&] { return controller.isControlActive(); });
+    const auto id = controller.submitVisualMotion(rb::MotionMode::Stop);
+    gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    std::optional<qint64> rtt;
+    QObject::connect(&controller, &rb::IConsoleController::commandTerminal,
+                     [&](quint32 received, rb::CommandTerminalResult, quint8, qint64 value) {
+        if (id && received == *id) rtt = value;
+    });
+    monotonicNow = 85;
+    if (id) {
+        sendSubmitted(gateway, *id, 44);
+        sendOutcome(gateway, *id, RobotCommandKind::StopMotion, 44,
+                    GatewayCommandOutcome::Accepted);
+    }
+    expect(pumpUntil([&] { return rtt.has_value(); }), "monotonic terminal arrives");
+    expect(rtt == 75, "terminal RTT uses injected monotonic send-to-outcome clock");
+    gateway.disconnectPeer();
+}
+
+void testNegativeSubmissionTerminalMapping()
+{
+    for (auto status : {CommandSubmittedStatus::InvalidArgument,
+                        CommandSubmittedStatus::PendingQualification,
+                        CommandSubmittedStatus::NotActive,
+                        CommandSubmittedStatus::PayloadTooLarge,
+                        CommandSubmittedStatus::QueueFull,
+                        CommandSubmittedStatus::TransportRejected}) {
+        FakeGatewayPeer gateway;
+        rb::RemoteRobotController controller;
+        rb::ConsoleConnectionConfiguration config;
+        config.endpoint = QStringLiteral("127.0.0.1");
+        config.tcpPort = gateway.port();
+        controller.connectController(config);
+        expect(gateway.accept(), "negative submission connects");
+        completeHello(gateway);
+        pumpUntil([&] { return controller.canAcquireControl(); });
+        controller.acquireControl();
+        completeAcquire(gateway);
+        pumpUntil([&] { return controller.isControlActive(); });
+        const auto id = controller.submitVisualMotion(rb::MotionMode::Stop);
+        gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        std::optional<rb::CommandTerminalResult> observed;
+        bool activeAtOutcome = false;
+        QObject::connect(&controller, &rb::IConsoleController::commandTerminal,
+                         [&](quint32 received, rb::CommandTerminalResult result,
+                             quint8 raw, qint64 rtt) {
+            if (id && received == *id) {
+                observed = result;
+                activeAtOutcome = controller.isControlActive();
+                expect(raw == 0xff && rtt >= 0,
+                       "negative submission has no firmware result but retains RTT");
+            }
+        });
+        if (id) gateway.send({*id, CommandSubmittedMessage{status, std::nullopt}});
+        expect(pumpUntil([&] { return observed.has_value(); }),
+               "negative submission emits terminal result");
+        expect(observed == rb::CommandTerminalResult::Rejected,
+               "known not-submitted status is Rejected rather than OutcomeUnknown");
+        expect(activeAtOutcome, "negative submission terminal precedes cleanup");
+        gateway.disconnectPeer();
+    }
+}
+
 void testVisualTerminalMapping()
 {
     struct Row { GatewayCommandOutcome outcome; quint8 raw; rb::CommandTerminalResult terminal; };
@@ -820,6 +897,8 @@ void testVisualWireAndPoseInference()
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
+    testMonotonicTerminalRtt();
+    testNegativeSubmissionTerminalMapping();
     testVisualTerminalMapping();
     testActiveControllerDestruction();
     testVisualWireAndPoseInference();
