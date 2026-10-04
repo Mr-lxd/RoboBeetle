@@ -6,10 +6,10 @@
 已合并到 main；Task 05 的 [PR #45](https://github.com/Mr-lxd/RoboBeetle/pull/45)
 完成 STOP 调研/特性测试，[PR #46](https://github.com/Mr-lxd/RoboBeetle/pull/46)
 完成纯逻辑布防/下发状态机。[PR #47](https://github.com/Mr-lxd/RoboBeetle/pull/47)
-先合并，随后 PR46 rebase 并完成 Qt 28/28 回归后合并，main 为
+先合并，随后 PR46 rebase 并完成 Qt 28/28 回归后合并，当时 main 为
 `dfd7972bf1c6102e83f406050c3f62730b046bca`。PR3 从该 main 新建分支接线，
-设计已先推送并获批准；本次保持 draft，实机运动尚未验收。以下桌面观察、host 测试与实际运动/
-水下验收分别记录，不互相替代。
+设计已先推送并获批准；操作员现已报告 PR48 桌面实测全部通过，Task 05 桌面阶段完成。
+以下操作员桌面验收、host 测试与水下验收分别记录，不互相替代。
 
 | Task | 已交付范围与证据 | 详细记录 |
 | --- | --- | --- |
@@ -19,7 +19,21 @@
 | 04 / PR #44 | 最近邻时间关联、LOCK/MISS/ACQUIRED 与 CSV v2；用户报告水平大跳变由 hc_u 的 108/997 降至关联 u 的 4/898，保留不同分母；桌面确认通过。视频等待/卡顿已记录，根因未确认。 | [target-temporal-association-dry-run-validation](docs/target-temporal-association-dry-run-validation.md) |
 | 05 / PR #45 | STM32 STOP 语义与 Qt 断线停止路径调研；两项 START/MODE 过渡特性测试通过，完整 Firmware host gate 37 executables + 13 compile-contract objects + USART2 source/config contract 全绿。 | [task05-stop-transition](docs/task05-stop-transition-red.md) |
 | 05 / PR #46 | 假发送接口的纯逻辑布防/下发状态机；NO_TARGET 保持已确认模式，LOST 才 STOP；Hold 未确认时 STOP。Qt 28/28 回归通过；当时应用仍 DRY_RUN。 | [task05-arming-dispatch-validation](docs/task05-arming-dispatch-validation.md) |
-| 05 / [PR #48](https://github.com/Mr-lxd/RoboBeetle/pull/48)（draft） | 默认关闭的会话级视觉下发开关、远程 RBRP 适配、50 ms evaluate、手动接管、姿态证据及 CSV v3；RED→GREEN，完整 Qt 30/30 全绿；回环验证和实测待办见专项记录，实机验收由操作员完成。 | [task05-visual-dispatch-wiring-validation](docs/task05-visual-dispatch-wiring-validation.md) |
+| 05 / [PR #48](https://github.com/Mr-lxd/RoboBeetle/pull/48) | 默认关闭的会话级视觉下发开关、远程 RBRP 适配、安全状态事件立即 evaluate、50 ms 超时/重试定时器、手动接管、姿态证据及 CSV v3；RED→GREEN，完整 Qt 30/30 全绿；操作员桌面实测全部通过，包括修复后的短暂 STALE 复验。 | [task05-visual-dispatch-wiring-validation](docs/task05-visual-dispatch-wiring-validation.md) |
+
+### Task 05 桌面验收完成与后续待办（操作员报告，2026-10-04）
+
+- **Task 05 桌面阶段完成**：操作员确认全部桌面检查通过。修复后的短暂 STALE
+  复验为 `17.76 s STALE → 17.78 s STOP 并撤防`；推理恢复后的 9.3 s 内没有
+  自动下发，恢复自动运动需要操作员重新 Arm。STOP 下发与撤防不等同于机械停止完成。
+- 桌面验证方向为 **`turn_sign = +1`**；水下方向仍待确认。此验收值不会成为程序的
+  默认布防方向：每次启动仍须在本次会话选择方向、明确确认，再单独 Arm。
+- 已知限制（**暂不修复**）：网关同一时间只接受一个客户端，且没有 TCP keepalive。
+  半开的旧连接可能导致新的 Console 被拒绝，日志显示 `remote host closed`。
+  重新连接前关闭旧的 Console；仍被拒绝时在 Pi 上重启网关服务。
+- 待办：**上浮/下潜（Task 06）**，设计尚未开始。
+
+以上为舵机空载、离水条件下的桌面阶段验收，不代表水下验收。
 
 ### Task 05 已确认的 STOP 语义与当前断线行为
 
@@ -65,11 +79,13 @@ ControlGatewayCore revoke/abort_once → LinuxOnboardApplicationPort::abort →
   姿态证据。Qt 推断已知而 START 返回 HARDWARE_FAILURE 时提示可能不一致。
 - 关闭开关仅在布防或自动 STOP 待确认时发一次操作员 STOP，不自动重试；
   已由手动接管撤防时不发命令。直连维护模式始终 DRY_RUN。
-- 每 50 ms evaluate 直接使用诊断快照的 VisualState 和同次策略结果的 ex_f。
+- 诊断事件进入 STALE / INFERENCE_OFF / LOST 时立即 evaluate 该事件快照；重入时
+  保留快照副本延迟处理，不能被恢复后的状态覆盖。50 ms 定时器保留用于超时和重试。
+  两条路径均直接使用诊断快照的 VisualState 和同次策略结果的 ex_f。
   AwaitingVideo 不额外覆盖为 STALE：上游在 500 ms 内保持原状态，超时才
   STALE；无有效快照时才由适配层视为 STALE。
 - 桌面实机验证仅限舵机空载、离水；拔网线后腿变软、停在原位是预期 disable-all，
-  不是回零。当前 Task 05 未连接硬件、未烧录、未做运动或水下测试。
+  不是回零。操作员已完成 Task 05 桌面实测；agent 的 host/回环验证不操作硬件，水下测试仍待完成。
 - 待办：用 PR43/44 CSV 统计跟踪中连续 NO_TARGET 持续时间分布，作为
   `lost_ms` 宽限期依据，尚未统计或修改参数。
 
@@ -82,12 +98,16 @@ PR47 的便携版（不含 PR46，保持 DRY_RUN）保留在
 `c5544306f3b5bfc4fbcbb23c4d2875f2e3962b12`，EXE SHA-256
 `1E1177CEA3E5B703A334592CD53B04A58098BBD213A69701061D151E2C3662AE`。
 PR3 新 EXE 与测试 EXE 使用独立输出目录；最终源码 commit 和 SHA-256 记录于
-draft PR 描述及便携包 BUILD_INFO，不覆盖以上历史包。
-PR48 包位于 `D:\RoboBeetleConsole-portable-task05-visual-dispatch-wiring-20261004\`，
+PR 描述及便携包 BUILD_INFO，不覆盖以上历史包。
+PR48 初始历史包位于 `D:\RoboBeetleConsole-portable-task05-visual-dispatch-wiring-20261004\`，
 二进制源码 `7da3ede860981adead9beb5a34f819dc6e1cf726`，EXE SHA-256
 `85FBE358DE2FEC67A48859C3020694CF0132B114C71C944D1B9E98071BFBDCFB`。
-Windows 便携启动检查通过；视觉开关每次启动默认关闭。后续交付收尾 commit
-仅修改文档，不改变已测试/打包的代码。
+已验收的短暂安全状态修复包位于
+`D:\RoboBeetleConsole-portable-task05-transient-safety-20261004\`，
+二进制源码 `d1a01c52d37134d66825a89ca8242c8fdc99de13`，EXE SHA-256
+`1576D37F3FE73ED7FED6EA931831E3D7BE7575B8CA1F6652BBB2AAF32E2A305B`。
+Windows 便携启动检查通过；视觉开关每次启动默认关闭。本次合并交接收尾 commit
+仅修改本文档，不改变已验收/打包的代码。
 
 当前 active/default Protocol V2 host transport 是 Raspberry Pi → STM32 USART2
 （PA2/PA3，115200 8-N-1）；2026-09-16 的 target link acceptance 见本文档末尾。
