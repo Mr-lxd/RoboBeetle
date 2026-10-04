@@ -34,13 +34,13 @@ Files: ui/MainWindow.{h,cpp}; vision/VisualCsvLogger.{h,cpp}; vision/VisualPolic
 - [x] Write CSVv3 RED using named columns and preserved old row content: append policy_request_id,request_id,dispatch_command,dispatch_result,ack_rtt_ms. Record every send/retry and terminal result; diagnostic rows leave them blank. Observe failures before logger changes.
 - [x] Implement logger event rows with existing escaping, size limit, flush and file lifecycle; bump schema v3; bind session dispatch events to logger. Test monotonic RTT, retries/unknown outcomes, columns and existing CSV behavior.
 - [x] Full loopback path: qualify enabled/known masks, direction select+confirm, gate+arm, tracking/ACK motion, stop frame stream, STALE/STOP/disarm, rearm then manual takeover. Verify no physical transport is accessed. Run targets.
-- [ ] Independent Task2 spec and quality reviews; fix findings and confirm source commit.
+- [x] Independent Task2 spec and quality reviews; fix findings and confirm source commit.
 
 ## Task3: Full validation, documentation and draft delivery
 
-- [ ] Run complete Qt build/regression offscreen with existing real-clock CTest isolation; require all tests green. New tests expand baseline28. Fix any failure using TDD, retain all existing assertions.
-- [ ] Independent final spec review against all ten user requirements plus latest pose/off/AwaitingVideo corrections, then quality review.
-- [ ] Update existing ROBOBEETLE_HARDWARE_CONTROL_HANDOFF.md and create Task05PR3 validation document with RED/GREEN logs and explicit pending user-only unloaded/out-of-water checklist: direction two-step confirmation; unplug network legs soft/hold position (not zero); STALE STOP; manual takeover. No claimed hardware acceptance.
+- [x] Run complete Qt build/regression offscreen with existing real-clock CTest isolation; require all tests green. New tests expand baseline28. Fix any failure using TDD, retain all existing assertions. Final root run:30/30 PASS,62.72s.
+- [x] Independent final spec review against all ten user requirements plus latest pose/off/AwaitingVideo corrections, then quality review. Approved implementation00beeed.
+- [x] Update existing ROBOBEETLE_HARDWARE_CONTROL_HANDOFF.md and create Task05PR3 validation document with RED/GREEN logs and explicit pending user-only unloaded/out-of-water checklist: direction two-step confirmation; unplug network legs soft/hold position (not zero); STALE STOP; manual takeover. No claimed hardware acceptance.
 - [ ] Build application/test EXEs, calculate SHA256 and record exact source commit. Package new app with windeployqt in a distinct Task05PR3 portable directory; startup smoke only, no robot connections. Keep prior portable packages untouched.
 - [ ] Commit/push branch normally, create and attach draft PR; record source/head and hashes in PR description and BUILD_INFO. Verify GitHub head/draft state and clean worktree. Do not merge PR3.
 
@@ -49,8 +49,8 @@ Files: ui/MainWindow.{h,cpp}; vision/VisualCsvLogger.{h,cpp}; vision/VisualPolic
 ```powershell
 $env:PATH='D:/Qt/6.11.2/mingw_64/bin;D:/Qt/Tools/mingw1310_64/bin;' + $env:PATH
 $env:QT_QPA_PLATFORM='offscreen'; $env:QT_QPA_FONTDIR='C:/Windows/Fonts'
-& D:/Qt/Tools/CMake_64/bin/cmake.exe --build C:/Users/laixindong/.codex/worktrees/task05-arming-dry-run-build/qt --parallel4
-& D:/Qt/Tools/CMake_64/bin/ctest.exe --test-dir C:/Users/laixindong/.codex/worktrees/task05-arming-dry-run-build/qt --output-on-failure -j4
+& D:/Qt/Tools/CMake_64/bin/cmake.exe --build C:/Users/laixindong/.codex/worktrees/task05-arming-dry-run-build/qt --parallel 4
+& D:/Qt/Tools/CMake_64/bin/ctest.exe --test-dir C:/Users/laixindong/.codex/worktrees/task05-arming-dry-run-build/qt --output-on-failure -j 4
 ```
 
 Existing worktree: C:/Users/laixindong/.codex/worktrees/task05-arming-dry-run/RoboBeetle; current branch codex/task05-pr3-visual-dispatch-wiring created directly from main dfd7972. Preserve detached root and historical output folders. Implementers and reviewers receive full task context; one implementer at a time to avoid shared-file conflicts.
