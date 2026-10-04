@@ -42,6 +42,7 @@ public:
     using NowMs = std::function<qint64()>;
     explicit VisualDiagnosticSession(VisualPolicyConfig config = {}, NowMs nowMs = {},
                                      QObject *parent = nullptr);
+    [[nodiscard]] qint64 monotonicNowMs() const { return nowMs_(); }
     void beginSession(quint64 sessionId);
     void onDetectionArrival(const DetectionFrame &frame, const VisualViewContext &context);
     void refresh(const VisualViewContext &context);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vision/VisualDiagnosticSession.h"
+#include "vision/VisualDispatchSession.h"
 #include <QFile>
 #include <QObject>
 #include <QTimer>
@@ -16,6 +17,7 @@ public:
     [[nodiscard]] static QString defaultDirectory();
     bool start(const QString &directory);
     void record(const VisualDiagnosticSnapshot &snapshot);
+    void recordDispatch(const VisualDispatchRecord &record);
     void stop();
     void flush();
     [[nodiscard]] bool isRecording() const { return recording_; }

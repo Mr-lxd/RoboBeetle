@@ -25,6 +25,8 @@ enum class ControlAuthorityState {
     Owned,
 };
 
+enum class CommandTerminalResult { Ok, Busy, Rejected, OutcomeUnknown };
+
 struct ConsoleConnectionConfiguration {
     QString endpoint;
     quint16 tcpPort{47000};
@@ -64,6 +66,8 @@ public:
     virtual bool neutralServo(ServoId id) = 0;
     virtual bool startMotion(MotionMode mode) = 0;
     virtual bool stopMotion() = 0;
+    virtual std::optional<quint32> submitVisualMotion(MotionMode) { return std::nullopt; }
+    [[nodiscard]] virtual quint16 inferredPoseKnownMask() const { return 0; }
     virtual bool setGaitBackend(GaitBackend backend) = 0;
     virtual bool setFrontRearCoordination(FrontRearCoordination coordination) = 0;
 
@@ -93,6 +97,7 @@ public:
     [[nodiscard]] virtual bool isMotionTransitioning() const = 0;
 
 signals:
+    void commandTerminal(quint32 requestId, rb::CommandTerminalResult result, quint8 rawResult, qint64 rttMs);
     void serialPortsChanged(const QStringList &ports);
     void connectionStateChanged(rb::TransportState state);
     void controlAvailabilityChanged();
@@ -119,3 +124,5 @@ Q_DECLARE_METATYPE(rb::MotionState)
 Q_DECLARE_METATYPE(rb::MotionMode)
 Q_DECLARE_METATYPE(rb::GaitBackend)
 Q_DECLARE_METATYPE(rb::FrontRearCoordination)
+
+Q_DECLARE_METATYPE(rb::CommandTerminalResult)

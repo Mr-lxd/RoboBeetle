@@ -3,9 +3,11 @@
 #include "controller/IConsoleController.h"
 #include "remote/RbrpClientSession.h"
 
+#include <QElapsedTimer>
 #include <QHash>
 #include <QTimer>
 
+#include <functional>
 #include <optional>
 
 namespace rb {
@@ -14,7 +16,9 @@ class RemoteRobotController final : public IConsoleController {
     Q_OBJECT
 
 public:
-    explicit RemoteRobotController(QObject *parent = nullptr);
+    using TerminalNowMs = std::function<qint64()>;
+    explicit RemoteRobotController(QObject *parent = nullptr, TerminalNowMs terminalNow = {});
+    ~RemoteRobotController() override;
 
     [[nodiscard]] ConsoleBackendKind backendKind() const noexcept override
     {
@@ -36,6 +40,8 @@ public:
     bool neutralServo(ServoId id) override;
     bool startMotion(MotionMode mode) override;
     bool stopMotion() override;
+    std::optional<quint32> submitVisualMotion(MotionMode mode) override;
+    [[nodiscard]] quint16 inferredPoseKnownMask() const override { return poseKnownMask_; }
     bool setGaitBackend(GaitBackend backend) override;
     bool setFrontRearCoordination(FrontRearCoordination coordination) override;
 
@@ -100,6 +106,7 @@ private:
         std::optional<quint16> submittedSequence;
         bool superseded{false};
         qint64 sentAtMs{0};
+        qint64 terminalSentMs{0};
     };
 
     std::optional<quint32>
@@ -114,7 +121,8 @@ private:
     void handleServiceError(quint32 requestId, const QByteArray &payload);
 
     void applyAcceptedCommand(const PendingCommand &pending);
-    void terminalizePending(quint32 requestId, const QString &status);
+    void terminalizePending(quint32 requestId, const QString &status,
+                            CommandTerminalResult result = CommandTerminalResult::OutcomeUnknown);
     void supersedePendingMotionStarts();
     void supersedePendingForDisable(quint16 affectedMask);
     void failClosedControlState(const QString &reason);
@@ -134,7 +142,10 @@ private:
     static QString authorityText(ControlAuthorityState state, bool active);
 
     RbrpClientSession session_;
+    QElapsedTimer terminalClock_;
+    TerminalNowMs terminalNow_;
     quint16 enabledMask_{0};
+    quint16 poseKnownMask_{0};
     quint16 disablePendingMask_{0};
     LeakState leakState_{LeakState::Unknown};
     qint64 lastLeakTelemetryAtMs_{-1};

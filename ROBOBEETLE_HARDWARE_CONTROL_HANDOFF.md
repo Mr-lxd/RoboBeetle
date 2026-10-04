@@ -3,9 +3,13 @@
 ## 2026-10-04 — 视觉伺服 Task 01–05 交接摘要
 
 本节为当前视觉伺服交接入口；不新建 `docs/HANDOFF.md`。Task 01–04
-已合并到 main，Task 05 为 [PR #45](https://github.com/Mr-lxd/RoboBeetle/pull/45)
-的测试与调研阶段，未交付自动运动下发。以下桌面观察、host 测试与实际运动/
-水下验收分别记录，不互相替代。
+已合并到 main；Task 05 的 [PR #45](https://github.com/Mr-lxd/RoboBeetle/pull/45)
+完成 STOP 调研/特性测试，[PR #46](https://github.com/Mr-lxd/RoboBeetle/pull/46)
+完成纯逻辑布防/下发状态机。[PR #47](https://github.com/Mr-lxd/RoboBeetle/pull/47)
+先合并，随后 PR46 rebase 并完成 Qt 28/28 回归后合并，当时 main 为
+`dfd7972bf1c6102e83f406050c3f62730b046bca`。PR3 从该 main 新建分支接线，
+设计已先推送并获批准；操作员现已报告 PR48 桌面实测全部通过，Task 05 桌面阶段完成。
+以下操作员桌面验收、host 测试与水下验收分别记录，不互相替代。
 
 | Task | 已交付范围与证据 | 详细记录 |
 | --- | --- | --- |
@@ -13,7 +17,23 @@
 | 02 / PR #42 | 纯建议命令状态机、EMA、滞回、dwell 及本地检测新 frame_id 看门狗；建议不发送。用户确认指定检查，滞回桌面验收移至 Task 03。 | [visual-command-dry-run-validation](docs/visual-command-dry-run-validation.md) |
 | 03 / PR #43 | CSV 录制与参数/会话来源；用户中心 60 s 和扫动滞回验收通过。多目标最高置信度切换作为 Task 04 依据。 | [visual-csv-dry-run-validation](docs/visual-csv-dry-run-validation.md) |
 | 04 / PR #44 | 最近邻时间关联、LOCK/MISS/ACQUIRED 与 CSV v2；用户报告水平大跳变由 hc_u 的 108/997 降至关联 u 的 4/898，保留不同分母；桌面确认通过。视频等待/卡顿已记录，根因未确认。 | [target-temporal-association-dry-run-validation](docs/target-temporal-association-dry-run-validation.md) |
-| 05 / PR #45 | STM32 STOP 语义与 Qt 断线停止路径调研；两项 START/MODE 过渡特性测试通过，完整 Firmware host gate 37 executables + 13 compile-contract objects + USART2 source/config contract 全绿。自动下发仍待后续 PR。 | [task05-stop-transition](docs/task05-stop-transition-red.md) |
+| 05 / PR #45 | STM32 STOP 语义与 Qt 断线停止路径调研；两项 START/MODE 过渡特性测试通过，完整 Firmware host gate 37 executables + 13 compile-contract objects + USART2 source/config contract 全绿。 | [task05-stop-transition](docs/task05-stop-transition-red.md) |
+| 05 / PR #46 | 假发送接口的纯逻辑布防/下发状态机；NO_TARGET 保持已确认模式，LOST 才 STOP；Hold 未确认时 STOP。Qt 28/28 回归通过；当时应用仍 DRY_RUN。 | [task05-arming-dispatch-validation](docs/task05-arming-dispatch-validation.md) |
+| 05 / [PR #48](https://github.com/Mr-lxd/RoboBeetle/pull/48) | 默认关闭的会话级视觉下发开关、远程 RBRP 适配、安全状态事件立即 evaluate、50 ms 超时/重试定时器、手动接管、姿态证据及 CSV v3；RED→GREEN，完整 Qt 30/30 全绿；操作员桌面实测全部通过，包括修复后的短暂 STALE 复验。 | [task05-visual-dispatch-wiring-validation](docs/task05-visual-dispatch-wiring-validation.md) |
+
+### Task 05 桌面验收完成与后续待办（操作员报告，2026-10-04）
+
+- **Task 05 桌面阶段完成**：操作员确认全部桌面检查通过。修复后的短暂 STALE
+  复验为 `17.76 s STALE → 17.78 s STOP 并撤防`；推理恢复后的 9.3 s 内没有
+  自动下发，恢复自动运动需要操作员重新 Arm。STOP 下发与撤防不等同于机械停止完成。
+- 桌面验证方向为 **`turn_sign = +1`**；水下方向仍待确认。此验收值不会成为程序的
+  默认布防方向：每次启动仍须在本次会话选择方向、明确确认，再单独 Arm。
+- 已知限制（**暂不修复**）：网关同一时间只接受一个客户端，且没有 TCP keepalive。
+  半开的旧连接可能导致新的 Console 被拒绝，日志显示 `remote host closed`。
+  重新连接前关闭旧的 Console；仍被拒绝时在 Pi 上重启网关服务。
+- 待办：**上浮/下潜（Task 06）**，设计尚未开始。
+
+以上为舵机空载、离水条件下的桌面阶段验收，不代表水下验收。
 
 ### Task 05 已确认的 STOP 语义与当前断线行为
 
@@ -38,23 +58,56 @@ ControlGatewayCore revoke/abort_once → LinuxOnboardApplicationPort::abort →
 中断和机械停止还需额外时间。575 ms SafetyQuiet 是重新打开串口的保护窗口，
 不能当作 STOP ACK 或物理停止证明。
 
-### 后续真实下发的必需安全门（尚未实现/验收）
+### Task 05 的安全门与实机验收边界
 
 - 布防默认关闭；Qt/gateway 断线立即撤防并在可用链路尝试 STOP，链路不可用时
   覆盖现有 watchdog fallback，不能宣称当前 abort 已经发了 STOP。
-- 任何手动输入立即接管并撤防自动模式；STALE / LOST / INFERENCE_OFF
-  立即 STOP，均不受 dwell 限制。
-- 非 STOP 下发 `min_dwell=1000 ms`；Busy=7 不立即重试。
-- `turn_sign` 为显式配置项，无默认方向；实机方向确认前拒绝布防。现有
+- 手动运动输入（含 STOP、舵机编辑和步态选择）立即接管并撤防自动模式。
+  STALE / INFERENCE_OFF 立即 STOP 并撤防；LOST STOP 但保持布防。
+  NO_TARGET 不发新命令，保持已确认模式与布防；NO_TARGET/Hold 没有已确认
+  模式时立即 STOP。以上安全 STOP 均不受 dwell 限制。
+- 非 STOP 下发门限为上次非 STOP 发送和上次 STOP 接受后各 1000 ms 的较晚
+  时刻；须等待 ACK，Busy=7 不立即重试，下个窗口比较最新建议。只有 OK
+  更新确认模式；非 STOP 超时或 OutcomeUnknown 立即 STOP 并撤防。
+- STOP 重试的任一次 OK 都确认同次停止；手动接管或链路/控制权丢失结束重试。
+  三次连续超时锁存告警。确认后旧 STOP 请求不得阻止恢复或改变新模式。
+- `turn_sign` 来自本次会话中明确选择 +1/−1 后单独确认，无默认方向；确认前
+  拒绝布防。现有
   DRY_RUN 的 `turn_sign=+1` 不构成运动布防默认值或方向确认。
-- 以上逐项要有测试覆盖；桌面实机验证仅限舵机空载、离水。当前 Task 05 未
-  连接硬件、未烧录、未做运动或水下测试。
+- 姿态已知依据固件规则推断：新使能/Neutral/Angle ACK OK 置已知，PWM/Disable
+  置未知；已使能舵机重复 Enable 保持原证据。断链/会话重建清空 enabled 和
+  姿态证据。Qt 推断已知而 START 返回 HARDWARE_FAILURE 时提示可能不一致。
+- 关闭开关仅在布防或自动 STOP 待确认时发一次操作员 STOP，不自动重试；
+  已由手动接管撤防时不发命令。直连维护模式始终 DRY_RUN。
+- 诊断事件进入 STALE / INFERENCE_OFF / LOST 时立即 evaluate 该事件快照；重入时
+  保留快照副本延迟处理，不能被恢复后的状态覆盖。50 ms 定时器保留用于超时和重试。
+  两条路径均直接使用诊断快照的 VisualState 和同次策略结果的 ex_f。
+  AwaitingVideo 不额外覆盖为 STALE：上游在 500 ms 内保持原状态，超时才
+  STALE；无有效快照时才由适配层视为 STALE。
+- 桌面实机验证仅限舵机空载、离水；拔网线后腿变软、停在原位是预期 disable-all，
+  不是回零。操作员已完成 Task 05 桌面实测；agent 的 host/回环验证不操作硬件，水下测试仍待完成。
+- 待办：用 PR43/44 CSV 统计跟踪中连续 NO_TARGET 持续时间分布，作为
+  `lost_ms` 宽限期依据，尚未统计或修改参数。
 
 保留 Task 04 Qt EXE：
 `D:\RoboBeetleConsole-portable-target-temporal-association-dry-run-20261003\RoboBeetleConsole.exe`，
 源码 `ec5841f30ace8eadc551b5893a849087c553aa67`，SHA-256
 `C6A525E920FC1DB7624F60967FF161AAC50C07C4678816A13C73A1405F6E1C78`。
-本次没有新建 Qt EXE；Task 05 host 测试 EXE 来源与哈希见调研记录及 PR 描述。
+PR47 的便携版（不含 PR46，保持 DRY_RUN）保留在
+`D:\RoboBeetleConsole-portable-qt-regression-stability-20261004\`，源码
+`c5544306f3b5bfc4fbcbb23c4d2875f2e3962b12`，EXE SHA-256
+`1E1177CEA3E5B703A334592CD53B04A58098BBD213A69701061D151E2C3662AE`。
+PR3 新 EXE 与测试 EXE 使用独立输出目录；最终源码 commit 和 SHA-256 记录于
+PR 描述及便携包 BUILD_INFO，不覆盖以上历史包。
+PR48 初始历史包位于 `D:\RoboBeetleConsole-portable-task05-visual-dispatch-wiring-20261004\`，
+二进制源码 `7da3ede860981adead9beb5a34f819dc6e1cf726`，EXE SHA-256
+`85FBE358DE2FEC67A48859C3020694CF0132B114C71C944D1B9E98071BFBDCFB`。
+已验收的短暂安全状态修复包位于
+`D:\RoboBeetleConsole-portable-task05-transient-safety-20261004\`，
+二进制源码 `d1a01c52d37134d66825a89ca8242c8fdc99de13`，EXE SHA-256
+`1576D37F3FE73ED7FED6EA931831E3D7BE7575B8CA1F6652BBB2AAF32E2A305B`。
+Windows 便携启动检查通过；视觉开关每次启动默认关闭。本次合并交接收尾 commit
+仅修改本文档，不改变已验收/打包的代码。
 
 当前 active/default Protocol V2 host transport 是 Raspberry Pi → STM32 USART2
 （PA2/PA3，115200 8-N-1）；2026-09-16 的 target link acceptance 见本文档末尾。
