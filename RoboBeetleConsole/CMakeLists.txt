@@ -213,6 +213,12 @@ if(BUILD_TESTING)
     target_link_libraries(main_window_visual_error_tests PRIVATE RoboBeetleCore Qt6::Widgets)
     add_test(NAME main_window_visual_error_tests COMMAND main_window_visual_error_tests)
 
+    # These integration tests assert real 170/220/500/1500 ms scheduler windows.
+    # Keep their event loops free of competing CTest processes; pure state-machine
+    # deadline tests above remain deterministic and may still run in parallel.
+    set_tests_properties(robot_controller_tests main_window_tests
+        main_window_visual_error_tests PROPERTIES RUN_SERIAL TRUE)
+
     add_executable(rbrp_client_session_tests
         tests/rbrp_client_session_tests.cpp
     )

@@ -749,8 +749,22 @@ void testPresentationDetailsReflowAndNoSideEffects()
         tabs->setCurrentIndex(0);
         QApplication::processEvents();
         auto *motionScroll = window.findChild<QScrollArea *>(QStringLiteral("motionScrollArea"));
+        // Startup can be screen-clamped to 720px; resizing preserves the
+        // splitter allocation. Exercise visibility with content-sized space,
+        // rather than assuming the startup pane grows on a larger screen.
+        if (splitter != nullptr && motionScroll != nullptr) {
+            const int chrome = splitter->widget(1)->height()
+                - motionScroll->viewport()->height();
+            const int toolsHeight = motionScroll->widget()->minimumSizeHint().height()
+                + chrome + 8;
+            splitter->setSizes({splitter->height() - toolsHeight, toolsHeight});
+            QApplication::processEvents();
+            expect(motionScroll->viewport()->height()
+                       >= motionScroll->widget()->minimumSizeHint().height(),
+                   "Motion/Gait receives at least its styled content minimum");
+        }
         expect(motionScroll != nullptr && motionScroll->verticalScrollBar()->maximum() == 0,
-               "feedback: Motion/Gait is fully visible at the comfortable window size");
+               "feedback: Motion/Gait is fully visible with a content-sized splitter pane");
     }
 
     if (splitter != nullptr && tabs != nullptr) {

@@ -1325,6 +1325,10 @@ QWidget *MainWindow::createStatusColumn()
         card->setMaximumWidth(230);
         card->setMaximumHeight(QWIDGETSIZE_MAX);
         card->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+        // Recompute content minima after font/style and live status changes.
+        if (card != actuator) {
+            card->layout()->setSizeConstraint(QLayout::SetMinimumSize);
+        }
         layout->addWidget(card, stretch);
     }
     return panel;
