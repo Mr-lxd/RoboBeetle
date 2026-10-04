@@ -17,6 +17,7 @@
 #include <QTcpSocket>
 #include <QThread>
 
+#include <algorithm>
 #include <cstdio>
 #include <functional>
 #include <optional>
@@ -504,6 +505,70 @@ void testSessionRuntime()
     expect(records.size()>=8,"runtime records sends and terminal outcomes");
     gateway.disconnectPeer();
 }
+void testReentrantSafetySnapshotIsRetained()
+{
+    using namespace rb::vision;
+    class ReentrantController : public rb::test::VisualControllerFixture {
+    public:
+        std::function<void()> duringSubmit;
+        int depth{0}, maximumDepth{0};
+        std::optional<quint32> submitVisualMotion(rb::MotionMode mode) override {
+            ++depth; maximumDepth = std::max(maximumDepth, depth);
+            const auto id = VisualControllerFixture::submitVisualMotion(mode);
+            if (duringSubmit) { auto once = std::move(duringSubmit); duringSubmit = {}; once(); }
+            --depth;
+            return id;
+        }
+    };
+    for (bool insideSubmit : {true, false})
+    for (auto state : {VisualState::Stale, VisualState::InferenceOff, VisualState::Lost}) {
+        ReentrantController controller;
+        qint64 now = 0;
+        VisualDiagnosticSession diagnostic({}, [&] { return now; });
+        DetectionFrame frame{1, 1001, {640, 480}, {{0, "fish", .9, {320, 240}}}};
+        diagnostic.onDetectionArrival(frame, {DetectionDisplayState::Target, frame});
+        VisualDispatchSession session(&controller, &diagnostic);
+        session.setFeatureEnabled(true); session.selectTurnSign(1); session.confirmTurnSign();
+        expect(session.arm() == ArmReason::Ready, "reentrant diagnostic fixture arms");
+        const auto emitTransient = [&] {
+            auto event = diagnostic.snapshot();
+            event.state = state; event.command.proposed = ProposedCommand::Stop;
+            emit diagnostic.diagnosticChanged(event);
+            // The provider remains TRACKING; recovery arrives before queued safety evaluation.
+            now = 10;
+            emit diagnostic.diagnosticChanged(diagnostic.snapshot());
+        };
+        bool emitted = false;
+        if (insideSubmit) controller.duringSubmit = emitTransient;
+        else QObject::connect(&session, &VisualDispatchSession::dispatchRecorded,
+            [&](const VisualDispatchRecord &record) {
+                if (!emitted && record.command == ProposedCommand::Forward && record.result == "SENT") {
+                    emitted = true;
+                    emitTransient(); // submitting_ is false but evaluate is still on the stack.
+                }
+            });
+        session.timerTick();
+        expect(controller.sends.size() == 1 && controller.maximumDepth == 1,
+               "diagnostic during submission never recursively submits STOP");
+        QApplication::processEvents();
+        expect(controller.sends.size() == 2 && controller.sends.back().second == rb::MotionMode::Stop,
+               "queued safety event uses captured snapshot despite TRACKING recovery");
+        expect(session.armed() == (state == VisualState::Lost),
+               "queued STALE/INFERENCE_OFF disarm; queued LOST retains arming");
+        if (controller.sends.size() == 2) controller.ack(controller.sends.back().first, rb::CommandTerminalResult::Ok);
+        controller.ack(controller.sends.front().first, rb::CommandTerminalResult::Ok);
+        now = 1010; session.timerTick();
+        if (state != VisualState::Lost)
+            expect(!session.armed() && controller.sends.size() == 2,
+                   "late START OK and next dwell cannot revive a transient safety disarm");
+        else
+            expect(session.armed() && controller.sends.size() == 3
+                   && controller.sends.back().second == rb::MotionMode::Forward,
+                   "transient LOST resumes only after STOP acceptance dwell");
+        expect(controller.maximumDepth == 1, "deferred STOP submission is never nested");
+    }
+}
+
 void testAuthorityLossInSameEvent()
 {
     using namespace rb::vision;
@@ -624,4 +689,4 @@ void testAutomaticStopCoversOperatorStop()
 }
 
 }
-int main(int argc,char **argv){QApplication app(argc,argv);testAuthorityLossInSameEvent();testPoseMismatchRequiresCompleteMask();testAutomaticStopCoversOperatorStop();testDeterministicRuntimeCases();testTimerAndRealDiagnosticGrace();testWireFailureSafetyStop();testAcceptedStopRetiresRetryEpisode();testSessionRuntime();return failures?1:0;}
+int main(int argc,char **argv){QApplication app(argc,argv);testReentrantSafetySnapshotIsRetained();testAuthorityLossInSameEvent();testPoseMismatchRequiresCompleteMask();testAutomaticStopCoversOperatorStop();testDeterministicRuntimeCases();testTimerAndRealDiagnosticGrace();testWireFailureSafetyStop();testAcceptedStopRetiresRetryEpisode();testSessionRuntime();return failures?1:0;}

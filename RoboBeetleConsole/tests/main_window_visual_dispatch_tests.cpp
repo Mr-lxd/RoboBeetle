@@ -425,6 +425,97 @@ void negativeAndTimer() {
     check(direct.sends.empty()&&!dw.findChild<VisualDispatchSession*>()->armed(),"direct maintenance cannot arm or send");
     check(dw.findChild<VideoView*>()->visualDiagnosticText().contains("DRY_RUN"),"direct maintenance video always DRY_RUN");
 }
+void transientSafetyEvents()
+{
+    for (const auto state : {VisualState::Stale, VisualState::InferenceOff, VisualState::Lost}) {
+        test::VisualControllerFixture controller;
+        MainWindow window(&controller);
+        auto *session = arm(window);
+        auto *diagnostic = window.findChild<VisualDiagnosticSession*>();
+        if (!session || !session->armed() || !diagnostic) return;
+        session->timerTick();
+        check(controller.sends.size() == 1, "transient fixture sends initial Forward");
+        if (controller.sends.empty()) return;
+        controller.ack(controller.sends.back().first, CommandTerminalResult::Ok);
+        check(session->currentMode() == ProposedCommand::Forward, "transient fixture confirms Forward");
+        auto snapshot = diagnostic->snapshot();
+        snapshot.state = state;
+        snapshot.command.proposed = ProposedCommand::Stop;
+        emit diagnostic->diagnosticChanged(snapshot);
+        // No processEvents/timer tick: the hazardous snapshot must be consumed now.
+        check(controller.sends.size() == 2 && controller.sends.back().second == rb::MotionMode::Stop,
+              "safety diagnostic immediately submits STOP between timer ticks");
+        check(session->armed() == (state == VisualState::Lost),
+              "STALE/INFERENCE_OFF disarm immediately; LOST retains arming");
+        if (controller.sends.size() == 2)
+            controller.ack(controller.sends.back().first, CommandTerminalResult::Ok);
+        QThread::msleep(10); // No event pumping; no polling opportunity inside the transient.
+        snapshot.state = VisualState::Tracking;
+        snapshot.command.proposed = ProposedCommand::Forward;
+        emit diagnostic->diagnosticChanged(snapshot);
+        session->timerTick();
+        check(session->armed() == (state == VisualState::Lost), "10ms recovery cannot undo safety disarm");
+        if (state != VisualState::Lost)
+            check(controller.sends.size() == 2, "recovery does not automatically resend Forward");
+    }
+}
+
+void replayDesktopTransientStale()
+{
+    // Exact diagnostic inputs extracted from the operator CSV; times relative to first row.
+    const auto fixture = QString::fromUtf8(__FILE__).replace("main_window_visual_dispatch_tests.cpp",
+        "fixtures/visual-dispatch-transient-stale.csv");
+    QFile file(fixture);
+    check(file.open(QIODevice::ReadOnly), "desktop CSV replay fixture opens");
+    if (!file.isOpen()) return;
+    test::VisualControllerFixture controller;
+    MainWindow window(&controller);
+    auto *session = arm(window);
+    auto *diagnostic = window.findChild<VisualDiagnosticSession*>();
+    if (!session || !session->armed() || !diagnostic) return;
+    session->timerTick();
+    if (controller.sends.empty()) { check(false, "replay initial Forward exists"); return; }
+    controller.ack(controller.sends.back().first, CommandTerminalResult::Ok);
+    QElapsedTimer clock; clock.start();
+    qint64 nextTick = 50;
+    file.readLine(); // header
+    bool sawStale = false, sawRecovery = false;
+    while (!file.atEnd()) {
+        const auto fields = file.readLine().trimmed().split(',');
+        if (fields.size() != 6) { check(false, "replay diagnostic row has six fields"); continue; }
+        const auto relativeMs = fields[0].toLongLong();
+        const auto elapsed = relativeMs - 111400;
+        while (nextTick <= elapsed) {
+            if (nextTick > clock.elapsed()) QThread::msleep(nextTick - clock.elapsed());
+            session->timerTick();
+            if (!controller.sends.empty()) controller.ack(controller.sends.back().first, CommandTerminalResult::Ok);
+            nextTick += 50;
+        }
+        if (elapsed > clock.elapsed()) QThread::msleep(elapsed - clock.elapsed());
+        auto snapshot = diagnostic->snapshot();
+        snapshot.localMonoMs = relativeMs + 158472;
+        snapshot.state = fields[2] == "STALE" ? VisualState::Stale
+            : fields[2] == "NO_TARGET" ? VisualState::NoTarget : VisualState::Tracking;
+        snapshot.command.proposed = fields[3] == "STOP" ? ProposedCommand::Stop
+            : fields[3] == "HOLD" ? ProposedCommand::Hold : ProposedCommand::Forward;
+        snapshot.command.ex_f = fields[4].isEmpty() ? std::nullopt : std::optional{fields[4].toDouble()};
+        snapshot.awaitingVideo = fields[5] == "1";
+        emit diagnostic->diagnosticChanged(snapshot);
+        if (snapshot.state == VisualState::Stale) {
+            sawStale = true;
+            check(relativeMs == 111988 && !session->armed(), "CSV 111.988s STALE disarms synchronously");
+            check(controller.sends.size() == 2 && controller.sends.back().second == rb::MotionMode::Stop,
+                  "CSV 111.988s STALE sends immediate STOP");
+            if (controller.sends.size() == 2) controller.ack(controller.sends.back().first, CommandTerminalResult::Ok);
+        }
+        if (sawStale && snapshot.state == VisualState::Tracking) sawRecovery = true;
+    }
+    session->timerTick();
+    check(sawStale && sawRecovery, "actual CSV replay includes STALE and subsequent TRACKING");
+    check(!session->armed() && controller.sends.size() == 2,
+          "CSV 111.4-113.5s replay stops/disarms and never auto-resumes Forward");
+}
+
 void coveredOperatorStopUi()
 {
     test::VisualControllerFixture controller;
@@ -439,4 +530,4 @@ void coveredOperatorStopUi()
 }
 
 }
-int main(int argc,char **argv){QApplication app(argc,argv);controls();coveredOperatorStopUi();manualPaths();keyboardPaths();rawRejection();signAndOffMatrix();enableReleaseBranchesAndAlert();negativeAndTimer();loopbackWindowAndCsv();std::printf("main_window_visual_dispatch_tests: %d failures\n",failures);return failures?1:0;}
+int main(int argc,char **argv){QApplication app(argc,argv);controls();transientSafetyEvents();replayDesktopTransientStale();coveredOperatorStopUi();manualPaths();keyboardPaths();rawRejection();signAndOffMatrix();enableReleaseBranchesAndAlert();negativeAndTimer();loopbackWindowAndCsv();std::printf("main_window_visual_dispatch_tests: %d failures\n",failures);return failures?1:0;}

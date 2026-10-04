@@ -2474,11 +2474,7 @@ void MainWindow::bindVisionUi()
         if (!directory.isEmpty()) { visualCsvDirectory_->setText(directory); }
     });
     visualSession_ = new vision::VisualDiagnosticSession({}, {}, this);
-    visualDispatch_ = new vision::VisualDispatchSession(controller_,
-        [this]() -> std::optional<vision::VisualDiagnosticSnapshot> {
-            if (!visualSession_) return std::nullopt;
-            return visualSession_->snapshot();
-        }, [this] { return visualSession_->monotonicNowMs(); }, {}, this);
+    visualDispatch_ = new vision::VisualDispatchSession(controller_, visualSession_, {}, this);
     connect(visualDispatch_, &vision::VisualDispatchSession::dispatchRecorded,
             visualCsvLogger_, &vision::VisualCsvLogger::recordDispatch);
     connect(visualDispatch_, &vision::VisualDispatchSession::dispatchRecorded, this,

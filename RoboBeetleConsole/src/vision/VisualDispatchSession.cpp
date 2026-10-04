@@ -70,7 +70,33 @@ VisualDispatchSession::VisualDispatchSession(IConsoleController *c, SnapshotProv
     });
     timer_.start();
 }
-VisualDispatchInput VisualDispatchSession::input() const
+VisualDispatchSession::VisualDispatchSession(IConsoleController *controller,
+    VisualDiagnosticSession *diagnostic, VisualDispatchConfig config, QObject *parent)
+    : VisualDispatchSession(controller,
+        [diagnostic] { return std::optional{diagnostic->snapshot()}; },
+        [diagnostic] { return diagnostic->monotonicNowMs(); }, config, parent)
+{
+    connect(diagnostic, &VisualDiagnosticSession::diagnosticChanged,
+            this, &VisualDispatchSession::diagnosticChanged);
+}
+
+void VisualDispatchSession::diagnosticChanged(const VisualDiagnosticSnapshot &snapshot)
+{
+    if (!enabled_ || (snapshot.state != VisualState::Stale
+        && snapshot.state != VisualState::InferenceOff && snapshot.state != VisualState::Lost)) return;
+    if (submitting_ || evaluating_) {
+        // Retain the event's value: a newer snapshot may already be TRACKING
+        // when submission/evaluation unwinds. Never collapse a safety transient.
+        QTimer::singleShot(0, this, [this, snapshot] { diagnosticChanged(snapshot); });
+        return;
+    }
+    evaluating_ = true;
+    machine_.evaluate(input(&snapshot));
+    evaluating_ = false;
+    emit statusChanged();
+}
+
+VisualDispatchInput VisualDispatchSession::input(const VisualDiagnosticSnapshot *eventSnapshot) const
 {
     VisualDispatchInput result;
     result.nowMs = now_();
@@ -86,7 +112,9 @@ VisualDispatchInput VisualDispatchSession::input() const
     result.confirmedTurnSign = confirmedSign_;
     // The diagnostic snapshot owns video grace and freshness. Use its state
     // verbatim and pair its proposal with the filtered error from that result.
-    if (auto snapshot = snapshot_()) {
+    const auto latest = eventSnapshot ? std::nullopt : snapshot_();
+    const auto *snapshot = eventSnapshot ? eventSnapshot : latest ? &*latest : nullptr;
+    if (snapshot) {
         result.state = snapshot->state;
         result.suggestion = snapshot->command.proposed;
         result.ex = snapshot->command.ex_f;
@@ -149,8 +177,10 @@ void VisualDispatchSession::manualInput(ManualInputKind kind)
 }
 void VisualDispatchSession::timerTick()
 {
-    if (!enabled_) return;
+    if (!enabled_ || submitting_ || evaluating_) return;
+    evaluating_ = true;
     machine_.evaluate(input());
+    evaluating_ = false;
     emit statusChanged();
 }
 std::optional<ProposedCommand> VisualDispatchSession::currentMode() const

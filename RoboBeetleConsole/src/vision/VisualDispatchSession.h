@@ -20,6 +20,7 @@ public:
     using SnapshotProvider = std::function<std::optional<VisualDiagnosticSnapshot>()>;
     using NowMs = std::function<qint64()>;
     VisualDispatchSession(IConsoleController *controller, SnapshotProvider snapshot, NowMs now = {}, VisualDispatchConfig config = {}, QObject *parent = nullptr);
+    VisualDispatchSession(IConsoleController *controller, VisualDiagnosticSession *diagnostic, VisualDispatchConfig config = {}, QObject *parent = nullptr);
     void setFeatureEnabled(bool enabled);
     ArmReason arm();
     void disarm();
@@ -45,7 +46,8 @@ private:
     void submit(quint64 policyId, ProposedCommand command, bool operatorStop);
     void terminal(quint32 id, CommandTerminalResult result, quint8 raw, qint64 rtt);
     void clearAssociations(bool includeOperator = false);
-    VisualDispatchInput input() const;
+    void diagnosticChanged(const VisualDiagnosticSnapshot &snapshot);
+    VisualDispatchInput input(const VisualDiagnosticSnapshot *snapshot = nullptr) const;
     IConsoleController *controller_;
     SnapshotProvider snapshot_;
     NowMs now_;
@@ -55,6 +57,7 @@ private:
     quint16 requiredServoMask_;
     bool enabled_{false};
     bool submitting_{false};
+    bool evaluating_{false};
     ArmReason reason_{ArmReason::NotTracking};
     std::optional<int> selectedSign_, confirmedSign_;
     std::optional<CommandTerminalResult> operatorStopResult_;

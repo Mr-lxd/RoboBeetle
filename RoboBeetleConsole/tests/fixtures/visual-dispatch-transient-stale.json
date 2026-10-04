@@ -1,0 +1,10 @@
+{
+  "source": "visual-20261004T125146854Z-1b8a4f80-2e24-497a-85ea-4f206d865aa5.csv",
+  "source_sha256": "460dcda8112c6111d0fbeade4f32c129502afba0d003f89674655cefda0ea388",
+  "time_origin_ms": 158472,
+  "range_ms": [
+    111400,
+    113500
+  ],
+  "note": "Diagnostic rows only; original dispatch outcomes are observations, not inputs."
+}

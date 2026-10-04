@@ -2,9 +2,11 @@
 
 Base: `dfd7972bf1c6102e83f406050c3f62730b046bca` (PR47 merged first, then rebased PR46). Branch `codex/task05-pr3-visual-dispatch-wiring` was created directly from that main commit. The design was pushed before implementation and approved by the operator, including the direct-snapshot AwaitingVideo clarification.
 
-This record covers host tests and loopback simulation. Physical motion and water acceptance remain pending. The final source commit and application/test EXE SHA-256 are recorded in the draft PR and the portable package's BUILD_INFO.
+This record covers host tests, loopback simulation and the operator-reported desktop observations below. Remaining desktop checks and water acceptance remain pending. The final source commit and application/test EXE SHA-256 are recorded in the draft PR and the portable package's BUILD_INFO.
 
-Delivered as [draft PR48](https://github.com/Mr-lxd/RoboBeetle/pull/48). Binary source commit: `7da3ede860981adead9beb5a34f819dc6e1cf726`; subsequent commits only finish documentation. Portable application: `D:/RoboBeetleConsole-portable-task05-visual-dispatch-wiring-20261004/`. Application EXE SHA-256: `85FBE358DE2FEC67A48859C3020694CF0132B114C71C944D1B9E98071BFBDCFB`. Test EXEs, all six artifact hashes, logs and manifest are retained in `D:/RoboBeetle-results/task05-pr3-wiring-20261004/`.
+Latest transient-safety portable package: `D:/RoboBeetleConsole-portable-task05-transient-safety-20261004/`; updated source commit, EXE SHA-256, build/test/startup logs and manifest are recorded in the PR description and `D:/RoboBeetle-results/task05-pr3-transient-safety-20261004/`. The packages below are preserved historical deliveries.
+
+Initial delivery as [draft PR48](https://github.com/Mr-lxd/RoboBeetle/pull/48). Binary source commit: `7da3ede860981adead9beb5a34f819dc6e1cf726`; its initial closeout commits only finished documentation. Later pre-merge fixes have new source/artifact provenance in the PR description and portable BUILD_INFO. Portable application: `D:/RoboBeetleConsole-portable-task05-visual-dispatch-wiring-20261004/`. Application EXE SHA-256: `85FBE358DE2FEC67A48859C3020694CF0132B114C71C944D1B9E98071BFBDCFB`. Test EXEs, all six artifact hashes, logs and manifest are retained in `D:/RoboBeetle-results/task05-pr3-wiring-20261004/`.
 
 windeployqt deployment and Windows startup passed with a system-only PATH, no Qt environment overrides, all nine Qt/MinGW runtime modules loaded from the package and empty stderr. The startup process was closed after verification; no hardware action occurred. Optional D3D12 dxcompiler/dxil files were unavailable and the optional OpenSSL plugin was omitted; Windows Widgets startup passed and Schannel is deployed.
 
@@ -12,9 +14,9 @@ windeployqt deployment and Windows startup passed with a system-only PATH, no Qt
 
 - Every application instance starts with visual dispatch OFF. Enabling the switch requires a separate Arm action; no settings persist the switch or direction confirmation. OFF retains DRY_RUN diagnostics. Direct maintenance remains DRY_RUN.
 - Direction confirmation is two separate operator actions: choose +1 or -1, then Confirm. `VisualPolicyConfig::turn_sign` is diagnostic configuration, not arming evidence.
-- A 50 ms GUI-thread timer evaluates the complete diagnostic snapshot, using its VisualState verbatim and its own policy result's `ex_f`. AwaitingVideo alone does not add STALE: confirmed Forward is retained at 400 ms; the upstream snapshot becomes STALE at 500 ms, causing STOP and disarm. Missing valid snapshot is STALE.
+- Safety diagnostic events (STALE / INFERENCE_OFF / LOST) immediately evaluate the event snapshot on the GUI thread. Reentrant submission/evaluation defers a copy of that snapshot, so TRACKING recovery cannot erase the transient. The 50 ms GUI-thread timer remains for polling, ACK timeouts and STOP retries and evaluates the complete diagnostic snapshot, using its VisualState verbatim and its own policy result's `ex_f`. AwaitingVideo alone does not add STALE: confirmed Forward is retained at 400 ms; the upstream snapshot becomes STALE at 500 ms, causing STOP and disarm. Missing valid snapshot is STALE.
 - Enabled and known pose evidence is inferred from correlated ACK OK. Newly enabled servos, Neutral and Angle establish known pose; PWM and Disable clear it. Re-enabling an already-enabled servo is a no-op and preserves its existing evidence. Link/authority loss or session reconstruction clears both masks; old ACKs cannot restore them.
-- START rejection with raw result6 and inferred known pose displays the possible firmware mismatch explanation; it is not a diagnosis of the hardware failure. The message survives the subsequent safety STOP.
+- START rejection with raw result6 and every configured required pose bit inferred known displays the possible firmware mismatch explanation; it is not a diagnosis of the hardware failure. The message survives the subsequent safety STOP.
 - NO_TARGET retains the confirmed mode and arming, without initiating motion. NO_TARGET/HOLD with no confirmed mode requests STOP. LOST requests STOP while retaining arming. STALE, INFERENCE_OFF, control/link loss and uncertain non-STOP outcomes disarm. Safety STOP bypasses dwell.
 - Non-STOP changes wait for the previous ACK and both 1000 ms gates: previous non-STOP send and accepted STOP. Busy does not update the mode or immediately retry; the next window re-evaluates the latest suggestion.
 - Manual motion/STOP takes over before the controller action or user actuator edit and cancels automatic commands and retries. Closing the visual gate only sends one operator STOP if armed or an automatic STOP is awaiting confirmation. That operator request does not retry. Closing after manual takeover sends no command.
@@ -47,7 +49,7 @@ UI tests also verify a second window cannot inherit activation, selection alone 
 
 Final implementation commit: `00beeeded151a66c45dd6ad98d868adf1707f7e5`. The root agent rebuilt all targets and ran the complete Qt regression on this final code: **30/30 PASS, zero failures, 62.72 s** (`task3-final-build.log`, `task3-final-full-tests.log`). Baseline28 gains the dispatch-session and MainWindow-dispatch targets. Existing real-clock CTest isolation remains in place.
 
-Independent final specification and code-quality reviews approved this implementation. Findings corrected during review were known submission rejection mapping, monotonic RTT, controller-level duplicate STOP retirement, operator STOP submission display and active turn-sign presentation. Subsequent closeout commits only update documentation; they do not change the tested application or test sources.
+Independent final specification and code-quality reviews approved this implementation. Findings corrected during review were known submission rejection mapping, monotonic RTT, controller-level duplicate STOP retirement, operator STOP submission display and active turn-sign presentation. The initial closeout commits only updated documentation. Later pre-merge fixes are recorded separately below and in the PR description.
 
 ## RBRP outcomes and CSV v3
 
@@ -57,7 +59,17 @@ CSV v3 retains all v2 columns and appends `policy_request_id,request_id,dispatch
 
 The PR46 TODO remains open: analyze contiguous NO_TARGET durations in PR43/44 CSV, preserving session boundaries and censored runs, to justify `lost_ms`. This PR does not claim that analysis or change the 1500 ms grace.
 
-## Operator desktop checklist: pending
+## Operator desktop evidence (2026-10-04)
+
+Evidence source: operator-provided `visual-20261004T125146854Z-1b8a4f80-2e24-497a-85ea-4f206d865aa5.csv`, SHA-256 `460dcda8112c6111d0fbeade4f32c129502afba0d003f89674655cefda0ea388`. Times here subtract the first row's `local_mono_ms=158472`. These observations are separate from agent-run host/loopback verification.
+
+- The operator reports checklist steps 7 and 8 passed. Both operator STOP requests (`policy_request_id=0`) received OK: request684 at relative71.062s, RTT100ms; request870 at relative116.310s, RTT91ms.
+- The eight OK non-STOP outcomes have median ACK RTT132ms (approximately130ms). This is measured gateway outcome latency, not physical motion completion.
+- At relative111.988s (absolute270460ms), AwaitingVideo reached the 500ms freshness limit and emitted STALE/STOP. At112.002s (14ms later), state became NO_TARGET/HOLD; TRACKING returned at112.085s. The old 50ms dispatch poll missed STALE. It sent the strategy's STOP at112.129s while remaining armed, accepted it at112.301s (173ms RTT), then resumed FORWARD at113.329s.
+- Fix: `VisualDispatchSession` connects directly to `VisualDiagnosticSession::diagnosticChanged` and immediately evaluates STALE/INFERENCE_OFF/LOST using the emitted snapshot. STALE/INFERENCE_OFF disarm; LOST keeps arming. A reentrant event retains a value copy until submission/evaluation unwinds. The 50ms timer continues to handle no-frame timeouts and retries. TRACKING recovery cannot rearm automatically.
+- RED regression reproduced the transient safety miss and actual111.4-113.5s diagnostic replay (12 assertion failures, `pr48-transient-red.log`). Final GREEN complete Qt6.11.2 Windows regression: **30/30 PASS, zero failures, 65.71s** (`pr48-transient-green-final.log`). The committed CSV fixture preserves the diagnostic rows and records the source hash/time origin; original dispatch/outcome rows are observed evidence, not replay inputs. Reentrant-snapshot tests also retain the safety event through a10ms recovery. Post-fix physical STALE behavior still requires operator revalidation with unloaded servos out of water.
+
+## Operator desktop checklist: remaining checks pending
 
 All checks below require **unloaded servos, out of water**, and are performed by the operator. Record actual observations separately from host/loopback results.
 
@@ -67,7 +79,7 @@ All checks below require **unloaded servos, out of water**, and are performed by
 - [ ] With remote control, enable/Neutral the required servos and confirm arming evidence. PWM must invalidate the corresponding pose evidence.
 - [ ] Unplug Ethernet and record elapsed behavior: legs become soft and stay at their position. This is the expected disable-all safety behavior, **not a smooth return to zero**.
 - [ ] Stop the frame stream and verify STALE causes STOP and disarm. ACK means acceptance; ordinary firmware STOP then ramps to zero with the documented tick-dependent upper bound.
-- [ ] Use manual motion/STOP and actuator editors while armed, including dwell and a pending ACK. Verify immediate takeover and no further automatic sends or retries.
-- [ ] Close the switch while armed and record the one operator STOP result. Repeat after manual takeover with manual motion in progress and verify it sends nothing.
+- [x] Operator reports step7 passed: Use manual motion/STOP and actuator editors while armed, including dwell and a pending ACK. Verify immediate takeover and no further automatic sends or retries.
+- [x] Operator reports step8 passed: Close the switch while armed and record the one operator STOP result. Repeat after manual takeover with manual motion in progress and verify it sends nothing.
 
-No physical controller connection, firmware flashing, servo movement or water test is part of this host validation. Disconnect safety continues through gateway abort/UART teardown/heartbeat timeout/firmware disable-all; abort itself does not send a STOP frame. See [Task05 STOP investigation](task05-stop-transition-red.md) for the code anchors and detection/scheduling budget.
+The agent-run host validation performs no physical controller connection, firmware flashing, servo movement or water test. Operator-reported desktop evidence above does not establish water acceptance. Disconnect safety continues through gateway abort/UART teardown/heartbeat timeout/firmware disable-all; abort itself does not send a STOP frame. See [Task05 STOP investigation](task05-stop-transition-red.md) for the code anchors and detection/scheduling budget.
