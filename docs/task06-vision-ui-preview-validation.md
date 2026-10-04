@@ -55,3 +55,31 @@ the latched STOP-timeout banner is covered by the UI test.
 - Turn +1 was confirmed on the desktop in Task 05; underwater remains unconfirmed.
 
 Preview approval and physical acceptance remain pending. No merge was requested.
+
+## Delivery provenance
+
+Tested binary source: `93a640ff8b10119c2aafa284f2120c063e9fcab1`.
+Full Qt regression: **30/30 PASS**, 67.52 seconds. RED and final GREEN logs are
+retained in the screenshot output directory. Independent spec and quality reviews
+found no remaining actionable issue.
+
+Portable directory: `D:/RoboBeetleConsole-portable-task06-ui-preview-20261004/`.
+Application EXE SHA-256:
+`0A0756036B4D690E76479B9E5EEF1EF60159BF59ADFE1EC2423E054EC9479ACF`.
+Portable and build EXEs are identical. windeployqt Release deployment excludes
+optional OpenSSL, retains Schannel, and startup passed with a system-only PATH,
+eight Qt/MinGW runtime modules from the package and empty stderr.
+
+Test EXE SHA-256:
+
+| EXE | SHA-256 |
+| --- | --- |
+| main_window_visual_dispatch_tests | 41F671ABD3ED769DF45BEECD07B398560215E115DB1A8280C12DB106248647CD |
+| visual_dispatch_session_tests | 6F47FBC939A09B8D893844AB9217DD59AC5C9CA72CBF30F0C671FB8F69AC50AF |
+| main_window_layout_tests | ACE3E3462B86C0FA2AEC40A15A8467F73BBEE987038875EBD23507DE7BAD1E6C |
+| video_view_tests | B8B08949DDEB38E97E7A15767E8F3826E01861A5AAC153AE07B92D198A625461 |
+| operator_console_preview | A2BCEA5D592B085B0264016D295361A94BF34A9E277B52A3D9C4FFC53AD4A06E |
+
+The output `README.md` indexes all ten PNGs. `manifest.json` records captured
+geometry/state and `BUILD_INFO.json` records source, EXE and screenshot hashes.
+Subsequent documentation-only commits do not change the tested binaries.
