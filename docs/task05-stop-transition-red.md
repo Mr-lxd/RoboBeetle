@@ -56,14 +56,14 @@ servo operations are faked. They check:
   (750 + 10 = 760 ms), assuming the foreground is serviced every tick.
 
 ```powershell
-./RoboBeetleFirmware/tests/run_host_tests.ps1 -BuildRoot C:/Users/laixindong/.codex/worktrees/task05-stop-transition-red-build/review
+./RoboBeetleFirmware/tests/run_host_tests.ps1 -BuildRoot C:/Users/laixindong/.codex/worktrees/task05-stop-transition-red-build/cadence
 ```
 
 Full Firmware host gate: **PASS**, 37 executables + 13 app/backend/benchmark/
 diagnostics compile-contract objects + USART2 source/config contract. The
 compiler uses `-std=c11 -Wall -Wextra -Werror`. The reviewed tests and existing
 MotionManager suite pass. Log:
-`C:/Users/laixindong/.codex/worktrees/task05-stop-transition-review.log`.
+`C:/Users/laixindong/.codex/worktrees/task05-stop-transition-cadence.log`.
 Original baseline/RED logs remain preserved outside the repo for provenance.
 This is host characterization, not hardware or water validation.
 
@@ -135,10 +135,10 @@ attempt while transport is usable, and the watchdog fallback when it is not.
 ## Artifact provenance
 
 Reviewed host test EXE (does not control a robot):
-`C:/Users/laixindong/.codex/worktrees/task05-stop-transition-red-build/review/protocol_dispatcher_tests.exe`.
-Test source commit: `ac1278df9a3ad8ca3a11700e98f061cc427c7a2b`.
+`C:/Users/laixindong/.codex/worktrees/task05-stop-transition-red-build/cadence/protocol_dispatcher_tests.exe`.
+Test source commit: `8a3a0d90248792855022b047234f2a45cdaafb35`.
 Fresh test EXE SHA-256:
-`223877EF4D7F2CFF9F25042421D03AFD19D7335EBBA7573661E36F05923C53AC`.
+`583C7A30E3E80B44622850542DE417FACDDA4E8AD49AD3C09905444498FD506B`.
 Subsequent provenance edits are documentation-only; executable build inputs
 remain unchanged. The final delivery head is recorded in the PR description.
 No new Qt EXE is built. The retained Task 04 DRY_RUN EXE
