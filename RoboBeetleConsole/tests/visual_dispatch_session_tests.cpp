@@ -370,6 +370,102 @@ void testWireFailureSafetyStop()
     expect(!s.armed()&&!s.currentMode(),"unknown and authority loss cannot retain confirmed mode");gateway.disconnectPeer();
 }
 
+void testAcceptedStopRetiresRetryEpisode()
+{
+    using namespace rb::vision;
+    for (bool acceptFirst : {false, true}) {
+        FakeGatewayPeer gateway;
+        rb::RemoteRobotController controller;
+        rb::ConsoleConnectionConfiguration config;
+        config.endpoint = QStringLiteral("127.0.0.1");
+        config.tcpPort = gateway.port();
+        controller.connectController(config);
+        expect(gateway.accept(), "STOP retry regression connects");
+        completeHello(gateway);
+        pumpUntil([&] { return controller.canAcquireControl(); });
+        controller.acquireControl();
+        completeAcquire(gateway);
+        pumpUntil([&] { return controller.isControlActive(); });
+        quint16 sequence = 10;
+        for (int i : {0, 1, 3, 4}) {
+            controller.enableServo(static_cast<rb::ServoId>(i));
+            auto frame = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+            if (frame) {
+                sendSubmitted(gateway, frame->request_id, sequence);
+                sendOutcome(gateway, frame->request_id, RobotCommandKind::EnableServos,
+                            sequence++, GatewayCommandOutcome::Accepted);
+                pumpUntil([&] { return controller.isServoEnabled(static_cast<rb::ServoId>(i)); });
+            }
+        }
+        qint64 now = 0;
+        VisualDiagnosticSnapshot snapshot;
+        snapshot.state = VisualState::Tracking;
+        snapshot.command.proposed = ProposedCommand::Forward;
+        VisualDispatchSession session(&controller, [&] { return std::optional{snapshot}; },
+                                      [&] { return now; });
+        session.setFeatureEnabled(true);
+        session.selectTurnSign(1);
+        session.confirmTurnSign();
+        expect(session.arm() == ArmReason::Ready, "STOP retry regression arms");
+        session.timerTick();
+        auto start = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        if (!start) { gateway.disconnectPeer(); continue; }
+        sendSubmitted(gateway, start->request_id, 50);
+        sendOutcome(gateway, start->request_id, RobotCommandKind::StartMotion, 50,
+                    GatewayCommandOutcome::Accepted);
+        expect(pumpUntil([&] { return session.currentMode() == ProposedCommand::Forward; }),
+               "initial forward ACK confirmed");
+        now = 50;
+        snapshot.state = VisualState::Lost;
+        session.timerTick();
+        auto first = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        if (!first) { gateway.disconnectPeer(); continue; }
+        sendSubmitted(gateway, first->request_id, 51);
+        now = 1050;
+        session.timerTick();
+        auto retry = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        if (!retry) { gateway.disconnectPeer(); continue; }
+        sendSubmitted(gateway, retry->request_id, 52);
+        const auto confirmedId = acceptFirst ? first->request_id : retry->request_id;
+        const auto retiredId = acceptFirst ? retry->request_id : first->request_id;
+        sendOutcome(gateway, confirmedId, RobotCommandKind::StopMotion,
+                    acceptFirst ? 51 : 52, GatewayCommandOutcome::Accepted);
+        expect(pumpUntil([&] { return session.currentMode() == ProposedCommand::Stop; }),
+               "any STOP in episode can confirm STOP");
+        expect(pumpUntil([&] { return controller.motionState() == rb::MotionState::Stopped; }),
+               "accepted STOP transition finishes");
+        expect(controller.isMotionReady(rb::MotionMode::Forward),
+               "accepted STOP retires unanswered retry readiness blockers");
+        now = 2050;
+        snapshot.state = VisualState::Tracking;
+        session.timerTick();
+        auto resumed = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        expect(resumed && resumed->payload == Bytes{static_cast<Byte>(RobotCommandKind::StartMotion), 1},
+               "Tracking resumes START after accepted STOP and dwell");
+        expect(session.armed(), "accepted STOP retry preserves arming for Tracking recovery");
+        if (resumed && resumed->payload[0] == static_cast<Byte>(RobotCommandKind::StartMotion)) {
+            sendSubmitted(gateway, resumed->request_id, 53);
+            sendOutcome(gateway, resumed->request_id, RobotCommandKind::StartMotion, 53,
+                        GatewayCommandOutcome::Accepted);
+            expect(pumpUntil([&] { return session.currentMode() == ProposedCommand::Forward; }),
+                   "resumed START ACK confirms forward");
+        }
+        // Leave the other STOP without an outcome beyond the full controller
+        // timeout window, then deliver its old ACK after Forward resumed.
+        expect(!gateway.nextFrame(RbrpMessageKind::ReleaseControl, 3000),
+               "retired STOP never causes later command timeout authority loss");
+        sendOutcome(gateway, retiredId, RobotCommandKind::StopMotion,
+                    acceptFirst ? 52 : 51, GatewayCommandOutcome::Accepted);
+        QApplication::processEvents();
+        expect(controller.isControlActive()
+               && controller.motionState() == rb::MotionState::Running
+               && controller.motionMode() == rb::MotionMode::Forward
+               && session.armed() && session.currentMode() == ProposedCommand::Forward,
+               "late retired STOP ACK cannot reset resumed motion or arming");
+        gateway.disconnectPeer();
+    }
+}
+
 void testSessionRuntime()
 {
     using namespace rb::vision;
@@ -409,4 +505,4 @@ void testSessionRuntime()
     gateway.disconnectPeer();
 }
 }
-int main(int argc,char **argv){QApplication app(argc,argv);testDeterministicRuntimeCases();testTimerAndRealDiagnosticGrace();testWireFailureSafetyStop();testSessionRuntime();return failures?1:0;}
+int main(int argc,char **argv){QApplication app(argc,argv);testDeterministicRuntimeCases();testTimerAndRealDiagnosticGrace();testWireFailureSafetyStop();testAcceptedStopRetiresRetryEpisode();testSessionRuntime();return failures?1:0;}

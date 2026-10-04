@@ -591,6 +591,28 @@ void RemoteRobotController::handleCommandOutcome(
         terminal = CommandTerminalResult::Ok;
     else if (outcome == static_cast<quint8>(robobeetle::gateway::GatewayCommandOutcome::Rejected))
         terminal = rawResult == 7 ? CommandTerminalResult::Busy : CommandTerminalResult::Rejected;
+    if (!pending.superseded && terminal == CommandTerminalResult::Ok
+        && pending.kind == robobeetle::gateway::RobotCommandKind::StopMotion) {
+        // With STOP outstanding, readiness forbids a newer START. All existing
+        // STOP requests therefore cover this same unresolved stop interval.
+        // One successful STOP confirms it; unanswered duplicates must neither
+        // block recovery nor later expire and release authority.
+        QHash<quint32, PendingCommand> retiredStops;
+        for (auto other = pending_.begin(); other != pending_.end();) {
+            if (other->kind == robobeetle::gateway::RobotCommandKind::StopMotion) {
+                retiredStops.insert(other.key(), other.value());
+                other = pending_.erase(other);
+            } else {
+                ++other;
+            }
+        }
+        // Erase the whole selected set before callbacks. A new operator STOP
+        // submitted reentrantly belongs to a later interval and stays pending.
+        for (auto retired = retiredStops.cbegin(); retired != retiredStops.cend(); ++retired) {
+            emit commandTerminal(retired.key(), CommandTerminalResult::OutcomeUnknown,
+                                 0xff, terminalNow_() - retired->terminalSentMs);
+        }
+    }
     emit commandTerminal(requestId, pending.superseded ? CommandTerminalResult::OutcomeUnknown : terminal, rawResult, monitor_.lastAckRttMs);
     if (pending.superseded) {
         updateMonitor(QStringLiteral("%1 superseded outcome ignored")

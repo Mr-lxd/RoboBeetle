@@ -725,6 +725,59 @@ void testCommandTimeoutReleasesAuthority()
            "uncertain command must never be automatically replayed");
 }
 
+void testStopRetirementPreservesReentrantRequest()
+{
+    FakeGatewayPeer gateway;
+    rb::RemoteRobotController controller;
+    rb::ConsoleConnectionConfiguration config;
+    config.endpoint = QStringLiteral("127.0.0.1");
+    config.tcpPort = gateway.port();
+    controller.connectController(config);
+    gateway.accept();
+    completeHello(gateway);
+    pumpUntil([&] { return controller.canAcquireControl(); });
+    controller.acquireControl();
+    completeAcquire(gateway);
+    pumpUntil([&] { return controller.isControlActive(); });
+    const auto first = controller.submitVisualMotion(rb::MotionMode::Stop);
+    const auto second = controller.submitVisualMotion(rb::MotionMode::Stop);
+    gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    std::optional<quint32> reentrant;
+    bool reentrantOk = false;
+    const auto connection = QObject::connect(
+        &controller, &rb::IConsoleController::commandTerminal,
+        [&](quint32 id, rb::CommandTerminalResult result, quint8, qint64) {
+            if (first && id == *first && result == rb::CommandTerminalResult::OutcomeUnknown)
+                reentrant = controller.submitVisualMotion(rb::MotionMode::Stop);
+            if (reentrant && id == *reentrant && result == rb::CommandTerminalResult::Ok)
+                reentrantOk = true;
+        });
+    if (first) sendSubmitted(gateway, *first, 80);
+    if (second) {
+        sendSubmitted(gateway, *second, 81);
+        sendOutcome(gateway, *second, RobotCommandKind::StopMotion, 81,
+                    GatewayCommandOutcome::Accepted);
+    }
+    expect(pumpUntil([&] { return reentrant.has_value(); }),
+           "retirement callback can submit a new operator STOP");
+    auto frame = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    expect(frame && reentrant && frame->request_id == *reentrant,
+           "reentrant STOP uses a fresh wire ID");
+    pumpUntil([&] { return controller.motionState() == rb::MotionState::Stopped; });
+    expect(controller.isMotionActive(),
+           "new STOP from retirement callback remains pending after old interval cleanup");
+    if (reentrant) {
+        sendSubmitted(gateway, *reentrant, 82);
+        sendOutcome(gateway, *reentrant, RobotCommandKind::StopMotion, 82,
+                    GatewayCommandOutcome::Accepted);
+    }
+    expect(pumpUntil([&] { return reentrantOk; }),
+           "reentrant STOP retains its own terminal outcome correlation");
+    QObject::disconnect(connection);
+    gateway.disconnectPeer();
+}
+
 void testMonotonicTerminalRtt()
 {
     FakeGatewayPeer gateway;
@@ -910,6 +963,7 @@ void testVisualWireAndPoseInference()
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
+    testStopRetirementPreservesReentrantRequest();
     testMonotonicTerminalRtt();
     testNegativeSubmissionTerminalMapping();
     testVisualTerminalMapping();
