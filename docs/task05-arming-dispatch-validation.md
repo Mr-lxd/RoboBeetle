@@ -108,8 +108,9 @@ shows no policy library in RoboBeetleConsole.exe.
 
 EXE SHA-256 (build and package identical):
 `922CE0ED148546AAF000B38F1FC9DC20CEEBACF1A3A6BB3E5A5DED36BF8F1201`.
-Source commit and final delivery head are recorded after committing the tested
-inputs, in this document/PR and package BUILD_INFO.txt.
+Test source commit: `8da248f30b74b883b8d5bb51ff48882dedd7dc73`.
+Later provenance changes are docs-only; build inputs remain unchanged. Final
+delivery head is in the PR description and package BUILD_INFO.txt.
 
 No hardware connected, firmware flashed, servo movement or water verification.
 Physical direction remains unconfirmed. Later desktop hardware tests must use

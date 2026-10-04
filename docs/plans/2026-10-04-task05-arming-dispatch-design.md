@@ -73,5 +73,6 @@ requests (more bookkeeping) or RobotController reuse (live-transport coupling).
   findings as RED, repair, then GREEN; final review no important findings.
 - [x] Build Qt tree and run full baseline and feature CTest, preserving unrelated
   UI failures; source/link audit confirms application remains DRY_RUN.
-- [ ] Commit source, package/hash the test EXE, docs-only provenance, normal push
-  and draft PR. No merge or hardware operation is authorized by this slice.
+- [x] Commit tested source; package/hash and verify reduced-PATH execution; record provenance.
+- [ ] Normal push and draft PR; final PR status is recorded in the PR description.
+  No merge or hardware operation is authorized by this slice.
