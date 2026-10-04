@@ -843,6 +843,82 @@ static void test_motion_start_stop_ack_and_duplicate_semantics(void)
            "new START during STOPPING should map to Protocol BUSY");
 }
 
+/* Task 05 RED contract: acceptance is not completion. No hardware is used. */
+static void check_stop_completes_before_original_transition(bool mode_change)
+{
+    fixture_t fixture;
+    const uint8_t start_payload[3] = {1U, MOTION_FORWARD, MOTION_ACTION_START};
+    const uint8_t turn_payload[3] = {1U, MOTION_TURN_LEFT, MOTION_ACTION_START};
+    const uint8_t stop_payload[3] = {1U, MOTION_STOP, MOTION_ACTION_STOP};
+    uint32_t transition_start_ms = mode_change ? 760U : 0U;
+    uint32_t stop_ms = transition_start_ms + 250U;
+    uint32_t before_deadline_ms = transition_start_ms + 740U;
+    rbp2_frame_t frame;
+    protocol_dispatcher_outcome_t outcome;
+    unsigned int writes_at_acceptance;
+
+    fixture_init(&fixture);
+    enable_paddles(&fixture);
+    expect(MOTION_TRANSITION_DURATION_MS == 750U,
+           "Task 05 deadline contract assumes a 750 ms transition");
+    frame = make_frame(RBP2_MSG_SET_MOTION_MODE, 200U,
+                       start_payload, sizeof(start_payload));
+    expect(handle(&fixture, &frame, 0U).result == RBP2_RESULT_OK,
+           "Task 05 setup must start Forward through the dispatcher");
+    if (mode_change)
+    {
+        complete_motion_start_ramp(&fixture);
+        frame = make_frame(RBP2_MSG_SET_MOTION_MODE, 201U,
+                           turn_payload, sizeof(turn_payload));
+        expect(handle(&fixture, &frame, transition_start_ms).result == RBP2_RESULT_OK,
+               "Task 05 setup must start the Forward-to-Turn transition");
+    }
+    else
+    {
+        (void)motion_manager_process(&fixture.motion_manager, 0U);
+    }
+    safety_supervisor_on_heartbeat(&fixture.safety_supervisor, stop_ms);
+    expect(motion_manager_process(&fixture.motion_manager, stop_ms) ==
+               MOTION_MANAGER_RESULT_OK,
+           "Task 05 setup must advance the live transition");
+    expect(fixture.motion_manager.transition == (mode_change
+               ? MOTION_MANAGER_TRANSITION_MODE : MOTION_MANAGER_TRANSITION_START),
+           "STOP must be injected while the original transition is active");
+
+    frame = make_frame(RBP2_MSG_SET_MOTION_MODE, 202U,
+                       stop_payload, sizeof(stop_payload));
+    writes_at_acceptance = fixture.driver.write_calls;
+    outcome = handle(&fixture, &frame, stop_ms);
+    expect(outcome.result == RBP2_RESULT_OK,
+           "STOP during transition must ACK OK rather than Busy=7");
+    expect(motion_manager_state(&fixture.motion_manager) == MOTION_STATE_STOPPING,
+           "STOP must immediately preempt the original transition with STOPPING");
+    expect(fixture.driver.write_calls == writes_at_acceptance,
+           "STOP ACK must not block on servo writes or ramp completion");
+
+    /* Keep liveness fresh: a watchdog abort must not make this test pass. */
+    safety_supervisor_on_heartbeat(&fixture.safety_supervisor, before_deadline_ms);
+    expect(motion_manager_process(&fixture.motion_manager, before_deadline_ms) ==
+               MOTION_MANAGER_RESULT_OK,
+           "deadline observation must not be a safety or hardware failure");
+    expect(motion_manager_state(&fixture.motion_manager) == MOTION_STATE_STOPPED &&
+               motion_manager_mode(&fixture.motion_manager) == MOTION_STOP &&
+               !servo_service_motion_is_active(&fixture.servo_service),
+           mode_change
+               ? "Task05 RED: mode-transition STOP must complete before original 750 ms deadline"
+               : "Task05 RED: start-transition STOP must complete before original 750 ms deadline");
+}
+
+static void test_stop_during_start_transition_completes_before_deadline(void)
+{
+    check_stop_completes_before_original_transition(false);
+}
+
+static void test_stop_during_mode_transition_completes_before_deadline(void)
+{
+    check_stop_completes_before_original_transition(true);
+}
+
 static void test_motion_unknown_raw_pwm_uses_existing_hardware_failure(void)
 {
     fixture_t fixture;
@@ -1401,6 +1477,8 @@ int main(void)
     test_result_mappings();
     test_unknown_messages_are_invalid_payload();
     test_motion_start_stop_ack_and_duplicate_semantics();
+    test_stop_during_start_transition_completes_before_deadline();
+    test_stop_during_mode_transition_completes_before_deadline();
     test_motion_unknown_raw_pwm_uses_existing_hardware_failure();
     test_motion_payload_validation();
     test_motion_ownership_and_disable_preemption();
