@@ -860,7 +860,20 @@ void testVisualWireAndPoseInference()
     pumpUntil([&]{return controller.motionState()==rb::MotionState::Stopped;});
     auto acceptServo=[&](const std::function<bool()> &action, RobotCommandKind kind, quint16 seq){
         expect(action(), "pose command submitted"); auto f=gateway.nextFrame(RbrpMessageKind::CommandRequest);
-        if(f){sendSubmitted(gateway,f->request_id,seq);sendOutcome(gateway,f->request_id,kind,seq,GatewayCommandOutcome::Accepted); QApplication::processEvents();}
+        if (f) {
+            bool terminalReceived = false;
+            const auto id = f->request_id;
+            const auto connection = QObject::connect(
+                &controller, &rb::IConsoleController::commandTerminal,
+                [&](quint32 received, rb::CommandTerminalResult, quint8, qint64) {
+                    if (received == id) terminalReceived = true;
+                });
+            sendSubmitted(gateway, id, seq);
+            sendOutcome(gateway, id, kind, seq, GatewayCommandOutcome::Accepted);
+            expect(pumpUntil([&] { return terminalReceived; }),
+                   "pose helper waits for the matching terminal ACK");
+            QObject::disconnect(connection);
+        }
     };
     acceptServo([&]{return controller.enableServo(rb::ServoId::FrontRight);},RobotCommandKind::EnableServos,100);
     expect(pumpUntil([&]{return controller.inferredPoseKnownMask()==1;}), "new Enable ACK establishes neutral pose");
