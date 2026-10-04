@@ -13,5 +13,7 @@ Tech: Qt6.11.2 Widgets/C++20, MinGW13.1, CMake/Ninja, PowerShell.
 - [x] operator_console_preview.cpp: add five state scenarios at both requested sizes using fake controller and real session; include geometry/state metadata and truthful base provenance.
 - [x] Build and focused checks using cmake --build <task06-build>/qt --parallel4 and ctest -R visual_dispatch --output-on-failure.
 - [x] Full ctest --output-on-failure -j4. Inspect all10 rendered images and adjust clipping only when evidence demands.
-- [ ] Commit tested source; windeployqt Release portable build, record EXE/test hashes and image/source manifest.
-- [ ] Push and create draft PR; attach it. Preserve old worktrees/packages; no merge or physical actuation.
+- [x] Commit tested source; windeployqt Release portable build, record EXE/test hashes and image/source manifest.
+- [x] Push and create draft PR; attach it. Preserve old worktrees/packages; no merge or physical actuation.
+
+Delivery: draft PR49 (https://github.com/Mr-lxd/RoboBeetle/pull/49). Binary source 93a640ff8b10119c2aafa284f2120c063e9fcab1; 30/30 PASS; ten screenshots and portable provenance in docs/task06-vision-ui-preview-validation.md. Operator/Claude review and physical trial pending; not merged.
