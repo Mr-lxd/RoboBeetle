@@ -147,6 +147,6 @@ Revised runnable test package (initial 246-check package remains preserved):
 `D:/RoboBeetle-results/task05-pr2-no-target-review-20261004/visual_dispatch_state_machine_tests.exe`.
 Revised EXE SHA-256:
 `AA6425E2DAEA7F56A66387B348FAC9FC1B2932CE07B213EC8BB30E1575D69FF1`.
-Revised source commit is recorded after committing the tested inputs; final head
+Revised tested source commit: `2e2ddddb0ee874821ab03209add7640ac5d47bc6`. Final head
 is in the PR description / new package BUILD_INFO.txt. The earlier source/hash
 above remain historical provenance, not the revised artifact.
