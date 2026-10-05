@@ -254,6 +254,16 @@ void commandProposalDisplay()
     s.command.proposed = rb::vision::ProposedCommand::TurnRight;
     s.command.effective = rb::vision::ProposedCommand::TurnRight;
     view.setVisualDiagnostic(s);
+    expect(view.visualDiagnosticText().contains(QStringLiteral("u=-- v=--")),
+           "no target leaves the area row out");
+    s.target = rb::vision::TargetState{1, 1, {640, 480}, {0, QStringLiteral("fish"), 0.9, {10, 20}, 6}, 0.0, 0.0};
+    view.setVisualDiagnostic(s);
+    expect(view.visualDiagnosticText().contains(QStringLiteral("area=6 cells")), "target area is shown");
+    s.target->target.areaCells.reset();
+    view.setVisualDiagnostic(s);
+    expect(view.visualDiagnosticText().contains(QStringLiteral("area=--")), "missing area is shown as --");
+    s.target.reset();
+    view.setVisualDiagnostic(s);
     expect(view.visualDiagnosticText().contains(QStringLiteral("manual controls live"))
                && view.visualDiagnosticText().contains(QStringLiteral("no motion output"))
                && view.visualDiagnosticText().contains(QStringLiteral("PROPOSED (not sent): TURN_RIGHT"))

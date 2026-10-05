@@ -6,6 +6,8 @@
 #include <QString>
 #include <QVector>
 
+#include <optional>
+
 namespace rb::vision {
 
 inline constexpr quint16 kDetectionStreamDefaultPort = 47012;
@@ -20,6 +22,7 @@ struct DetectionObservation {
     QString className;
     double confidence{0.0};
     QPointF originalPoint;
+    std::optional<int> areaCells; // heatmap cells in the component; nullopt when the Pi does not send it
 };
 
 struct DetectionFrame {

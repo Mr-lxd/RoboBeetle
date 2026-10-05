@@ -8,7 +8,7 @@
 
 namespace rb::vision {
 namespace {
-const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets,policy_request_id,request_id,dispatch_command,dispatch_result,ack_rtt_ms,axis_mode,ey_f,pitch_sign,depth_raw_m,depth_cal_m,depth_age_ms,envelope_state\n";
+const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets,policy_request_id,request_id,dispatch_command,dispatch_result,ack_rtt_ms,axis_mode,ey_f,pitch_sign,depth_raw_m,depth_cal_m,depth_age_ms,envelope_state,sel_area_cells\n";
 
 QString escaped(QString field)
 {
@@ -107,7 +107,7 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
                                std::optional<qint64> arrivalMs) const
 {
     QStringList fields;
-    fields.reserve(42);
+    fields.reserve(43);
     fields << (transition ? QStringLiteral("transition") : QStringLiteral("frame"))
            << QString::number(s.localMonoMs)
            << (!transition && arrivalMs ? QString::number(*arrivalMs) : QString{});
@@ -148,7 +148,8 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
         detections.reserve(frame.detections.size());
         for (const auto &d : frame.detections) {
             detections << (QString::number(d.classId) + ':' + number(d.confidence)
-                + ':' + number(d.originalPoint.x()) + ':' + number(d.originalPoint.y()));
+                + ':' + number(d.originalPoint.x()) + ':' + number(d.originalPoint.y())
+                + ':' + (d.areaCells ? QString::number(*d.areaCells) : QString{}));
         }
         fields << QString::number(frame.sourceSize.width()) << QString::number(frame.sourceSize.height())
                << detections.join(';');
@@ -171,6 +172,9 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
     } else {
         for (int i = 0; i < 4; ++i) fields << QString{};
     }
+    // v5 addition: selected target's component area, frame rows only.
+    fields << (!transition && !s.awaitingVideo && s.target && s.target->target.areaCells
+                   ? QString::number(*s.target->target.areaCells) : QString{});
     for (QString &field : fields) field = escaped(std::move(field));
     return (fields.join(QLatin1Char(',')) + QLatin1Char('\n')).toUtf8();
 }
@@ -181,7 +185,7 @@ void VisualCsvLogger::recordDispatch(const VisualDispatchRecord &record)
     // Dispatch events do not consume or finalize diagnostic frames, nor alter
     // their session, deduplication floor or transition baseline.
     QStringList fields;
-    for (int i = 0; i < 42; ++i) fields << QString{};
+    for (int i = 0; i < 43; ++i) fields << QString{};
     fields[0] = record.result == QStringLiteral("SENT")
         || record.result == QStringLiteral("LOCAL_REJECTED")
         ? QStringLiteral("dispatch") : QStringLiteral("outcome");

@@ -136,6 +136,17 @@ std::optional<DetectionFrame> parseLine(const QByteArray &line, QString *error)
             detection.value(QStringLiteral("original_x")));
         const auto originalY = readFiniteDouble(
             detection.value(QStringLiteral("original_y")));
+        std::optional<int> areaCells;
+        if (detection.contains(QStringLiteral("component_area_cells"))) {
+            areaCells = readInt(
+                detection.value(QStringLiteral("component_area_cells")),
+                1,
+                std::numeric_limits<int>::max());
+            if (!areaCells.has_value()) {
+                *error = QStringLiteral("Detection component area is invalid");
+                return std::nullopt;
+            }
+        }
         if (!classId.has_value() || !classNameValue.isString()
             || !confidence.has_value() || !originalX.has_value()
             || !originalY.has_value()) {
@@ -164,6 +175,7 @@ std::optional<DetectionFrame> parseLine(const QByteArray &line, QString *error)
         observation.className = className;
         observation.confidence = *confidence;
         observation.originalPoint = QPointF(*originalX, *originalY);
+        observation.areaCells = areaCells;
         frame.detections.push_back(std::move(observation));
     }
     return frame;
