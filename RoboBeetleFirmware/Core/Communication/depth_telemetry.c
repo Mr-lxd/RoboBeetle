@@ -255,14 +255,18 @@ void depth_telemetry_policy_init(
     if (policy != NULL)
     {
         policy->last_success_ms = 0U;
+        policy->last_published_valid_line_count = 0U;
         policy->has_success = false;
     }
 }
 
 bool depth_telemetry_policy_is_due(
     const depth_telemetry_policy_t *policy,
-    uint32_t now_ms)
+    uint32_t now_ms,
+    uint32_t valid_line_count)
 {
+    uint32_t elapsed_ms;
+
     if (policy == NULL)
     {
         return false;
@@ -273,17 +277,26 @@ bool depth_telemetry_policy_is_due(
         return true;
     }
 
-    return (uint32_t)(now_ms - policy->last_success_ms) >=
-           DEPTH_TELEMETRY_INTERVAL_MS;
+    elapsed_ms = (uint32_t)(now_ms - policy->last_success_ms);
+
+    if (elapsed_ms >= DEPTH_TELEMETRY_KEEPALIVE_INTERVAL_MS)
+    {
+        return true;
+    }
+
+    return (valid_line_count != policy->last_published_valid_line_count) &&
+           (elapsed_ms >= DEPTH_TELEMETRY_INTERVAL_MS);
 }
 
 void depth_telemetry_policy_mark_success(
     depth_telemetry_policy_t *policy,
-    uint32_t now_ms)
+    uint32_t now_ms,
+    uint32_t valid_line_count)
 {
     if (policy != NULL)
     {
         policy->last_success_ms = now_ms;
+        policy->last_published_valid_line_count = valid_line_count;
         policy->has_success = true;
     }
 }

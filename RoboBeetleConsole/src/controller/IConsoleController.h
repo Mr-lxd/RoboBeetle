@@ -1,5 +1,6 @@
 #pragma once
 
+#include "robot/DepthControl.h"
 #include "robot/DepthMonitor.h"
 #include "robot/ImuMonitor.h"
 #include "robot/LeakStatus.h"
@@ -68,6 +69,13 @@ public:
     virtual bool stopMotion() = 0;
     virtual std::optional<quint32> submitVisualMotion(MotionMode) { return std::nullopt; }
     [[nodiscard]] virtual quint16 inferredPoseKnownMask() const { return 0; }
+    [[nodiscard]] virtual std::optional<DepthControlSample> controlDepthSample() const { return std::nullopt; }
+    virtual bool zeroDepth(QString *error = nullptr)
+    {
+        if (error) *error = QStringLiteral("unsupported");
+        return false;
+    }
+    [[nodiscard]] virtual std::optional<qint64> depthZeroedAtMs() const { return std::nullopt; }
     virtual bool setGaitBackend(GaitBackend backend) = 0;
     virtual bool setFrontRearCoordination(FrontRearCoordination coordination) = 0;
 
@@ -107,6 +115,7 @@ signals:
     void leakStateChanged(rb::LeakState state);
     void imuStateChanged();
     void depthStateChanged();
+    void controlDepthSampleChanged(); // 每收到一个深度样本、归零或清除时发出
     void motionStateChanged(rb::MotionState state, rb::MotionMode mode);
     void gaitBackendStateChanged();
     void frontRearCoordinationStateChanged();

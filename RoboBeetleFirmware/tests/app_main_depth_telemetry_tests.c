@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define TEST_MAX_TX_FRAMES 24U
+#define TEST_MAX_TX_FRAMES 400U
 
 static int failures = 0;
 static uint32_t test_tick = 0U;
@@ -357,6 +357,92 @@ static bool find_last_tx_type(
     return false;
 }
 
+static size_t count_tx_type_from(size_t first, size_t last, uint8_t type)
+{
+    size_t count = 0U;
+
+    for (size_t index = first; index < last; ++index)
+    {
+        rbp2_frame_t frame;
+
+        if (decode_tx_frame(index, &frame) && (frame.type == type))
+        {
+            ++count;
+        }
+    }
+
+    return count;
+}
+
+/*
+ * Drive 20 Heartbeats spaced by spacing_ms with a fresh depth line before each
+ * one. Every accepted Heartbeat must publish a new depth frame, never send
+ * more than two telemetry frames, and always send its ACK first.
+ */
+static void run_depth_rate_scenario(
+    UART_HandleTypeDef *host_uart,
+    UART_HandleTypeDef *depth_uart,
+    uint32_t start_ms,
+    uint32_t spacing_ms,
+    uint16_t first_sequence,
+    size_t *leak_frames,
+    size_t *imu_frames)
+{
+    const size_t scenario_first_frame = tx_frame_count;
+    size_t depth_frames;
+
+    for (uint32_t beat = 0U; beat < 20U; ++beat)
+    {
+        const size_t before = tx_frame_count;
+        rbp2_frame_t frame;
+
+        test_tick = start_ms + (beat * spacing_ms);
+        inject_depth_line(depth_uart, "Depth:0.50m Temp:20.00C\r\n");
+        app_main_process();
+        send_heartbeat(host_uart, (uint16_t)(first_sequence + beat));
+
+        expect(tx_frame_count > before,
+               "a Heartbeat must at least produce its ACK");
+        expect(tx_frame_count - before <= 3U,
+               "a Heartbeat must be followed by at most two telemetry frames");
+        if (tx_frame_count > before)
+        {
+            expect(decode_tx_frame(before, &frame) && (frame.type == RBP2_MSG_ACK),
+                   "the ACK must be transmitted before any telemetry");
+        }
+    }
+
+    depth_frames = count_tx_type_from(
+        scenario_first_frame, tx_frame_count, RBP2_MSG_DEPTH_SNAPSHOT);
+    expect(depth_frames == 20U,
+           "depth must be published once per accepted Heartbeat");
+    *leak_frames = count_tx_type_from(
+        scenario_first_frame, tx_frame_count, RBP2_MSG_LEAK_STATUS);
+    *imu_frames = count_tx_type_from(
+        scenario_first_frame, tx_frame_count, RBP2_MSG_IMU_SNAPSHOT);
+}
+
+static void test_depth_rate_follows_heartbeats(
+    UART_HandleTypeDef *host_uart,
+    UART_HandleTypeDef *depth_uart)
+{
+    size_t leak_frames = 0U;
+    size_t imu_frames = 0U;
+
+    /* 250 ms nominal heartbeats: 5 s. Leak refreshes every 500 ms, IMU 1 s. */
+    run_depth_rate_scenario(
+        host_uart, depth_uart, 20000U, 250U, 100U, &leak_frames, &imu_frames);
+    expect(leak_frames >= 9U && leak_frames <= 11U,
+           "Leak telemetry must keep about 2 Hz beside 4 Hz depth");
+    expect(imu_frames >= 4U && imu_frames <= 6U,
+           "IMU telemetry must keep about 1 Hz beside 4 Hz depth");
+
+    /* Early heartbeats (205 ms) must not degrade depth to every other beat. */
+    run_depth_rate_scenario(
+        host_uart, depth_uart, 40000U, 205U, 200U, &leak_frames, &imu_frames);
+    expect(imu_frames >= 3U, "IMU must not starve with early Heartbeats");
+}
+
 int main(void)
 {
     UART_HandleTypeDef uart1 = {0};
@@ -405,19 +491,22 @@ int main(void)
     send_heartbeat(&uart1, 2U);
     send_heartbeat(&uart1, 3U);
 
+    /* B': the first Heartbeat publishes the new depth sample and one
+     * Leak/IMU frame, always after its ACK; later Heartbeats at the same tick
+     * repeat nothing that is not due. */
     expect(tx_frame_count == 6U,
-           "three Heartbeats should produce ACK plus three telemetry frames");
+           "three Heartbeats should produce three ACKs plus three telemetry frames");
     expect_tx_type(0U, RBP2_MSG_ACK, 4U);
-    expect_tx_type(1U, RBP2_MSG_LEAK_STATUS, 1U);
-    expect_tx_type(2U, RBP2_MSG_ACK, 4U);
-    expect_tx_type(3U, RBP2_MSG_IMU_SNAPSHOT, 56U);
-    expect_tx_type(4U, RBP2_MSG_ACK, 4U);
-    expect_tx_type(5U, RBP2_MSG_DEPTH_SNAPSHOT,
+    expect_tx_type(1U, RBP2_MSG_DEPTH_SNAPSHOT,
                    DEPTH_TELEMETRY_PAYLOAD_LENGTH);
+    expect_tx_type(2U, RBP2_MSG_LEAK_STATUS, 1U);
+    expect_tx_type(3U, RBP2_MSG_ACK, 4U);
+    expect_tx_type(4U, RBP2_MSG_IMU_SNAPSHOT, 56U);
+    expect_tx_type(5U, RBP2_MSG_ACK, 4U);
 
-    expect(decode_tx_frame(5U, &depth_frame),
+    expect(decode_tx_frame(1U, &depth_frame),
            "DepthSnapshot frame did not decode");
-    if (decode_tx_frame(5U, &depth_frame))
+    if (decode_tx_frame(1U, &depth_frame))
     {
         expect(depth_telemetry_decode(
                    depth_frame.payload,
@@ -529,6 +618,8 @@ int main(void)
     send_servo_pwm(&uart1, 12U, 1900U);
     expect(fake_tim3.CCR1 == 1234U,
            "a stale actuator frame must be rejected before SafetySupervisor disables outputs");
+
+    test_depth_rate_follows_heartbeats(&uart1, &uart6);
 
     if (failures == 0)
     {

@@ -7,6 +7,7 @@
 #include <QHash>
 #include <QTimer>
 
+#include <deque>
 #include <functional>
 #include <optional>
 
@@ -42,6 +43,15 @@ public:
     bool stopMotion() override;
     std::optional<quint32> submitVisualMotion(MotionMode mode) override;
     [[nodiscard]] quint16 inferredPoseKnownMask() const override { return poseKnownMask_; }
+    [[nodiscard]] std::optional<DepthControlSample> controlDepthSample() const override;
+    bool zeroDepth(QString *error = nullptr) override;
+    [[nodiscard]] std::optional<qint64> depthZeroedAtMs() const override { return depthZeroedAtMs_; }
+
+    // Control-depth parameters and clock; the clock exists so tests can drive
+    // sample ages deterministically.
+    void setDepthControlConfig(const DepthControlConfig &config);
+    [[nodiscard]] const DepthControlConfig &depthControlConfig() const { return depthControlConfig_; }
+    void setDepthClockForTesting(std::function<qint64()> clock) { depthClock_ = std::move(clock); }
     bool setGaitBackend(GaitBackend backend) override;
     bool setFrontRearCoordination(FrontRearCoordination coordination) override;
 
@@ -126,6 +136,9 @@ private:
     void supersedePendingMotionStarts();
     void supersedePendingForDisable(quint16 affectedMask);
     void failClosedControlState(const QString &reason);
+    void clearControlDepth();
+    // Monotonic: a wall-clock step backwards must not keep an old sample fresh.
+    [[nodiscard]] qint64 depthNowMs() const { return depthClock_ ? depthClock_() : terminalClock_.elapsed(); }
     void resetTelemetry();
     void refreshTelemetryStaleness();
 
@@ -151,6 +164,25 @@ private:
     qint64 lastLeakTelemetryAtMs_{-1};
     ImuMonitorState imuState_;
     DepthMonitorState depthState_;
+
+    struct DepthSampleRecord {
+        double rawM{0.0};
+        qint64 sampledAtMs{0};     // receive time minus firmware sample age
+        quint32 validLineCount{0}; // identifies the firmware sample
+    };
+    struct ControlDepthLatest {
+        double rawM{0.0};
+        qint64 receivedAtMs{0};
+        qint64 sampleAgeMs{-1};    // -1: unknown
+        bool depthValid{false};
+    };
+    DepthControlConfig depthControlConfig_;
+    std::function<qint64()> depthClock_;
+    std::optional<ControlDepthLatest> controlLatest_;
+    std::deque<DepthSampleRecord> zeroSamples_; // last distinct fresh samples
+    std::optional<quint32> lastZeroSampleLine_;
+    std::optional<double> zeroOffsetM_;         // survives reconnects, never persisted
+    std::optional<qint64> depthZeroedAtMs_;
     MotionState motionState_{MotionState::Stopped};
     MotionMode motionMode_{MotionMode::Stop};
     std::optional<GaitBackend> confirmedGaitBackend_;

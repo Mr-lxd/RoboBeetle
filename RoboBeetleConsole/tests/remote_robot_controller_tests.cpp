@@ -15,6 +15,7 @@
 #include <QTcpSocket>
 #include <QThread>
 
+#include <cmath>
 #include <cstdio>
 #include <functional>
 #include <optional>
@@ -411,8 +412,10 @@ void testRemoteControllerAndUi()
 void testUserReleaseDoesNotReportAuthorityLoss()
 {
     FakeGatewayPeer gateway;
-    rb::RemoteRobotController controller;
+    // Declared before the controller: the controller emits logMessage while it
+    // is destroyed, and the lambda below writes into `logs`.
     QStringList logs;
+    rb::RemoteRobotController controller;
     QObject::connect(&controller, &rb::IConsoleController::logMessage,
                      &controller, [&logs](const QString &message) {
         logs.push_back(message);
@@ -969,6 +972,273 @@ void testVisualWireAndPoseInference()
 
 } // namespace
 
+
+// ---- Control depth (PR-B) -------------------------------------------------
+
+struct DepthFixture {
+    FakeGatewayPeer gateway;
+    rb::RemoteRobotController controller;
+    qint64 now{100000};
+    int changes{0};
+    quint16 sequence{500};
+    quint32 line{0};
+
+    DepthFixture()
+    {
+        controller.setDepthClockForTesting([this] { return now; });
+        QObject::connect(&controller,
+                         &rb::IConsoleController::controlDepthSampleChanged,
+                         &controller, [this] { ++changes; });
+        rb::ConsoleConnectionConfiguration config;
+        config.endpoint = QStringLiteral("127.0.0.1");
+        config.tcpPort = gateway.port();
+        controller.connectController(config);
+        expect(gateway.accept(), "depth fixture must connect");
+        completeHello(gateway);
+        expect(pumpUntil([&] { return controller.canAcquireControl(); }),
+               "depth fixture must complete Hello");
+    }
+
+    // Sends one DepthSnapshot and waits until the controller has processed it.
+    void send(double depthM, quint16 ageMs, bool newLine = true,
+              quint8 flags = 0x03)
+    {
+        if (newLine) ++line;
+        GatewayDepthTelemetry depth;
+        depth.sequence = sequence++;
+        depth.schema_version = 1;
+        depth.validity_flags = flags;
+        depth.depth_mm = static_cast<std::int32_t>(depthM * 1000.0 + (depthM < 0 ? -0.5 : 0.5));
+        depth.temperature_centi_c = (flags & 0x02) ? 2000 : 0;
+        depth.sample_age_ms = ageMs;
+        depth.diagnostics.valid_line_count = line;
+        const int before = changes;
+        gateway.send({0, depth});
+        expect(pumpUntil([&] { return changes > before; }),
+               "depth telemetry must emit controlDepthSampleChanged");
+    }
+
+    void feedSteady(int count, double depthM, qint64 spacingMs)
+    {
+        for (int i = 0; i < count; ++i) {
+            send(depthM, 10);
+            now += spacingMs;
+        }
+    }
+};
+
+void testControlDepthAgeAndFreshness()
+{
+    DepthFixture f;
+    const auto &cfg = f.controller.depthControlConfig();
+    expect(!f.controller.controlDepthSample().has_value(),
+           "no control sample before any DepthSnapshot");
+
+    f.send(0.123, 40);
+    auto s = f.controller.controlDepthSample();
+    expect(s.has_value() && s->ageMs == 40,
+           "age at receipt equals the firmware sample age");
+    expect(s && s->rawDepthM > 0.1229 && s->rawDepthM < 0.1231,
+           "raw depth converts millimetres to metres");
+    expect(s && !s->calibratedDepthM.has_value(),
+           "calibrated depth is empty before zeroing");
+
+    f.now += 100;
+    s = f.controller.controlDepthSample();
+    expect(s && s->ageMs == 140, "age adds local elapsed time to firmware age");
+
+    f.now += cfg.controlFreshMs - 140 - 40 + 40; // age == controlFreshMs
+    s = f.controller.controlDepthSample();
+    expect(s && s->ageMs == cfg.controlFreshMs && s->fresh,
+           "age == controlFreshMs is still fresh");
+    f.now += 1;
+    s = f.controller.controlDepthSample();
+    expect(s && s->ageMs == cfg.controlFreshMs + 1 && !s->fresh,
+           "age == controlFreshMs + 1 is stale");
+
+    f.send(0.2, 0xffff);
+    s = f.controller.controlDepthSample();
+    expect(s && s->ageMs < 0 && !s->fresh,
+           "unknown firmware sample age is never fresh");
+
+    f.send(0.0, 0xffff, true, 0x00);
+    s = f.controller.controlDepthSample();
+    expect(s && !s->fresh && s->rawDepthM == 0.0,
+           "invalid depth flag is never fresh");
+
+    f.gateway.disconnectPeer();
+    expect(pumpUntil([&] { return !f.controller.isConnected(); }),
+           "depth fixture must see the disconnect");
+    expect(!f.controller.controlDepthSample().has_value(),
+           "disconnect clears the control depth sample");
+}
+
+void testZeroDepth()
+{
+    DepthFixture f;
+    QString error;
+    expect(!f.controller.zeroDepth(&error) && !error.isEmpty(),
+           "zeroing without any sample must be refused with a reason");
+
+    for (int i = 0; i < 4; ++i) {
+        f.send(0.115 + 0.001 * i, 10);
+        f.now += 100;
+    }
+    expect(!f.controller.zeroDepth(&error) && error.contains(QStringLiteral("not enough")),
+           "four samples are not enough for zeroing");
+
+    // Re-delivery of the same firmware sample must not count twice.
+    f.send(0.118, 10, /*newLine=*/false);
+    expect(!f.controller.zeroDepth(&error) && error.contains(QStringLiteral("not enough")),
+           "a repeated sample must not count as a distinct sample");
+
+    f.send(0.119, 10);
+    const int before = f.changes;
+    expect(f.controller.zeroDepth(&error), "five steady samples must zero");
+    expect(f.changes > before, "zeroing emits controlDepthSampleChanged");
+    expect(f.controller.depthZeroedAtMs() == f.now, "zero time is recorded");
+    const double mean = (0.115 + 0.116 + 0.117 + 0.118 + 0.119) / 5.0;
+    f.send(0.300, 10);
+    auto s = f.controller.controlDepthSample();
+    expect(s && s->calibratedDepthM
+               && std::abs(*s->calibratedDepthM - (0.300 - mean)) < 1e-6,
+           "calibrated = raw - mean of the zeroing samples");
+
+    // Offset survives a reconnect; buffer and sample do not.
+    f.gateway.disconnectPeer();
+    expect(pumpUntil([&] { return !f.controller.isConnected(); }),
+           "zero fixture must see the disconnect");
+    expect(!f.controller.controlDepthSample().has_value(),
+           "disconnect clears the sample");
+    expect(f.controller.depthZeroedAtMs().has_value(),
+           "disconnect keeps the zero offset");
+    rb::ConsoleConnectionConfiguration config;
+    config.endpoint = QStringLiteral("127.0.0.1");
+    config.tcpPort = f.gateway.port();
+    f.controller.connectController(config);
+    expect(f.gateway.accept(), "zero fixture must reconnect");
+    completeHello(f.gateway);
+    expect(pumpUntil([&] { return f.controller.canAcquireControl(); }),
+           "zero fixture must complete the second Hello");
+    f.send(0.400, 10);
+    s = f.controller.controlDepthSample();
+    expect(s && s->calibratedDepthM
+               && std::abs(*s->calibratedDepthM - (0.400 - mean)) < 1e-6,
+           "offset still applies after reconnect");
+    expect(!f.controller.zeroDepth(&error) && error.contains(QStringLiteral("not enough")),
+           "the sample buffer is empty after reconnect");
+}
+
+// The sensor resolves 1 cm: a steady reading that flips between two adjacent
+// values (0.12 / 0.13, which differ by slightly more than 0.01 in floating
+// point) must still be zeroable with the default configuration.
+void testZeroDepthToleratesOneSensorStep()
+{
+    DepthFixture f;
+    QString error;
+    const double values[] = {0.12, 0.13, 0.12, 0.13, 0.12, 0.13};
+    for (const double v : values) {
+        f.send(v, 10);
+        f.now += 100;
+    }
+    f.now -= 100;
+    expect(f.controller.zeroDepth(&error), "alternating 0.12 / 0.13 samples must zero with default settings");
+    // Two steps (2 cm) is genuinely unsteady and stays refused.
+    DepthFixture g;
+    const double jumpy[] = {0.12, 0.14, 0.12, 0.14, 0.12};
+    for (const double v : jumpy) {
+        g.send(v, 10);
+        g.now += 100;
+    }
+    g.now -= 100;
+    expect(!g.controller.zeroDepth(&error) && error.contains(QStringLiteral("not steady")),
+           "a 2 cm swing is still refused");
+}
+
+void testZeroDepthRejectsUnsteadySamples()
+{
+    DepthFixture f;
+    QString error;
+    f.send(0.100, 10); f.now += 100;
+    f.send(0.101, 10); f.now += 100;
+    f.send(0.140, 10); f.now += 100;
+    f.send(0.100, 10); f.now += 100;
+    f.send(0.101, 10);
+    expect(!f.controller.zeroDepth(&error) && error.contains(QStringLiteral("not steady")),
+           "range above zeroMaxRangeM must be refused");
+    expect(!f.controller.depthZeroedAtMs().has_value(), "refused zero leaves no offset");
+}
+
+void testZeroDepthWindowFollowsSamplePeriod()
+{
+    // Five samples 600 ms apart span 2400 ms.
+    auto run = [](std::int64_t period, std::int64_t fresh) {
+        DepthFixture f;
+        rb::DepthControlConfig cfg;
+        cfg.nominalSamplePeriodMs = period;
+        cfg.controlFreshMs = fresh;
+        f.controller.setDepthControlConfig(cfg);
+        f.feedSteady(5, 0.2, 600);
+        f.now -= 600; // newest sample is fresh again
+        QString error;
+        const bool ok = f.controller.zeroDepth(&error);
+        return std::make_pair(ok, error);
+    };
+    const auto fast = run(250, 700);
+    expect(!fast.first && fast.second.contains(QStringLiteral("span")),
+           "2400 ms span exceeds the 250 ms-period window (1500 ms)");
+    const auto slow = run(500, 1200);
+    expect(slow.first, "the window widens with a 500 ms nominal period (3000 ms)");
+}
+
+void testZeroDepthRefusedWhileMoving()
+{
+    DepthFixture f;
+    expect(f.controller.acquireControl(), "move fixture must acquire control");
+    completeAcquire(f.gateway);
+    expect(pumpUntil([&] { return f.controller.isControlActive(); }),
+           "move fixture must reach active control");
+    const std::pair<rb::ServoId, quint16> servos[] = {
+        {rb::ServoId::FrontRight, 12U}, {rb::ServoId::FrontLeft, 13U},
+        {rb::ServoId::RearRight, 14U}, {rb::ServoId::RearLeft, 15U},
+    };
+    for (const auto &[servo, seq] : servos) {
+        expect(f.controller.enableServo(servo), "move fixture enables paddles");
+        const auto enable = f.gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        if (enable.has_value()) {
+            sendSubmitted(f.gateway, enable->request_id, seq);
+            sendOutcome(f.gateway, enable->request_id, RobotCommandKind::EnableServos,
+                        seq, GatewayCommandOutcome::Accepted);
+            expect(pumpUntil([&] { return f.controller.isServoEnabled(servo); }),
+                   "paddle enable accepted");
+        }
+    }
+    f.feedSteady(5, 0.2, 50);
+    f.now -= 50;
+    expect(f.controller.startMotion(rb::MotionMode::Forward), "move fixture starts motion");
+    expect(f.gateway.nextFrame(RbrpMessageKind::CommandRequest).has_value(),
+           "gateway receives StartMotion");
+    QString error;
+    expect(!f.controller.zeroDepth(&error) && error.contains(QStringLiteral("moving")),
+           "zeroing must be refused while motion is active");
+    f.gateway.disconnectPeer();
+}
+
+void testControlDepthCadenceAndAge()
+{
+    // 10 Hz telemetry: every frame emits exactly one change and the age of
+    // each new sample equals its firmware age.
+    DepthFixture f;
+    const int before = f.changes;
+    for (int i = 0; i < 20; ++i) {
+        f.send(0.2, 20);
+        const auto s = f.controller.controlDepthSample();
+        expect(s && s->ageMs == 20 && s->fresh, "fresh 10 Hz sample age");
+        f.now += 100;
+    }
+    expect(f.changes - before == 20, "one controlDepthSampleChanged per sample");
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -983,6 +1253,13 @@ int main(int argc, char **argv)
     testSafetySupersessionIgnoresLateOutcomes();
     testRemoteGaitSelectorsAndMotionGate();
     testCommandTimeoutReleasesAuthority();
+    testControlDepthAgeAndFreshness();
+    testZeroDepth();
+    testZeroDepthToleratesOneSensorStep();
+    testZeroDepthRejectsUnsteadySamples();
+    testZeroDepthWindowFollowsSamplePeriod();
+    testZeroDepthRefusedWhileMoving();
+    testControlDepthCadenceAndAge();
     if (failures == 0) {
         std::fprintf(stdout,
                      "All RemoteRobotController/MainWindow tests passed\n");

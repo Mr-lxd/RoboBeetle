@@ -206,16 +206,34 @@ static void protocol_feed_byte(
                             &imu_telemetry_policy,
                             now_ms,
                             JY901S_IMU_TELEMETRY_INTERVAL_MS);
-                    const bool depth_due =
-                        depth_telemetry_policy_is_due(
+                    depth_parser_stats_t depth_stats;
+
+                    depth_parser_get_stats(&depth_parser, &depth_stats);
+
+                    /* Depth is published on its own track: one frame per
+                     * accepted Heartbeat when a new sample is available. The
+                     * scheduler then picks at most one Leak/IMU frame, so a
+                     * Heartbeat is followed by at most two telemetry frames
+                     * (the telemetry TX queue holds two). The ACK is already
+                     * enqueued on the control queue, which always drains
+                     * first. */
+                    if (depth_telemetry_policy_is_due(
                             &depth_telemetry_policy,
-                            now_ms);
+                            now_ms,
+                            depth_stats.valid_line_count) &&
+                        protocol_send_depth_snapshot())
+                    {
+                        depth_telemetry_policy_mark_success(
+                            &depth_telemetry_policy,
+                            now_ms,
+                            depth_stats.valid_line_count);
+                    }
 
                     switch (telemetry_scheduler_select(
                                 &telemetry_scheduler,
                                 leak_due,
                                 imu_due,
-                                depth_due))
+                                false))
                     {
                         case TELEMETRY_SLOT_LEAK_STATUS:
                             if (protocol_send_leak_status(state))
@@ -243,17 +261,6 @@ static void protocol_feed_byte(
                             break;
 
                         case TELEMETRY_SLOT_DEPTH_SNAPSHOT:
-                            if (protocol_send_depth_snapshot())
-                            {
-                                depth_telemetry_policy_mark_success(
-                                    &depth_telemetry_policy,
-                                    now_ms);
-                                telemetry_scheduler_mark_success(
-                                    &telemetry_scheduler,
-                                    TELEMETRY_SLOT_DEPTH_SNAPSHOT);
-                            }
-                            break;
-
                         case TELEMETRY_SLOT_NONE:
                         default:
                             break;

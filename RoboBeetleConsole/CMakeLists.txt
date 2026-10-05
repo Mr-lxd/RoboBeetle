@@ -9,11 +9,22 @@ set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Network SerialPort)
 
+add_library(DepthControl STATIC
+    src/robot/DepthControl.h
+    src/robot/DepthControl.cpp
+)
+target_include_directories(DepthControl PUBLIC src)
+set_target_properties(DepthControl PROPERTIES AUTOMOC OFF)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(DepthControl PRIVATE -Wall -Wextra -Werror)
+endif()
+
 add_library(VisualDispatchPolicy STATIC
     src/vision/VisualDispatchStateMachine.h
     src/vision/VisualDispatchStateMachine.cpp
 )
 target_include_directories(VisualDispatchPolicy PUBLIC src)
+target_link_libraries(VisualDispatchPolicy PUBLIC DepthControl)
 set_target_properties(VisualDispatchPolicy PROPERTIES AUTOMOC OFF)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(VisualDispatchPolicy PRIVATE -Wall -Wextra -Werror)
@@ -91,7 +102,7 @@ target_include_directories(RoboBeetleCore PUBLIC
     src
     ../RoboBeetlePi/gateway/include
 )
-target_link_libraries(RoboBeetleCore PUBLIC Qt6::Core Qt6::Gui Qt6::Network Qt6::SerialPort VisualDispatchPolicy)
+target_link_libraries(RoboBeetleCore PUBLIC DepthControl Qt6::Core Qt6::Gui Qt6::Network Qt6::SerialPort VisualDispatchPolicy)
 
 set(RB_CONSOLE_UI_SOURCES
     src/ui/MainWindow.h
@@ -111,6 +122,14 @@ target_link_libraries(RoboBeetleConsole PRIVATE RoboBeetleCore Qt6::Widgets)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(depth_control_tests tests/depth_control_tests.cpp)
+    set_target_properties(depth_control_tests PROPERTIES AUTOMOC OFF)
+    target_link_libraries(depth_control_tests PRIVATE DepthControl)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(depth_control_tests PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_test(NAME depth_control_tests COMMAND depth_control_tests)
+
     add_executable(visual_dispatch_state_machine_tests
         tests/visual_dispatch_state_machine_tests.cpp
     )
