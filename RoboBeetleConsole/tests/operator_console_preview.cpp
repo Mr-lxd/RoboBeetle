@@ -199,7 +199,7 @@ QList<PreviewCase> greenRegionCases()
     return cases;
 }
 
-// Desktop-fix suite: dispatch diagnostic screen appearance S1 / S2, 1420x880.
+// Desktop-fix suite: dispatch diagnostic screen appearance (S1), 1420x880.
 QList<PreviewCase> fixesCases(const QString &style)
 {
     QList<PreviewCase> cases;
@@ -567,7 +567,7 @@ int main(int argc, char **argv)
     parser.addOption(greenOption);
     QCommandLineOption fixesOption(
         QStringLiteral("fixes"),
-        QStringLiteral("Run the desktop-fix suite with diagnostic screen style S1 or S2"),
+        QStringLiteral("Run the desktop-fix suite with diagnostic screen style label (S1)"),
         QStringLiteral("style"));
     parser.addOption(scaleLabelOption);
     parser.addOption(fixesOption);
@@ -578,9 +578,6 @@ int main(int argc, char **argv)
     }
     QDir().mkpath(directory);
     const QString fixesStyle = parser.value(fixesOption);
-    if (!fixesStyle.isEmpty()) {
-        qputenv("ROBOBEETLE_DIAG_SCREEN", fixesStyle.toUtf8());
-    }
     const bool greenSuite = parser.isSet(greenOption) || !fixesStyle.isEmpty();
     const QString scaleLabel = parser.value(scaleLabelOption);
     auto cases = selectedCases(parser.value(caseOption), greenSuite, fixesStyle);

@@ -29,8 +29,6 @@
 #include <QKeyEvent>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QLinearGradient>
-#include <QMouseEvent>
 #include <QPainter>
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -542,7 +540,7 @@ void reserveValueWidth(QLabel *value, const QString &widest)
 
 // Small fixed-height screen for the vision dispatch diagnostic text. Each line is
 // elided on the right; lines that do not fit vertically are cut with a final
-// ellipsis. S1 is a dark LCD, S2 an acrylic panel; double-click switches.
+// ellipsis. Drawn as a dark LCD.
 class DiagnosticScreen : public QLabel
 {
 public:
@@ -556,58 +554,24 @@ public:
         setFont(mono);
         setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
         setTextFormat(Qt::PlainText);
-        setAppearance(qEnvironmentVariable("ROBOBEETLE_DIAG_SCREEN") == QStringLiteral("S2")
-                          ? Acrylic : Lcd);
-    }
-
-    enum Appearance { Lcd, Acrylic };
-
-    void setAppearance(Appearance appearance)
-    {
-        appearance_ = appearance;
-        setProperty("screenStyle", appearance == Lcd ? "S1" : "S2");
-        update();
     }
 
     QSize sizeHint() const override { return {fixedWidth(), 40}; }
     QSize minimumSizeHint() const override { return {fixedWidth(), 40}; }
 
 protected:
-    void mouseDoubleClickEvent(QMouseEvent *) override
-    {
-        setAppearance(appearance_ == Lcd ? Acrylic : Lcd);
-    }
-
     void paintEvent(QPaintEvent *) override
     {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
         const QRectF frame = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        QColor text;
-        QColor accent;
-        if (appearance_ == Lcd) {
-            painter.setBrush(QColor(0x0F, 0x1A, 0x24));
-            painter.setPen(QPen(QColor(0x2C, 0x45, 0x58), 1));
-            painter.drawRoundedRect(frame, 6, 6);
-            painter.setPen(QPen(QColor(0x1B, 0x2D, 0x3B), 1));
-            painter.drawRoundedRect(frame.adjusted(2, 2, -2, -2), 4, 4);
-            text = QColor(0x9F, 0xE8, 0xD8);
-            accent = QColor(0xFF, 0xE0, 0x82);
-        } else {
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(0x5A, 0x7A, 0x96, 36));
-            painter.drawRoundedRect(frame.translated(0, 1.5), 7, 7);
-            QLinearGradient gradient(frame.topLeft(), frame.bottomLeft());
-            gradient.setColorAt(0.0, QColor(0xFF, 0xFF, 0xFF));
-            gradient.setColorAt(1.0, QColor(0xDD, 0xE7, 0xF0));
-            painter.setBrush(gradient);
-            painter.setPen(QPen(QColor(0xB9, 0xCC, 0xDC), 1));
-            painter.drawRoundedRect(frame.adjusted(0, 0, 0, -2), 7, 7);
-            painter.setPen(QPen(QColor(255, 255, 255, 200), 1));
-            painter.drawLine(QPointF(9, 2), QPointF(width() - 9, 2));
-            text = QColor(0x2B, 0x40, 0x52);
-            accent = QColor(0x1C, 0x6A, 0xA8);
-        }
+        painter.setBrush(QColor(0x0F, 0x1A, 0x24));
+        painter.setPen(QPen(QColor(0x2C, 0x45, 0x58), 1));
+        painter.drawRoundedRect(frame, 6, 6);
+        painter.setPen(QPen(QColor(0x1B, 0x2D, 0x3B), 1));
+        painter.drawRoundedRect(frame.adjusted(2, 2, -2, -2), 4, 4);
+        const QColor text(0x9F, 0xE8, 0xD8);
+        const QColor accent(0xFF, 0xE0, 0x82);
 
         const QFontMetrics metrics(font());
         constexpr int padX = 8;
@@ -643,8 +607,6 @@ private:
         }
         return widest + 18;
     }
-
-    Appearance appearance_{Lcd};
 };
 
 void addDashboardCardHeader(QVBoxLayout *layout,
