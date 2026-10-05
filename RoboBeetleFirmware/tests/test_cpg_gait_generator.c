@@ -56,8 +56,8 @@ static void test_production_profile_and_initialization(void)
     assert(generator.profile.front_amplitude_deg == 10.0);
     assert(generator.profile.rear_amplitude_deg == 10.0);
     assert(generator.profile.nominal_period_s == 2.0);
-    assert(generator.profile.front_axis_bias_cdeg[MOTION_ASCEND] == 1000.0);
-    assert(generator.profile.front_axis_bias_cdeg[MOTION_DESCEND] == -1000.0);
+    assert(generator.profile.front_axis_bias_cdeg[MOTION_ASCEND] == -1000.0);
+    assert(generator.profile.front_axis_bias_cdeg[MOTION_DESCEND] == 1000.0);
     assert(generator.core.params.period_s[0] == 2.0);
     assert(generator.core.params.period_s[1] == 2.0);
     assert(generator.core.params.period_s[2] == 2.0);
@@ -114,11 +114,11 @@ static void test_turn_keeps_full_target_amplitudes(void)
 
     assert(cpg_gait_generator_sample(
         &generator, MOTION_ASCEND, 1.0F, 1.0F, &targets));
-    assert(targets.front_axis_cdeg == 1000);
+    assert(targets.front_axis_cdeg == -1000);
     assert_target_amplitudes(&generator, -10.0, 10.0, 10.0, -10.0);
     assert(cpg_gait_generator_sample(
         &generator, MOTION_DESCEND, 1.0F, 1.0F, &targets));
-    assert(targets.front_axis_cdeg == -1000);
+    assert(targets.front_axis_cdeg == 1000);
     assert_target_amplitudes(&generator, -10.0, 10.0, 10.0, -10.0);
 }
 

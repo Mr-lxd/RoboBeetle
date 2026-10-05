@@ -97,11 +97,11 @@ static void test_modes_stop_axis_and_backward(void)
     }
 
     targets = sample(&generator, MOTION_ASCEND);
-    expect(targets.front_axis_cdeg == 1000,
-           "ASCEND should use +1000 cdeg FrontAxis bias");
-    targets = sample(&generator, MOTION_DESCEND);
     expect(targets.front_axis_cdeg == -1000,
-           "DESCEND should use -1000 cdeg FrontAxis bias");
+           "ASCEND should use -1000 cdeg FrontAxis bias");
+    targets = sample(&generator, MOTION_DESCEND);
+    expect(targets.front_axis_cdeg == 1000,
+           "DESCEND should use +1000 cdeg FrontAxis bias");
 
     expect(!experimental_flex_gait_generator_is_mode_valid(MOTION_BACKWARD),
            "BACKWARD should remain unsupported by Experimental Flex");
