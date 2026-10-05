@@ -1,4 +1,6 @@
 #include "ui/MainWindow.h"
+#include "ui/AutoFollowState.h"
+#include <string>
 #include "vision/VisualDispatchSession.h"
 #include "vision/VideoView.h"
 #include "vision/VisualCsvLogger.h"
@@ -17,6 +19,7 @@
 #include <QDoubleSpinBox>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSlider>
 #include <QSet>
@@ -40,9 +43,9 @@ void frame(MainWindow &w,quint64 id=1,double u=320) {
 }
 VisualDispatchSession *arm(MainWindow &w) {
     frame(w);auto *s=w.findChild<VisualDispatchSession*>();check(s!=nullptr,"dispatch child exists");if(!s)return nullptr;
-    auto *gate=child<QCheckBox>(w,"visualDispatchEnabled");auto *sign=child<QComboBox>(w,"visualTurnSign");
-    check(gate&&sign,"gate and separate sign selector exist");if(!gate||!sign)return nullptr;
-    gate->setChecked(true);sign->setCurrentIndex(sign->findData(1));click(w,"visualTurnSignConfirm");click(w,"visualArmButton");
+    auto *gate=child<QCheckBox>(w,"visualDispatchEnabled");
+    check(gate!=nullptr,"session gate exists");if(!gate)return nullptr;
+    gate->setChecked(true);click(w,"visualArmButton");
     check(s->armed()==(w.findChild<QCheckBox*>("visualDispatchEnabled")->isChecked() && s->armReason()==ArmReason::Ready),"arm follows eligibility");return s;
 }
 bool pumpUntil(const std::function<bool()> &predicate, int timeoutMs = 1500)
@@ -204,22 +207,22 @@ void sendOutcome(FakeGatewayPeer &gateway, RequestId requestId,
 
 void controls() {
     test::VisualControllerFixture c;MainWindow w(&c);frame(w);
-    auto *gate=child<QCheckBox>(w,"visualDispatchEnabled");auto *sign=child<QComboBox>(w,"visualTurnSign");
-    check(gate&&!gate->isChecked(),"feature defaults OFF");check(sign&&sign->currentIndex()==0,"sign has unconfirmed placeholder");
-    auto *s=w.findChild<VisualDispatchSession*>();if(!gate||!sign||!s)return;
+    auto *gate=child<QCheckBox>(w,"visualDispatchEnabled");
+    check(gate&&!gate->isChecked(),"feature defaults OFF");
+    check(!child<QComboBox>(w,"visualTurnSign")&&!child<QPushButton>(w,"visualTurnSignConfirm"),"turn-direction selection workflow is removed");
+    auto *s=w.findChild<VisualDispatchSession*>();if(!gate||!s)return;
+    check(s->confirmedTurnSign()==VisualPolicyConfig::configuredTurnSign,"session direction comes from the config constant");
     gate->setChecked(true);check(!s->armed(),"gate ON does not arm");click(w,"visualArmButton");
+    check(s->armed(),"configured direction plus readiness enables explicit Arm");
     auto *status=child<QLabel>(w,"visualDispatchStatus");
-    check(status&&status->text().contains("TURN_SIGN_UNCONFIRMED"),"missing sign rejection visible");
-    sign->setCurrentIndex(sign->findData(-1));click(w,"visualArmButton");check(!s->armed(),"selection is not confirmation");
-    click(w,"visualTurnSignConfirm");click(w,"visualArmButton");check(s->armed(),"separate confirmation enables arming");
     s->timerTick();check(!c.sends.empty(),"real snapshot drives dispatch");
     if(!c.sends.empty())c.ack(c.sends.back().first,CommandTerminalResult::Ok);
     check(status->text().contains("ACK-confirmed: FORWARD"),"UI displays ACK confirmed actual mode");
     auto *v=w.findChild<VideoView*>();check(v&&!v->visualDiagnosticText().contains("no motion output")&&!v->visualDiagnosticText().contains("not sent"),"enabled video text is truthful");
-    check(v&&v->visualDiagnosticText().contains("turn sign: -1 confirmed")
-          &&!v->visualDiagnosticText().contains("turn_sign="),"active sign shows operator-confirmed -1 without conflicting preview default");
+    check(v&&v->visualDiagnosticText().contains("turn sign: 1 confirmed")
+          &&!v->visualDiagnosticText().contains("turn_sign="),"active sign shows the configured +1 without conflicting preview default");
     check(!child<QCheckBox>(w,"visualCsvEnabled")->text().contains("no motion output"),"enabled CSV label truthful");
-    const auto n=c.sends.size();click(w,"visualDisarmButton");check(!s->armed()&&c.sends.size()==n+1,"distinct Disarm sends one operator STOP");
+    const auto n=c.sends.size();click(w,"visualArmButton");check(!s->armed()&&c.sends.size()==n+1,"toggle Disarm sends one operator STOP");
     check(status->text().contains("operator STOP: SENT"),"operator STOP submission shown before terminal ACK");
     c.ack(c.sends.back().first,CommandTerminalResult::Busy,7);
     check(status->text().contains("operator STOP: BUSY"),"operator STOP terminal result shown");
@@ -301,10 +304,12 @@ void rawRejection() {
 void signAndOffMatrix() {
     {
         test::VisualControllerFixture c;MainWindow w(&c);auto *s=arm(w);if(!s)return;
-        s->timerTick();const auto n=c.sends.size();
-        auto *sign=child<QComboBox>(w,"visualTurnSign");sign->setCurrentIndex(sign->findData(-1));
-        check(!s->armed()&&!s->confirmedTurnSign()&&c.sends.size()==n+1&&c.sends.back().second==rb::MotionMode::Stop,"UI sign change invalidates confirmation and sends one conditional operator STOP");
-        click(w,"visualArmButton");check(!s->armed(),"changed sign requires separate confirmation again");
+        s->timerTick();
+        check(s->confirmedTurnSign()==VisualPolicyConfig::configuredTurnSign,"configured direction survives arming");
+        check(!child<QComboBox>(w,"visualTurnSign")&&!child<QPushButton>(w,"visualTurnSignConfirm"),"operator confirmation workflow is absent");
+        const auto n=c.sends.size();
+        click(w,"visualArmButton");check(!s->armed()&&c.sends.size()==n+1&&c.sends.back().second==rb::MotionMode::Stop,"combined toggle disarms and sends one operator STOP");
+        click(w,"visualArmButton");check(s->armed(),"the same combined action re-arms without any sign reconfirmation");
     }
     for(auto result:{CommandTerminalResult::Ok,CommandTerminalResult::Busy,CommandTerminalResult::Rejected,CommandTerminalResult::OutcomeUnknown}) {
         test::VisualControllerFixture c;MainWindow w(&c);auto *s=arm(w);if(!s)continue;
@@ -516,6 +521,152 @@ void replayDesktopTransientStale()
           "CSV 111.4-113.5s replay stops/disarms and never auto-resumes Forward");
 }
 
+// Task 06: the green region's state pill, checklist and combined Arm/Disarm.
+void autoFollowPanelContract()
+{
+    test::VisualControllerFixture c;MainWindow w(&c);
+    // The green region condenses against its real height, so the window must be
+    // realized at the minimum supported size before visibility is meaningful.
+    w.resize(1100,720);w.show();QApplication::processEvents();
+    auto *session=w.findChild<VisualDispatchSession*>();auto *gate=child<QCheckBox>(w,"visualDispatchEnabled");
+    auto *pill=child<QLabel>(w,"autoFollowStatePill");auto *action=child<QPushButton>(w,"visualArmButton");
+    auto *checklist=child<QLabel>(w,"autoFollowChecklist");auto *alert=child<QLabel>(w,"autoFollowAlert");
+    check(session&&gate&&pill&&action&&checklist&&alert,"Task 06 green region widgets exist");
+    if(!session||!gate||!pill||!action||!checklist||!alert) return;
+    // Drive evaluation explicitly: the live 50 ms timer would otherwise
+    // overwrite the injected fixture state between assertions.
+    session->setTimerEnabled(false);
+
+    // Structure: two independent sub-regions inside the Vision Status panel.
+    auto *summary=child<QWidget>(w,"visionSummaryPanel");
+    auto *autoGroup=child<QWidget>(w,"autoFollowCard");auto *controlsGroup=child<QWidget>(w,"visionControlsGroup");
+    check(summary&&autoGroup&&controlsGroup&&summary->isAncestorOf(autoGroup)
+          &&summary->isAncestorOf(controlsGroup)&&autoGroup!=controlsGroup,
+          "Vision Controls and Auto Follow are two independent sub-regions of the panel");
+    check(autoGroup->isAncestorOf(gate)&&autoGroup->isAncestorOf(action)&&autoGroup->isAncestorOf(pill),
+          "the dispatch switch, Arm action and state pill live in Auto Follow");
+    for(const auto *name:{"visionConnectButton","startInferenceButton","snapshotButton","startRecordingButton"})
+        check(controlsGroup->isAncestorOf(child<QPushButton>(w,name)),"vision actions live in Vision Controls");
+    check(!child<QPushButton>(w,"visualDisarmButton"),"the separate Disarm button is gone");
+    check(child<QWidget>(w,"autoFollowAxisSelector")&&!child<QWidget>(w,"autoFollowAxisSelector")->isVisible(),
+          "the axis selector is reserved but hidden in this preview");
+    check(!child<QWidget>(w,"autoFollowDepthRow"),"the depth row is not part of the green region");
+    {   // Depth Sensor card: bar and Zero action are always shown; wiring comes later.
+        auto *card=child<QWidget>(w,"depthCard");auto *bar=child<QProgressBar>(w,"autoFollowDepthBar");
+        auto *zero=child<QPushButton>(w,"autoFollowZeroDepthButton");
+        check(card&&bar&&zero&&card->isAncestorOf(bar)&&card->isAncestorOf(zero)&&!autoGroup->isAncestorOf(zero),
+              "the depth bar and Zero button live in the Depth Sensor card, not in Auto Follow");
+        check(bar&&bar->isVisible()&&bar->minimum()==0&&bar->maximum()==500&&bar->value()==0&&bar->format()=="Not zeroed",
+              "the bar covers 0-0.50 m and shows Not zeroed");
+        check(zero&&zero->isVisible()&&!zero->isEnabled(),"Zero is shown but disabled in this preview");
+    }
+
+    // 1. DRY RUN: feature off, ready underneath, nothing armed.
+    check(pill->text()=="DRY RUN"&&!action->isEnabled()&&action->text().contains("not ready"),
+          "feature off shows DRY RUN and refuses Arm while the link is down");
+
+    // 2. NOT READY: all three conditions independently visible.
+    gate->setChecked(true);
+    c.active=false;c.enabled=0;c.known=0;
+    session->timerTick();
+    check(pill->text()=="NOT READY","feature on without prerequisites is NOT READY");
+    check(!checklist->isHidden()&&checklist->text().contains("Link + control")
+          &&checklist->text().contains("Servos enabled")&&checklist->text().contains("Tracking"),
+          "NOT READY lists every unsatisfied readiness condition");
+    check(checklist->text().contains(QStringLiteral("\u2717")),"unsatisfied conditions are marked as unmet");
+    check(!action->isEnabled()&&action->text().contains("3"),"Arm is disabled and counts three unmet conditions");
+    check(alert->isHidden()&&alert->text().isEmpty(),"no alert banner without a fault");
+
+    // 3. READY: requires an explicit operator Arm.
+    c.active=true;c.enabled=0x1b;c.known=0x1b;
+    frame(w);
+    session->timerTick();
+    check(pill->text()=="READY"&&action->isEnabled()&&action->text()=="Arm","all conditions met shows READY and enables Arm");
+    check(!session->armed(),"READY never arms by itself");
+
+    // 4. ARMED: the combined action becomes Disarm with the danger role.
+    action->click();
+    check(pill->text()=="ARMED"&&action->text()=="Disarm","the combined action becomes Disarm once armed");
+    check(action->property("consoleActionRole").toString()=="danger","armed action uses the danger role");
+    check(action->isEnabled(),"armed Disarm is always available");
+    check(checklist->isHidden(),"the checklist is hidden while armed");
+
+    // The same action disarms and sends exactly one operator STOP.
+    const auto n=c.sends.size();action->click();
+    check(!session->armed()&&c.sends.size()==n+1&&c.sends.back().second==rb::MotionMode::Stop,
+          "the combined action disarms and sends one operator STOP");
+    check(action->text().contains("not ready")||action->text()=="Arm","disarmed action returns to Arm");
+
+    // 5. FAULT has the highest priority over ARMED and DRY RUN.
+    {
+        test::VisualControllerFixture fault;MainWindow fw(&fault);
+        fw.resize(1100,720);fw.show();QApplication::processEvents();
+        auto *fs=fw.findChild<VisualDispatchSession*>();auto *fgate=child<QCheckBox>(fw,"visualDispatchEnabled");
+        auto *fpill=child<QLabel>(fw,"autoFollowStatePill");auto *fwarn=child<QLabel>(fw,"autoFollowAlert");
+        if(fs) fs->setTimerEnabled(false);
+        frame(fw);fgate->setChecked(true);click(fw,"visualArmButton");
+        check(fs&&fs->armed(),"fault fixture arms before the safety event");
+        if(fs){
+            auto *diagnostic=fw.findChild<VisualDiagnosticSession*>();
+            if(diagnostic){VisualViewContext stale;stale.gate=DetectionDisplayState::Stale;diagnostic->refresh(stale);}
+            // Never ACK the automatic STOP: the retry deadlines latch the alarm.
+            QElapsedTimer wait;wait.start();
+            while(wait.elapsed()<6000&&!fs->stopTimeoutAlert()){QApplication::processEvents(QEventLoop::AllEvents,20);fs->timerTick();}
+            check(fs->stopTimeoutAlert(),"safety STOP retries latch the timeout alarm");
+            check(fpill->text()=="FAULT","a latched fault outranks every other state");
+            check(!fwarn->isHidden()&&fwarn->text().contains("STOP"),"FAULT shows the alert banner with the cause");
+        }
+    }
+    // 5b. STOPPING: disarmed but the automatic STOP is still unconfirmed.
+    {
+        test::VisualControllerFixture sc;MainWindow sw(&sc);
+        sw.resize(1100,720);sw.show();QApplication::processEvents();
+        auto *ss=sw.findChild<VisualDispatchSession*>();auto *sgate=child<QCheckBox>(sw,"visualDispatchEnabled");
+        auto *spill=child<QLabel>(sw,"autoFollowStatePill");auto *sarm=child<QPushButton>(sw,"visualArmButton");
+        if(ss) ss->setTimerEnabled(false);
+        frame(sw);sgate->setChecked(true);
+        ss->timerTick();
+        check(spill->text()=="READY","stopping fixture starts READY");
+        click(sw,"visualArmButton");
+        check(ss->armed()&&spill->text()=="ARMED","stopping fixture arms");
+        auto *diagnostic=sw.findChild<VisualDiagnosticSession*>();
+        VisualViewContext stale;stale.gate=DetectionDisplayState::Stale;diagnostic->refresh(stale);
+        check(!ss->armed()&&ss->stopAwaiting(),"STALE disarms and leaves the automatic STOP unconfirmed");
+        check(spill->text()=="STOPPING","an unconfirmed automatic STOP shows STOPPING, not READY or DRY RUN");
+        check(spill->styleSheet().contains("#F0A92E"),"STOPPING uses the amber fill");
+        check(!sarm->isEnabled()&&sarm->text().contains("stopping"),"Arm is refused while the STOP is unconfirmed");
+        check(!sc.sends.empty()&&sc.sends.back().second==rb::MotionMode::Stop,"the automatic STOP was sent");
+        sc.ack(sc.sends.back().first,CommandTerminalResult::Ok);
+        frame(sw);ss->timerTick();
+        check(!ss->stopAwaiting()&&spill->text()!="STOPPING","an accepted STOP clears STOPPING");
+    }
+    // 5c. Pure priority table: FAULT > STOPPING > ARMED > DRY RUN > READY > NOT READY,
+    // and READY additionally needs eligibility.
+    {
+        using rb::ui::AutoFollowState;using rb::ui::AutoFollowStateInput;using rb::ui::classifyAutoFollowState;
+        AutoFollowStateInput in;in.enabled=true;in.readinessComplete=true;in.eligible=true;
+        check(classifyAutoFollowState(in)==AutoFollowState::Ready,"complete and eligible is READY");
+        in.eligible=false;
+        check(classifyAutoFollowState(in)==AutoFollowState::NotReady,"a complete checklist without eligibility is NOT READY");
+        in.eligible=true;in.readinessComplete=false;
+        check(classifyAutoFollowState(in)==AutoFollowState::NotReady,"eligibility without a complete checklist is NOT READY");
+        in.readinessComplete=true;in.enabled=false;
+        check(classifyAutoFollowState(in)==AutoFollowState::DryRun,"switch off is DRY RUN");
+        in.armed=true;
+        check(classifyAutoFollowState(in)==AutoFollowState::Armed,"armed outranks DRY RUN");
+        in.stopping=true;
+        check(classifyAutoFollowState(in)==AutoFollowState::Stopping,"STOPPING outranks ARMED");
+        in.stopping=true;in.armed=false;in.enabled=false;
+        check(classifyAutoFollowState(in)==AutoFollowState::Stopping,"STOPPING outranks DRY RUN and READY");
+        in.fault=true;
+        check(classifyAutoFollowState(in)==AutoFollowState::Fault,"FAULT outranks STOPPING");
+        check(std::string(rb::ui::autoFollowStateText(AutoFollowState::Stopping))=="STOPPING","state text");
+    }
+    // 6. Turning the feature off returns to DRY RUN and clears the checklist.
+    gate->setChecked(false);
+    check(pill->text()=="DRY RUN"&&checklist->isHidden(),"feature off returns to DRY RUN with no checklist");
+}
+
 void coveredOperatorStopUi()
 {
     test::VisualControllerFixture controller;
@@ -530,4 +681,4 @@ void coveredOperatorStopUi()
 }
 
 }
-int main(int argc,char **argv){QApplication app(argc,argv);controls();transientSafetyEvents();replayDesktopTransientStale();coveredOperatorStopUi();manualPaths();keyboardPaths();rawRejection();signAndOffMatrix();enableReleaseBranchesAndAlert();negativeAndTimer();loopbackWindowAndCsv();std::printf("main_window_visual_dispatch_tests: %d failures\n",failures);return failures?1:0;}
+int main(int argc,char **argv){QApplication app(argc,argv);autoFollowPanelContract();controls();transientSafetyEvents();replayDesktopTransientStale();coveredOperatorStopUi();manualPaths();keyboardPaths();rawRejection();signAndOffMatrix();enableReleaseBranchesAndAlert();negativeAndTimer();loopbackWindowAndCsv();std::printf("main_window_visual_dispatch_tests: %d failures\n",failures);return failures?1:0;}

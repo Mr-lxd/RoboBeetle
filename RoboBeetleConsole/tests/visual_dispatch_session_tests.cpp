@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -237,28 +238,42 @@ void testDeterministicRuntimeCases()
 {
     using namespace rb::vision;
     auto snapshot=[] {VisualDiagnosticSnapshot s;s.state=VisualState::Tracking;s.command.proposed=ProposedCommand::Forward;s.command.ex_f=0.5;return s;};
-    for(int sign:{-1,1}) {
-        rb::test::VisualControllerFixture c;qint64 now=0;auto snap=snapshot();snap.command.proposed=ProposedCommand::TurnLeft; snap.target=TargetState{};snap.target->ex=-0.8;
+    {
+        rb::test::VisualControllerFixture controller;
+        const auto snap = snapshot();
+        VisualDispatchSession session(&controller, [&] { return std::optional{snap}; },
+                                      [] { return 0; });
+        expect(session.confirmedTurnSign() == VisualPolicyConfig::configuredTurnSign
+                   && VisualPolicyConfig::configuredTurnSign == 1,
+               "session starts with the configured +1 turn sign already confirmed");
+        expect(!session.featureEnabled() && !session.armed() && controller.sends.empty(),
+               "configured turn sign neither enables the feature, arms, nor submits motion");
+    }
+    for (double error : {-0.5, 0.5}) {
+        rb::test::VisualControllerFixture c;qint64 now=0;auto snap=snapshot();
+        snap.command.ex_f=error;
+        snap.command.proposed=error>0?ProposedCommand::TurnLeft:ProposedCommand::TurnRight;
+        snap.target=TargetState{};snap.target->ex=-error;
         VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});
         s.timerTick();expect(c.sends.empty(),"off default sends nothing");
-        s.setFeatureEnabled(true);s.selectTurnSign(sign);s.confirmTurnSign();expect(s.arm()==ArmReason::Ready,"paired turn sign arm");s.timerTick();
-        expect(c.sends.size()==1&&c.sends.back().second==(sign>0?rb::MotionMode::TurnRight:rb::MotionMode::TurnLeft),"filtered error and sign map command from same snapshot");
+        s.setFeatureEnabled(true);expect(s.arm()==ArmReason::Ready,"configured turn sign arms without operator confirmation");s.timerTick();
+        expect(c.sends.size()==1&&c.sends.back().second==(error>0?rb::MotionMode::TurnRight:rb::MotionMode::TurnLeft),"filtered error and configured +1 sign map command from same snapshot");
         c.ack(c.sends.back().first,rb::CommandTerminalResult::Ok);expect(s.currentMode().has_value(),"ACK establishes visible mode");
-        s.selectTurnSign(-sign);expect(!s.armed()&&!s.currentMode()&&c.sends.size()==2&&c.sends.back().second==rb::MotionMode::Stop,"changing sign disarms and sends operator STOP");
+        s.disarm();expect(!s.armed()&&!s.currentMode()&&c.sends.size()==2&&c.sends.back().second==rb::MotionMode::Stop,"disarm sends exactly one operator STOP");
         c.ack(c.sends.back().first,rb::CommandTerminalResult::Busy,7);expect(s.operatorStopResult()==rb::CommandTerminalResult::Busy,"operator busy remains visible");
         now=3000;s.timerTick();expect(c.sends.size()==2,"operator stop has no retries");
     }
     {
         rb::test::VisualControllerFixture c;auto snap=snapshot();qint64 now=0;VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});
         std::vector<VisualDispatchRecord> records;QObject::connect(&s,&VisualDispatchSession::dispatchRecorded,[&](auto record){records.push_back(record);});
-        s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();s.timerTick();auto old=c.sends.back().first;
+        s.setFeatureEnabled(true);s.arm();s.timerTick();auto old=c.sends.back().first;
         c.disconnectController();
         expect(!s.armed()&&records.size()>=3&&records[1].command==ProposedCommand::Stop,"loss attempts immediate policy safety STOP before clearing associations");
         now=5000;s.timerTick();c.ack(old,rb::CommandTerminalResult::Ok);expect(c.sends.size()==1&&!s.currentMode(),"loss ends retries and stale ACK associations");
     }
     {
         rb::test::VisualControllerFixture c;auto snap=snapshot();VisualDispatchSession s(&c,[&]{return std::optional{snap};},[]{return 0;});
-        s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();s.disarm();auto stop=c.sends.back().first;
+        s.setFeatureEnabled(true);s.arm();s.disarm();auto stop=c.sends.back().first;
         s.setFeatureEnabled(false);c.ack(stop,rb::CommandTerminalResult::Ok);
         expect(s.operatorStopResult()==rb::CommandTerminalResult::Ok&&c.sends.size()==1,"operator STOP correlation survives later feature off without extra STOP");
     }
@@ -272,9 +287,7 @@ void testDeterministicRuntimeCases()
         VisualDispatchSession session(&controller, [&] { return std::optional{snap}; },
                                       [&] { return now; });
         session.setFeatureEnabled(true);
-        session.selectTurnSign(1);
-        session.confirmTurnSign();
-        session.arm();
+                session.arm();
         session.timerTick();
         const auto oldStart = controller.sends.back().first;
         session.setFeatureEnabled(false);
@@ -297,23 +310,23 @@ void testDeterministicRuntimeCases()
     }
     {
         rb::test::VisualControllerFixture c;auto snap=snapshot();qint64 now=0;VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});
-        s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();s.timerTick();auto old=c.sends.back().first;
+        s.setFeatureEnabled(true);s.arm();s.timerTick();auto old=c.sends.back().first;
         s.manualInput(ManualInputKind::Motion);s.setFeatureEnabled(false);c.ack(old,rb::CommandTerminalResult::Ok);expect(c.sends.size()==1&&!s.armed()&&!s.currentMode(),"manual pending takeover and late OK cannot revive mode or STOP on off");
     }
     {
         rb::test::VisualControllerFixture c;auto snap=snapshot();qint64 now=0;VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});
-        s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();s.timerTick();c.ack(c.sends.back().first,rb::CommandTerminalResult::Rejected,6);
+        s.setFeatureEnabled(true);s.arm();s.timerTick();c.ack(c.sends.back().first,rb::CommandTerminalResult::Rejected,6);
         expect(s.poseMismatch()==QStringLiteral("可能是姿态未知（Qt 推断与固件不一致）"),"HardwareFailure diagnostic is inference only");expect(c.sends.size()==2&&c.sends.back().second==rb::MotionMode::Stop,"rejected START immediately safety stops");
         c.ack(c.sends.back().first,rb::CommandTerminalResult::Ok);expect(!s.poseMismatch().isEmpty(),"STOP preserves hardware diagnostic");
     }
     {
         rb::test::VisualControllerFixture c;c.synchronous=true;auto snap=snapshot();VisualDispatchSession s(&c,[&]{return std::optional{snap};},[]{return 0;});
-        s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();s.timerTick();QApplication::processEvents();expect(s.currentMode()==ProposedCommand::Forward,"synchronous callback deferred until mapping installed");
+        s.setFeatureEnabled(true);s.arm();s.timerTick();QApplication::processEvents();expect(s.currentMode()==ProposedCommand::Forward,"synchronous callback deferred until mapping installed");
         s.disarm();QApplication::processEvents();expect(s.operatorStopResult()==rb::CommandTerminalResult::Ok,"synchronous operator stop correlation");
     }
     {
         rb::test::VisualControllerFixture c;c.backend=rb::ConsoleBackendKind::DirectSerial;auto snap=snapshot();VisualDispatchSession s(&c,[&]{return std::optional{snap};},[]{return 0;});
-        s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();expect(s.arm()==ArmReason::LinkDisconnected,"direct maintenance cannot arm despite mock active flags");s.timerTick();expect(c.sends.empty(),"direct maintenance always dry run");
+        s.setFeatureEnabled(true);expect(s.arm()==ArmReason::LinkDisconnected,"direct maintenance cannot arm despite mock active flags");s.timerTick();expect(c.sends.empty(),"direct maintenance always dry run");
     }
 }
 
@@ -322,7 +335,7 @@ void testTimerAndRealDiagnosticGrace()
     using namespace rb::vision;
     {
         rb::test::VisualControllerFixture c;qint64 now=0;VisualDiagnosticSnapshot snap;snap.state=VisualState::Tracking;snap.command.proposed=ProposedCommand::Forward;
-        VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();
+        VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});s.setFeatureEnabled(true);s.arm();
         expect(pumpUntil([&]{return c.sends.size()==1;},200),"50ms timer starts motion without manual tick");
         now=1000;expect(pumpUntil([&]{return c.sends.size()==2;},200),"timer detects outstanding nonSTOP deadline without frames");
         for(qint64 deadline:{2000,3000,4000}){now=deadline;auto count=c.sends.size();expect(pumpUntil([&]{return c.sends.size()>count;},200),"timer retries STOP without frames");}
@@ -333,7 +346,7 @@ void testTimerAndRealDiagnosticGrace()
         rb::test::VisualControllerFixture c;qint64 now=0;VisualDiagnosticSession diagnostic({},[&]{return now;});
         DetectionFrame frame{1,1001,{640,480},{{0,"fish",.9,{320,240}}}};
         diagnostic.onDetectionArrival(frame,{DetectionDisplayState::Target,frame});
-        VisualDispatchSession s(&c,[&]{return std::optional{diagnostic.snapshot()};},[&]{return now;});s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();expect(s.arm()==ArmReason::Ready,"real diagnostic tracking arms");s.timerTick();c.ack(c.sends.back().first,rb::CommandTerminalResult::Ok);
+        VisualDispatchSession s(&c,[&]{return std::optional{diagnostic.snapshot()};},[&]{return now;});s.setFeatureEnabled(true);expect(s.arm()==ArmReason::Ready,"real diagnostic tracking arms");s.timerTick();c.ack(c.sends.back().first,rb::CommandTerminalResult::Ok);
         now=20;frame.frameId=2;diagnostic.onDetectionArrival(frame,{DetectionDisplayState::AwaitingVideo,frame});
         now=420;diagnostic.refresh({DetectionDisplayState::AwaitingVideo,frame});s.timerTick();
         expect(diagnostic.snapshot().awaitingVideo&&diagnostic.snapshot().state==VisualState::Tracking&&s.armed()&&c.sends.size()==1,"real diagnostic 400ms grace preserves ACKconfirmed Forward");
@@ -342,7 +355,7 @@ void testTimerAndRealDiagnosticGrace()
     }
     {
         rb::test::VisualControllerFixture c;qint64 now=0;std::optional<VisualDiagnosticSnapshot> snapshot{VisualDiagnosticSnapshot{}};snapshot->state=VisualState::Tracking;snapshot->command.proposed=ProposedCommand::Forward;
-        VisualDispatchSession s(&c,[&]{return snapshot;},[&]{return now;});s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();s.arm();s.timerTick();snapshot.reset();now=50;s.timerTick();expect(!s.armed()&&c.sends.size()==2&&c.sends.back().second==rb::MotionMode::Stop,"only missing snapshot produces adapter STALE");
+        VisualDispatchSession s(&c,[&]{return snapshot;},[&]{return now;});s.setFeatureEnabled(true);s.arm();s.timerTick();snapshot.reset();now=50;s.timerTick();expect(!s.armed()&&c.sends.size()==2&&c.sends.back().second==rb::MotionMode::Stop,"only missing snapshot produces adapter STALE");
     }
 }
 
@@ -355,7 +368,7 @@ void testWireFailureSafetyStop()
     int seq=10;
     for(int i:{0,1,3,4}){c.enableServo(static_cast<rb::ServoId>(i));auto f=gateway.nextFrame(RbrpMessageKind::CommandRequest);if(f){sendSubmitted(gateway,f->request_id,seq);sendOutcome(gateway,f->request_id,RobotCommandKind::EnableServos,seq++,GatewayCommandOutcome::Accepted);pumpUntil([&]{return c.isServoEnabled(static_cast<rb::ServoId>(i));});}}
     qint64 now=0;VisualDiagnosticSnapshot snap;snap.state=VisualState::Tracking;snap.command.proposed=ProposedCommand::Forward;
-    VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});s.setFeatureEnabled(true);s.selectTurnSign(1);s.confirmTurnSign();expect(s.arm()==ArmReason::Ready,"wire failure session arm");s.timerTick();
+    VisualDispatchSession s(&c,[&]{return std::optional{snap};},[&]{return now;});s.setFeatureEnabled(true);expect(s.arm()==ArmReason::Ready,"wire failure session arm");s.timerTick();
     auto start=gateway.nextFrame(RbrpMessageKind::CommandRequest);expect(start&&start->payload==Bytes{static_cast<Byte>(RobotCommandKind::StartMotion),1},"visual START maps modebyte on existing RBRP socket");
     if(!start){gateway.disconnectPeer();return;}
     sendSubmitted(gateway,start->request_id,50);GatewayCommandOutcomeMessage rejected;rejected.command_kind=RobotCommandKind::StartMotion;rejected.event={GatewayCommandOutcome::Rejected,50,6};gateway.send({start->request_id,rejected});
@@ -405,9 +418,7 @@ void testAcceptedStopRetiresRetryEpisode()
         VisualDispatchSession session(&controller, [&] { return std::optional{snapshot}; },
                                       [&] { return now; });
         session.setFeatureEnabled(true);
-        session.selectTurnSign(1);
-        session.confirmTurnSign();
-        expect(session.arm() == ArmReason::Ready, "STOP retry regression arms");
+                expect(session.arm() == ArmReason::Ready, "STOP retry regression arms");
         session.timerTick();
         auto start = gateway.nextFrame(RbrpMessageKind::CommandRequest);
         if (!start) { gateway.disconnectPeer(); continue; }
@@ -483,8 +494,7 @@ void testSessionRuntime()
     VisualDispatchSession session(&c,[&]{return std::optional{snap};},[&]{return now;});
     std::vector<VisualDispatchRecord> records;QObject::connect(&session,&VisualDispatchSession::dispatchRecorded,[&](auto r){records.push_back(r);});
     expect(!session.featureEnabled()&&!session.armed(),"runtime starts feature off and disarmed");
-    session.setFeatureEnabled(true);expect(session.arm()==ArmReason::TurnSignUnconfirmed,"sign confirmation required");
-    session.selectTurnSign(1);session.confirmTurnSign();expect(session.arm()==ArmReason::Ready,"explicit arming ready");
+    session.setFeatureEnabled(true);expect(session.arm()==ArmReason::Ready,"configured turn sign needs no operator confirmation");
     expect(session.armed(),"operator action arms runtime");
     if(!session.armed()){gateway.disconnectPeer();return;}
     session.timerTick();auto forward=gateway.nextFrame(RbrpMessageKind::CommandRequest);expect(forward.has_value(),"runtime forwards snapshot command");
@@ -528,7 +538,7 @@ void testReentrantSafetySnapshotIsRetained()
         DetectionFrame frame{1, 1001, {640, 480}, {{0, "fish", .9, {320, 240}}}};
         diagnostic.onDetectionArrival(frame, {DetectionDisplayState::Target, frame});
         VisualDispatchSession session(&controller, &diagnostic);
-        session.setFeatureEnabled(true); session.selectTurnSign(1); session.confirmTurnSign();
+        session.setFeatureEnabled(true);
         expect(session.arm() == ArmReason::Ready, "reentrant diagnostic fixture arms");
         const auto emitTransient = [&] {
             auto event = diagnostic.snapshot();
@@ -580,8 +590,6 @@ void testAuthorityLossInSameEvent()
     VisualDispatchSession session(&controller, [&] { return std::optional{snapshot}; },
                                   [&] { return now; });
     session.setFeatureEnabled(true);
-    session.selectTurnSign(1);
-    session.confirmTurnSign();
     expect(session.arm() == ArmReason::Ready, "authority-loss fixture is armed");
     session.timerTick();
     controller.ack(controller.sends.back().first, rb::CommandTerminalResult::Ok);
@@ -614,9 +622,7 @@ void testPoseMismatchRequiresCompleteMask()
         VisualDispatchSession session(&controller, [&] { return std::optional{snapshot}; },
                                       [] { return 0; }, config);
         session.setFeatureEnabled(true);
-        session.selectTurnSign(1);
-        session.confirmTurnSign();
-        expect(session.arm() == ArmReason::Ready, "pose-mask rejection fixture arms");
+                expect(session.arm() == ArmReason::Ready, "pose-mask rejection fixture arms");
         session.timerTick();
         controller.known = known;
         controller.ack(controller.sends.back().first, rb::CommandTerminalResult::Rejected, 6);
@@ -657,7 +663,7 @@ void testAutomaticStopCoversOperatorStop()
     std::vector<VisualDispatchRecord> records;
     QObject::connect(&session, &VisualDispatchSession::dispatchRecorded,
                      [&](const auto &record) { records.push_back(record); });
-    session.setFeatureEnabled(true); session.selectTurnSign(1); session.confirmTurnSign();
+    session.setFeatureEnabled(true);
     expect(session.arm() == ArmReason::Ready, "covered STOP session arms");
     session.timerTick(); // Unconfirmed HOLD requests an automatic STOP.
     const auto automatic = gateway.nextFrame(RbrpMessageKind::CommandRequest);
@@ -688,5 +694,147 @@ void testAutomaticStopCoversOperatorStop()
     gateway.disconnectPeer();
 }
 
+// Task 06: readiness() reports every condition independently and is a pure
+// query. Each item is falsified on its own while the other two stay satisfied.
+void testAutoFollowReadinessEachItemIndependently()
+{
+    using namespace rb::vision;
+    VisualDiagnosticSnapshot snap;
+    snap.state = VisualState::Tracking;
+    snap.command.proposed = ProposedCommand::Forward;
+    const auto build = [&snap](rb::test::VisualControllerFixture &c, qint64 &now) {
+        return std::make_unique<VisualDispatchSession>(
+            &c, [&snap] { return std::optional{snap}; }, [&now] { return now; });
+    };
+
+    // Baseline: everything satisfied.
+    {
+        rb::test::VisualControllerFixture c; qint64 now = 0;
+        auto session = build(c, now);
+        const auto ready = session->readiness();
+        expect(ready.linkAndControl && ready.servosReady && ready.tracking
+                   && ready.allReady() && ready.missingCount() == 0,
+               "fully provisioned session reports every readiness item satisfied");
+    }
+    // 1. Link + control alone is false.
+    {
+        rb::test::VisualControllerFixture c; qint64 now = 0;
+        c.active = false;
+        auto session = build(c, now);
+        const auto ready = session->readiness();
+        expect(!ready.linkAndControl && ready.servosReady && ready.tracking
+                   && !ready.allReady() && ready.missingCount() == 1,
+               "losing control authority falsifies only the link/control item");
+        c.active = true; c.connected = false;
+        const auto disconnected = session->readiness();
+        expect(!disconnected.linkAndControl && disconnected.servosReady
+                   && disconnected.tracking && disconnected.missingCount() == 1,
+               "a closed link falsifies only the link/control item");
+        c.backend = rb::ConsoleBackendKind::DirectSerial; c.connected = true;
+        expect(!session->readiness().linkAndControl,
+               "direct maintenance link can never satisfy the readiness item");
+    }
+    // 2. Servos alone is false: disabled mask and unknown pose are both fatal.
+    {
+        rb::test::VisualControllerFixture c; qint64 now = 0;
+        c.enabled = 0;
+        auto session = build(c, now);
+        const auto ready = session->readiness();
+        expect(ready.linkAndControl && !ready.servosReady && ready.tracking
+                   && ready.missingCount() == 1,
+               "disabled required servos falsify only the servo/pose item");
+        c.enabled = 0x1b; c.known = 0;
+        const auto unknownPose = session->readiness();
+        expect(unknownPose.linkAndControl && !unknownPose.servosReady
+                   && unknownPose.tracking && unknownPose.missingCount() == 1,
+               "enabled servos with unknown pose still falsify the servo/pose item");
+        c.known = 0x1b;
+        expect(session->readiness().servosReady,
+               "complete enabled and known mask satisfies the servo/pose item");
+    }
+    // 3. Tracking alone is false.
+    {
+        rb::test::VisualControllerFixture c; qint64 now = 0;
+        auto session = build(c, now);
+        expect(session->readiness().tracking, "TRACKING snapshot satisfies the tracking item");
+        snap.state = VisualState::Stale;
+        const auto stale = session->readiness();
+        expect(stale.linkAndControl && stale.servosReady && !stale.tracking
+                   && stale.missingCount() == 1,
+               "STALE falsifies only the tracking item");
+        snap.state = VisualState::NoTarget;
+        expect(!session->readiness().tracking,
+               "NO_TARGET falsifies only the tracking item");
+        snap.state = VisualState::Tracking;
+        expect(session->readiness().tracking, "restored TRACKING satisfies the item again");
+    }
+    // All three false at once, and readiness() must not disturb any state.
+    {
+        rb::test::VisualControllerFixture c; qint64 now = 0;
+        c.active = false; c.enabled = 0; c.known = 0;
+        snap.state = VisualState::Stale;
+        auto session = build(c, now);
+        const auto ready = session->readiness();
+        expect(!ready.linkAndControl && !ready.servosReady && !ready.tracking
+                   && ready.missingCount() == 3 && !ready.allReady(),
+               "a fully unprovisioned session reports three missing items");
+        expect(!session->armed() && !session->featureEnabled() && c.sends.empty(),
+               "readiness() is a pure query: no arming, no feature change, no submission");
+        snap.state = VisualState::Tracking;
+    }
 }
-int main(int argc,char **argv){QApplication app(argc,argv);testReentrantSafetySnapshotIsRetained();testAuthorityLossInSameEvent();testPoseMismatchRequiresCompleteMask();testAutomaticStopCoversOperatorStop();testDeterministicRuntimeCases();testTimerAndRealDiagnosticGrace();testWireFailureSafetyStop();testAcceptedStopRetiresRetryEpisode();testSessionRuntime();return failures?1:0;}
+
+}
+// Task 06: eligibility() and stopAwaiting() back the READY and STOPPING labels.
+void testAutoFollowEligibilityAndStopAwaiting()
+{
+    using namespace rb::vision;
+    VisualDiagnosticSnapshot snap;
+    snap.state = VisualState::Tracking;
+    snap.command.proposed = ProposedCommand::Forward;
+    rb::test::VisualControllerFixture c;
+    qint64 now = 100;
+    VisualDispatchSession session(
+        &c, [&snap] { return std::optional{snap}; }, [&now] { return now; });
+    session.setTimerEnabled(false);
+    session.setFeatureEnabled(true);
+
+    expect(session.readiness().allReady() && session.eligibility() == ArmReason::Ready,
+           "a provisioned session is eligible");
+    expect(!session.stopAwaiting(), "nothing awaits a STOP initially");
+
+    // The checklist can be complete while arm() would still refuse: a clock that
+    // went backwards is the reachable example (InvalidTime).
+    session.timerTick();
+    now = 50;
+    expect(session.readiness().allReady(),
+           "the readiness checklist does not look at the clock");
+    expect(session.eligibility() == ArmReason::InvalidTime,
+           "eligibility reports InvalidTime although the checklist is complete");
+    expect(session.arm() == ArmReason::InvalidTime && !session.armed(),
+           "arm() agrees with eligibility()");
+    now = 200;
+    expect(session.eligibility() == ArmReason::Ready, "eligibility recovers with the clock");
+
+    // eligibility() is a pure query.
+    const bool armedBefore = session.armed();
+    (void)session.eligibility();
+    expect(session.armed() == armedBefore && !session.stopAwaiting(),
+           "eligibility() changes no state");
+
+    // Armed, then STALE: disarmed with the automatic STOP unconfirmed.
+    expect(session.arm() == ArmReason::Ready && session.armed(), "arm succeeds when eligible");
+    snap.state = VisualState::Stale;
+    now = 300;
+    session.timerTick();
+    expect(!session.armed() && session.stopAwaiting(),
+           "STALE leaves the session disarmed and awaiting the STOP outcome");
+    expect(!c.sends.empty() && c.sends.back().second == rb::MotionMode::Stop,
+           "the awaited STOP was sent");
+    c.ack(c.sends.back().first, rb::CommandTerminalResult::Ok);
+    now = 400;
+    session.timerTick();
+    expect(!session.stopAwaiting(), "an accepted STOP ends the awaiting state");
+}
+
+int main(int argc,char **argv){QApplication app(argc,argv);testAutoFollowEligibilityAndStopAwaiting();testAutoFollowReadinessEachItemIndependently();testReentrantSafetySnapshotIsRetained();testAuthorityLossInSameEvent();testPoseMismatchRequiresCompleteMask();testAutomaticStopCoversOperatorStop();testDeterministicRuntimeCases();testTimerAndRealDiagnosticGrace();testWireFailureSafetyStop();testAcceptedStopRetiresRetryEpisode();testSessionRuntime();return failures?1:0;}

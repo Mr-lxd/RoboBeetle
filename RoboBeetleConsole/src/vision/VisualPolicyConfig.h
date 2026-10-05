@@ -19,7 +19,10 @@ struct VisualPolicyConfig {
     std::int64_t stale_ms{500};
     std::int64_t lost_ms{1500};
     double K_yaw{1.0};
-    int turn_sign{1}; // [Provisional] Physical turn direction remains unverified.
+    // [Provisional] Physical turn direction remains unverified. The sign is a
+    // build-time constant: the operator no longer selects or confirms it.
+    static constexpr int configuredTurnSign{+1};
+    int turn_sign{configuredTurnSign};
     int ui_tick_ms{50};
     double gate_px{48.0}; // [Provisional] Original image pixels.
     std::int64_t max_miss_ms{500}; // [Provisional] Local monotonic milliseconds.

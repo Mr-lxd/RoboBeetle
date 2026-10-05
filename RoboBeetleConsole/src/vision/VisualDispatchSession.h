@@ -5,6 +5,18 @@
 #include <QHash>
 
 namespace rb::vision {
+// Independent operator-facing readiness conditions. Every field is evaluated on
+// its own so the checklist can show all outstanding items at once.
+struct AutoFollowReadiness {
+    bool linkAndControl{false}; // Remote RBRP link up and control authority held.
+    bool servosReady{false};    // Required servos enabled and their pose known.
+    bool tracking{false};       // Diagnostic snapshot reports TRACKING.
+    [[nodiscard]] int missingCount() const
+    {
+        return (linkAndControl ? 0 : 1) + (servosReady ? 0 : 1) + (tracking ? 0 : 1);
+    }
+    [[nodiscard]] bool allReady() const { return missingCount() == 0; }
+};
 struct VisualDispatchRecord {
     qint64 nowMs{0};
     quint64 policyId{0};
@@ -24,19 +36,27 @@ public:
     void setFeatureEnabled(bool enabled);
     ArmReason arm();
     void disarm();
-    void selectTurnSign(std::optional<int> sign);
-    void confirmTurnSign();
     void manualInput(ManualInputKind kind);
     void timerTick();
+    // Test seam: stops the 50 ms evaluation timer so a caller can drive the
+    // session deterministically with timerTick(). Never changes policy state.
+    void setTimerEnabled(bool enabled) { enabled ? timer_.start() : timer_.stop(); }
+    [[nodiscard]] bool timerEnabled() const { return timer_.isActive(); }
     bool featureEnabled() const { return enabled_; }
     bool armed() const { return machine_.armed(); }
+    // Disarmed, but an automatic or operator STOP is still unconfirmed.
+    [[nodiscard]] bool stopAwaiting() const { return machine_.stopAwaiting(); }
+    // What arm() would answer right now, without arming or mutating state.
+    [[nodiscard]] ArmReason eligibility() const { return machine_.eligibility(input()); }
     ArmReason armReason() const { return reason_; }
     std::optional<ProposedCommand> currentMode() const;
     bool stopTimeoutAlert() const { return machine_.stopTimeoutAlert(); }
     std::optional<CommandTerminalResult> operatorStopResult() const { return operatorStopResult_; }
     QString poseMismatch() const { return poseMismatch_; }
-    std::optional<int> selectedTurnSign() const { return selectedSign_; }
     std::optional<int> confirmedTurnSign() const { return confirmedSign_; }
+    // Read-only checklist for the operator surface. Unlike eligibility(), every
+    // condition is reported independently and no state is mutated.
+    [[nodiscard]] AutoFollowReadiness readiness() const;
 signals:
     void statusChanged();
     void dispatchRecorded(const rb::vision::VisualDispatchRecord &record);
@@ -59,7 +79,7 @@ private:
     bool submitting_{false};
     bool evaluating_{false};
     ArmReason reason_{ArmReason::NotTracking};
-    std::optional<int> selectedSign_, confirmedSign_;
+    std::optional<int> confirmedSign_{VisualPolicyConfig::configuredTurnSign};
     std::optional<CommandTerminalResult> operatorStopResult_;
     QString poseMismatch_;
     QHash<quint32, Association> associations_;

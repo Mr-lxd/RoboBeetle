@@ -11,21 +11,27 @@
 #include <optional>
 
 class QCloseEvent;
+class QShowEvent;
 class QComboBox;
 class QCheckBox;
 class QDoubleSpinBox;
+class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
+class QProgressBar;
 class QPushButton;
 class QSlider;
 class QSpinBox;
 class QSplitter;
 class QTabWidget;
+class QVBoxLayout;
 class QWidget;
 class QEvent;
 class QGridLayout;
 class QScrollArea;
+
+#include <QList>
 
 namespace rb {
 
@@ -55,9 +61,24 @@ public:
         vision::DetectionClient *detectionClient = nullptr,
         QWidget *parent = nullptr);
     ~MainWindow() override;
+    // Height the Operator tools pane needs so that no tab has to scroll for its
+    // preferred content (action bar + tab bar + tallest page). The pane never
+    // gets less than this; the video/dashboard area gives way first.
+    [[nodiscard]] int operatorToolsRequiredHeight() const;
+    // Smallest window height that honours operatorToolsRequiredHeight() while
+    // the dashboard keeps its own minimum. This is also the default height.
+    [[nodiscard]] int fullyExpandedWindowHeight() const;
+    // True when the screen cannot hold fullyExpandedWindowHeight(); main() then
+    // shows the window maximized. The window itself keeps a plain resize so
+    // callers (tests, previews) stay in control of the geometry.
+    [[nodiscard]] bool startupWantsMaximized() const noexcept { return startupMaximize_; }
+    // Re-evaluates minimum/default geometry with real (shown) size hints. main()
+    // calls it after one invisible show so the first visible frame is final.
+    void settleStartupGeometry();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
@@ -88,6 +109,10 @@ private:
     QWidget *createOperatorActionBar();
     QTabWidget *createOperatorToolsTabs();
     QWidget *createVisionDetailsTab();
+    // Task 06 green region (everything after the status text + its stretch).
+    void createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summary);
+    void applyAutoFollowCondensation();
+    void refreshAutoFollowUi();
     void bindVisionUi();
     void refreshVisualCsvUi();
     void refreshVisualDispatchUi();
@@ -103,6 +128,8 @@ private:
     void reflowActuatorCards();
     void updateVideoSurfaceGeometry();
     void initializeWorkspaceSizes();
+    void updateWorkspaceMinimums();
+    void applyStartupGeometry();
     // Refresh helpers.
     void setConnectedUi(bool connected);
     void refreshServoUi(int index);
@@ -132,9 +159,35 @@ private:
     quint64 visualSessionId_{0};
     vision::VisualDispatchSession *visualDispatch_{nullptr};
     QCheckBox *visualDispatchEnabled_{nullptr};
-    QComboBox *visualTurnSign_{nullptr};
-    QPushButton *visualTurnSignConfirm_{nullptr};
     QLabel *visualDispatchStatus_{nullptr};
+    // Task 06 green region. Sub-region A keeps the frozen vision actions;
+    // sub-region B is the new Auto Follow block.
+    QGroupBox *visionControlsGroup_{nullptr};
+    QGroupBox *autoFollowGroup_{nullptr};
+    QGridLayout *visionControlsGrid_{nullptr};
+    QGridLayout *autoFollowGrid_{nullptr};
+    QGridLayout *greenRegionGrid_{nullptr};
+    QLabel *autoFollowStatePill_{nullptr};
+    QLabel *autoFollowChecklist_{nullptr};
+    QLabel *autoFollowAlert_{nullptr};
+    QLabel *autoFollowDetail_{nullptr};
+    QLabel *autoFollowFooter_{nullptr};
+    QWidget *autoFollowAxisSelector_{nullptr};
+    // Depth Sensor card: zeroed-depth bar and Zero action (wired by the follow-up PR).
+    QProgressBar *depthBar_{nullptr};
+    QPushButton *depthZeroButton_{nullptr};
+    QWidget *connectionBar_{nullptr};
+    bool startupMaximize_{false};
+    QPushButton *visualArmButton_{nullptr};
+    QPushButton *visualDisarmButton_{nullptr};
+    int autoFollowMissing_{3};
+    QString autoFollowStateText_;
+    QString autoFollowChecklistFull_;
+    QString autoFollowDetailText_;
+    QString autoFollowBlockedText_; // all items ready but arm() would still refuse
+    bool autoFollowCondensed_{false};
+    bool autoFollowChecklistWanted_{false};
+    QList<QWidget *> autoFollowPinned_;
     QString visualDispatchRejection_;
     QString visualOperatorStopStatus_;
     QLabel *visualProposalDetails_{nullptr};

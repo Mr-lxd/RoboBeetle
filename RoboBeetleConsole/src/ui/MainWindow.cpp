@@ -1,4 +1,6 @@
 #include "ui/MainWindow.h"
+
+#include "ui/AutoFollowState.h"
 #include "ui/ElidedLabel.h"
 
 #include "robot/ServoDescriptor.h"
@@ -12,6 +14,7 @@
 #include "vision/VisualDispatchSession.h"
 
 #include <QCloseEvent>
+#include <QShowEvent>
 #include <QAbstractSpinBox>
 #include <QComboBox>
 #include <QCheckBox>
@@ -28,6 +31,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QMessageBox>
 #include <QRegularExpression>
@@ -493,6 +497,17 @@ void applySubpanelStyle(QGroupBox *box)
     ));
 }
 
+// The green region has a hard vertical budget, so its buttons use explicit
+// geometry instead of the global 30px-min-height/12px-padding button rule.
+void applyGreenRegionButtonStyle(QPushButton *button, int height)
+{
+    button->setMinimumHeight(height);
+    button->setMaximumHeight(height);
+    button->setStyleSheet(QStringLiteral(
+        "QPushButton { min-height: %1px; max-height: %1px; padding: 0 4px;"
+        " border-radius: 5px; }").arg(height));
+}
+
 void applyDashboardCardStyle(QGroupBox *box)
 {
     box->setStyleSheet(QStringLiteral(
@@ -598,19 +613,7 @@ MainWindow::MainWindow(
             committedPiHost_, visionControlClient_->port());
     }
     setWindowTitle(QStringLiteral("RoboBeetle Console"));
-    setMinimumSize(1100, 720);
-    const QScreen *startupScreen = QGuiApplication::primaryScreen();
-    if (startupScreen != nullptr) {
-        const QRect available = startupScreen->availableGeometry();
-        const int initialWidth = qMax(1100, qMin(1420, available.width() - 32));
-        const int initialHeight = qMax(720, qMin(1000, available.height() - 80));
-        resize(initialWidth, initialHeight);
-        const QSize frameSize = frameGeometry().size();
-        move(available.center()
-             - QPoint(frameSize.width() / 2, frameSize.height() / 2));
-    } else {
-        resize(1420, 1000);
-    }
+    setMinimumSize(1100, 720); // raised to the content-driven minimum once the UI exists
 
     auto *central = new QWidget(this);
     central->setObjectName(QStringLiteral("appCanvas"));
@@ -620,7 +623,8 @@ MainWindow::MainWindow(
     root->setContentsMargins(8, 8, 8, 8);
     root->setSpacing(8);
 
-    root->addWidget(createConnectionBar());
+    connectionBar_ = createConnectionBar();
+    root->addWidget(connectionBar_);
     operatorToolsPane_ = createOperatorTools();
     workspaceSplitter_ = new QSplitter(Qt::Vertical, central);
     workspaceSplitter_->setObjectName(QStringLiteral("workspaceSplitter"));
@@ -677,7 +681,10 @@ MainWindow::MainWindow(
         "QPlainTextEdit { background: #fbfcfd; border: 1px solid #c4ccd4; "
         "  border-radius: 4px; color: #334A5C; }"));
 
+    updateWorkspaceMinimums();
+    applyStartupGeometry();
     initializeWorkspaceSizes();
+    QTimer::singleShot(0, this, [this] { updateWorkspaceMinimums(); });
 
     setConnectedUi(false);
     setLeakUiState(controller_->leakState());
@@ -1037,12 +1044,6 @@ QWidget *MainWindow::createVideoPlaceholder()
     summaryLayout->addWidget(visionControlMessage_);
     summaryLayout->addStretch(1);
 
-    auto *controlsLabel = new QLabel(QStringLiteral("Vision Controls"), summary);
-    controlsLabel->setObjectName(QStringLiteral("visionControlsLabel"));
-    controlsLabel->setStyleSheet(QStringLiteral(
-        "color: #667C8C; font-size: 11px; font-weight: 700;"));
-    summaryLayout->addWidget(controlsLabel);
-
     visionConnectButton_ = new QPushButton(QStringLiteral("Connect Video"), summary);
     visionConnectButton_->setObjectName(QStringLiteral("visionConnectButton"));
     visionConnectButton_->setProperty("consoleActionRole", "primary");
@@ -1078,14 +1079,7 @@ QWidget *MainWindow::createVideoPlaceholder()
     stopRecordingButton_->setProperty("consoleActionRole", "stop");
     stopRecordingButton_->setVisible(false);
 
-    for (QPushButton *button :
-         {visionConnectButton_, startInferenceButton_,
-          stopInferenceButton_, snapshotButton_,
-          startRecordingButton_}) {
-        button->setMinimumHeight(34);
-        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        summaryLayout->addWidget(button);
-    }
+    createGreenRegion(summaryLayout, summary);
 
     content->addWidget(summary, 1);
     layout->addWidget(videoContentHost_, 1);
@@ -1108,6 +1102,178 @@ QWidget *MainWindow::createVideoPlaceholder()
     stopInferenceButton_->setEnabled(false);
     QTimer::singleShot(0, this, [this] { updateVideoSurfaceGeometry(); });
     return box;
+}
+
+// Task 06: the whole "green region" - everything below the Vision Status
+// status text and its trailing stretch. Two visually independent sub-regions:
+// A) the frozen Vision Controls actions, now a 2x2 grid; B) the new Auto Follow
+// block. The status text above this region is never touched.
+void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summary)
+{
+    auto *host = new QWidget(summary);
+    host->setObjectName(QStringLiteral("greenRegionHost"));
+    greenRegionGrid_ = new QGridLayout(host);
+    greenRegionGrid_->setContentsMargins(0, 0, 0, 0);
+    greenRegionGrid_->setSpacing(6);
+
+    // --- Sub-region A: Vision Controls (existing actions, original wiring) ---
+    visionControlsGroup_ = new QGroupBox(QStringLiteral("Vision Controls"), host);
+    visionControlsGroup_->setObjectName(QStringLiteral("visionControlsGroup"));
+    applySubpanelStyle(visionControlsGroup_);
+    auto *controlsOuter = new QVBoxLayout(visionControlsGroup_);
+    controlsOuter->setContentsMargins(6, 10, 6, 4);
+    controlsOuter->setSpacing(4);
+    visionControlsGrid_ = new QGridLayout;
+    visionControlsGrid_->setObjectName(QStringLiteral("visionControlsGrid"));
+    visionControlsGrid_->setContentsMargins(0, 0, 0, 0);
+    visionControlsGrid_->setSpacing(4);
+    controlsOuter->addLayout(visionControlsGrid_);
+
+    const QList<QPushButton *> visionButtons{
+        visionConnectButton_, startInferenceButton_, snapshotButton_,
+        startRecordingButton_};
+    for (int i = 0; i < visionButtons.size(); ++i) {
+        QPushButton *button = visionButtons.at(i);
+        button->setParent(visionControlsGroup_);
+        applyGreenRegionButtonStyle(button, 36);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        button->show();
+        visionControlsGrid_->addWidget(button, i / 2, i % 2);
+    }
+    // Hidden compatibility action keeps its original signal path and parentage.
+    stopInferenceButton_->setParent(visionControlsGroup_);
+    applyGreenRegionButtonStyle(stopInferenceButton_, 36);
+    visionControlsGrid_->addWidget(stopInferenceButton_, 2, 0, 1, 2);
+    stopRecordingButton_->setParent(visionControlsGroup_);
+    applyGreenRegionButtonStyle(stopRecordingButton_, 36);
+    visionControlsGrid_->addWidget(stopRecordingButton_, 0, 0);
+    stopRecordingButton_->setVisible(false);
+
+    // --- Sub-region B: Auto Follow (new) ---
+    autoFollowGroup_ = new QGroupBox(QStringLiteral("Auto Follow"), host);
+    autoFollowGroup_->setObjectName(QStringLiteral("autoFollowCard"));
+    applySubpanelStyle(autoFollowGroup_);
+    auto *autoOuter = new QVBoxLayout(autoFollowGroup_);
+    autoOuter->setContentsMargins(6, 10, 6, 4);
+    autoOuter->setSpacing(4);
+    autoFollowGrid_ = new QGridLayout;
+    autoFollowGrid_->setObjectName(QStringLiteral("autoFollowGrid"));
+    autoFollowGrid_->setContentsMargins(0, 0, 0, 0);
+    autoFollowGrid_->setSpacing(3);
+    autoOuter->addLayout(autoFollowGrid_);
+
+    autoFollowStatePill_ = new QLabel(QStringLiteral("DRY RUN"), autoFollowGroup_);
+    autoFollowStatePill_->setObjectName(QStringLiteral("autoFollowStatePill"));
+    autoFollowStatePill_->setAlignment(Qt::AlignCenter);
+    autoFollowStatePill_->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+    autoFollowStatePill_->setMinimumWidth(96);
+    autoFollowStatePill_->setToolTip(
+        QStringLiteral("Auto follow state: DRY RUN / NOT READY / READY / ARMED / STOPPING / FAULT"));
+
+    visualDispatchEnabled_ = new QCheckBox(QStringLiteral("Visual dispatch"), autoFollowGroup_);
+    visualDispatchEnabled_->setObjectName(QStringLiteral("visualDispatchEnabled"));
+    visualDispatchEnabled_->setToolTip(
+        QStringLiteral("Session-only: never persisted and never auto-arms."));
+
+    // Axis selection stays hidden in this preview and is wired by the
+    // follow-up PR. The objectName is reserved here.
+    autoFollowAxisSelector_ = new QWidget(autoFollowGroup_);
+    autoFollowAxisSelector_->setObjectName(QStringLiteral("autoFollowAxisSelector"));
+    auto *axisLayout = new QHBoxLayout(autoFollowAxisSelector_);
+    axisLayout->setContentsMargins(0, 0, 0, 0);
+    axisLayout->setSpacing(0);
+    for (const QString &axis : {QStringLiteral("Yaw"), QStringLiteral("Pitch"),
+                                QStringLiteral("Both")}) {
+        auto *axisButton = new QPushButton(axis, autoFollowAxisSelector_);
+        axisButton->setCheckable(true);
+        axisButton->setMinimumHeight(28);
+        axisButton->setProperty("consoleActionRole", "secondary");
+        axisLayout->addWidget(axisButton);
+    }
+    autoFollowAxisSelector_->setVisible(false);
+
+    autoFollowChecklist_ = new QLabel(autoFollowGroup_);
+    autoFollowChecklist_->setObjectName(QStringLiteral("autoFollowChecklist"));
+    autoFollowChecklist_->setWordWrap(true);
+    autoFollowChecklist_->setTextFormat(Qt::PlainText);
+    autoFollowChecklist_->setStyleSheet(QStringLiteral("font-size: 11px; color: #566B79;"));
+
+    visualArmButton_ = new QPushButton(QStringLiteral("Arm"), autoFollowGroup_);
+    visualArmButton_->setObjectName(QStringLiteral("visualArmButton"));
+    applyGreenRegionButtonStyle(visualArmButton_, 36);
+    visualArmButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+    autoFollowAlert_ = new QLabel(autoFollowGroup_);
+    autoFollowAlert_->setObjectName(QStringLiteral("autoFollowAlert"));
+    autoFollowAlert_->setWordWrap(true);
+    autoFollowAlert_->setTextFormat(Qt::PlainText);
+    autoFollowAlert_->setStyleSheet(QStringLiteral(
+        "background: #C53F3F; color: #FFFFFF; border-radius: 4px; "
+        "padding: 4px 6px; font-weight: 700; font-size: 11px;"));
+    autoFollowAlert_->setVisible(false);
+
+    autoFollowDetail_ = new QLabel(autoFollowGroup_);
+    autoFollowDetail_->setObjectName(QStringLiteral("autoFollowDetail"));
+    autoFollowDetail_->setTextFormat(Qt::PlainText);
+    autoFollowDetail_->setStyleSheet(QStringLiteral(
+        "font-family: \"Consolas\", \"Courier New\", monospace; "
+        "font-size: 10px; color: #566B79;"));
+    autoFollowDetail_->setVisible(false);
+
+    autoFollowFooter_ = new QLabel(
+        QStringLiteral("Turn %1 (config) · manual input disarms")
+            .arg(vision::VisualPolicyConfig{}.turn_sign),
+        autoFollowGroup_);
+    autoFollowFooter_->setObjectName(QStringLiteral("autoFollowFooter"));
+    autoFollowFooter_->setStyleSheet(QStringLiteral("font-size: 10px; color: #7B8F9D;"));
+
+    // Dispatch status keeps its frozen objectName: behaviour tests read it.
+    visualDispatchStatus_ = new QLabel(autoFollowGroup_);
+    visualDispatchStatus_->setObjectName(QStringLiteral("visualDispatchStatus"));
+    visualDispatchStatus_->setWordWrap(true);
+    visualDispatchStatus_->setTextFormat(Qt::PlainText);
+    visualDispatchStatus_->setStyleSheet(QStringLiteral("font-size: 10px; color: #566B79;"));
+    visualDispatchStatus_->setVisible(false);
+
+    connect(visualArmButton_, &QPushButton::clicked, this, [this] {
+        if (!visualDispatch_) return;
+        if (visualDispatch_->armed()) visualDispatch_->disarm();
+        else visualDispatch_->arm();
+    });
+
+    // Order inside Auto Follow. The state pill and the dispatch switch share the
+    // first row to keep the block inside its height budget at 1100x720.
+    autoFollowGrid_->setColumnStretch(0, 0);
+    autoFollowGrid_->setColumnStretch(1, 1);
+    autoFollowGrid_->addWidget(autoFollowStatePill_, 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    autoFollowGrid_->addWidget(visualDispatchEnabled_, 0, 1, Qt::AlignRight | Qt::AlignVCenter);
+    int autoRow = 1;
+    const auto addAuto = [this, &autoRow](QWidget *widget) {
+        if (widget == nullptr) return;
+        autoFollowGrid_->addWidget(widget, autoRow, 0, 1, 2);
+        ++autoRow;
+    };
+    addAuto(autoFollowAxisSelector_);
+    addAuto(autoFollowChecklist_);
+    addAuto(visualArmButton_);
+    addAuto(autoFollowAlert_);
+    addAuto(autoFollowDetail_);
+    addAuto(autoFollowFooter_);
+
+    // Pinned rows: never dropped, never clipped. The axis row is pre-wired for
+    // the follow-up PR and is hidden in this preview, so it costs nothing.
+    autoFollowPinned_ = {autoFollowStatePill_, visualDispatchEnabled_,
+                         visualArmButton_, autoFollowAlert_};
+
+    // Height-driven condensation: the pinned rows never shrink, optional rows
+    // are dropped in the documented order when the panel is short.
+    autoFollowGroup_->installEventFilter(this);
+
+    summaryLayout->addWidget(host);
+    // Auto Follow above Vision Controls, both full width.
+    greenRegionGrid_->addWidget(autoFollowGroup_, 0, 0);
+    greenRegionGrid_->addWidget(visionControlsGroup_, 1, 0);
+    greenRegionGrid_->setColumnStretch(0, 1);
 }
 
 QWidget *MainWindow::createLeakCard()
@@ -1203,6 +1369,28 @@ QWidget *MainWindow::createDepthCard()
     addDashboardCardHeader(
         layout, box, QStringLiteral("Depth Sensor"));
 
+    // Top row: Depth / Temp / Age side by side.
+    auto *metrics = new QHBoxLayout;
+    metrics->setContentsMargins(1, 0, 0, 0);
+    metrics->setSpacing(10);
+    depthValue_ = new QLabel(QStringLiteral("--"), box);
+    depthTemperature_ = new QLabel(QStringLiteral("--"), box);
+    depthAge_ = new QLabel(QStringLiteral("--"), box);
+    const QStringList metricNames{QStringLiteral("Depth"), QStringLiteral("Temp"), QStringLiteral("Age")};
+    const QList<QLabel *> metricValues{depthValue_, depthTemperature_, depthAge_};
+    for (int i = 0; i < metricNames.size(); ++i) {
+        auto *name = new QLabel(metricNames.at(i), box);
+        name->setStyleSheet(QStringLiteral("color: #7B8F9D; font-size: 11px; font-weight: 500;"));
+        metricValues.at(i)->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
+        auto *pair = new QHBoxLayout;
+        pair->setSpacing(4);
+        pair->addWidget(name);
+        pair->addWidget(metricValues.at(i));
+        metrics->addLayout(pair);
+    }
+    metrics->addStretch();
+    layout->addLayout(metrics);
+
     auto *statusRow = new QHBoxLayout;
     statusRow->setContentsMargins(1, 0, 0, 0);
     statusRow->setSpacing(7);
@@ -1220,25 +1408,33 @@ QWidget *MainWindow::createDepthCard()
     statusRow->addStretch();
     layout->addLayout(statusRow);
 
-    auto *metrics = new QGridLayout;
-    metrics->setHorizontalSpacing(10);
-    metrics->setVerticalSpacing(2);
-    depthValue_ = new QLabel(QStringLiteral("--"), box);
-    depthTemperature_ = new QLabel(QStringLiteral("--"), box);
-    depthAge_ = new QLabel(QStringLiteral("--"), box);
-    for (QLabel *label : {depthValue_, depthTemperature_, depthAge_}) {
-        label->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
-    }
-    for (int row = 0; row < 3; ++row) {
-        auto *label = new QLabel(QStringList{QStringLiteral("Depth"), QStringLiteral("Temp"), QStringLiteral("Age")}.at(row), box);
-        label->setStyleSheet(QStringLiteral("color: #7B8F9D; font-size: 11px; font-weight: 500;"));
-        metrics->addWidget(label, row, 0);
-    }
-    metrics->addWidget(depthValue_, 0, 1);
-    metrics->addWidget(depthTemperature_, 1, 1);
-    metrics->addWidget(depthAge_, 2, 1);
-    metrics->setColumnStretch(1, 1);
-    layout->addLayout(metrics);
+    // Zeroed depth 0-0.50 m and the Zero action, always shown. The preview
+    // shows "Not zeroed" and a disabled button; the follow-up PR wires them.
+    auto *zeroRow = new QHBoxLayout;
+    zeroRow->setContentsMargins(0, 0, 0, 0);
+    zeroRow->setSpacing(6);
+    depthBar_ = new QProgressBar(box);
+    depthBar_->setObjectName(QStringLiteral("autoFollowDepthBar"));
+    depthBar_->setRange(0, 500); // millimetres below the zeroed surface
+    depthBar_->setValue(0);
+    depthBar_->setTextVisible(true);
+    depthBar_->setFormat(QStringLiteral("Not zeroed"));
+    depthBar_->setAlignment(Qt::AlignCenter);
+    depthBar_->setFixedHeight(16);
+    depthBar_->setToolTip(QStringLiteral("Zeroed depth, 0 - 0.50 m"));
+    depthBar_->setStyleSheet(QStringLiteral(
+        "QProgressBar { background: #E3E9EF; border: 1px solid #C5D4E0; border-radius: 4px; "
+        "  color: #566B79; font-size: 10px; font-weight: 600; }"
+        "QProgressBar::chunk { background: #2F80C9; border-radius: 3px; }"));
+    depthZeroButton_ = new QPushButton(QStringLiteral("Zero"), box);
+    depthZeroButton_->setObjectName(QStringLiteral("autoFollowZeroDepthButton"));
+    depthZeroButton_->setProperty("consoleActionRole", "secondary");
+    depthZeroButton_->setFixedHeight(24);
+    depthZeroButton_->setStyleSheet(QStringLiteral("QPushButton { min-height: 20px; padding: 1px 10px; }"));
+    depthZeroButton_->setEnabled(false);
+    zeroRow->addWidget(depthBar_, 1);
+    zeroRow->addWidget(depthZeroButton_);
+    layout->addLayout(zeroRow);
     layout->addStretch();
     return box;
 }
@@ -1310,7 +1506,7 @@ QWidget *MainWindow::createStatusColumn()
 
     leak->setMinimumHeight(60);
     imu->setMinimumHeight(96);
-    depth->setMinimumHeight(92);
+    depth->setMinimumHeight(112);
     protocol->setMinimumHeight(110);
     actuator->setMinimumHeight(145);
 
@@ -2143,43 +2339,9 @@ QWidget *MainWindow::createVisionDetailsTab()
     videoForm->addRow(QStringLiteral("Visual proposal"), visualProposalDetails_);
     layout->addLayout(videoForm);
 
-    auto *dispatchForm = new QFormLayout;
-    visualDispatchEnabled_ = new QCheckBox(QStringLiteral("Enable visual dispatch"), content);
-    visualDispatchEnabled_->setObjectName(QStringLiteral("visualDispatchEnabled"));
-    // Deliberately session-only; neither gate nor turn confirmation uses settings.
-    dispatchForm->addRow(QStringLiteral("Visual dispatch"), visualDispatchEnabled_);
-    auto *signRow = new QWidget(content);
-    auto *signLayout = new QHBoxLayout(signRow);
-    signLayout->setContentsMargins(0, 0, 0, 0);
-    visualTurnSign_ = new QComboBox(signRow);
-    visualTurnSign_->setObjectName(QStringLiteral("visualTurnSign"));
-    visualTurnSign_->addItem(QStringLiteral("Select turn sign (unconfirmed)"));
-    visualTurnSign_->addItem(QStringLiteral("+1"), 1);
-    visualTurnSign_->addItem(QStringLiteral("-1"), -1);
-    visualTurnSignConfirm_ = new QPushButton(QStringLiteral("Confirm turn sign"), signRow);
-    visualTurnSignConfirm_->setObjectName(QStringLiteral("visualTurnSignConfirm"));
-    signLayout->addWidget(visualTurnSign_);
-    signLayout->addWidget(visualTurnSignConfirm_);
-    dispatchForm->addRow(QStringLiteral("Turn direction"), signRow);
-    auto *armRow = new QWidget(content);
-    auto *armLayout = new QHBoxLayout(armRow);
-    armLayout->setContentsMargins(0, 0, 0, 0);
-    auto *arm = new QPushButton(QStringLiteral("Arm"), armRow);
-    arm->setObjectName(QStringLiteral("visualArmButton"));
-    auto *disarm = new QPushButton(QStringLiteral("Disarm"), armRow);
-    disarm->setObjectName(QStringLiteral("visualDisarmButton"));
-    armLayout->addWidget(arm);
-    armLayout->addWidget(disarm);
-    dispatchForm->addRow(QStringLiteral("Automatic control"), armRow);
-    visualDispatchStatus_ = new QLabel(content);
-    visualDispatchStatus_->setObjectName(QStringLiteral("visualDispatchStatus"));
-    visualDispatchStatus_->setWordWrap(true);
-    visualDispatchStatus_->setTextFormat(Qt::PlainText);
-    dispatchForm->addRow(QStringLiteral("Dispatch status"), visualDispatchStatus_);
-    layout->addLayout(dispatchForm);
-    connect(arm, &QPushButton::clicked, this, [this] { if (visualDispatch_) visualDispatch_->arm(); });
-    connect(disarm, &QPushButton::clicked, this, [this] { if (visualDispatch_) visualDispatch_->disarm(); });
-
+    // Task 06: the visual-dispatch gate, axis selection, the combined Arm/Disarm
+    // action and the dispatch status moved to the Vision Status green region.
+    // The CSV recorder below and every other control on this page are unchanged.
     auto *csvForm = new QFormLayout;
     visualCsvEnabled_ = new QCheckBox(QStringLiteral("Record visual CSV (no motion output)"), content);
     visualCsvEnabled_->setObjectName(QStringLiteral("visualCsvEnabled"));
@@ -2423,18 +2585,182 @@ void MainWindow::refreshVisualCsvUi()
     }
 }
 
-void MainWindow::refreshVisualDispatchUi()
+// Auto Follow condensation. Only optional rows are dropped, always from the
+// bottom of the priority list, so the state pill, the dispatch switch, the
+// combined Arm/Disarm action and the alert banner are never clipped.
+void MainWindow::applyAutoFollowCondensation()
+{
+    if (autoFollowGroup_ == nullptr || autoFollowPinned_.isEmpty()) return;
+    // Measure the real content bottom rather than contentsRect(): the group
+    // stylesheet reserves a title margin and padding that contentsRect omits.
+    int contentBottom = 0;
+    int visibleRows = 0;
+    for (QWidget *widget : autoFollowPinned_) {
+        // isHidden() is the explicit show/hide state; isVisible() also factors in
+        // ancestor visibility, which is wrong for a nested measurement.
+        if (widget == nullptr || widget->isHidden()) continue;
+        contentBottom = qMax(contentBottom, widget->y() + widget->height());
+        ++visibleRows;
+    }
+    if (visibleRows == 0) return;
+    // Before the first layout pass the group still reports its default geometry,
+    // so no measurement is meaningful yet. Keep everything available and let the
+    // next resize settle the arrangement.
+    if (autoFollowGroup_->height() < contentBottom + 16) return;
+    const int available = autoFollowGroup_->contentsRect().bottom()
+        - autoFollowGrid_->contentsMargins().bottom() - contentBottom;
+    if (available <= 0) {
+        autoFollowFooter_->setVisible(false);
+        autoFollowChecklist_->setVisible(false);
+        autoFollowDetail_->setVisible(false);
+        return;
+    }
+    const int spacing = autoFollowGrid_->verticalSpacing();
+    const int footerCost = autoFollowFooter_->sizeHint().height() + spacing;
+    // A hidden label reports an invalid size hint, so derive the checklist cost
+    // from its font metrics and its known line count instead.
+    const int lineHeight = autoFollowChecklist_->fontMetrics().lineSpacing() + 2;
+    const int collapsedCost = lineHeight + spacing;
+    const int expandedCost = lineHeight * 3 + spacing;
+    const int detailCost = autoFollowDetail_->fontMetrics().lineSpacing() + 4 + spacing;
+
+    // 1. Footer goes first.
+    autoFollowFooter_->setVisible(footerCost <= available);
+    const int afterFooter = available - (autoFollowFooter_->isHidden() ? 0 : footerCost);
+    // 2. The checklist collapses to a one-line summary before it is dropped.
+    const bool showChecklist = autoFollowChecklistWanted_ && collapsedCost <= afterFooter;
+    autoFollowCondensed_ = showChecklist && expandedCost > afterFooter;
+    autoFollowChecklist_->setText(
+        autoFollowBlockedText_.isEmpty()
+                && (autoFollowCondensed_ || autoFollowMissing_ == 0)
+            ? QStringLiteral("%1/3 ready").arg(3 - autoFollowMissing_)
+            : autoFollowChecklistFull_);
+    autoFollowChecklist_->setVisible(showChecklist);
+    // 3. Detail line last.
+    const int afterChecklist = afterFooter
+        - (showChecklist ? (autoFollowCondensed_ ? collapsedCost : expandedCost) : 0);
+    autoFollowDetail_->setVisible(!autoFollowDetailText_.isEmpty()
+                                  && detailCost <= afterChecklist);
+}
+
+void MainWindow::refreshAutoFollowUi()
 {
     if (!visualDispatch_) return;
-    const bool enabled = visualDispatch_->featureEnabled()
-        && controller_->backendKind() == ConsoleBackendKind::RemoteRbrp;
+    const bool remote =
+        controller_->backendKind() == ConsoleBackendKind::RemoteRbrp;
+    const bool enabled = visualDispatch_->featureEnabled() && remote;
+    const bool armed = visualDispatch_->armed();
+    const auto readiness = visualDispatch_->readiness();
+    autoFollowMissing_ = readiness.missingCount();
+
+    QString fault;
+    if (visualDispatch_->stopTimeoutAlert()) {
+        fault = QStringLiteral("STOP timeout: no ACK after retries");
+    }
+    if (!visualDispatch_->poseMismatch().isEmpty()) {
+        if (!fault.isEmpty()) fault += QStringLiteral(" | ");
+        fault += visualDispatch_->poseMismatch();
+    }
+    if (!visualOperatorStopStatus_.isEmpty()
+        && visualOperatorStopStatus_ != QStringLiteral("SENT")
+        && visualOperatorStopStatus_ != QStringLiteral("OK")) {
+        if (!fault.isEmpty()) fault += QStringLiteral(" | ");
+        fault += QStringLiteral("operator STOP: %1").arg(visualOperatorStopStatus_);
+    }
+
+    // READY must mean "Arm will succeed": the checklist alone can be complete
+    // while arm() still refuses (invalid config/time, unconfirmed sign).
+    const bool stopping = visualDispatch_->stopAwaiting();
+    const auto eligibility = visualDispatch_->eligibility();
+    const bool eligible = eligibility == vision::ArmReason::Ready;
+    const QString state = QString::fromLatin1(ui::autoFollowStateText(
+        ui::classifyAutoFollowState({!fault.isEmpty(), stopping, armed, enabled,
+                                     readiness.allReady(), eligible})));
+    const bool ready = state == QStringLiteral("READY");
+    autoFollowBlockedText_ = enabled && !armed && !stopping && readiness.allReady() && !eligible
+        ? QStringLiteral("\u2717 Arm blocked: %1")
+              .arg(QString::fromLatin1(vision::armReasonName(eligibility)))
+        : QString();
+    autoFollowStateText_ = state;
+
+    // Colour plus wording: every state is distinguishable without colour, and
+    // the fills differ in lightness so they also differ in greyscale.
+    const QString pillStyle = state == QStringLiteral("FAULT")
+        ? QStringLiteral("background: #A32B2B; color: #FFFFFF;")
+        : state == QStringLiteral("ARMED")
+            ? QStringLiteral("background: #1F6B3A; color: #FFFFFF;")
+            : state == QStringLiteral("STOPPING")
+                ? QStringLiteral("background: #F0A92E; color: #3A2400;")
+            : state == QStringLiteral("READY")
+                ? QStringLiteral("background: #D8EDE0; color: #14532D;")
+                : state == QStringLiteral("NOT READY")
+                    ? QStringLiteral("background: #FBE3B8; color: #7A4A06;")
+                    : QStringLiteral("background: #E3E9EF; color: #4A5C6B;");
+    autoFollowStatePill_->setText(state);
+    autoFollowStatePill_->setStyleSheet(pillStyle + QStringLiteral(
+        "border-radius: 4px; padding: 3px 8px; font-size: 12px; font-weight: 800;"
+        " letter-spacing: 1px;"));
+
+    const auto tick = [](bool ok) {
+        return ok ? QStringLiteral("\u2713") : QStringLiteral("\u2717");
+    };
+    autoFollowChecklistFull_ = !autoFollowBlockedText_.isEmpty()
+        ? autoFollowBlockedText_
+        : QStringLiteral("%1 Link + control\n%2 Servos enabled + pose\n%3 Tracking target")
+              .arg(tick(readiness.linkAndControl))
+              .arg(tick(readiness.servosReady))
+              .arg(tick(readiness.tracking));
+    autoFollowChecklist_->setToolTip(autoFollowChecklistFull_);
+    autoFollowChecklistWanted_ = enabled && !armed && !stopping
+        && (autoFollowMissing_ > 0 || !autoFollowBlockedText_.isEmpty());
+    autoFollowChecklist_->setVisible(autoFollowChecklistWanted_);
+    autoFollowChecklist_->setText(autoFollowChecklistFull_);
+
+    autoFollowAlert_->setText(fault);
+    autoFollowAlert_->setVisible(!fault.isEmpty());
+
+    const QString mode = visualDispatch_->currentMode()
+        ? QString::fromLatin1(vision::proposedCommandName(*visualDispatch_->currentMode()))
+        : QStringLiteral("--");
+    QStringList detailParts;
+    detailParts << QStringLiteral("ACK: %1").arg(mode);
+    detailParts << QStringLiteral("operator STOP: %1")
+        .arg(visualOperatorStopStatus_.isEmpty() ? QStringLiteral("--")
+                                                 : visualOperatorStopStatus_);
+    autoFollowDetailText_ = armed || stopping ? detailParts.join(QStringLiteral(" \u00b7 "))
+                                  : QString();
+    autoFollowDetail_->setText(autoFollowDetailText_);
+    autoFollowDetail_->setToolTip(detailParts.join(QStringLiteral(" \u00b7 ")));
+
+    const bool actionable = armed || (ready && fault.isEmpty());
+    visualArmButton_->setEnabled(actionable);
+    if (armed) {
+        visualArmButton_->setText(QStringLiteral("Disarm"));
+    } else if (stopping) {
+        visualArmButton_->setText(QStringLiteral("Arm \u00b7 stopping"));
+    } else if (autoFollowMissing_ > 0) {
+        visualArmButton_->setText(QStringLiteral("Arm \u00b7 %1 not ready")
+            .arg(autoFollowMissing_));
+    } else if (!autoFollowBlockedText_.isEmpty()) {
+        visualArmButton_->setText(QStringLiteral("Arm \u00b7 blocked"));
+    } else {
+        visualArmButton_->setText(QStringLiteral("Arm"));
+    }
+    const QString armRole = armed ? QStringLiteral("danger")
+                                  : QStringLiteral("primary");
+    if (visualArmButton_->property("consoleActionRole").toString() != armRole) {
+        visualArmButton_->setProperty("consoleActionRole", armRole);
+        visualArmButton_->style()->unpolish(visualArmButton_);
+        visualArmButton_->style()->polish(visualArmButton_);
+        visualArmButton_->update();
+    }
+
+    // Frozen diagnostic text: behaviour tests read this label verbatim.
     QString status = QStringLiteral("%1 | %2 | %3\nACK-confirmed: %4\nturn sign: %5")
         .arg(enabled ? QStringLiteral("DISPATCH ON") : QStringLiteral("DRY_RUN"))
-        .arg(visualDispatch_->armed() ? QStringLiteral("ARMED") : QStringLiteral("DISARMED"))
+        .arg(armed ? QStringLiteral("ARMED") : QStringLiteral("DISARMED"))
         .arg(QString::fromLatin1(vision::armReasonName(visualDispatch_->armReason())))
-        .arg(visualDispatch_->currentMode()
-             ? QString::fromLatin1(vision::proposedCommandName(*visualDispatch_->currentMode()))
-             : QStringLiteral("--"))
+        .arg(mode)
         .arg(visualDispatch_->confirmedTurnSign()
              ? QStringLiteral("%1 confirmed").arg(*visualDispatch_->confirmedTurnSign())
              : QStringLiteral("UNCONFIRMED"));
@@ -2444,11 +2770,22 @@ void MainWindow::refreshVisualDispatchUi()
     if (!visualDispatchRejection_.isEmpty()) status += '\n' + visualDispatchRejection_;
     if (!visualDispatch_->poseMismatch().isEmpty()) status += '\n' + visualDispatch_->poseMismatch();
     visualDispatchStatus_->setText(status);
-    visualTurnSignConfirm_->setEnabled(visualTurnSign_->currentData().isValid());
+    visualDispatchStatus_->setVisible(false);
+
+    applyAutoFollowCondensation();
+}
+
+void MainWindow::refreshVisualDispatchUi()
+{
+    if (!visualDispatch_) return;
+    const bool enabled = visualDispatch_->featureEnabled()
+        && controller_->backendKind() == ConsoleBackendKind::RemoteRbrp;
+    refreshAutoFollowUi();
     visualCsvEnabled_->setText(enabled ? QStringLiteral("Record visual CSV (diagnostics + dispatch)")
                                       : QStringLiteral("Record visual CSV (no motion output)"));
     if (videoView_) {
-        videoView_->setVisualDispatchPresentation(enabled, visualDispatch_->armed(), status);
+        videoView_->setVisualDispatchPresentation(
+            enabled, visualDispatch_->armed(), visualDispatchStatus_->text());
         if (visualProposalDetails_) visualProposalDetails_->setText(videoView_->visualDiagnosticText());
     }
 }
@@ -2492,18 +2829,11 @@ void MainWindow::bindVisionUi()
             this, &MainWindow::refreshVisualDispatchUi);
     connect(visualDispatchEnabled_, &QCheckBox::toggled,
             visualDispatch_, &vision::VisualDispatchSession::setFeatureEnabled);
-    connect(visualTurnSign_, qOverload<int>(&QComboBox::currentIndexChanged), this,
-            [this](int index) {
-        const auto value = visualTurnSign_->itemData(index);
-        visualDispatch_->selectTurnSign(value.isValid()
-            ? std::optional<int>(value.toInt()) : std::nullopt);
-    });
-    connect(visualTurnSignConfirm_, &QPushButton::clicked,
-            visualDispatch_, &vision::VisualDispatchSession::confirmTurnSign);
     refreshVisualDispatchUi();
     connect(visualSession_, &vision::VisualDiagnosticSession::diagnosticChanged, this,
             [this](const vision::VisualDiagnosticSnapshot &snapshot) {
         visualCsvLogger_->record(snapshot);
+        refreshAutoFollowUi();
         if (videoView_ == nullptr) { return; }
         const auto gate = visualDisplayContext().gate;
         if (latestDetectionFrame_ && latestDetectionFrame_->frameId == snapshot.frameId
@@ -3198,6 +3528,98 @@ void MainWindow::updateVideoSurfaceGeometry()
     videoView_->setFixedSize(targetWidth, targetHeight);
 }
 
+int MainWindow::operatorToolsRequiredHeight() const
+{
+    if (operatorToolsTabs_ == nullptr || operatorToolsPane_ == nullptr) return 0;
+    // Preferred content of the tallest page. Scroll-area pages use the size of
+    // the widget they scroll so nothing needs a scrollbar; the Vision Details
+    // page holds flexible log views, so its (small) minimum is what counts.
+    int content = 0;
+    for (int index = 0; index < operatorToolsTabs_->count(); ++index) {
+        QWidget *page = operatorToolsTabs_->widget(index);
+        if (auto *scroll = qobject_cast<QScrollArea *>(page)) {
+            content = qMax(content, scroll->widget()->sizeHint().height());
+        } else {
+            content = qMax(content, page->minimumSizeHint().height());
+        }
+    }
+    const int tabChrome = operatorToolsTabs_->tabBar()->sizeHint().height() + 8;
+    const auto *bar = operatorToolsPane_->findChild<QWidget *>(QStringLiteral("operatorActionBar"));
+    const int actionBar = bar != nullptr ? bar->sizeHint().height() : 0;
+    const int spacing = operatorToolsPane_->layout() != nullptr
+        ? operatorToolsPane_->layout()->spacing() : 0;
+    return actionBar + spacing + tabChrome + content;
+}
+
+int MainWindow::fullyExpandedWindowHeight() const
+{
+    // Size hints depend on the stylesheet. Hidden widgets can still report
+    // slightly smaller hints than they will have once shown, so main() settles
+    // the startup geometry again after one invisible show (settleStartupGeometry).
+    const_cast<MainWindow *>(this)->ensurePolished();
+    for (QWidget *child : findChildren<QWidget *>()) child->ensurePolished();
+
+    if (workspaceSplitter_ == nullptr || centralWidget() == nullptr
+        || centralWidget()->layout() == nullptr || connectionBar_ == nullptr) {
+        return 720;
+    }
+    const auto *rootLayout = centralWidget()->layout();
+    const QMargins margins = rootLayout->contentsMargins();
+    const int dashboard = workspaceSplitter_->widget(0)->minimumSizeHint().height();
+    const int total = margins.top() + margins.bottom() + connectionBar_->sizeHint().height()
+        + rootLayout->spacing() + dashboard + workspaceSplitter_->handleWidth()
+        + operatorToolsRequiredHeight();
+    return qMax(720, total);
+}
+
+// The tools pane keeps its content height; the window minimum follows so the
+// dashboard (video + status columns) is what shrinks when space is short.
+void MainWindow::updateWorkspaceMinimums()
+{
+    if (operatorToolsPane_ == nullptr) return;
+    operatorToolsPane_->setMinimumHeight(operatorToolsRequiredHeight());
+    const int needed = fullyExpandedWindowHeight();
+    if (minimumHeight() != needed) setMinimumSize(1100, needed);
+}
+
+// Default size = everything fully expanded; if the screen cannot hold that,
+// open maximized instead of clipping the operator tools.
+void MainWindow::applyStartupGeometry()
+{
+    const int needed = fullyExpandedWindowHeight();
+    const QScreen *startupScreen = QGuiApplication::primaryScreen();
+    if (startupScreen == nullptr) {
+        resize(1420, needed);
+        return;
+    }
+    const QRect available = startupScreen->availableGeometry();
+    const int initialWidth = qMax(1100, qMin(1420, available.width() - 32));
+    constexpr int kFrameAllowance = 40; // title bar and borders
+    if (needed + kFrameAllowance > available.height()) {
+        resize(initialWidth, needed);
+        startupMaximize_ = true;
+        return;
+    }
+    resize(initialWidth, needed);
+    const QSize frameSize = frameGeometry().size();
+    move(available.center() - QPoint(frameSize.width() / 2, frameSize.height() / 2));
+}
+
+// Layouts are active by the time the first show event arrives, so this is the
+// first moment the size hints are final; raise the minimum then.
+void MainWindow::showEvent(QShowEvent *event)
+{
+    QMainWindow::showEvent(event);
+    updateWorkspaceMinimums();
+}
+
+void MainWindow::settleStartupGeometry()
+{
+    updateWorkspaceMinimums();
+    applyStartupGeometry();
+    initializeWorkspaceSizes();
+}
+
 void MainWindow::initializeWorkspaceSizes()
 {
     if (workspaceSplitter_ == nullptr) {
@@ -3213,8 +3635,7 @@ void MainWindow::initializeWorkspaceSizes()
         }
         return;
     }
-    const int availableHeight = qMax(0, height() - 100);
-    const int toolsHeight = availableHeight > 760 ? 260 : 240;
+    const int toolsHeight = operatorToolsRequiredHeight();
     const int total = qMax(400, workspaceSplitter_->height());
     workspaceSplitter_->setSizes({qMax(1, total - toolsHeight), toolsHeight});
     workspaceSplitter_->setStretchFactor(0, 1);
@@ -4068,6 +4489,9 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 updateVideoSurfaceGeometry();
             });
         }
+    }
+    if (watched == autoFollowGroup_ && event->type() == QEvent::Resize) {
+        applyAutoFollowCondensation();
     }
     if ((watched == actuatorCardsHost_ || watched == actuatorScroll_
          || (actuatorScroll_ != nullptr && watched == actuatorScroll_->viewport()))
