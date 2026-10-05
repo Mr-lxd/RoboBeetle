@@ -970,6 +970,73 @@ void testVisualWireAndPoseInference()
     expect(controller.inferredPoseKnownMask()==0&&!controller.isServoEnabled(rb::ServoId::FrontRight),"reconstruction never restores previous pose/enabled");gateway.disconnectPeer();
 }
 
+// Task 06 PR-C: automatic dispatch may use Ascend/Descend, which need the front axis.
+void testVisualAscendDescendAndFrontAxis()
+{
+    FakeGatewayPeer gateway;
+    rb::RemoteRobotController controller;
+    rb::ConsoleConnectionConfiguration config;
+    config.endpoint = QStringLiteral("127.0.0.1"); config.tcpPort = gateway.port();
+    controller.connectController(config);
+    expect(gateway.accept(), "ascend loopback connects");
+    completeHello(gateway);
+    expect(pumpUntil([&] { return controller.canAcquireControl(); }), "ascend hello");
+    expect(controller.acquireControl(), "ascend acquire"); completeAcquire(gateway);
+    expect(pumpUntil([&] { return controller.isControlActive(); }), "ascend active");
+    quint16 sequence = 200;
+    const auto enable = [&](rb::ServoId servo) {
+        expect(controller.enableServo(servo), "enable submitted");
+        const auto frame = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        if (!frame) return;
+        sendSubmitted(gateway, frame->request_id, sequence);
+        sendOutcome(gateway, frame->request_id, RobotCommandKind::EnableServos, sequence,
+                    GatewayCommandOutcome::Accepted);
+        ++sequence;
+        expect(pumpUntil([&] { return controller.isServoEnabled(servo); }), "enable accepted");
+    };
+    for (const auto servo : {rb::ServoId::FrontRight, rb::ServoId::FrontLeft,
+                             rb::ServoId::RearRight, rb::ServoId::RearLeft})
+        enable(servo);
+    expect(controller.isMotionReady(rb::MotionMode::Forward), "four paddles are enough for Forward");
+    for (const auto mode : {rb::MotionMode::Ascend, rb::MotionMode::Descend}) {
+        expect(!controller.isMotionReady(mode), "Ascend/Descend need the front axis too");
+        expect(!controller.submitVisualMotion(mode), "visual Ascend/Descend is refused without the front axis");
+    }
+    expect(!gateway.nextFrame(RbrpMessageKind::CommandRequest, 50), "refused submissions never reach the wire");
+
+    enable(rb::ServoId::FrontAxis);
+    for (const auto mode : {rb::MotionMode::Ascend, rb::MotionMode::Descend}) {
+        expect(controller.isMotionReady(mode), "with the front axis enabled Ascend/Descend are ready");
+        const auto id = controller.submitVisualMotion(mode);
+        expect(id.has_value(), "visual Ascend/Descend is accepted");
+        const auto frame = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        expect(frame && frame->request_id == id.value_or(0)
+                   && frame->payload == Bytes({static_cast<Byte>(RobotCommandKind::StartMotion),
+                                               static_cast<Byte>(mode)}),
+               "Ascend/Descend go out as StartMotion with the mode byte");
+        if (frame && id) {
+            sendSubmitted(gateway, frame->request_id, sequence);
+            sendOutcome(gateway, frame->request_id, RobotCommandKind::StartMotion, sequence,
+                        GatewayCommandOutcome::Accepted);
+            ++sequence;
+            expect(pumpUntil([&] { return controller.motionMode() == mode; }), "mode confirmed");
+        }
+        // Back to Stop so the next mode starts from a settled state.
+        const auto stop = controller.submitVisualMotion(rb::MotionMode::Stop);
+        const auto stopFrame = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+        if (stop && stopFrame) {
+            sendSubmitted(gateway, stopFrame->request_id, sequence);
+            sendOutcome(gateway, stopFrame->request_id, RobotCommandKind::StopMotion, sequence,
+                        GatewayCommandOutcome::Accepted);
+            ++sequence;
+            expect(pumpUntil([&] { return !controller.isMotionActive(); }), "stopped");
+        }
+    }
+    expect(!controller.submitVisualMotion(rb::MotionMode::Backward),
+           "other modes stay refused for automatic dispatch");
+    gateway.disconnectPeer();
+}
+
 } // namespace
 
 
@@ -1248,6 +1315,7 @@ int main(int argc, char **argv)
     testVisualTerminalMapping();
     testActiveControllerDestruction();
     testVisualWireAndPoseInference();
+    testVisualAscendDescendAndFrontAxis();
     testRemoteControllerAndUi();
     testUserReleaseDoesNotReportAuthorityLoss();
     testSafetySupersessionIgnoresLateOutcomes();

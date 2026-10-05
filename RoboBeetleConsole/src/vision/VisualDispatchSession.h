@@ -3,6 +3,7 @@
 #include "vision/VisualDiagnosticSession.h"
 #include "vision/VisualDispatchStateMachine.h"
 #include <QHash>
+#include <deque>
 
 namespace rb::vision {
 // Independent operator-facing readiness conditions. Every field is evaluated on
@@ -11,11 +12,26 @@ struct AutoFollowReadiness {
     bool linkAndControl{false}; // Remote RBRP link up and control authority held.
     bool servosReady{false};    // Required servos enabled and their pose known.
     bool tracking{false};       // Diagnostic snapshot reports TRACKING.
+    // Pitch/Both only: the front axis servo is enabled with a known pose, and a
+    // fresh zeroed depth sample is available. Always true in Yaw mode.
+    bool pitchActive{false};              // Pitch/Both: the two items below count
+    bool frontAxisReady{true};
+    bool depthReady{true};
+    std::optional<QString> depthNote;     // why depth is not ready (e.g. "Depth not zeroed")
     [[nodiscard]] int missingCount() const
     {
-        return (linkAndControl ? 0 : 1) + (servosReady ? 0 : 1) + (tracking ? 0 : 1);
+        return (linkAndControl ? 0 : 1) + (servosReady ? 0 : 1) + (tracking ? 0 : 1)
+            + (pitchActive && !frontAxisReady ? 1 : 0) + (pitchActive && !depthReady ? 1 : 0);
     }
+    [[nodiscard]] int totalCount() const { return pitchActive ? 5 : 3; }
     [[nodiscard]] bool allReady() const { return missingCount() == 0; }
+};
+// Depth columns for the CSV (raw and zeroed depth, sample age, envelope).
+struct VisualDepthCsvInfo {
+    std::optional<double> rawM;
+    std::optional<double> calibratedM;
+    std::optional<qint64> ageMs;
+    QString envelope{QStringLiteral("UNAVAILABLE")};
 };
 struct VisualDispatchRecord {
     qint64 nowMs{0};
@@ -42,6 +58,12 @@ public:
     // session deterministically with timerTick(). Never changes policy state.
     void setTimerEnabled(bool enabled) { enabled ? timer_.start() : timer_.stop(); }
     [[nodiscard]] bool timerEnabled() const { return timer_.isActive(); }
+    // Switching axis while armed (or while an automatic STOP is unconfirmed)
+    // sends one operator STOP and disarms, exactly like disarm().
+    void setAxisMode(VisualAxisMode axis);
+    [[nodiscard]] VisualAxisMode axisMode() const noexcept { return axis_; }
+    [[nodiscard]] DepthEnvelopeState depthEnvelope() const noexcept { return machine_.depthEnvelope(); }
+    [[nodiscard]] VisualDepthCsvInfo depthCsvInfo() const;
     bool featureEnabled() const { return enabled_; }
     bool armed() const { return machine_.armed(); }
     // Disarmed, but an automatic or operator STOP is still unconfirmed.
@@ -67,8 +89,15 @@ private:
     void terminal(quint32 id, CommandTerminalResult result, quint8 raw, qint64 rtt);
     void clearAssociations(bool includeOperator = false);
     void diagnosticChanged(const VisualDiagnosticSnapshot &snapshot);
+    void depthSampleChanged();
+    void deliverDepth(const std::optional<DepthControlSample> &depth);
+    void drainDepthQueue();
     VisualDispatchInput input(const VisualDiagnosticSnapshot *snapshot = nullptr) const;
     IConsoleController *controller_;
+    VisualDiagnosticSession *diagnostic_{nullptr};
+    VisualAxisMode axis_{VisualAxisMode::Yaw};
+    std::deque<std::optional<DepthControlSample>> depthQueue_;
+    bool depthDrainScheduled_{false};
     SnapshotProvider snapshot_;
     NowMs now_;
     QElapsedTimer clock_;

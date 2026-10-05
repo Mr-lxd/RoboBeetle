@@ -72,7 +72,7 @@ void configProvenance() {
     qint64 now=0;
     VisualDiagnosticSession a({},[&]{return now;}), b({},[&]{return now;});
     const auto hash=a.snapshot().policyHash;
-    check(a.snapshot().policyVersion==QStringLiteral("visual-command-proposal-v2"),
+    check(a.snapshot().policyVersion==QStringLiteral("visual-command-proposal-v3"),
           "snapshot identifies the policy version");
     check(hash.size()==64 && hash==b.snapshot().policyHash,
           "same actual configuration has a deterministic SHA-256");

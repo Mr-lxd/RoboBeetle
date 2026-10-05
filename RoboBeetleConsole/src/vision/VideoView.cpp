@@ -127,6 +127,11 @@ QString VideoView::visualDiagnosticText() const
                      .arg(c.yaw_cmd, 0, 'f', 3)
               << (dispatchEnabled_ ? QStringLiteral("PROPOSED: %1") : QStringLiteral("PROPOSED (not sent): %1"))
                      .arg(QString::fromLatin1(proposedCommandName(c.proposed)));
+        if (s.axis != VisualAxisMode::Yaw)
+            lines << QStringLiteral("axis=%1 ey_f=%2 pitch_sign=%3")
+                         .arg(s.axis == VisualAxisMode::Pitch ? QStringLiteral("PITCH") : QStringLiteral("BOTH"))
+                         .arg(c.ey_f ? QString::number(*c.ey_f, 'f', 3) : QStringLiteral("--"))
+                         .arg(s.pitchSign);
         if (!dispatchEnabled_)
             lines << QStringLiteral("turn_sign=%1 (实机符号未验证)").arg(s.turnSign);
         if (s.awaitingVideo) { lines << QStringLiteral("waiting for video"); }

@@ -837,4 +837,270 @@ void testAutoFollowEligibilityAndStopAwaiting()
     expect(!session.stopAwaiting(), "an accepted STOP ends the awaiting state");
 }
 
-int main(int argc,char **argv){QApplication app(argc,argv);testAutoFollowEligibilityAndStopAwaiting();testAutoFollowReadinessEachItemIndependently();testReentrantSafetySnapshotIsRetained();testAuthorityLossInSameEvent();testPoseMismatchRequiresCompleteMask();testAutomaticStopCoversOperatorStop();testDeterministicRuntimeCases();testTimerAndRealDiagnosticGrace();testWireFailureSafetyStop();testAcceptedStopRetiresRetryEpisode();testSessionRuntime();return failures?1:0;}
+// ---- Pitch axis / depth at the session level (Task 06 PR-C) ----------------------
+rb::DepthControlSample sampleAt(double metres, bool fresh = true)
+{
+    rb::DepthControlSample sample;
+    sample.rawDepthM = metres + 0.115;
+    sample.calibratedDepthM = metres;
+    sample.ageMs = fresh ? 20 : 5000;
+    sample.fresh = fresh;
+    return sample;
+}
+
+struct PitchSession {
+    rb::test::VisualControllerFixture controller;
+    rb::vision::VisualDiagnosticSnapshot snap;
+    qint64 now{100};
+    std::unique_ptr<rb::vision::VisualDispatchSession> session;
+    explicit PitchSession(rb::vision::VisualAxisMode axis = rb::vision::VisualAxisMode::Pitch)
+    {
+        using namespace rb::vision;
+        snap.state = VisualState::Tracking;
+        snap.command.proposed = ProposedCommand::Forward;
+        snap.command.ex_f = 0.0;
+        controller.enabled = 0x1f; controller.known = 0x1f;
+        controller.depthSample = sampleAt(0.2);
+        session = std::make_unique<VisualDispatchSession>(
+            &controller, [this] { return std::optional{snap}; }, [this] { return now; });
+        session->setFeatureEnabled(true);
+       
+        session->setAxisMode(axis);
+    }
+    // Arm, send `command` and have it confirmed.
+    void armAndConfirm(rb::vision::ProposedCommand command)
+    {
+        using namespace rb::vision;
+        snap.command.proposed = command;
+        expect(session->arm() == ArmReason::Ready, "pitch session arms");
+        session->timerTick();
+        expect(!controller.sends.empty(), "pitch session sent a command");
+        controller.ack(controller.sends.back().first, rb::CommandTerminalResult::Ok);
+    }
+};
+
+void testAxisSwitchStopsAndDisarms()
+{
+    using namespace rb::vision;
+    {
+        PitchSession s(VisualAxisMode::Yaw);
+        expect(s.session->axisMode() == VisualAxisMode::Yaw, "default axis is Yaw");
+        s.session->setAxisMode(VisualAxisMode::Pitch);
+        expect(s.controller.sends.empty(), "switching axis while disarmed sends nothing");
+        expect(s.session->axisMode() == VisualAxisMode::Pitch, "axis switched");
+    }
+    {
+        PitchSession s(VisualAxisMode::Yaw);
+        s.snap.command.proposed = ProposedCommand::Forward;
+        s.controller.enabled = 0x1b; s.controller.known = 0x1b;
+        expect(s.session->arm() == ArmReason::Ready && s.session->armed(), "yaw session arms");
+        s.session->setAxisMode(VisualAxisMode::Both);
+        expect(!s.session->armed() && s.controller.sends.size() == 1
+                   && s.controller.sends.back().second == rb::MotionMode::Stop,
+               "switching axis while armed sends exactly one operator STOP and disarms");
+        s.session->setAxisMode(VisualAxisMode::Both);
+        expect(s.controller.sends.size() == 1, "re-selecting the same axis does nothing");
+        s.controller.enabled = 0x1f; s.controller.known = 0x1f;
+        expect(s.session->arm() == ArmReason::Ready, "re-arming after the switch is explicit and works");
+    }
+    {   // Unconfirmed automatic STOP counts like an armed session.
+        PitchSession s;
+        s.armAndConfirm(ProposedCommand::Forward);
+        s.snap.state = VisualState::Stale;
+        s.session->timerTick();
+        const auto before = s.controller.sends.size();
+        expect(!s.session->armed() && s.controller.sends.back().second == rb::MotionMode::Stop,
+               "STALE sent the automatic STOP");
+        s.session->setAxisMode(VisualAxisMode::Both);
+        expect(s.controller.sends.size() == before + 1, "axis switch while a STOP is unconfirmed sends the operator STOP");
+    }
+}
+
+void testDepthSampleIsEvaluatedImmediately()
+{
+    using namespace rb::vision;
+    {   // Hard limit between two timer ticks: STOP and disarm without waiting for the timer.
+        PitchSession s;
+        s.armAndConfirm(ProposedCommand::Descend);
+        expect(s.controller.sends.back().second == rb::MotionMode::Descend, "DESCEND went out as Descend");
+        const auto before = s.controller.sends.size();
+        s.controller.publishDepth(sampleAt(0.51));
+        expect(!s.session->armed() && s.controller.sends.size() == before + 1
+                   && s.controller.sends.back().second == rb::MotionMode::Stop,
+               "a hard-limit sample stops and disarms immediately (no timer tick)");
+    }
+    {   // Soft floor: STOP but stay armed.
+        PitchSession s;
+        s.armAndConfirm(ProposedCommand::Descend);
+        const auto before = s.controller.sends.size();
+        s.controller.publishDepth(sampleAt(0.41));
+        expect(s.session->armed() && s.controller.sends.size() == before + 1
+                   && s.controller.sends.back().second == rb::MotionMode::Stop,
+               "a soft-floor sample stops the dive and keeps the session armed");
+    }
+    {   // Yaw never reacts to depth events.
+        PitchSession s(VisualAxisMode::Yaw);
+        s.controller.enabled = 0x1b; s.controller.known = 0x1b;
+        s.snap.command.proposed = ProposedCommand::Forward;
+        expect(s.session->arm() == ArmReason::Ready, "yaw arms");
+        s.session->timerTick();
+        const auto before = s.controller.sends.size();
+        s.controller.publishDepth(sampleAt(0.9));
+        expect(s.session->armed() && s.controller.sends.size() == before, "Yaw ignores depth events");
+    }
+    {   // Disarmed with nothing pending: no evaluation, no output.
+        PitchSession s;
+        s.controller.publishDepth(sampleAt(0.9));
+        expect(s.controller.sends.empty() && !s.session->armed(), "an idle session does nothing on depth events");
+    }
+    {   // Staleness has no event: the timer notices it.
+        PitchSession s;
+        s.armAndConfirm(ProposedCommand::Forward);
+        const auto before = s.controller.sends.size();
+        s.controller.depthSample = sampleAt(0.2, false);
+        s.now += 60;
+        s.session->timerTick();
+        expect(!s.session->armed() && s.controller.sends.size() == before + 1
+                   && s.controller.sends.back().second == rb::MotionMode::Stop,
+               "a stale depth sample is caught by the next timer tick");
+    }
+}
+
+void testDepthEventsKeepTheirValueWhenDeferred()
+{
+    using namespace rb::vision;
+    class Hooked : public rb::test::VisualControllerFixture {
+    public:
+        std::function<void()> duringSubmit;
+        std::optional<quint32> submitVisualMotion(rb::MotionMode mode) override {
+            const auto id = VisualControllerFixture::submitVisualMotion(mode);
+            if (duringSubmit) { auto once = std::move(duringSubmit); duringSubmit = {}; once(); }
+            return id;
+        }
+    };
+    Hooked controller;
+    VisualDiagnosticSnapshot snap;
+    snap.state = VisualState::Tracking;
+    snap.command.proposed = ProposedCommand::Forward;
+    snap.command.ex_f = 0.0;
+    qint64 now = 100;
+    controller.enabled = 0x1f; controller.known = 0x1f;
+    controller.depthSample = sampleAt(0.2);
+    VisualDispatchSession session(&controller, [&] { return std::optional{snap}; }, [&] { return now; });
+    session.setFeatureEnabled(true);
+    session.setAxisMode(VisualAxisMode::Pitch);
+    expect(session.arm() == ArmReason::Ready, "deferral fixture arms");
+    session.timerTick();
+    controller.ack(controller.sends.back().first, rb::CommandTerminalResult::Ok);
+    // A new command is submitted; while that submission is on the stack the depth
+    // reading crosses the hard limit and is back in range before it unwinds.
+    snap.command.proposed = ProposedCommand::Descend;
+    now += 1500;
+    controller.duringSubmit = [&] {
+        controller.publishDepth(sampleAt(0.51));
+        controller.publishDepth(sampleAt(0.2));
+    };
+    session.timerTick();
+    QApplication::processEvents();
+    bool stopped = false;
+    for (const auto &send : controller.sends) stopped = stopped || send.second == rb::MotionMode::Stop;
+    expect(stopped && !session.armed(),
+           "a transient hard-limit sample is evaluated with its own value even if a newer in-range sample follows");
+}
+
+void testSessionSurvivesControllerLifetime()
+{
+    using namespace rb::vision;
+    class Emitting : public rb::test::VisualControllerFixture {
+    public:
+        ~Emitting() override { emit controlDepthSampleChanged(); }
+    };
+    // Session destroyed first: a later controller signal must not reach it.
+    {
+        rb::test::VisualControllerFixture controller;
+        {
+            VisualDispatchSession session(&controller, [] { return std::optional<VisualDiagnosticSnapshot>{}; });
+            session.setFeatureEnabled(true);
+        }
+        controller.publishDepth(sampleAt(0.9));
+        expect(true, "no crash when the controller signals after the session is gone");
+    }
+    // Controller destroyed first: it signals from its destructor while the session is armed.
+    {
+        auto controller = std::make_unique<Emitting>();
+        VisualDiagnosticSnapshot snap;
+        snap.state = VisualState::Tracking; snap.command.proposed = ProposedCommand::Forward; snap.command.ex_f = 0.0;
+        controller->enabled = 0x1f; controller->known = 0x1f;
+        controller->depthSample = sampleAt(0.2);
+        qint64 now = 10;
+        VisualDispatchSession session(controller.get(), [&] { return std::optional{snap}; }, [&] { return now; });
+        session.setFeatureEnabled(true);
+        session.setAxisMode(VisualAxisMode::Pitch);
+        expect(session.arm() == ArmReason::Ready, "lifetime fixture arms");
+        controller.reset();   // emits controlDepthSampleChanged() during destruction
+        expect(true, "no crash when the controller signals while being destroyed");
+    }
+}
+
+void testFrontAxisPoseMismatchUsesAxisMask()
+{
+    using namespace rb::vision;
+    PitchSession s;
+    s.controller.known = 0x1b;          // front axis pose unknown
+    expect(s.session->arm() == ArmReason::PoseUnknown, "Pitch refuses to arm without the front axis pose");
+    s.controller.known = 0x1f;
+    expect(s.session->arm() == ArmReason::Ready, "and arms with it");
+}
+
+
+// Task 06 PR-C: Pitch/Both add the front axis and depth to the readiness checklist.
+void testReadinessIncludesFrontAxisAndDepthInPitch()
+{
+    using namespace rb::vision;
+    {   // Yaw: the two extra items are inert, whatever the depth or front axis say.
+        PitchSession s(VisualAxisMode::Yaw);
+        s.controller.enabled = 0x1b; s.controller.known = 0x1b; s.controller.depthSample.reset();
+        const auto r = s.session->readiness();
+        expect(!r.pitchActive && r.allReady() && r.totalCount() == 3 && r.missingCount() == 0,
+               "Yaw readiness ignores the front axis and depth");
+    }
+    {   // Pitch, everything ready.
+        PitchSession s;
+        const auto r = s.session->readiness();
+        expect(r.pitchActive && r.frontAxisReady && r.depthReady && r.allReady() && r.totalCount() == 5,
+               "Pitch readiness is complete with front axis and a zeroed fresh depth");
+    }
+    {   // Front axis only.
+        PitchSession s;
+        s.controller.enabled = 0x1b;
+        auto r = s.session->readiness();
+        expect(!r.frontAxisReady && r.depthReady && r.missingCount() == 1, "disabled front axis falsifies only that item");
+        s.controller.enabled = 0x1f; s.controller.known = 0x1b;
+        r = s.session->readiness();
+        expect(!r.frontAxisReady && r.missingCount() == 1, "unknown front axis pose falsifies only that item");
+    }
+    {   // Depth items.
+        PitchSession s;
+        s.controller.depthSample.reset();
+        auto r = s.session->readiness();
+        expect(!r.depthReady && r.frontAxisReady && r.missingCount() == 1
+                   && r.depthNote && *r.depthNote == QStringLiteral("Depth unavailable"), "no depth sample");
+        auto notZeroed = sampleAt(0.2); notZeroed.calibratedDepthM.reset();
+        s.controller.depthSample = notZeroed;
+        r = s.session->readiness();
+        expect(!r.depthReady && r.depthNote && *r.depthNote == QStringLiteral("Depth not zeroed"),
+               "fresh but not zeroed says Depth not zeroed");
+        s.controller.depthSample = sampleAt(0.2, false);
+        r = s.session->readiness();
+        expect(!r.depthReady && r.depthNote && *r.depthNote == QStringLiteral("Depth unavailable"), "stale depth");
+        s.controller.depthSample = sampleAt(0.55);
+        r = s.session->readiness();
+        expect(!r.depthReady && r.depthNote && *r.depthNote == QStringLiteral("Depth at hard limit"), "hard limit");
+        s.controller.depthSample = sampleAt(0.45);
+        expect(s.session->readiness().depthReady, "the soft floor and surface bands are ready (gated, not refused)");
+        s.controller.depthSample = sampleAt(0.0);
+        expect(s.session->readiness().depthReady, "surface is ready");
+    }
+}
+
+int main(int argc,char **argv){QApplication app(argc,argv);testAutoFollowEligibilityAndStopAwaiting();testAxisSwitchStopsAndDisarms();testDepthSampleIsEvaluatedImmediately();testDepthEventsKeepTheirValueWhenDeferred();testSessionSurvivesControllerLifetime();testFrontAxisPoseMismatchUsesAxisMask();testReadinessIncludesFrontAxisAndDepthInPitch();testAutoFollowReadinessEachItemIndependently();testReentrantSafetySnapshotIsRetained();testAuthorityLossInSameEvent();testPoseMismatchRequiresCompleteMask();testAutomaticStopCoversOperatorStop();testDeterministicRuntimeCases();testTimerAndRealDiagnosticGrace();testWireFailureSafetyStop();testAcceptedStopRetiresRetryEpisode();testSessionRuntime();return failures?1:0;}

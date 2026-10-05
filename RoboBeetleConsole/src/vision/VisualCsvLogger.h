@@ -20,6 +20,8 @@ public:
     void recordDispatch(const VisualDispatchRecord &record);
     void stop();
     void flush();
+    // Source of the depth_* / envelope_state columns (blank when unset).
+    void setDepthInfoProvider(std::function<VisualDepthCsvInfo()> provider) { depthInfo_ = std::move(provider); }
     [[nodiscard]] bool isRecording() const { return recording_; }
     [[nodiscard]] QString filePath() const { return file_.fileName(); }
     [[nodiscard]] QString lastError() const { return lastError_; }
@@ -32,6 +34,7 @@ private:
                    std::optional<qint64> arrivalMs = std::nullopt) const;
     bool finishPending(qint64 evaluationMs);
     VisualCsvConfig config_;
+    std::function<VisualDepthCsvInfo()> depthInfo_;
     QFile file_;
     QTimer timer_;
     QString lastError_;

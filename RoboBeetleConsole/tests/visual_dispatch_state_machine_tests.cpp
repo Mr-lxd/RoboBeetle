@@ -1,12 +1,15 @@
 #include "vision/VisualDispatchStateMachine.h"
 
 #include <cstdio>
+#include <optional>
 #include <cstring>
 #include <limits>
 #include <vector>
 
 namespace {
 using namespace rb::vision;
+using rb::DepthControlSample;
+using rb::DepthEnvelopeState;
 int checks = 0;
 int failures = 0;
 void expect(bool value, const char *message)
@@ -390,6 +393,223 @@ void additionalAckAndStopBoundaries()
 }
 } // namespace
 
+
+// ---- Pitch / Both: front axis, depth arming and depth gating (Task 06 PR-C) -----
+DepthControlSample depthAt(double metres, bool fresh = true, bool zeroed = true)
+{
+    DepthControlSample sample;
+    sample.rawDepthM = metres + 0.115;
+    if (zeroed) sample.calibratedDepthM = metres;
+    sample.ageMs = fresh ? 20 : 5000;
+    sample.fresh = fresh;
+    return sample;
+}
+
+struct PitchFixture : Fixture {
+    explicit PitchFixture(VisualAxisMode axis = VisualAxisMode::Pitch, double depth = 0.2)
+    {
+        input.axis = axis;
+        input.enabledMask = 0x001f;
+        input.poseKnownMask = 0x001f;
+        input.depth = depthAt(depth);
+        input.suggestion = ProposedCommand::Forward;
+    }
+    void armAndSend(ProposedCommand command, std::int64_t time = 0)
+    {
+        input.suggestion = command;
+        input.nowMs = time;
+        expect(policy.arm(input) == ArmReason::Ready && policy.armed(), "pitch fixture arms");
+        policy.evaluate(input);
+        expect(port.last().command == command, "pitch fixture sends the requested command");
+    }
+    void depth(double metres, std::int64_t time)
+    {
+        input.depth = depthAt(metres);
+        input.nowMs = time;
+        policy.evaluate(input);
+    }
+};
+
+void frontAxisMaskDependsOnAxis()
+{
+    for (const auto axis : {VisualAxisMode::Pitch, VisualAxisMode::Both}) {
+        PitchFixture f(axis);
+        f.input.enabledMask = 0x001b; // Yaw mask only: front axis (0x0004) missing
+        expect(f.policy.arm(f.input) == ArmReason::ServosNotEnabled, "Pitch/Both require the front axis to be enabled");
+        f.input.enabledMask = 0x001f; f.input.poseKnownMask = 0x001b;
+        expect(f.policy.arm(f.input) == ArmReason::PoseUnknown, "Pitch/Both require the front axis pose to be known");
+        f.input.poseKnownMask = 0x001f;
+        expect(f.policy.arm(f.input) == ArmReason::Ready, "Pitch/Both arm with the front axis ready");
+    }
+    Fixture yaw; // Yaw: the original mask is enough, front axis irrelevant
+    expect(yaw.policy.arm(yaw.input) == ArmReason::Ready, "Yaw still arms with the original 0x001b mask");
+    VisualDispatchStateMachine probe(yaw.port);
+    expect(probe.requiredMask(VisualAxisMode::Yaw) == 0x001b && probe.requiredMask(VisualAxisMode::Pitch) == 0x001f
+               && probe.requiredMask(VisualAxisMode::Both) == 0x001f, "required mask per axis");
+}
+
+void depthArmingReasons()
+{
+    const struct { std::optional<DepthControlSample> sample; ArmReason expected; const char *name; } rows[] = {
+        {std::nullopt, ArmReason::DepthUnavailable, "no sample"},
+        {depthAt(0.2, false), ArmReason::DepthUnavailable, "stale sample"},
+        {depthAt(0.2, true, false), ArmReason::DepthNotZeroed, "not zeroed"},
+        {depthAt(0.50), ArmReason::DepthHardLimit, "hard limit"},
+        {depthAt(0.02), ArmReason::Ready, "surface can arm (ASCEND is gated, not arming)"},
+        {depthAt(0.42), ArmReason::Ready, "soft floor can arm"},
+    };
+    for (const auto axis : {VisualAxisMode::Pitch, VisualAxisMode::Both}) {
+        for (const auto &row : rows) {
+            PitchFixture f(axis);
+            f.input.depth = row.sample;
+            expect(f.policy.arm(f.input) == row.expected, row.name);
+        }
+    }
+    // Yaw ignores depth completely, even a hard limit or no data at all.
+    for (const auto &row : rows) {
+        Fixture f;
+        f.input.depth = row.sample;
+        expect(f.policy.arm(f.input) == ArmReason::Ready, "Yaw arming never looks at depth");
+    }
+    expect(std::strcmp(armReasonName(ArmReason::DepthUnavailable), "DEPTH_UNAVAILABLE") == 0
+               && std::strcmp(armReasonName(ArmReason::DepthNotZeroed), "DEPTH_NOT_ZEROED") == 0
+               && std::strcmp(armReasonName(ArmReason::DepthHardLimit), "DEPTH_HARD_LIMIT") == 0, "depth reasons are displayable");
+}
+
+void depthDisarmsEvenWithoutTarget()
+{
+    // The depth reasons sit before NotTracking: a hard limit reached while the
+    // target is missing or lost must still STOP and disarm.
+    for (const auto state : {VisualState::Tracking, VisualState::NoTarget, VisualState::Lost}) {
+        for (const auto which : {0, 1, 2}) {
+            PitchFixture f;
+            f.armAndSend(ProposedCommand::Forward);
+            f.ack(1);
+            const auto before = f.port.requests.size();
+            f.input.state = state;
+            f.input.suggestion = state == VisualState::Tracking ? ProposedCommand::Forward
+                : state == VisualState::NoTarget ? ProposedCommand::Hold : ProposedCommand::Stop;
+            f.input.depth = which == 0 ? depthAt(0.51) : which == 1 ? depthAt(0.2, false) : depthAt(0.2, true, false);
+            f.evaluate(100);
+            expect(!f.policy.armed() && f.port.requests.size() == before + 1
+                       && f.port.last().command == ProposedCommand::Stop,
+                   "hard limit / stale / unzeroed depth stops and disarms in TRACKING, NO_TARGET and LOST");
+        }
+    }
+    // Yaw armed through the same events stays armed.
+    Fixture yaw; yaw.start(); yaw.ack(1);
+    yaw.input.depth = depthAt(0.9); yaw.evaluate(100);
+    expect(yaw.policy.armed() && yaw.port.requests.size() == 1, "Yaw ignores a hard-limit depth sample");
+    yaw.input.depth = std::nullopt; yaw.evaluate(200);
+    expect(yaw.policy.armed() && yaw.port.requests.size() == 1, "Yaw ignores missing depth");
+}
+
+void depthGatesNewCandidates()
+{
+    const struct { double depth; ProposedCommand suggestion; ProposedCommand sent; const char *name; } rows[] = {
+        {0.20, ProposedCommand::Descend, ProposedCommand::Descend, "normal depth allows DESCEND"},
+        {0.20, ProposedCommand::Ascend, ProposedCommand::Ascend, "normal depth allows ASCEND"},
+        {0.40, ProposedCommand::Descend, ProposedCommand::Forward, "soft floor turns DESCEND into FORWARD"},
+        {0.40, ProposedCommand::Ascend, ProposedCommand::Ascend, "soft floor still allows ASCEND"},
+        {0.02, ProposedCommand::Ascend, ProposedCommand::Forward, "surface turns ASCEND into FORWARD"},
+        {0.02, ProposedCommand::Descend, ProposedCommand::Descend, "surface still allows DESCEND"},
+        {0.02, ProposedCommand::Forward, ProposedCommand::Forward, "forward is never gated"},
+    };
+    for (const auto axis : {VisualAxisMode::Pitch, VisualAxisMode::Both}) {
+        for (const auto &row : rows) {
+            PitchFixture f(axis, row.depth);
+            f.input.suggestion = row.suggestion;
+            expect(f.policy.arm(f.input) == ArmReason::Ready, row.name);
+            f.policy.evaluate(f.input);
+            expect(f.port.requests.size() == 1 && f.port.last().command == row.sent, row.name);
+        }
+    }
+}
+
+void confirmedCommandIsStoppedAtLimit()
+{
+    // Confirmed DESCEND, depth reaches the soft floor: STOP in the same evaluation, stay armed.
+    {
+        PitchFixture f; f.armAndSend(ProposedCommand::Descend); f.ack(1);
+        expect(f.policy.currentMode() == ProposedCommand::Descend, "DESCEND confirmed");
+        f.depth(0.41, 100);
+        expect(f.port.requests.size() == 2 && f.port.last().command == ProposedCommand::Stop && f.policy.armed(),
+               "confirmed DESCEND is stopped at the soft floor and the session stays armed");
+        f.policy.acknowledge(f.port.last().id, DispatchOutcome::Ok, 110);
+        f.input.suggestion = ProposedCommand::Descend;
+        f.depth(0.41, 500);
+        expect(f.port.requests.size() == 2, "no new command within the 1000 ms after an accepted STOP");
+        f.depth(0.41, 1109);
+        expect(f.port.requests.size() == 2, "still blocked at 999 ms");
+        f.depth(0.41, 1110);
+        expect(f.port.requests.size() == 3 && f.port.last().command == ProposedCommand::Forward,
+               "after the dwell the gated candidate (FORWARD) follows, not DESCEND");
+    }
+    // Confirmed ASCEND, depth reaches the surface band: symmetric.
+    {
+        PitchFixture f; f.armAndSend(ProposedCommand::Ascend); f.ack(1);
+        f.depth(0.02, 100);
+        expect(f.port.requests.size() == 2 && f.port.last().command == ProposedCommand::Stop && f.policy.armed(),
+               "confirmed ASCEND is stopped at the surface and the session stays armed");
+        f.policy.acknowledge(f.port.last().id, DispatchOutcome::Ok, 110);
+        f.input.suggestion = ProposedCommand::Ascend;
+        f.depth(0.02, 1110);
+        expect(f.port.last().command == ProposedCommand::Forward, "after the dwell FORWARD follows, not ASCEND");
+    }
+    // The opposite direction is not touched: DESCEND at the surface keeps going.
+    {
+        PitchFixture f(VisualAxisMode::Pitch, 0.02); f.armAndSend(ProposedCommand::Descend); f.ack(1);
+        f.depth(0.03, 100);
+        expect(f.port.requests.size() == 1 && f.policy.armed(), "DESCEND is unaffected near the surface");
+    }
+    // NO_TARGET grace: the held DESCEND must stop immediately, not after 1.5 s.
+    {
+        PitchFixture f; f.armAndSend(ProposedCommand::Descend); f.ack(1);
+        f.input.state = VisualState::NoTarget; f.input.suggestion = ProposedCommand::Hold;
+        f.depth(0.41, 100);
+        expect(f.port.requests.size() == 2 && f.port.last().command == ProposedCommand::Stop && f.policy.armed(),
+               "NO_TARGET grace does not delay the depth STOP");
+    }
+    // Command in flight: its late OK must not establish DESCEND.
+    {
+        PitchFixture f; f.armAndSend(ProposedCommand::Descend);
+        const auto descendId = f.port.last().id;
+        f.depth(0.41, 100);
+        expect(f.port.requests.size() == 2 && f.port.last().command == ProposedCommand::Stop && f.policy.armed(),
+               "an unacknowledged DESCEND is stopped at the soft floor");
+        f.policy.acknowledge(descendId, DispatchOutcome::Ok, 120);
+        expect(f.policy.currentMode() != ProposedCommand::Descend, "a late OK for the stopped DESCEND is ignored");
+    }
+}
+
+void softFloorLatchFollowsSamplesWhileDisarmed()
+{
+    PitchFixture f(VisualAxisMode::Pitch, 0.42);
+    f.input.suggestion = ProposedCommand::Forward;
+    f.evaluate(10);                      // disarmed, in the soft-floor band: latch set
+    f.depth(0.38, 20);                   // between release (0.37) and max (0.40): latch holds
+    f.input.suggestion = ProposedCommand::Descend;
+    expect(f.policy.arm(f.input) == ArmReason::Ready && f.policy.depthEnvelope() == DepthEnvelopeState::SoftFloor,
+           "the latch followed the disarmed samples");
+    f.policy.evaluate(f.input);
+    expect(f.port.requests.size() == 1 && f.port.last().command == ProposedCommand::Forward,
+           "DESCEND at 0.38 m after 0.42 m is gated to FORWARD");
+    // And a hard limit leaves the latch set, so 0.52 -> 0.38 is still SoftFloor.
+    PitchFixture g;
+    g.depth(0.52, 10); g.depth(0.38, 20);
+    expect(g.policy.depthEnvelope() == DepthEnvelopeState::SoftFloor, "hard limit latches the soft floor");
+}
+
+void yawModeIgnoresDepthGate()
+{
+    Fixture f;
+    f.input.depth = depthAt(0.45);       // soft floor
+    f.input.suggestion = ProposedCommand::Descend;
+    expect(f.policy.arm(f.input) == ArmReason::Ready, "Yaw arms");
+    f.policy.evaluate(f.input);
+    expect(f.port.last().command == ProposedCommand::Descend, "Yaw does not rewrite candidates by depth");
+}
+
 int main()
 {
     armingConditions(); ackModeDwellAndBusy(); disarmingSafety();
@@ -397,6 +617,9 @@ int main()
     noTargetHoldsConfirmedModeOnly(); noTargetStillEnforcesPendingMotionTimeout(); disconnectedStopDoesNotSurviveReconnect();
     stopRetriesAnyOkAndStaleMotion(); directionMappingAndHold();
     additionalAckAndStopBoundaries();
+    frontAxisMaskDependsOnAxis(); depthArmingReasons(); depthDisarmsEvenWithoutTarget();
+    depthGatesNewCandidates(); confirmedCommandIsStoppedAtLimit();
+    softFloorLatchFollowsSamplesWhileDisarmed(); yawModeIgnoresDepthGate();
     std::printf("Visual dispatch: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

@@ -2907,8 +2907,8 @@ void testSlice5DetectionTextOverlayLifecycle()
             bool usableErrors = false;
             for (qsizetype i = 1; i < lines.size(); ++i) {
                 const auto columns = lines[i].trimmed().split(',');
-                if (columns.size() != 35) { continue; }
-                expect(columns[21]=="visual-csv-v3","loopback CSV rows identify new schema");
+                if (columns.size() != 42) { continue; }
+                expect(columns[21]=="visual-csv-v4","loopback CSV rows identify new schema");
                 if (columns[0] == "frame" && columns[3] == "11") {
                     ++aheadFrameCount;
                     expect(columns[6] == "fish" && std::abs(columns[10].toDouble() + 0.578125) < 1e-9

@@ -14,11 +14,35 @@ ArmReason VisualDispatchStateMachine::eligibility(const VisualDispatchInput &inp
     if (input.nowMs < 0 || (lastObservedMs_ && input.nowMs < *lastObservedMs_)) return ArmReason::InvalidTime;
     if (!input.linkConnected) return ArmReason::LinkDisconnected;
     if (!input.controlOwned) return ArmReason::ControlNotOwned;
-    if ((input.enabledMask & config_.requiredServoMask) != config_.requiredServoMask) return ArmReason::ServosNotEnabled;
-    if ((input.poseKnownMask & config_.requiredServoMask) != config_.requiredServoMask) return ArmReason::PoseUnknown;
+    const std::uint16_t required = requiredMask(input.axis);
+    if ((input.enabledMask & required) != required) return ArmReason::ServosNotEnabled;
+    if ((input.poseKnownMask & required) != required) return ArmReason::PoseUnknown;
     if (!input.confirmedTurnSign || (*input.confirmedTurnSign != 1 && *input.confirmedTurnSign != -1)) return ArmReason::TurnSignUnconfirmed;
+    // Depth reasons MUST precede NotTracking: while armed, NotTracking is
+    // deliberately tolerated in NO_TARGET/LOST, so a hard limit reached there
+    // would otherwise never disarm.
+    if (input.axis != VisualAxisMode::Yaw) {
+        switch (envelopeFor(input)) {
+        case DepthEnvelopeState::Unavailable: return ArmReason::DepthUnavailable;
+        case DepthEnvelopeState::NotZeroed: return ArmReason::DepthNotZeroed;
+        case DepthEnvelopeState::HardLimit: return ArmReason::DepthHardLimit;
+        default: break;
+        }
+    }
     if (input.state != VisualState::Tracking) return ArmReason::NotTracking;
     return ArmReason::Ready;
+}
+
+DepthEnvelopeState VisualDispatchStateMachine::envelopeFor(const VisualDispatchInput &input) const
+{
+    return evaluateDepthEnvelope(input.depth, depthMemory_, config_.depth).state;
+}
+
+void VisualDispatchStateMachine::updateDepthLatch(const VisualDispatchInput &input)
+{
+    const auto result = evaluateDepthEnvelope(input.depth, depthMemory_, config_.depth);
+    depthMemory_ = result.next;
+    envelope_ = result.state;
 }
 
 bool VisualDispatchStateMachine::observeTime(std::int64_t nowMs)
@@ -30,6 +54,7 @@ bool VisualDispatchStateMachine::observeTime(std::int64_t nowMs)
 
 ArmReason VisualDispatchStateMachine::arm(const VisualDispatchInput &input)
 {
+    updateDepthLatch(input); // The latch follows every sample, armed or not.
     const auto reason = eligibility(input);
     if (reason != ArmReason::Ready) {
         // Rejected operator actions are observations too. Keep the clock
@@ -107,6 +132,7 @@ void VisualDispatchStateMachine::evaluate(const VisualDispatchInput &input)
         if (armed_) failSafe(lastObservedMs_.value_or(0));
         return;
     }
+    updateDepthLatch(input);
     if (!input.linkConnected || !input.controlOwned) {
         if (armed_) failSafe(input.nowMs); // One immediate STOP attempt on loss.
         armed_ = false;
@@ -128,6 +154,21 @@ void VisualDispatchStateMachine::evaluate(const VisualDispatchInput &input)
         } else if (input.state == VisualState::Lost || input.suggestion == ProposedCommand::Stop) {
             beginStop(input.nowMs);
         }
+        // Depth gate for a command that is already confirmed or in flight. It
+        // keys on currentMode_/pendingMotion_, never on input.suggestion, so it
+        // also holds during the NO_TARGET grace period and while an ACK is
+        // outstanding. STOP keeps the session armed; the gated candidate
+        // (FORWARD) follows once the STOP is accepted.
+        if (armed_ && input.axis != VisualAxisMode::Yaw) {
+            const auto active = [&](ProposedCommand command) {
+                return (modeConfirmed_ && currentMode_ == command)
+                    || (pendingMotion_ && pendingMotion_->request.command == command);
+            };
+            if ((envelope_ == DepthEnvelopeState::SoftFloor && active(ProposedCommand::Descend))
+                || (envelope_ == DepthEnvelopeState::Surface && active(ProposedCommand::Ascend))) {
+                beginStop(input.nowMs);
+            }
+        }
     }
     if (stopAwaiting_) { retryStop(input.nowMs); return; }
     if (!armed_) return;
@@ -145,6 +186,12 @@ void VisualDispatchStateMachine::evaluate(const VisualDispatchInput &input)
         }
         command = ((*input.ex > 0.0) == (*input.confirmedTurnSign > 0))
             ? ProposedCommand::TurnRight : ProposedCommand::TurnLeft;
+    }
+    if (input.axis != VisualAxisMode::Yaw) {
+        if (command == ProposedCommand::Descend && envelope_ == DepthEnvelopeState::SoftFloor)
+            command = ProposedCommand::Forward;
+        if (command == ProposedCommand::Ascend && envelope_ == DepthEnvelopeState::Surface)
+            command = ProposedCommand::Forward;
     }
     if (modeConfirmed_ && currentMode_ == command) return;
     // Subtract monotonic timestamps rather than adding deadlines (no overflow).
@@ -208,6 +255,9 @@ const char *armReasonName(ArmReason reason) noexcept
     case ArmReason::PoseUnknown: return "POSE_UNKNOWN";
     case ArmReason::TurnSignUnconfirmed: return "TURN_SIGN_UNCONFIRMED";
     case ArmReason::NotTracking: return "NOT_TRACKING";
+    case ArmReason::DepthUnavailable: return "DEPTH_UNAVAILABLE";
+    case ArmReason::DepthNotZeroed: return "DEPTH_NOT_ZEROED";
+    case ArmReason::DepthHardLimit: return "DEPTH_HARD_LIMIT";
     }
     return "UNKNOWN";
 }

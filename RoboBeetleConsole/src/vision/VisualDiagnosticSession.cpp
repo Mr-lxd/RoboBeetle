@@ -17,6 +17,10 @@ QString configHash(const VisualPolicyConfig &c)
         + QString::number(c.lost_ms) + '\n'
         + QString::number(c.K_yaw, 'g', 17) + '\n'
         + QString::number(c.turn_sign) + '\n'
+        + QString::number(c.alpha_y, 'g', 17) + '\n'
+        + QString::number(c.ey_on, 'g', 17) + '\n'
+        + QString::number(c.ey_off, 'g', 17) + '\n'
+        + QString::number(c.pitch_sign) + '\n'
         + QString::number(c.ui_tick_ms) + '\n'
         + QString::number(c.gate_px, 'g', 17) + '\n'
         + QString::number(c.max_miss_ms) + '\n'
@@ -64,6 +68,12 @@ void VisualDiagnosticSession::onDetectionArrival(const DetectionFrame &frame,
     context_ = context;
     context_.frame = frame;
     evaluate(frame.frameId);
+}
+void VisualDiagnosticSession::setAxisMode(VisualAxisMode axis)
+{
+    if (axis_ == axis) return;
+    axis_ = axis;
+    evaluate(std::nullopt);
 }
 void VisualDiagnosticSession::refresh(const VisualViewContext &context)
 {
@@ -116,11 +126,15 @@ void VisualDiagnosticSession::evaluate(std::optional<quint64> arrivedId)
     snapshot_.awaitingVideo = state.awaitingVideo;
     snapshot_.target = state.usableTarget;
     snapshot_.turnSign = config_.turn_sign;
+    snapshot_.pitchSign = config_.pitch_sign;
+    snapshot_.axis = axis_;
     if (!state.awaitingVideo) {
         snapshot_.command = evaluateVisualCommand(commandMemory_,
             {now, state.state,
              state.usableTarget ? std::optional<std::uint64_t>(state.usableTarget->frameId) : std::nullopt,
-             state.usableTarget ? std::optional<double>(state.usableTarget->ex) : std::nullopt}, config_);
+             state.usableTarget ? std::optional<double>(state.usableTarget->ex) : std::nullopt,
+             state.usableTarget ? std::optional<double>(state.usableTarget->ey) : std::nullopt,
+             axis_}, config_);
         commandMemory_ = snapshot_.command.next;
     }
     emit diagnosticChanged(snapshot_);
