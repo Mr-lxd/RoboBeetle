@@ -19,6 +19,7 @@ class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
+class QButtonGroup;
 class QProgressBar;
 class QPushButton;
 class QSlider;
@@ -113,7 +114,10 @@ private:
     void createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summary);
     void applyAutoFollowCondensation();
     void refreshAutoFollowUi();
+    void refreshDepthControlUi();
+    void onAxisSelected(int axisIndex);
     void bindVisionUi();
+    void refreshVisualDiagnosticTexts();
     void refreshVisualCsvUi();
     void refreshVisualDispatchUi();
     void bindControllerUi();
@@ -129,6 +133,7 @@ private:
     void updateVideoSurfaceGeometry();
     void initializeWorkspaceSizes();
     void updateWorkspaceMinimums();
+    void reserveVisionPanelHeight();
     void applyStartupGeometry();
     // Refresh helpers.
     void setConnectedUi(bool connected);
@@ -181,8 +186,14 @@ private:
     QPushButton *visualArmButton_{nullptr};
     QPushButton *visualDisarmButton_{nullptr};
     int autoFollowMissing_{3};
+    int autoFollowTotal_{3};
+    int autoFollowChecklistLines_{3};
+    QString autoFollowDepthNote_;
+    QButtonGroup *axisGroup_{nullptr};
+    rb::DepthEnvelopeMemory depthUiMemory_;
     QString autoFollowStateText_;
     QString autoFollowChecklistFull_;
+    QString autoFollowChecklistTip_;
     QString autoFollowDetailText_;
     QString autoFollowBlockedText_; // all items ready but arm() would still refuse
     bool autoFollowCondensed_{false};
@@ -210,6 +221,7 @@ private:
     QSpinBox *visionPort_{nullptr};
     QPushButton *visionConnectButton_{nullptr};
     QLabel *visionState_{nullptr};
+    QLabel *visionDiagnosticScreen_{nullptr};
     QLabel *visionDot_{nullptr};
     QLabel *visionDiagnostics_{nullptr};
     QLabel *videoFpsSummary_{nullptr};
@@ -278,14 +290,12 @@ private:
 
     // IMU card.
     QLabel *imuDot_{nullptr};
-    QLabel *imuStatus_{nullptr};
     QLabel *imuAcc_{nullptr};
     QLabel *imuGyro_{nullptr};
     QLabel *imuAngle_{nullptr};
 
     // Depth card.
     QLabel *depthDot_{nullptr};
-    QLabel *depthStatus_{nullptr};
     QLabel *depthValue_{nullptr};
     QLabel *depthTemperature_{nullptr};
     QLabel *depthAge_{nullptr};

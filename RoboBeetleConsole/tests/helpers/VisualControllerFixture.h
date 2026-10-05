@@ -11,6 +11,17 @@ public:
     quint32 next{1};
     bool motionActive{false};
     std::optional<DepthControlSample> depthSample;
+    int zeroCalls{0};
+    bool zeroResult{true};
+    QString zeroError{QStringLiteral("not enough distinct depth samples")};
+    std::optional<qint64> zeroedAt;
+    bool zeroDepth(QString *error = nullptr) override
+    {
+        ++zeroCalls;
+        if (!zeroResult && error) *error = zeroError;
+        return zeroResult;
+    }
+    std::optional<qint64> depthZeroedAtMs() const override { return zeroedAt; }
     std::function<void()> beforeManual;
     std::vector<QString> manualRecords;
     bool manual(const QString &action) { if (beforeManual) beforeManual(); manualRecords.push_back(action); return true; }

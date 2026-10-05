@@ -30,31 +30,31 @@ void boundaries()
     expect(eval(0.020).state == DepthEnvelopeState::Surface, "0.020 is Surface");
     expect(eval(0.021).state == DepthEnvelopeState::Normal, "0.021 is Normal");
     expect(eval(-0.05).state == DepthEnvelopeState::Surface, "negative is Surface");
-    expect(eval(0.399).state == DepthEnvelopeState::Normal, "0.399 Normal");
-    expect(eval(0.400).state == DepthEnvelopeState::SoftFloor, "0.400 SoftFloor");
-    expect(eval(0.400).next.softFloorLatched, "0.400 latches");
-    expect(eval(0.499).state == DepthEnvelopeState::SoftFloor, "0.499 SoftFloor");
-    expect(eval(0.500).state == DepthEnvelopeState::HardLimit, "0.500 HardLimit");
+    expect(eval(0.249).state == DepthEnvelopeState::Normal, "0.249 Normal");
+    expect(eval(0.250).state == DepthEnvelopeState::SoftFloor, "0.250 SoftFloor");
+    expect(eval(0.250).next.softFloorLatched, "0.250 latches");
+    expect(eval(0.349).state == DepthEnvelopeState::SoftFloor, "0.349 SoftFloor");
+    expect(eval(0.350).state == DepthEnvelopeState::HardLimit, "0.350 HardLimit");
 }
 
 void hysteresis()
 {
-    expect(eval(0.371, true).state == DepthEnvelopeState::SoftFloor, "latched 0.371 stays");
-    expect(eval(0.371, true).next.softFloorLatched, "latched 0.371 keeps latch");
-    expect(eval(0.370, true).state == DepthEnvelopeState::Normal, "latched 0.370 releases");
-    expect(!eval(0.370, true).next.softFloorLatched, "latched 0.370 clears latch");
-    expect(eval(0.369, true).state == DepthEnvelopeState::Normal, "latched 0.369 releases");
-    expect(eval(0.380, false).state == DepthEnvelopeState::Normal, "unlatched 0.380 Normal");
+    expect(eval(0.221, true).state == DepthEnvelopeState::SoftFloor, "latched 0.221 stays");
+    expect(eval(0.221, true).next.softFloorLatched, "latched 0.221 keeps latch");
+    expect(eval(0.220, true).state == DepthEnvelopeState::Normal, "latched 0.220 releases");
+    expect(!eval(0.220, true).next.softFloorLatched, "latched 0.220 clears latch");
+    expect(eval(0.219, true).state == DepthEnvelopeState::Normal, "latched 0.219 releases");
+    expect(eval(0.230, false).state == DepthEnvelopeState::Normal, "unlatched 0.230 Normal");
     expect(eval(0.010, true).state == DepthEnvelopeState::Surface, "release into Surface");
     expect(eval(0.55, true).next.softFloorLatched, "hard limit keeps latch");
     {
         auto hard = eval(0.52, false);
         expect(hard.state == DepthEnvelopeState::HardLimit, "0.52 HardLimit");
         expect(hard.next.softFloorLatched, "hard limit sets latch");
-        auto back = eval(0.38, hard.next.softFloorLatched);
-        expect(back.state == DepthEnvelopeState::SoftFloor, "0.52 -> 0.38 is SoftFloor");
+        auto back = eval(0.24, hard.next.softFloorLatched);
+        expect(back.state == DepthEnvelopeState::SoftFloor, "0.52 -> 0.24 is SoftFloor");
     }
-    expect(eval(0.30, true).state == DepthEnvelopeState::Normal, "0.30 after hard releases");
+    expect(eval(0.20, true).state == DepthEnvelopeState::Normal, "0.20 after hard releases");
 }
 
 void unavailable()
@@ -99,9 +99,9 @@ void invalidConfig()
         expect(!rb::validDepthControlConfig(tight), "one millisecond below the rule is invalid");
     }
     bad([](DepthControlConfig &c) { c.surfaceMarginM = -0.01; }, "negative surface");
-    bad([](DepthControlConfig &c) { c.surfaceMarginM = 0.37; }, "surface == softRelease");
-    bad([](DepthControlConfig &c) { c.softReleaseM = 0.40; }, "softRelease == softMax");
-    bad([](DepthControlConfig &c) { c.softMaxM = 0.50; }, "softMax == hardMax");
+    bad([](DepthControlConfig &c) { c.surfaceMarginM = 0.22; }, "surface == softRelease");
+    bad([](DepthControlConfig &c) { c.softReleaseM = 0.25; }, "softRelease == softMax");
+    bad([](DepthControlConfig &c) { c.softMaxM = 0.35; }, "softMax == hardMax");
     bad([](DepthControlConfig &c) { c.nominalSamplePeriodMs = 0; }, "zero period");
     bad([](DepthControlConfig &c) { c.controlFreshMs = 2 * c.nominalSamplePeriodMs + 199; },
         "fresh below 2*period+200");

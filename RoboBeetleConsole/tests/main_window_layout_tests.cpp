@@ -462,6 +462,151 @@ void testGreenRegionFitsAtMinimumSize()
     window.close();
 }
 
+// Desktop-verification fixes: status dots on the card title row, a stable
+// right column, the diagnostic screen left of the status text, big motion buttons.
+void testRightCardsStatusDotsAndStableWidth()
+{
+    rb::test::OperatorConsoleFixture fixture;
+    fixture.create(false, true);
+    rb::MainWindow window(fixture.controller(), fixture.visionClient.get(),
+                          fixture.visionControlClient.get());
+    window.resize(1420, window.fullyExpandedWindowHeight());
+    window.show();
+    QApplication::processEvents();
+
+    for (const auto &pair : {std::pair<QString, QString>{QStringLiteral("leakCard"), QStringLiteral("leakStatusDot")},
+                             {QStringLiteral("imuCard"), QStringLiteral("imuStatusDot")},
+                             {QStringLiteral("depthCard"), QStringLiteral("depthStatusDot")}}) {
+        auto *card = window.findChild<QWidget *>(pair.first);
+        auto *dot = window.findChild<QLabel *>(pair.second);
+        expect(card != nullptr && dot != nullptr, "right card and its status dot exist");
+        if (card == nullptr || dot == nullptr) continue;
+        const QPoint topLeft = dot->mapTo(card, QPoint(0, 0));
+        expect(topLeft.y() < 32, "status dot sits on the card title row");
+        expect(topLeft.x() + dot->width() > card->width() - 16 && topLeft.x() > card->width() / 2,
+               "status dot sits at the right end of the title row");
+    }
+    bool statusTextVisible = false;
+    for (const QString &card : {QStringLiteral("imuCard"), QStringLiteral("depthCard")}) {
+        for (QLabel *label : window.findChild<QWidget *>(card)->findChildren<QLabel *>()) {
+            if (label->isVisible() && (label->text() == QStringLiteral("Unknown")
+                                       || label->text() == QStringLiteral("Receiving"))) {
+                statusTextVisible = true;
+            }
+        }
+    }
+    expect(!statusTextVisible, "IMU and Depth cards no longer show a status text row");
+    bool leakTextVisible = false;
+    for (QLabel *label : window.findChild<QWidget *>(QStringLiteral("leakCard"))->findChildren<QLabel *>()) {
+        if (label->isVisible() && label->text() == QStringLiteral("Unknown")) leakTextVisible = true;
+    }
+    expect(leakTextVisible, "Leak card keeps its status text");
+
+    auto *depthCard = window.findChild<QWidget *>(QStringLiteral("depthCard"));
+    auto *value = window.findChild<QLabel *>(QStringLiteral("depthValue"));
+    auto *temperature = window.findChild<QLabel *>(QStringLiteral("depthTemperature"));
+    auto *age = window.findChild<QLabel *>(QStringLiteral("depthAge"));
+    expect(value != nullptr && temperature != nullptr && age != nullptr, "depth value labels exist");
+    if (depthCard == nullptr || value == nullptr || temperature == nullptr || age == nullptr) {
+        window.close();
+        return;
+    }
+    expect(age->mapTo(depthCard, QPoint(0, 0)).y() > value->mapTo(depthCard, QPoint(0, 0)).y() + value->height() - 2,
+           "Age sits on its own row below Depth / Temp");
+    value->setText(QStringLiteral("0.1 m"));
+    temperature->setText(QStringLiteral("5.0 C"));
+    age->setText(QStringLiteral("5 ms"));
+    QApplication::processEvents();
+    const int widthBefore = depthCard->width();
+    const QSize windowBefore = window.size();
+    value->setText(QStringLiteral("10.25 m"));
+    temperature->setText(QStringLiteral("25.34 C"));
+    age->setText(QStringLiteral("12345 ms"));
+    QApplication::processEvents();
+    expect(depthCard->width() == widthBefore && window.size() == windowBefore,
+           "changing depth, temperature and age digits does not resize the right column");
+    window.close();
+}
+
+void testDiagnosticScreenBesideStatusText()
+{
+    rb::test::OperatorConsoleFixture fixture;
+    fixture.create(false, true);
+    rb::MainWindow window(fixture.controller(), fixture.visionClient.get(),
+                          fixture.visionControlClient.get());
+    window.resize(1420, window.fullyExpandedWindowHeight());
+    window.show();
+    QApplication::processEvents();
+
+    auto *summary = window.findChild<QWidget *>(QStringLiteral("visionSummaryPanel"));
+    auto *screen = window.findChild<QLabel *>(QStringLiteral("visionDiagnosticScreen"));
+    auto *state = window.findChild<QLabel *>(QStringLiteral("visionState"));
+    auto *host = window.findChild<QWidget *>(QStringLiteral("greenRegionHost"));
+    expect(summary != nullptr && screen != nullptr && state != nullptr && host != nullptr,
+           "diagnostic screen, status text and green region exist");
+    if (summary == nullptr || screen == nullptr || state == nullptr || host == nullptr) {
+        window.close();
+        return;
+    }
+    const QRect screenRect(screen->mapTo(summary, QPoint(0, 0)), screen->size());
+    expect(screenRect.right() < state->mapTo(summary, QPoint(0, 0)).x(),
+           "the diagnostic screen is to the left of the status text");
+    expect(summary->rect().contains(screenRect)
+               && screenRect.bottom() < host->mapTo(summary, QPoint(0, 0)).y(),
+           "the diagnostic screen stays inside the status block, above the green region");
+
+    const QString eleven = QStringLiteral(
+        "VISION DISPATCH - ARMED\nstate: TRACKING  mode: FORWARD\nPROPOSED (not sent): TURN_LEFT\n"
+        "ex=-0.625 ey=-0.333  axis: PITCH\nsent: FORWARD  acked: FORWARD\nturn sign: 1 confirmed\n"
+        "pitch sign: 1 confirmed\ndepth: 0.12 m  fresh\ngate: NORMAL\nretries: 0\nlast ack: 130 ms");
+    screen->setText(eleven);
+    QApplication::processEvents();
+    const QFontMetrics metrics(screen->font());
+    int widest = 0;
+    for (const QString &line : eleven.split('\n')) widest = std::max(widest, metrics.horizontalAdvance(line));
+    expect(screen->width() >= widest + 16,
+           "an 11-line ARMED + Pitch diagnostic fits un-elided at 1420 px");
+    const int heightBefore = screen->height();
+    screen->setText(eleven + QStringLiteral("\nextra 1\nextra 2\nextra 3\nextra 4"));
+    QApplication::processEvents();
+    expect(screen->height() == heightBefore, "the screen keeps a fixed height as the line count changes");
+    window.close();
+}
+
+void testMotionButtonsFillTheirGroup()
+{
+    rb::test::OperatorConsoleFixture fixture;
+    fixture.create(false, true);
+    rb::MainWindow window(fixture.controller(), fixture.visionClient.get(),
+                          fixture.visionControlClient.get());
+    window.resize(1420, window.fullyExpandedWindowHeight());
+    window.show();
+    QApplication::processEvents();
+
+    QList<QPushButton *> buttons;
+    QGroupBox *group = nullptr;
+    for (QPushButton *button : window.findChildren<QPushButton *>()) {
+        auto *parentGroup = qobject_cast<QGroupBox *>(button->parentWidget());
+        if (!button->isVisible() || parentGroup == nullptr
+            || parentGroup->title() != QStringLiteral("Motion Control")) {
+            continue;
+        }
+        group = parentGroup;
+        buttons.append(button);
+    }
+    expect(buttons.size() == 5 && group != nullptr, "Motion Control holds five visible buttons");
+    for (int i = 0; i < buttons.size(); ++i) {
+        expect(buttons[i]->height() >= 40, "each Motion Control button is at least 40 px tall");
+        const QRect rect(buttons[i]->mapTo(group, QPoint(0, 0)), buttons[i]->size());
+        expect(group->rect().contains(rect), "each Motion Control button is inside its group box");
+        for (int j = i + 1; j < buttons.size(); ++j) {
+            const QRect other(buttons[j]->mapTo(group, QPoint(0, 0)), buttons[j]->size());
+            expect(!rect.intersects(other), "Motion Control buttons do not overlap");
+        }
+    }
+    window.close();
+}
+
 bool fullyContainedInVisibleAncestors(QWidget *widget, QWidget *root)
 {
     if (widget == nullptr || root == nullptr || !widget->isVisible()
@@ -1075,6 +1220,9 @@ int main(int argc, char **argv)
     testElidedLabel();
     testCompactVisionSurfaceAndDetailsTree();
     testGreenRegionFitsAtMinimumSize();
+    testRightCardsStatusDotsAndStableWidth();
+    testDiagnosticScreenBesideStatusText();
+    testMotionButtonsFillTheirGroup();
     testMinimumToolPagesUseVerticalScrollOnly();
     testReviewerClosureContracts();
     testPresentationDetailsReflowAndNoSideEffects();

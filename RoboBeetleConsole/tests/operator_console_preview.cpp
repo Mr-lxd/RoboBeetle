@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QCommandLineParser>
+#include <QGroupBox>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -155,7 +156,7 @@ struct PreviewCase {
     QString scenario;
     // Task 06 green-region extra: variant selector and scripted Auto Follow state.
     QString variant;   // "V1" for the green-region suite, empty for the generic suite.
-    QString state;     // DRY RUN / NOT READY / READY / ARMED / STOPPING / FAULT / ARMED+AXIS
+    QString state;     // DRY RUN / NOT READY / READY / ARMED / STOPPING / FAULT / PITCH-READY / PITCH-NOT-ZEROED
     bool panelCrop{false};
 };
 
@@ -170,7 +171,8 @@ QList<PreviewCase> greenRegionCases()
     const QList<QString> states{
         QStringLiteral("DRY RUN"), QStringLiteral("NOT READY"),
         QStringLiteral("READY"), QStringLiteral("ARMED"), QStringLiteral("STOPPING"),
-        QStringLiteral("FAULT"), QStringLiteral("ARMED+AXIS")};
+        QStringLiteral("FAULT"), QStringLiteral("PITCH-READY"),
+        QStringLiteral("PITCH-NOT-ZEROED")};
     const auto slug = [](const QString &state) {
         return QString(state).replace(QStringLiteral(" "), QStringLiteral("-"))
             .replace(QStringLiteral("+"), QStringLiteral("-"));
@@ -197,6 +199,25 @@ QList<PreviewCase> greenRegionCases()
     return cases;
 }
 
+// Desktop-fix suite: dispatch diagnostic screen appearance (S1), 1420x880.
+QList<PreviewCase> fixesCases(const QString &style)
+{
+    QList<PreviewCase> cases;
+    for (const QString &state : {QStringLiteral("ARMED-PITCH"), QStringLiteral("DRY RUN"),
+                                 QStringLiteral("FAULT")}) {
+        PreviewCase item;
+        item.id = QStringLiteral("FX-%1-%2-1420x880")
+                      .arg(style, QString(state).replace(QStringLiteral(" "), QStringLiteral("-")));
+        item.size = {1420, 880};
+        item.scenario = QStringLiteral("desktop fixes %1 %2").arg(style, state);
+        item.variant = style;
+        item.state = state;
+        item.panelCrop = true;
+        cases.append(item);
+    }
+    return cases;
+}
+
 QList<PreviewCase> standardCases()
 {
     return {
@@ -219,9 +240,10 @@ QList<PreviewCase> standardCases()
     };
 }
 
-QList<PreviewCase> selectedCases(const QString &caseId, bool greenOnly)
+QList<PreviewCase> selectedCases(const QString &caseId, bool greenOnly, const QString &fixesStyle)
 {
-    const auto all = greenOnly ? greenRegionCases() : standardCases();
+    const auto all = !fixesStyle.isEmpty() ? fixesCases(fixesStyle)
+        : greenOnly ? greenRegionCases() : standardCases();
     if (caseId.isEmpty()) {
         return all;
     }
@@ -274,6 +296,22 @@ void applyGreenState(rb::MainWindow &window,
 
     gate->setChecked(true);
     QApplication::processEvents();
+
+    if (item.state == QStringLiteral("PITCH-READY") || item.state == QStringLiteral("PITCH-NOT-ZEROED")
+        || item.state == QStringLiteral("ARMED-PITCH")) {
+        // Pitch axis with the front axis ready; depth either zeroed (0.12 m, NORMAL) or not.
+        if (auto *pitch = window.findChild<QPushButton *>(QStringLiteral("autoFollowAxisPitch"))) pitch->click();
+        fixture.enabled = 0x1f;
+        fixture.known = 0x1f;
+        rb::DepthControlSample sample;
+        sample.rawDepthM = 0.12 + 0.115;
+        if (item.state != QStringLiteral("PITCH-NOT-ZEROED")) sample.calibratedDepthM = 0.12;
+        sample.ageMs = 20;
+        sample.fresh = true;
+        fixture.publishDepth(sample);
+        QApplication::processEvents();
+        return;
+    }
 
     if (item.state == QStringLiteral("STOPPING")) {
         // Armed, then a STALE safety event: the automatic STOP is sent and its
@@ -392,30 +430,21 @@ QJsonObject captureCase(rb::MainWindow &window,
     // Keep a scripted TRACKING state fresh across the layout settle above.
     const bool wantsTracking = item.state == QStringLiteral("READY")
         || item.state == QStringLiteral("ARMED")
-        || item.state == QStringLiteral("ARMED+AXIS");
+        || item.state == QStringLiteral("ARMED-PITCH")
+        || item.state == QStringLiteral("PITCH-READY")
+        || item.state == QStringLiteral("PITCH-NOT-ZEROED");
     if (wantsTracking) {
         freshenTracking(window, 2);
         if (auto *session = window.findChild<rb::vision::VisualDispatchSession *>()) {
             session->timerTick();
         }
         QApplication::processEvents();
-        if (item.state == QStringLiteral("ARMED")
-            || item.state == QStringLiteral("ARMED+AXIS")) {
+        if (item.state == QStringLiteral("ARMED") || item.state == QStringLiteral("ARMED-PITCH")) {
             if (auto *arm = window.findChild<QPushButton *>(QStringLiteral("visualArmButton"))) {
                 arm->click();
             }
             if (auto *session = window.findChild<rb::vision::VisualDispatchSession *>()) {
                 session->timerTick();
-            }
-        }
-        if (item.state == QStringLiteral("ARMED+AXIS")) {
-            // The axis selector is hidden by default; show it to check that the
-            // pinned Arm/Disarm button is not clipped once the row is wired.
-            auto *axis = window.findChild<QWidget *>(QStringLiteral("autoFollowAxisSelector"));
-            if (axis != nullptr) {
-                axis->setVisible(true);
-                const auto buttons = axis->findChildren<QPushButton *>();
-                if (!buttons.isEmpty()) buttons.first()->setChecked(true);
             }
         }
         QApplication::processEvents();
@@ -428,6 +457,19 @@ QJsonObject captureCase(rb::MainWindow &window,
         if (auto *depthCard = window.findChild<QWidget *>(QStringLiteral("depthCard"))) {
             depthCard->grab().save(
                 QDir(directory).filePath(item.id + QStringLiteral("-depthcard.png")), "PNG");
+        }
+        if (auto *leakCard = window.findChild<QWidget *>(QStringLiteral("leakCard"))) {
+            if (QWidget *column = leakCard->parentWidget()) {
+                column->grab().save(
+                    QDir(directory).filePath(item.id + QStringLiteral("-cards.png")), "PNG");
+            }
+        }
+        for (QGroupBox *box : window.findChildren<QGroupBox *>()) {
+            if (box->title() == QStringLiteral("Motion Control") && box->isVisible()) {
+                box->grab().save(
+                    QDir(directory).filePath(item.id + QStringLiteral("-motion.png")), "PNG");
+                break;
+            }
         }
     }
 
@@ -445,6 +487,21 @@ QJsonObject captureCase(rb::MainWindow &window,
                   QString::fromLocal8Bit(qgetenv("QT_SCALE_FACTOR")));
     result.insert(QStringLiteral("device_pixel_ratio"), image.devicePixelRatio());
     result.insert(QStringLiteral("png_size"), QStringLiteral("%1x%2").arg(image.width()).arg(image.height()));
+    if (auto *screen = window.findChild<QWidget *>(QStringLiteral("visionDiagnosticScreen"))) {
+        auto *block = window.findChild<QWidget *>(QStringLiteral("visionStatusBlock"));
+        auto *summary = window.findChild<QWidget *>(QStringLiteral("visionSummaryPanel"));
+        auto *alert = window.findChild<QWidget *>(QStringLiteral("autoFollowAlert"));
+        auto *controls = window.findChild<QWidget *>(QStringLiteral("visionControlsGroup"));
+        result.insert(QStringLiteral("screen_width_px"), screen->width());
+        result.insert(QStringLiteral("screen_height_px"), screen->height());
+        if (block != nullptr) result.insert(QStringLiteral("status_block_width_px"), block->width());
+        if (summary != nullptr) result.insert(QStringLiteral("panel_width_px"), summary->width());
+        if (alert != nullptr && alert->isVisible() && controls != nullptr) {
+            const QRect a(alert->mapTo(&window, QPoint(0, 0)), alert->size());
+            const QRect c(controls->mapTo(&window, QPoint(0, 0)), controls->size());
+            result.insert(QStringLiteral("fault_banner_intersects_controls"), a.intersects(c));
+        }
+    }
     result.insert(QStringLiteral("selected_tab"), item.tab);
     result.insert(QStringLiteral("scenario"), item.scenario);
     result.insert(QStringLiteral("output"), fileName);
@@ -508,16 +565,22 @@ int main(int argc, char **argv)
     parser.addOption(suiteOption);
     parser.addOption(caseOption);
     parser.addOption(greenOption);
+    QCommandLineOption fixesOption(
+        QStringLiteral("fixes"),
+        QStringLiteral("Run the desktop-fix suite with diagnostic screen style label (S1)"),
+        QStringLiteral("style"));
     parser.addOption(scaleLabelOption);
+    parser.addOption(fixesOption);
     parser.process(app);
     const QString directory = parser.value(outputOption);
     if (directory.isEmpty()) {
         return 2;
     }
     QDir().mkpath(directory);
-    const bool greenSuite = parser.isSet(greenOption);
+    const QString fixesStyle = parser.value(fixesOption);
+    const bool greenSuite = parser.isSet(greenOption) || !fixesStyle.isEmpty();
     const QString scaleLabel = parser.value(scaleLabelOption);
-    auto cases = selectedCases(parser.value(caseOption), greenSuite);
+    auto cases = selectedCases(parser.value(caseOption), greenSuite, fixesStyle);
     if (cases.isEmpty()) {
         return 3;
     }

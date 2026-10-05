@@ -215,40 +215,6 @@ void VideoView::paintEvent(QPaintEvent *event)
     constexpr int centerArm = 10;
     painter.drawLine(center - QPointF(centerArm, 0), center + QPointF(centerArm, 0));
     painter.drawLine(center - QPointF(0, centerArm), center + QPointF(0, centerArm));
-
-    QFont diagnosticFont = font();
-    diagnosticFont.setPointSizeF(9.0);
-    painter.setFont(diagnosticFont);
-    const QFontMetrics diagnosticMetrics(diagnosticFont);
-    const QStringList lines = visualDiagnosticText().split('\n');
-    int textWidth = 0;
-    for (const QString &line : lines) {
-        textWidth = qMax(textWidth, diagnosticMetrics.horizontalAdvance(line));
-    }
-    constexpr int padding = 5;
-    constexpr int margin = 6;
-    const int panelWidth = qMin(textWidth + 2 * padding, target.width() - 2 * margin);
-    const int contentWidth = qMax(1, panelWidth - 2 * padding);
-    const int titleHeight = diagnosticMetrics.boundingRect(
-        QRect(0, 0, contentWidth, 1000), Qt::TextWordWrap, lines.front()).height();
-    const QRect panel(
-        target.right() - margin - panelWidth + 1,
-        target.top() + margin,
-        panelWidth,
-        titleHeight + (static_cast<int>(lines.size()) - 1) * diagnosticMetrics.lineSpacing()
-            + 2 * padding);
-    painter.fillRect(panel, QColor(0, 0, 0, 190));
-    painter.setPen(Qt::white);
-    painter.drawText(QRect(panel.left() + padding, panel.top() + padding,
-                          contentWidth, titleHeight), Qt::TextWordWrap, lines.front());
-    for (qsizetype index = 1; index < lines.size(); ++index) {
-        painter.drawText(
-            panel.left() + padding,
-            panel.top() + padding + titleHeight + diagnosticMetrics.ascent()
-                + (static_cast<int>(index) - 1) * diagnosticMetrics.lineSpacing(),
-            diagnosticMetrics.elidedText(
-                lines[index], Qt::ElideRight, panelWidth - 2 * padding));
-    }
     painter.restore();
 
     if (detectionOverlay_.has_value()

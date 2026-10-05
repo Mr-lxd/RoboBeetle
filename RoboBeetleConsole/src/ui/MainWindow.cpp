@@ -29,8 +29,10 @@
 #include <QKeyEvent>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPainter>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QButtonGroup>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QMessageBox>
@@ -85,7 +87,7 @@ QString formatAngle(const std::array<qint16, 3> &values)
 QString formatDepth(qint32 depthMm)
 {
     return QStringLiteral("%1 m")
-        .arg(static_cast<double>(depthMm) / 1000.0, 0, 'f', 3);
+        .arg(static_cast<double>(depthMm) / 1000.0, 0, 'f', 2);
 }
 
 QString formatTemperature(qint16 temperatureCentiC)
@@ -526,9 +528,91 @@ void applyDashboardCardStyle(QGroupBox *box)
     ));
 }
 
+// Reserve the width of the widest expected value so the card never resizes as
+// the number changes. Measured with the card's own 11 px semi-bold value font.
+void reserveValueWidth(QLabel *value, const QString &widest)
+{
+    QFont font = value->font();
+    font.setPixelSize(11);
+    font.setWeight(QFont::DemiBold);
+    value->setMinimumWidth(QFontMetrics(font).horizontalAdvance(widest));
+}
+
+// Small fixed-height screen for the vision dispatch diagnostic text. Each line is
+// elided on the right; lines that do not fit vertically are cut with a final
+// ellipsis. Drawn as a dark LCD.
+class DiagnosticScreen : public QLabel
+{
+public:
+    explicit DiagnosticScreen(QWidget *parent)
+        : QLabel(parent)
+    {
+        setObjectName(QStringLiteral("visionDiagnosticScreen"));
+        QFont mono(QStringLiteral("Consolas"));
+        mono.setStyleHint(QFont::Monospace);
+        mono.setPointSizeF(9.0);
+        setFont(mono);
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+        setTextFormat(Qt::PlainText);
+    }
+
+    QSize sizeHint() const override { return {fixedWidth(), 40}; }
+    QSize minimumSizeHint() const override { return {fixedWidth(), 40}; }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QRectF frame = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        painter.setBrush(QColor(0x0F, 0x1A, 0x24));
+        painter.setPen(QPen(QColor(0x2C, 0x45, 0x58), 1));
+        painter.drawRoundedRect(frame, 6, 6);
+        painter.setPen(QPen(QColor(0x1B, 0x2D, 0x3B), 1));
+        painter.drawRoundedRect(frame.adjusted(2, 2, -2, -2), 4, 4);
+        const QColor text(0x9F, 0xE8, 0xD8);
+        const QColor accent(0xFF, 0xE0, 0x82);
+
+        const QFontMetrics metrics(font());
+        constexpr int padX = 8;
+        constexpr int padY = 6;
+        const int lineHeight = metrics.lineSpacing();
+        const QStringList lines = this->text().split('\n');
+        const int fit = qMax(1, (height() - 2 * padY) / lineHeight);
+        painter.setFont(font());
+        for (int i = 0; i < qMin<int>(fit, lines.size()); ++i) {
+            QString line = lines.at(i);
+            if (i == fit - 1 && lines.size() > fit) {
+                line += QStringLiteral(" ...");
+            }
+            const bool key = i == 0 || line.startsWith(QStringLiteral("Proposed"))
+                || line.startsWith(QStringLiteral("PROPOSED"));
+            painter.setPen(key ? accent : text);
+            painter.drawText(padX, padY + i * lineHeight + metrics.ascent(),
+                             metrics.elidedText(line, Qt::ElideRight, width() - 2 * padX));
+        }
+    }
+
+private:
+    // Fixed so the status text beside the screen never shifts as the lines change:
+    // wide enough for the longest regular line, longer ones are elided.
+    int fixedWidth() const
+    {
+        const QFontMetrics metrics(font());
+        int widest = 0;
+        for (const char *line : {"manual controls live | INFERENCE_OFF",
+                                 "axis=PITCH ey_f=-0.000 pitch_sign=1",
+                                 "DISPATCH ON | ARMED | READY"}) {
+            widest = qMax(widest, metrics.horizontalAdvance(QString::fromLatin1(line)));
+        }
+        return widest + 18;
+    }
+};
+
 void addDashboardCardHeader(QVBoxLayout *layout,
                             QGroupBox *box,
-                            const QString &text)
+                            const QString &text,
+                            QWidget *trailing = nullptr)
 {
     auto *header = new QHBoxLayout;
     header->setContentsMargins(0, 0, 0, 0);
@@ -550,6 +634,9 @@ void addDashboardCardHeader(QVBoxLayout *layout,
     ));
     header->addWidget(title);
     header->addStretch();
+    if (trailing != nullptr) {
+        header->addWidget(trailing);
+    }
 
     layout->addLayout(header);
 
@@ -913,6 +1000,19 @@ QWidget *MainWindow::createVideoPlaceholder()
     summaryLayout->setContentsMargins(8, 10, 8, 8);
     summaryLayout->setSpacing(4);
 
+    // Left: the dispatch diagnostic screen. Right: the status text, unchanged.
+    auto *statusTop = new QHBoxLayout;
+    statusTop->setContentsMargins(0, 0, 0, 0);
+    statusTop->setSpacing(8);
+    visionDiagnosticScreen_ = new DiagnosticScreen(summary);
+    statusTop->addWidget(visionDiagnosticScreen_);
+    auto *statusBlock = new QWidget(summary);
+    statusBlock->setObjectName(QStringLiteral("visionStatusBlock"));
+    auto *blockLayout = new QVBoxLayout(statusBlock);
+    blockLayout->setContentsMargins(0, 0, 0, 0);
+    blockLayout->setSpacing(2);
+    statusTop->addWidget(statusBlock, 1);
+
     auto *videoStateRow = new QHBoxLayout;
     videoStateRow->setContentsMargins(0, 0, 0, 0);
     videoStateRow->setSpacing(6);
@@ -931,7 +1031,7 @@ QWidget *MainWindow::createVideoPlaceholder()
     videoStateRow->addWidget(visionDot_);
     videoStateRow->addWidget(visionState_);
     videoStateRow->addStretch(1);
-    summaryLayout->addLayout(videoStateRow);
+    blockLayout->addLayout(videoStateRow);
 
     videoFpsSummary_ = new QLabel(QStringLiteral("Video FPS --"), summary);
     videoFpsSummary_->setObjectName(QStringLiteral("videoFpsSummary"));
@@ -939,7 +1039,7 @@ QWidget *MainWindow::createVideoPlaceholder()
         QStringLiteral("Received RBVS frame rate; not inference FPS or unique display FPS."));
     videoFpsSummary_->setStyleSheet(
         QStringLiteral("color: #257A9E; font-size: 13px; font-weight: 700;"));
-    summaryLayout->addWidget(videoFpsSummary_);
+    blockLayout->addWidget(videoFpsSummary_);
 
     videoResolutionSummary_ =
         new QLabel(QStringLiteral("Resolution --"), summary);
@@ -947,19 +1047,19 @@ QWidget *MainWindow::createVideoPlaceholder()
         QStringLiteral("videoResolutionSummary"));
     videoResolutionSummary_->setStyleSheet(
         QStringLiteral("color: #566B79; font-weight: 600;"));
-    summaryLayout->addWidget(videoResolutionSummary_);
+    blockLayout->addWidget(videoResolutionSummary_);
 
     storageFreeSummary_ = new QLabel(QStringLiteral("Storage Free --"), summary);
     storageFreeSummary_->setObjectName(QStringLiteral("storageFreeSummary"));
     storageFreeSummary_->setToolTip(QStringLiteral("Pi free disk space reported by the Vision status API; this is storage, not RAM."));
     storageFreeSummary_->setStyleSheet(
         QStringLiteral("color: #566B79; font-weight: 600;"));
-    summaryLayout->addWidget(storageFreeSummary_);
+    blockLayout->addWidget(storageFreeSummary_);
 
     auto *divider1 = new QFrame(summary);
     divider1->setFrameShape(QFrame::HLine);
     divider1->setStyleSheet(QStringLiteral("color: #D5E0E8;"));
-    summaryLayout->addWidget(divider1);
+    blockLayout->addWidget(divider1);
 
     const bool inferenceAvailable = visionControlClient_ != nullptr;
     auto *inferenceStateRow = new QHBoxLayout;
@@ -981,7 +1081,7 @@ QWidget *MainWindow::createVideoPlaceholder()
     inferenceStateRow->addWidget(inferenceDot_);
     inferenceStateRow->addWidget(inferenceState_);
     inferenceStateRow->addStretch(1);
-    summaryLayout->addLayout(inferenceStateRow);
+    blockLayout->addLayout(inferenceStateRow);
 
     inferencePerformanceSummary_ = new QLabel(
         QStringLiteral("-- FPS / -- ms"), summary);
@@ -991,13 +1091,13 @@ QWidget *MainWindow::createVideoPlaceholder()
         QStringLiteral("Camera capture to inference completion; not ORT-only duration."));
     inferencePerformanceSummary_->setStyleSheet(
         QStringLiteral("color: #6C5AAE; font-size: 13px; font-weight: 700;"));
-    summaryLayout->addWidget(inferencePerformanceSummary_);
+    blockLayout->addWidget(inferencePerformanceSummary_);
 
     inferenceDetectionSummary_ = new QLabel(
         QStringLiteral("Detections --"), summary);
     inferenceDetectionSummary_->setObjectName(
         QStringLiteral("inferenceDetectionSummary"));
-    summaryLayout->addWidget(inferenceDetectionSummary_);
+    blockLayout->addWidget(inferenceDetectionSummary_);
 
     inferenceMemorySummary_ = new QLabel(
         QStringLiteral("Memory -- / --"), summary);
@@ -1005,19 +1105,19 @@ QWidget *MainWindow::createVideoPlaceholder()
         QStringLiteral("inferenceMemorySummary"));
     inferenceMemorySummary_->setToolTip(
         QStringLiteral("Vision process RSS / total system physical memory"));
-    summaryLayout->addWidget(inferenceMemorySummary_);
+    blockLayout->addWidget(inferenceMemorySummary_);
 
     visionControlState_ = new QLabel(
         QStringLiteral("HTTP: Unavailable"), summary);
     visionControlState_->setObjectName(QStringLiteral("visionControlState"));
     visionControlState_->setStyleSheet(
         QStringLiteral("font-weight: 600; color: #566B79;"));
-    summaryLayout->addWidget(visionControlState_);
+    blockLayout->addWidget(visionControlState_);
 
     auto *divider2 = new QFrame(summary);
     divider2->setFrameShape(QFrame::HLine);
     divider2->setStyleSheet(QStringLiteral("color: #D5E0E8;"));
-    summaryLayout->addWidget(divider2);
+    blockLayout->addWidget(divider2);
 
     captureState_ = new QLabel(
         visionControlClient_ != nullptr
@@ -1027,13 +1127,13 @@ QWidget *MainWindow::createVideoPlaceholder()
     captureState_->setObjectName(QStringLiteral("captureState"));
     captureState_->setStyleSheet(
         QStringLiteral("font-weight: 700; color: #566B79;"));
-    summaryLayout->addWidget(captureState_);
+    blockLayout->addWidget(captureState_);
 
     captureCountSummary_ = new QLabel(
         QStringLiteral("Recorded -- | Snapshots --"), summary);
     captureCountSummary_->setObjectName(QStringLiteral("captureCountSummary"));
     captureCountSummary_->setWordWrap(true);
-    summaryLayout->addWidget(captureCountSummary_);
+    blockLayout->addWidget(captureCountSummary_);
 
     visionControlMessage_ = new ui::ElidedLabel(summary);
     visionControlMessage_->setObjectName(QStringLiteral("visionControlMessage"));
@@ -1041,7 +1141,9 @@ QWidget *MainWindow::createVideoPlaceholder()
     visionControlMessage_->setAccessibleName(QStringLiteral("Vision notice"));
     visionControlMessage_->setStyleSheet(
         QStringLiteral("font-size: 10px; color: #7B8F9D;"));
-    summaryLayout->addWidget(visionControlMessage_);
+    blockLayout->addWidget(visionControlMessage_);
+    blockLayout->addStretch(1);
+    summaryLayout->addLayout(statusTop);
     summaryLayout->addStretch(1);
 
     visionConnectButton_ = new QPushButton(QStringLiteral("Connect Video"), summary);
@@ -1154,12 +1256,12 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     autoFollowGroup_->setObjectName(QStringLiteral("autoFollowCard"));
     applySubpanelStyle(autoFollowGroup_);
     auto *autoOuter = new QVBoxLayout(autoFollowGroup_);
-    autoOuter->setContentsMargins(6, 10, 6, 4);
+    autoOuter->setContentsMargins(6, 8, 6, 3);
     autoOuter->setSpacing(4);
     autoFollowGrid_ = new QGridLayout;
     autoFollowGrid_->setObjectName(QStringLiteral("autoFollowGrid"));
     autoFollowGrid_->setContentsMargins(0, 0, 0, 0);
-    autoFollowGrid_->setSpacing(3);
+    autoFollowGrid_->setSpacing(2);
     autoOuter->addLayout(autoFollowGrid_);
 
     autoFollowStatePill_ = new QLabel(QStringLiteral("DRY RUN"), autoFollowGroup_);
@@ -1175,32 +1277,41 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     visualDispatchEnabled_->setToolTip(
         QStringLiteral("Session-only: never persisted and never auto-arms."));
 
-    // Axis selection stays hidden in this preview and is wired by the
-    // follow-up PR. The objectName is reserved here.
+    // Axis selection: Yaw (default) / Pitch / Both. Session-only, never persisted.
     autoFollowAxisSelector_ = new QWidget(autoFollowGroup_);
     autoFollowAxisSelector_->setObjectName(QStringLiteral("autoFollowAxisSelector"));
     auto *axisLayout = new QHBoxLayout(autoFollowAxisSelector_);
     axisLayout->setContentsMargins(0, 0, 0, 0);
     axisLayout->setSpacing(0);
-    for (const QString &axis : {QStringLiteral("Yaw"), QStringLiteral("Pitch"),
-                                QStringLiteral("Both")}) {
-        auto *axisButton = new QPushButton(axis, autoFollowAxisSelector_);
+    axisGroup_ = new QButtonGroup(this);
+    axisGroup_->setExclusive(true);
+    const QStringList axisNames{QStringLiteral("Yaw"), QStringLiteral("Pitch"), QStringLiteral("Both")};
+    for (int i = 0; i < axisNames.size(); ++i) {
+        auto *axisButton = new QPushButton(axisNames.at(i), autoFollowAxisSelector_);
+        axisButton->setObjectName(QStringLiteral("autoFollowAxis%1").arg(axisNames.at(i)));
         axisButton->setCheckable(true);
-        axisButton->setMinimumHeight(28);
+        axisButton->setChecked(i == 0);
+        axisButton->setMinimumHeight(24);
         axisButton->setProperty("consoleActionRole", "secondary");
+        axisButton->setStyleSheet(QStringLiteral(
+            "QPushButton { min-height: 24px; padding: 2px 6px; border-radius: 0px; }"
+            "QPushButton:checked { background: #344B5B; color: #FFFFFF; font-weight: 700; "
+            "  border-color: #344B5B; }"));
+        axisGroup_->addButton(axisButton, i);
         axisLayout->addWidget(axisButton);
     }
-    autoFollowAxisSelector_->setVisible(false);
+    connect(axisGroup_, &QButtonGroup::idClicked, this, &MainWindow::onAxisSelected);
 
     autoFollowChecklist_ = new QLabel(autoFollowGroup_);
     autoFollowChecklist_->setObjectName(QStringLiteral("autoFollowChecklist"));
     autoFollowChecklist_->setWordWrap(true);
+    autoFollowChecklist_->setMaximumHeight(18); // one line of 11 px text
     autoFollowChecklist_->setTextFormat(Qt::PlainText);
     autoFollowChecklist_->setStyleSheet(QStringLiteral("font-size: 11px; color: #566B79;"));
 
     visualArmButton_ = new QPushButton(QStringLiteral("Arm"), autoFollowGroup_);
     visualArmButton_->setObjectName(QStringLiteral("visualArmButton"));
-    applyGreenRegionButtonStyle(visualArmButton_, 36);
+    applyGreenRegionButtonStyle(visualArmButton_, 34);
     visualArmButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
     autoFollowAlert_ = new QLabel(autoFollowGroup_);
@@ -1226,6 +1337,7 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
         autoFollowGroup_);
     autoFollowFooter_->setObjectName(QStringLiteral("autoFollowFooter"));
     autoFollowFooter_->setStyleSheet(QStringLiteral("font-size: 10px; color: #7B8F9D;"));
+    visualArmButton_->setToolTip(autoFollowFooter_->text());
 
     // Dispatch status keeps its frozen objectName: behaviour tests read it.
     visualDispatchStatus_ = new QLabel(autoFollowGroup_);
@@ -1258,7 +1370,9 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     addAuto(visualArmButton_);
     addAuto(autoFollowAlert_);
     addAuto(autoFollowDetail_);
-    addAuto(autoFollowFooter_);
+    // The footer line no longer takes a row (the vertical budget goes to the axis
+    // selector and the checklist); its text lives in the Arm button tooltip.
+    autoFollowFooter_->setVisible(false);
 
     // Pinned rows: never dropped, never clipped. The axis row is pre-wired for
     // the follow-up PR and is hidden in this preview, so it costs nothing.
@@ -1284,22 +1398,22 @@ QWidget *MainWindow::createLeakCard()
     auto *layout = new QVBoxLayout(box);
     layout->setContentsMargins(7, 6, 7, 6);
     layout->setSpacing(7);
+    leakDot_ = new QLabel(box);
+    leakDot_->setFixedSize(10, 10);
+    leakDot_->setObjectName(QStringLiteral("leakStatusDot"));
+    leakDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     addDashboardCardHeader(
-        layout, box, QStringLiteral("Leak Detection"));
+        layout, box, QStringLiteral("Leak Detection"), leakDot_);
 
     auto *statusRow = new QHBoxLayout;
     statusRow->setContentsMargins(1, 1, 0, 0);
     statusRow->setSpacing(7);
-    leakDot_ = new QLabel(box);
-    leakDot_->setFixedSize(10, 10);
-    leakDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     leakStatus_ = new QLabel(QStringLiteral("Unknown"), box);
     leakStatus_->setStyleSheet(QStringLiteral(
         "color: #566B79;"
         "font-size: 12px;"
         "font-weight: 600;"
     ));
-    statusRow->addWidget(leakDot_);
     statusRow->addWidget(leakStatus_);
     statusRow->addStretch();
     layout->addLayout(statusRow);
@@ -1315,25 +1429,13 @@ QWidget *MainWindow::createImuCard()
     auto *layout = new QVBoxLayout(box);
     layout->setContentsMargins(7, 6, 7, 6);
     layout->setSpacing(6);
-    addDashboardCardHeader(
-        layout, box, QStringLiteral("IMU"));
-
-    auto *statusRow = new QHBoxLayout;
-    statusRow->setContentsMargins(1, 0, 0, 0);
-    statusRow->setSpacing(7);
     imuDot_ = new QLabel(box);
     imuDot_->setFixedSize(10, 10);
+    imuDot_->setObjectName(QStringLiteral("imuStatusDot"));
     imuDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
-    imuStatus_ = new QLabel(QStringLiteral("Unknown"), box);
-    imuStatus_->setStyleSheet(QStringLiteral(
-        "color: #566B79;"
-        "font-size: 12px;"
-        "font-weight: 600;"
-    ));
-    statusRow->addWidget(imuDot_);
-    statusRow->addWidget(imuStatus_);
-    statusRow->addStretch();
-    layout->addLayout(statusRow);
+    imuDot_->setToolTip(QStringLiteral("Unknown"));
+    addDashboardCardHeader(
+        layout, box, QStringLiteral("IMU"), imuDot_);
 
     auto *metrics = new QGridLayout;
     metrics->setHorizontalSpacing(10);
@@ -1344,6 +1446,9 @@ QWidget *MainWindow::createImuCard()
     for (QLabel *label : {imuAcc_, imuGyro_, imuAngle_}) {
         label->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
     }
+    reserveValueWidth(imuAcc_, QStringLiteral("-9.999, -9.999, -9.999 g"));
+    reserveValueWidth(imuGyro_, QStringLiteral("-999.9, -999.9, -999.9 dps"));
+    reserveValueWidth(imuAngle_, QStringLiteral("-180.00, -180.00, -180.00 deg"));
     for (int row = 0; row < 3; ++row) {
         auto *label = new QLabel(QStringList{QStringLiteral("Acc"), QStringLiteral("Gyro"), QStringLiteral("Angle")}.at(row), box);
         label->setStyleSheet(QStringLiteral("color: #7B8F9D; font-size: 11px; font-weight: 500;"));
@@ -1366,47 +1471,45 @@ QWidget *MainWindow::createDepthCard()
     auto *layout = new QVBoxLayout(box);
     layout->setContentsMargins(7, 6, 7, 6);
     layout->setSpacing(6);
+    depthDot_ = new QLabel(box);
+    depthDot_->setFixedSize(10, 10);
+    depthDot_->setObjectName(QStringLiteral("depthStatusDot"));
+    depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
+    depthDot_->setToolTip(QStringLiteral("Unknown"));
     addDashboardCardHeader(
-        layout, box, QStringLiteral("Depth Sensor"));
+        layout, box, QStringLiteral("Depth Sensor"), depthDot_);
 
-    // Top row: Depth / Temp / Age side by side.
-    auto *metrics = new QHBoxLayout;
-    metrics->setContentsMargins(1, 0, 0, 0);
-    metrics->setSpacing(10);
+    // Depth / Temp on one row, Age on the next; fixed value widths keep the
+    // card from changing width as the numbers change.
     depthValue_ = new QLabel(QStringLiteral("--"), box);
     depthTemperature_ = new QLabel(QStringLiteral("--"), box);
     depthAge_ = new QLabel(QStringLiteral("--"), box);
-    const QStringList metricNames{QStringLiteral("Depth"), QStringLiteral("Temp"), QStringLiteral("Age")};
-    const QList<QLabel *> metricValues{depthValue_, depthTemperature_, depthAge_};
-    for (int i = 0; i < metricNames.size(); ++i) {
-        auto *name = new QLabel(metricNames.at(i), box);
+    depthValue_->setObjectName(QStringLiteral("depthValue"));
+    depthTemperature_->setObjectName(QStringLiteral("depthTemperature"));
+    depthAge_->setObjectName(QStringLiteral("depthAge"));
+    const auto makeMetric = [box](const QString &nameText, QLabel *value, const QString &widest) {
+        auto *name = new QLabel(nameText, box);
         name->setStyleSheet(QStringLiteral("color: #7B8F9D; font-size: 11px; font-weight: 500;"));
-        metricValues.at(i)->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
+        value->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
+        reserveValueWidth(value, widest);
         auto *pair = new QHBoxLayout;
         pair->setSpacing(4);
         pair->addWidget(name);
-        pair->addWidget(metricValues.at(i));
-        metrics->addLayout(pair);
-    }
+        pair->addWidget(value);
+        return pair;
+    };
+    auto *metrics = new QHBoxLayout;
+    metrics->setContentsMargins(1, 0, 0, 0);
+    metrics->setSpacing(10);
+    metrics->addLayout(makeMetric(QStringLiteral("Depth"), depthValue_, QStringLiteral("99.99 m")));
+    metrics->addLayout(makeMetric(QStringLiteral("Temp"), depthTemperature_, QStringLiteral("99.99 C")));
     metrics->addStretch();
     layout->addLayout(metrics);
-
-    auto *statusRow = new QHBoxLayout;
-    statusRow->setContentsMargins(1, 0, 0, 0);
-    statusRow->setSpacing(7);
-    depthDot_ = new QLabel(box);
-    depthDot_->setFixedSize(10, 10);
-    depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
-    depthStatus_ = new QLabel(QStringLiteral("Unknown"), box);
-    depthStatus_->setStyleSheet(QStringLiteral(
-        "color: #566B79;"
-        "font-size: 12px;"
-        "font-weight: 600;"
-    ));
-    statusRow->addWidget(depthDot_);
-    statusRow->addWidget(depthStatus_);
-    statusRow->addStretch();
-    layout->addLayout(statusRow);
+    auto *ageRow = new QHBoxLayout;
+    ageRow->setContentsMargins(1, 0, 0, 0);
+    ageRow->addLayout(makeMetric(QStringLiteral("Age"), depthAge_, QStringLiteral("99999 ms")));
+    ageRow->addStretch();
+    layout->addLayout(ageRow);
 
     // Zeroed depth 0-0.50 m and the Zero action, always shown. The preview
     // shows "Not zeroed" and a disabled button; the follow-up PR wires them.
@@ -1983,6 +2086,18 @@ QWidget *MainWindow::createMotionPanel()
         motionButtons_[static_cast<std::size_t>(MotionMode::TurnRight)], 1, 2);
     dpad->addWidget(
         motionButtons_[static_cast<std::size_t>(MotionMode::Backward)], 2, 1);
+    for (QPushButton *button : {motionButtons_[static_cast<std::size_t>(MotionMode::Forward)],
+                                motionButtons_[static_cast<std::size_t>(MotionMode::TurnLeft)],
+                                motionStopButton_,
+                                motionButtons_[static_cast<std::size_t>(MotionMode::TurnRight)],
+                                motionButtons_[static_cast<std::size_t>(MotionMode::Backward)]}) {
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        button->setStyleSheet(button->styleSheet() + QStringLiteral("QPushButton { font-size: 15px; }"));
+    }
+    for (int index = 0; index < 3; ++index) {
+        dpad->setRowStretch(index, 1);
+        dpad->setColumnStretch(index, 1);
+    }
 
     // --- Gait / Vertical ---
     auto *gaitGroup = new QGroupBox(QStringLiteral("Gait / Vertical"), page);
@@ -2610,30 +2725,32 @@ void MainWindow::applyAutoFollowCondensation()
     const int available = autoFollowGroup_->contentsRect().bottom()
         - autoFollowGrid_->contentsMargins().bottom() - contentBottom;
     if (available <= 0) {
-        autoFollowFooter_->setVisible(false);
         autoFollowChecklist_->setVisible(false);
         autoFollowDetail_->setVisible(false);
         return;
     }
     const int spacing = autoFollowGrid_->verticalSpacing();
-    const int footerCost = autoFollowFooter_->sizeHint().height() + spacing;
+    const int footerCost = 0; // footer is tooltip-only now
     // A hidden label reports an invalid size hint, so derive the checklist cost
     // from its font metrics and its known line count instead.
     const int lineHeight = autoFollowChecklist_->fontMetrics().lineSpacing() + 2;
     const int collapsedCost = lineHeight + spacing;
-    const int expandedCost = lineHeight * 3 + spacing;
+    const int expandedCost = lineHeight * qMax(1, autoFollowChecklistLines_) + spacing;
     const int detailCost = autoFollowDetail_->fontMetrics().lineSpacing() + 4 + spacing;
 
     // 1. Footer goes first.
-    autoFollowFooter_->setVisible(footerCost <= available);
-    const int afterFooter = available - (autoFollowFooter_->isHidden() ? 0 : footerCost);
+    autoFollowFooter_->setVisible(false);
+    const int afterFooter = available - footerCost;
     // 2. The checklist collapses to a one-line summary before it is dropped.
     const bool showChecklist = autoFollowChecklistWanted_ && collapsedCost <= afterFooter;
     autoFollowCondensed_ = showChecklist && expandedCost > afterFooter;
     autoFollowChecklist_->setText(
         autoFollowBlockedText_.isEmpty()
                 && (autoFollowCondensed_ || autoFollowMissing_ == 0)
-            ? QStringLiteral("%1/3 ready").arg(3 - autoFollowMissing_)
+            ? (autoFollowDepthNote_.isEmpty()
+                   ? QStringLiteral("%1/%2 ready").arg(autoFollowTotal_ - autoFollowMissing_).arg(autoFollowTotal_)
+                   : QStringLiteral("%1/%2 ready %3 %4").arg(autoFollowTotal_ - autoFollowMissing_)
+                         .arg(autoFollowTotal_).arg(QChar(0x00B7)).arg(autoFollowDepthNote_))
             : autoFollowChecklistFull_);
     autoFollowChecklist_->setVisible(showChecklist);
     // 3. Detail line last.
@@ -2652,6 +2769,9 @@ void MainWindow::refreshAutoFollowUi()
     const bool armed = visualDispatch_->armed();
     const auto readiness = visualDispatch_->readiness();
     autoFollowMissing_ = readiness.missingCount();
+    autoFollowTotal_ = readiness.totalCount();
+    autoFollowChecklistLines_ = 1;
+    autoFollowDepthNote_ = readiness.depthNote.value_or(QString());
 
     QString fault;
     if (visualDispatch_->stopTimeoutAlert()) {
@@ -2704,20 +2824,47 @@ void MainWindow::refreshAutoFollowUi()
     const auto tick = [](bool ok) {
         return ok ? QStringLiteral("\u2713") : QStringLiteral("\u2717");
     };
+    // One line: the first missing item and how many more follow. The tooltip
+    // carries the full checklist with ticks.
+    QStringList missing;
+    QStringList everything;
+    const auto addItem = [&](bool ok, const QString &text) {
+        everything << QStringLiteral("%1 %2").arg(tick(ok), text);
+        if (!ok) missing << QStringLiteral("%1 %2").arg(tick(false), text);
+    };
+    addItem(readiness.linkAndControl, QStringLiteral("Link + control"));
+    addItem(readiness.servosReady, QStringLiteral("Servos enabled + pose"));
+    addItem(readiness.tracking, QStringLiteral("Tracking target"));
+    if (readiness.pitchActive) {
+        addItem(readiness.frontAxisReady, QStringLiteral("Front axis servo"));
+        addItem(readiness.depthReady, readiness.depthNote.value_or(QStringLiteral("Depth ready")));
+    }
     autoFollowChecklistFull_ = !autoFollowBlockedText_.isEmpty()
         ? autoFollowBlockedText_
-        : QStringLiteral("%1 Link + control\n%2 Servos enabled + pose\n%3 Tracking target")
-              .arg(tick(readiness.linkAndControl))
-              .arg(tick(readiness.servosReady))
-              .arg(tick(readiness.tracking));
-    autoFollowChecklist_->setToolTip(autoFollowChecklistFull_);
-    autoFollowChecklistWanted_ = enabled && !armed && !stopping
+        : missing.size() <= 1 ? missing.value(0)
+        : QStringLiteral("%1  +%2 more").arg(missing.first()).arg(missing.size() - 1);
+    autoFollowChecklistTip_ = everything.join(QLatin1Char(10));
+    autoFollowChecklist_->setToolTip(autoFollowChecklistTip_);
+    // A fault banner takes the checklist line's room.
+    autoFollowChecklistWanted_ = enabled && !armed && !stopping && fault.isEmpty()
         && (autoFollowMissing_ > 0 || !autoFollowBlockedText_.isEmpty());
     autoFollowChecklist_->setVisible(autoFollowChecklistWanted_);
     autoFollowChecklist_->setText(autoFollowChecklistFull_);
 
+    if (axisGroup_ != nullptr) {
+        const int axisIndex = static_cast<int>(visualDispatch_->axisMode());
+        if (axisGroup_->checkedId() != axisIndex) {
+            const QSignalBlocker blocker(axisGroup_);
+            if (auto *button = axisGroup_->button(axisIndex)) button->setChecked(true);
+        }
+    }
+    refreshDepthControlUi();
+
     autoFollowAlert_->setText(fault);
     autoFollowAlert_->setVisible(!fault.isEmpty());
+    // The alert banner is never clipped: while a fault is shown the axis row
+    // gives up its space, so the block keeps its original height budget.
+    autoFollowAxisSelector_->setVisible(fault.isEmpty());
 
     const QString mode = visualDispatch_->currentMode()
         ? QString::fromLatin1(vision::proposedCommandName(*visualDispatch_->currentMode()))
@@ -2738,6 +2885,8 @@ void MainWindow::refreshAutoFollowUi()
         visualArmButton_->setText(QStringLiteral("Disarm"));
     } else if (stopping) {
         visualArmButton_->setText(QStringLiteral("Arm \u00b7 stopping"));
+    } else if (autoFollowMissing_ == 1 && !autoFollowDepthNote_.isEmpty()) {
+        visualArmButton_->setText(QStringLiteral("Arm \u00b7 %1").arg(autoFollowDepthNote_));
     } else if (autoFollowMissing_ > 0) {
         visualArmButton_->setText(QStringLiteral("Arm \u00b7 %1 not ready")
             .arg(autoFollowMissing_));
@@ -2775,6 +2924,59 @@ void MainWindow::refreshAutoFollowUi()
     applyAutoFollowCondensation();
 }
 
+void MainWindow::onAxisSelected(int axisIndex)
+{
+    if (!visualDispatch_) return;
+    // The session sends the operator STOP and disarms when needed; the UI only refreshes.
+    visualDispatch_->setAxisMode(static_cast<vision::VisualAxisMode>(axisIndex));
+    refreshAutoFollowUi();
+}
+
+// Depth Sensor card: zeroed-depth bar (0 - 0.50 m) and the Zero action.
+void MainWindow::refreshDepthControlUi()
+{
+    if (depthBar_ == nullptr || depthZeroButton_ == nullptr) return;
+    const auto sample = controller_->controlDepthSample();
+    const DepthControlConfig config;
+
+    QString text = QStringLiteral("Not zeroed");
+    QString chunk = QStringLiteral("#9AA7B2"); // grey
+    int millimetres = 0;
+    if (!sample || !sample->fresh) {
+        if (sample || controller_->depthZeroedAtMs().has_value()) text = QStringLiteral("Stale");
+    } else if (!sample->calibratedDepthM) {
+        text = QStringLiteral("Not zeroed");
+    } else {
+        const auto result = evaluateDepthEnvelope(sample, depthUiMemory_, config);
+        depthUiMemory_ = result.next;
+        const double metres = *sample->calibratedDepthM;
+        millimetres = qBound(0, qRound(metres * 1000.0), 500);
+        text = QStringLiteral("%1 m %2 %3").arg(metres, 0, 'f', 2).arg(QChar(0x00B7))
+                   .arg(QString::fromLatin1(depthEnvelopeStateName(result.state)));
+        switch (result.state) {
+        case DepthEnvelopeState::Surface:
+        case DepthEnvelopeState::SoftFloor: chunk = QStringLiteral("#F0A92E"); break; // amber
+        case DepthEnvelopeState::HardLimit: chunk = QStringLiteral("#C53F3F"); break; // red
+        case DepthEnvelopeState::Normal: chunk = QStringLiteral("#2F80C9"); break;
+        default: break;
+        }
+    }
+    depthBar_->setValue(millimetres);
+    depthBar_->setFormat(text);
+    depthBar_->setStyleSheet(QStringLiteral(
+        "QProgressBar { background: #E3E9EF; border: 1px solid #C5D4E0; border-radius: 4px; "
+        "  color: #334A5C; font-size: 10px; font-weight: 600; }"
+        "QProgressBar::chunk { background: %1; border-radius: 3px; }").arg(chunk));
+
+    // Zeroing while armed would shift every limit under the running session.
+    const bool armed = visualDispatch_ != nullptr && visualDispatch_->armed();
+    depthZeroButton_->setEnabled(
+        controller_->backendKind() == ConsoleBackendKind::RemoteRbrp
+        && controller_->isConnected() && sample.has_value() && sample->fresh && !armed);
+    depthZeroButton_->setToolTip(armed ? QStringLiteral("Disarm before zeroing depth")
+                                       : QStringLiteral("Take the current depth as 0"));
+}
+
 void MainWindow::refreshVisualDispatchUi()
 {
     if (!visualDispatch_) return;
@@ -2786,7 +2988,17 @@ void MainWindow::refreshVisualDispatchUi()
     if (videoView_) {
         videoView_->setVisualDispatchPresentation(
             enabled, visualDispatch_->armed(), visualDispatchStatus_->text());
-        if (visualProposalDetails_) visualProposalDetails_->setText(videoView_->visualDiagnosticText());
+        refreshVisualDiagnosticTexts();
+    }
+}
+
+void MainWindow::refreshVisualDiagnosticTexts()
+{
+    const QString text = videoView_->visualDiagnosticText();
+    if (visualProposalDetails_) visualProposalDetails_->setText(text);
+    if (visionDiagnosticScreen_) {
+        visionDiagnosticScreen_->setText(text);
+        visionDiagnosticScreen_->setToolTip(text);
     }
 }
 
@@ -2829,6 +3041,22 @@ void MainWindow::bindVisionUi()
             this, &MainWindow::refreshVisualDispatchUi);
     connect(visualDispatchEnabled_, &QCheckBox::toggled,
             visualDispatch_, &vision::VisualDispatchSession::setFeatureEnabled);
+    // CSV depth columns come from the session (blank until a sample exists).
+    visualCsvLogger_->setDepthInfoProvider([this] { return visualDispatch_->depthCsvInfo(); });
+    connect(depthZeroButton_, &QPushButton::clicked, this, [this] {
+        QString error;
+        if (!controller_->zeroDepth(&error)) {
+            appendLog(QStringLiteral("Zero depth failed: %1").arg(error));
+        }
+        refreshDepthControlUi();
+    });
+    connect(controller_, &IConsoleController::controlDepthSampleChanged,
+            this, &MainWindow::refreshDepthControlUi);
+    // Staleness has no event: look again twice a second.
+    auto *depthRefreshTimer = new QTimer(this);
+    depthRefreshTimer->setInterval(500);
+    connect(depthRefreshTimer, &QTimer::timeout, this, &MainWindow::refreshDepthControlUi);
+    depthRefreshTimer->start();
     refreshVisualDispatchUi();
     connect(visualSession_, &vision::VisualDiagnosticSession::diagnosticChanged, this,
             [this](const vision::VisualDiagnosticSnapshot &snapshot) {
@@ -2849,9 +3077,7 @@ void MainWindow::bindVisionUi()
             videoView_->clearDetectionOverlay(reason);
         }
         videoView_->setVisualDiagnostic(snapshot);
-        if (visualProposalDetails_) {
-            visualProposalDetails_->setText(videoView_->visualDiagnosticText());
-        }
+        refreshVisualDiagnosticTexts();
     });
     if (visionClient_ != nullptr) {
         connect(visionConnectButton_, &QPushButton::clicked, this, [this] {
@@ -3574,9 +3800,32 @@ int MainWindow::fullyExpandedWindowHeight() const
 
 // The tools pane keeps its content height; the window minimum follows so the
 // dashboard (video + status columns) is what shrinks when space is short.
+// Auto Follow keeps a constant height: room for the one-line checklist is reserved even while the checklist is hidden, so the
+// block never changes size when the state changes and nothing overlaps. The
+// reserve comes out of the free space above the block.
+void MainWindow::reserveVisionPanelHeight()
+{
+    if (autoFollowGroup_ == nullptr || autoFollowChecklist_ == nullptr
+        || autoFollowGroup_->layout() == nullptr) return;
+    const QString keptText = autoFollowChecklist_->text();
+    const bool keptVisible = !autoFollowChecklist_->isHidden();
+    autoFollowGroup_->setMinimumHeight(0);
+    QStringList lines;
+    lines << QStringLiteral("X Placeholder checklist line");
+    autoFollowChecklist_->setText(lines.join(QLatin1Char(10)));
+    autoFollowChecklist_->setVisible(true);
+    autoFollowGroup_->layout()->activate();
+    const int worstCase = autoFollowGroup_->minimumSizeHint().height();
+    autoFollowChecklist_->setText(keptText);
+    autoFollowChecklist_->setVisible(keptVisible);
+    autoFollowGroup_->layout()->activate();
+    autoFollowGroup_->setMinimumHeight(worstCase);
+}
+
 void MainWindow::updateWorkspaceMinimums()
 {
     if (operatorToolsPane_ == nullptr) return;
+    reserveVisionPanelHeight();
     operatorToolsPane_->setMinimumHeight(operatorToolsRequiredHeight());
     const int needed = fullyExpandedWindowHeight();
     if (minimumHeight() != needed) setMinimumSize(1100, needed);
@@ -3672,26 +3921,22 @@ void MainWindow::setLeakUiState(LeakState state)
 
 void MainWindow::setImuUiState(const ImuMonitorState &state)
 {
-    if (imuStatus_ == nullptr) {
+    if (imuDot_ == nullptr) {
         return;
     }
 
-    imuStatus_->setText(imuStatusText(state.status));
+    imuDot_->setToolTip(imuStatusText(state.status));
     switch (state.status) {
     case ImuStatus::Unknown:
-        imuStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 12px; font-weight: 600;"));
         imuDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
         break;
     case ImuStatus::Receiving:
-        imuStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-size: 12px; font-weight: 600;"));
         imuDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 5px;"));
         break;
     case ImuStatus::Stale:
-        imuStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-size: 12px; font-weight: 600;"));
         imuDot_->setStyleSheet(QStringLiteral("background: #FB8C00; border-radius: 5px;"));
         break;
     case ImuStatus::Error:
-        imuStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-size: 12px; font-weight: 600;"));
         imuDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 5px;"));
         break;
     }
@@ -3730,26 +3975,22 @@ void MainWindow::setImuUiState(const ImuMonitorState &state)
 
 void MainWindow::setDepthUiState(const DepthMonitorState &state)
 {
-    if (depthStatus_ == nullptr) {
+    if (depthDot_ == nullptr) {
         return;
     }
 
-    depthStatus_->setText(depthStatusText(state.status));
+    depthDot_->setToolTip(depthStatusText(state.status));
     switch (state.status) {
     case DepthStatus::Unknown:
-        depthStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 12px; font-weight: 600;"));
         depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
         break;
     case DepthStatus::Receiving:
-        depthStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-size: 12px; font-weight: 600;"));
         depthDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 5px;"));
         break;
     case DepthStatus::Stale:
-        depthStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-size: 12px; font-weight: 600;"));
         depthDot_->setStyleSheet(QStringLiteral("background: #FB8C00; border-radius: 5px;"));
         break;
     case DepthStatus::Error:
-        depthStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-size: 12px; font-weight: 600;"));
         depthDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 5px;"));
         break;
     }
