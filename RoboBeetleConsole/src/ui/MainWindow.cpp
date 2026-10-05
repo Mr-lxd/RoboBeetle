@@ -1,4 +1,6 @@
 #include "ui/MainWindow.h"
+
+#include "ui/AutoFollowState.h"
 #include "ui/ElidedLabel.h"
 
 #include "robot/ServoDescriptor.h"
@@ -28,7 +30,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
-#include <QProgressBar>
 #include <QPushButton>
 #include <QMessageBox>
 #include <QRegularExpression>
@@ -615,13 +616,13 @@ MainWindow::MainWindow(
     if (startupScreen != nullptr) {
         const QRect available = startupScreen->availableGeometry();
         const int initialWidth = qMax(1100, qMin(1420, available.width() - 32));
-        const int initialHeight = qMax(720, qMin(1000, available.height() - 80));
+        const int initialHeight = qMax(720, qMin(880, available.height() - 80));
         resize(initialWidth, initialHeight);
         const QSize frameSize = frameGeometry().size();
         move(available.center()
              - QPoint(frameSize.width() / 2, frameSize.height() / 2));
     } else {
-        resize(1420, 1000);
+        resize(1420, 880);
     }
 
     auto *central = new QWidget(this);
@@ -1173,15 +1174,15 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     autoFollowStatePill_->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
     autoFollowStatePill_->setMinimumWidth(96);
     autoFollowStatePill_->setToolTip(
-        QStringLiteral("Auto follow state: DRY RUN / NOT READY / READY / ARMED / FAULT"));
+        QStringLiteral("Auto follow state: DRY RUN / NOT READY / READY / ARMED / STOPPING / FAULT"));
 
     visualDispatchEnabled_ = new QCheckBox(QStringLiteral("Visual dispatch"), autoFollowGroup_);
     visualDispatchEnabled_->setObjectName(QStringLiteral("visualDispatchEnabled"));
     visualDispatchEnabled_->setToolTip(
         QStringLiteral("Session-only: never persisted and never auto-arms."));
 
-    // Axis selection and the depth row stay hidden in this preview and are
-    // wired by the follow-up PR. objectNames are reserved here.
+    // Axis selection stays hidden in this preview and is wired by the
+    // follow-up PR. The objectName is reserved here.
     autoFollowAxisSelector_ = new QWidget(autoFollowGroup_);
     autoFollowAxisSelector_->setObjectName(QStringLiteral("autoFollowAxisSelector"));
     auto *axisLayout = new QHBoxLayout(autoFollowAxisSelector_);
@@ -1202,26 +1203,6 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     autoFollowChecklist_->setWordWrap(true);
     autoFollowChecklist_->setTextFormat(Qt::PlainText);
     autoFollowChecklist_->setStyleSheet(QStringLiteral("font-size: 11px; color: #566B79;"));
-
-    autoFollowDepthRow_ = new QWidget(autoFollowGroup_);
-    autoFollowDepthRow_->setObjectName(QStringLiteral("autoFollowDepthRow"));
-    auto *depthLayout = new QHBoxLayout(autoFollowDepthRow_);
-    depthLayout->setContentsMargins(0, 0, 0, 0);
-    depthLayout->setSpacing(5);
-    auto *depthValue = new QLabel(QStringLiteral("Depth -- m"), autoFollowDepthRow_);
-    auto *depthBar = new QProgressBar(autoFollowDepthRow_);
-    depthBar->setRange(0, 50);
-    depthBar->setValue(12);
-    depthBar->setTextVisible(false);
-    depthBar->setMaximumHeight(8);
-    autoFollowZeroDepthButton_ = new QPushButton(QStringLiteral("Zero"), autoFollowDepthRow_);
-    autoFollowZeroDepthButton_->setObjectName(QStringLiteral("autoFollowZeroDepthButton"));
-    autoFollowZeroDepthButton_->setMinimumHeight(26);
-    autoFollowZeroDepthButton_->setProperty("consoleActionRole", "secondary");
-    depthLayout->addWidget(depthValue);
-    depthLayout->addWidget(depthBar, 1);
-    depthLayout->addWidget(autoFollowZeroDepthButton_);
-    autoFollowDepthRow_->setVisible(false);
 
     visualArmButton_ = new QPushButton(QStringLiteral("Arm"), autoFollowGroup_);
     visualArmButton_->setObjectName(QStringLiteral("visualArmButton"));
@@ -1280,14 +1261,13 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     };
     addAuto(autoFollowAxisSelector_);
     addAuto(autoFollowChecklist_);
-    addAuto(autoFollowDepthRow_);
     addAuto(visualArmButton_);
     addAuto(autoFollowAlert_);
     addAuto(autoFollowDetail_);
     addAuto(autoFollowFooter_);
 
-    // Pinned rows: never dropped, never clipped. Axis/depth rows are pre-wired
-    // for the follow-up PR and are hidden in this preview, so they cost nothing.
+    // Pinned rows: never dropped, never clipped. The axis row is pre-wired for
+    // the follow-up PR and is hidden in this preview, so it costs nothing.
     autoFollowPinned_ = {autoFollowStatePill_, visualDispatchEnabled_,
                          visualArmButton_, autoFollowAlert_};
 
@@ -1296,37 +1276,10 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     autoFollowGroup_->installEventFilter(this);
 
     summaryLayout->addWidget(host);
-    applyGreenRegionVariant();
-}
-
-void MainWindow::setGreenRegionVariant(GreenRegionVariant variant)
-{
-    if (greenVariant_ == variant) return;
-    greenVariant_ = variant;
-    applyGreenRegionVariant();
-    applyAutoFollowCondensation();
-}
-
-// Core safety-critical controls stay pinned in the upper band; optional rows
-// follow in the shrink order required by the task book.
-void MainWindow::applyGreenRegionVariant()
-{
-    if (greenRegionGrid_ == nullptr) return;
-    // Re-arrange the existing sub-regions; no widget is ever recreated.
-    while (auto *item = greenRegionGrid_->takeAt(0)) {
-        delete item;
-    }
-    if (greenVariant_ == GreenRegionVariant::StackedV1) {
-        greenRegionGrid_->addWidget(autoFollowGroup_, 0, 0);
-        greenRegionGrid_->addWidget(visionControlsGroup_, 1, 0);
-        greenRegionGrid_->setColumnStretch(0, 1);
-        greenRegionGrid_->setColumnStretch(1, 0);
-    } else {
-        greenRegionGrid_->addWidget(visionControlsGroup_, 0, 0);
-        greenRegionGrid_->addWidget(autoFollowGroup_, 0, 1);
-        greenRegionGrid_->setColumnStretch(0, 0);
-        greenRegionGrid_->setColumnStretch(1, 1);
-    }
+    // Auto Follow above Vision Controls, both full width.
+    greenRegionGrid_->addWidget(autoFollowGroup_, 0, 0);
+    greenRegionGrid_->addWidget(visionControlsGroup_, 1, 0);
+    greenRegionGrid_->setColumnStretch(0, 1);
 }
 
 QWidget *MainWindow::createLeakCard()
@@ -2654,7 +2607,8 @@ void MainWindow::applyAutoFollowCondensation()
     const bool showChecklist = autoFollowChecklistWanted_ && collapsedCost <= afterFooter;
     autoFollowCondensed_ = showChecklist && expandedCost > afterFooter;
     autoFollowChecklist_->setText(
-        autoFollowCondensed_ || autoFollowMissing_ == 0
+        autoFollowBlockedText_.isEmpty()
+                && (autoFollowCondensed_ || autoFollowMissing_ == 0)
             ? QStringLiteral("%1/3 ready").arg(3 - autoFollowMissing_)
             : autoFollowChecklistFull_);
     autoFollowChecklist_->setVisible(showChecklist);
@@ -2690,11 +2644,19 @@ void MainWindow::refreshAutoFollowUi()
         fault += QStringLiteral("operator STOP: %1").arg(visualOperatorStopStatus_);
     }
 
-    const QString state = !fault.isEmpty() ? QStringLiteral("FAULT")
-        : armed ? QStringLiteral("ARMED")
-        : !enabled ? QStringLiteral("DRY RUN")
-        : readiness.allReady() ? QStringLiteral("READY")
-        : QStringLiteral("NOT READY");
+    // READY must mean "Arm will succeed": the checklist alone can be complete
+    // while arm() still refuses (invalid config/time, unconfirmed sign).
+    const bool stopping = visualDispatch_->stopAwaiting();
+    const auto eligibility = visualDispatch_->eligibility();
+    const bool eligible = eligibility == vision::ArmReason::Ready;
+    const QString state = QString::fromLatin1(ui::autoFollowStateText(
+        ui::classifyAutoFollowState({!fault.isEmpty(), stopping, armed, enabled,
+                                     readiness.allReady(), eligible})));
+    const bool ready = state == QStringLiteral("READY");
+    autoFollowBlockedText_ = enabled && !armed && !stopping && readiness.allReady() && !eligible
+        ? QStringLiteral("\u2717 Arm blocked: %1")
+              .arg(QString::fromLatin1(vision::armReasonName(eligibility)))
+        : QString();
     autoFollowStateText_ = state;
 
     // Colour plus wording: every state is distinguishable without colour, and
@@ -2703,6 +2665,8 @@ void MainWindow::refreshAutoFollowUi()
         ? QStringLiteral("background: #A32B2B; color: #FFFFFF;")
         : state == QStringLiteral("ARMED")
             ? QStringLiteral("background: #1F6B3A; color: #FFFFFF;")
+            : state == QStringLiteral("STOPPING")
+                ? QStringLiteral("background: #F0A92E; color: #3A2400;")
             : state == QStringLiteral("READY")
                 ? QStringLiteral("background: #D8EDE0; color: #14532D;")
                 : state == QStringLiteral("NOT READY")
@@ -2716,12 +2680,15 @@ void MainWindow::refreshAutoFollowUi()
     const auto tick = [](bool ok) {
         return ok ? QStringLiteral("\u2713") : QStringLiteral("\u2717");
     };
-    autoFollowChecklistFull_ = QStringLiteral("%1 Link + control\n%2 Servos enabled + pose\n%3 Tracking target")
-        .arg(tick(readiness.linkAndControl))
-        .arg(tick(readiness.servosReady))
-        .arg(tick(readiness.tracking));
+    autoFollowChecklistFull_ = !autoFollowBlockedText_.isEmpty()
+        ? autoFollowBlockedText_
+        : QStringLiteral("%1 Link + control\n%2 Servos enabled + pose\n%3 Tracking target")
+              .arg(tick(readiness.linkAndControl))
+              .arg(tick(readiness.servosReady))
+              .arg(tick(readiness.tracking));
     autoFollowChecklist_->setToolTip(autoFollowChecklistFull_);
-    autoFollowChecklistWanted_ = enabled && !armed && autoFollowMissing_ > 0;
+    autoFollowChecklistWanted_ = enabled && !armed && !stopping
+        && (autoFollowMissing_ > 0 || !autoFollowBlockedText_.isEmpty());
     autoFollowChecklist_->setVisible(autoFollowChecklistWanted_);
     autoFollowChecklist_->setText(autoFollowChecklistFull_);
 
@@ -2736,18 +2703,22 @@ void MainWindow::refreshAutoFollowUi()
     detailParts << QStringLiteral("operator STOP: %1")
         .arg(visualOperatorStopStatus_.isEmpty() ? QStringLiteral("--")
                                                  : visualOperatorStopStatus_);
-    autoFollowDetailText_ = armed ? detailParts.join(QStringLiteral(" \u00b7 "))
+    autoFollowDetailText_ = armed || stopping ? detailParts.join(QStringLiteral(" \u00b7 "))
                                   : QString();
     autoFollowDetail_->setText(autoFollowDetailText_);
     autoFollowDetail_->setToolTip(detailParts.join(QStringLiteral(" \u00b7 ")));
 
-    const bool actionable = armed || (enabled && readiness.allReady() && fault.isEmpty());
+    const bool actionable = armed || (ready && fault.isEmpty());
     visualArmButton_->setEnabled(actionable);
     if (armed) {
         visualArmButton_->setText(QStringLiteral("Disarm"));
+    } else if (stopping) {
+        visualArmButton_->setText(QStringLiteral("Arm \u00b7 stopping"));
     } else if (autoFollowMissing_ > 0) {
         visualArmButton_->setText(QStringLiteral("Arm \u00b7 %1 not ready")
             .arg(autoFollowMissing_));
+    } else if (!autoFollowBlockedText_.isEmpty()) {
+        visualArmButton_->setText(QStringLiteral("Arm \u00b7 blocked"));
     } else {
         visualArmButton_->setText(QStringLiteral("Arm"));
     }

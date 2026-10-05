@@ -785,4 +785,56 @@ void testAutoFollowReadinessEachItemIndependently()
 }
 
 }
-int main(int argc,char **argv){QApplication app(argc,argv);testAutoFollowReadinessEachItemIndependently();testReentrantSafetySnapshotIsRetained();testAuthorityLossInSameEvent();testPoseMismatchRequiresCompleteMask();testAutomaticStopCoversOperatorStop();testDeterministicRuntimeCases();testTimerAndRealDiagnosticGrace();testWireFailureSafetyStop();testAcceptedStopRetiresRetryEpisode();testSessionRuntime();return failures?1:0;}
+// Task 06: eligibility() and stopAwaiting() back the READY and STOPPING labels.
+void testAutoFollowEligibilityAndStopAwaiting()
+{
+    using namespace rb::vision;
+    VisualDiagnosticSnapshot snap;
+    snap.state = VisualState::Tracking;
+    snap.command.proposed = ProposedCommand::Forward;
+    rb::test::VisualControllerFixture c;
+    qint64 now = 100;
+    VisualDispatchSession session(
+        &c, [&snap] { return std::optional{snap}; }, [&now] { return now; });
+    session.setTimerEnabled(false);
+    session.setFeatureEnabled(true);
+
+    expect(session.readiness().allReady() && session.eligibility() == ArmReason::Ready,
+           "a provisioned session is eligible");
+    expect(!session.stopAwaiting(), "nothing awaits a STOP initially");
+
+    // The checklist can be complete while arm() would still refuse: a clock that
+    // went backwards is the reachable example (InvalidTime).
+    session.timerTick();
+    now = 50;
+    expect(session.readiness().allReady(),
+           "the readiness checklist does not look at the clock");
+    expect(session.eligibility() == ArmReason::InvalidTime,
+           "eligibility reports InvalidTime although the checklist is complete");
+    expect(session.arm() == ArmReason::InvalidTime && !session.armed(),
+           "arm() agrees with eligibility()");
+    now = 200;
+    expect(session.eligibility() == ArmReason::Ready, "eligibility recovers with the clock");
+
+    // eligibility() is a pure query.
+    const bool armedBefore = session.armed();
+    (void)session.eligibility();
+    expect(session.armed() == armedBefore && !session.stopAwaiting(),
+           "eligibility() changes no state");
+
+    // Armed, then STALE: disarmed with the automatic STOP unconfirmed.
+    expect(session.arm() == ArmReason::Ready && session.armed(), "arm succeeds when eligible");
+    snap.state = VisualState::Stale;
+    now = 300;
+    session.timerTick();
+    expect(!session.armed() && session.stopAwaiting(),
+           "STALE leaves the session disarmed and awaiting the STOP outcome");
+    expect(!c.sends.empty() && c.sends.back().second == rb::MotionMode::Stop,
+           "the awaited STOP was sent");
+    c.ack(c.sends.back().first, rb::CommandTerminalResult::Ok);
+    now = 400;
+    session.timerTick();
+    expect(!session.stopAwaiting(), "an accepted STOP ends the awaiting state");
+}
+
+int main(int argc,char **argv){QApplication app(argc,argv);testAutoFollowEligibilityAndStopAwaiting();testAutoFollowReadinessEachItemIndependently();testReentrantSafetySnapshotIsRetained();testAuthorityLossInSameEvent();testPoseMismatchRequiresCompleteMask();testAutomaticStopCoversOperatorStop();testDeterministicRuntimeCases();testTimerAndRealDiagnosticGrace();testWireFailureSafetyStop();testAcceptedStopRetiresRetryEpisode();testSessionRuntime();return failures?1:0;}

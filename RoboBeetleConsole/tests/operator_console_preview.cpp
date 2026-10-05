@@ -91,8 +91,7 @@ QJsonObject measureGreenRegion(rb::MainWindow &window)
             QStringLiteral("autoFollowStatePill"), QStringLiteral("visualDispatchEnabled"),
             QStringLiteral("autoFollowChecklist"), QStringLiteral("visualArmButton"),
             QStringLiteral("autoFollowAlert"), QStringLiteral("autoFollowDetail"),
-            QStringLiteral("autoFollowFooter"), QStringLiteral("autoFollowAxisSelector"),
-            QStringLiteral("autoFollowDepthRow")};
+            QStringLiteral("autoFollowFooter"), QStringLiteral("autoFollowAxisSelector")};
         for (const QString &name : names) {
             auto *widget = window.findChild<QWidget *>(name);
             if (widget == nullptr) continue;
@@ -129,11 +128,7 @@ QJsonObject measureGreenRegion(rb::MainWindow &window)
     if (auto *connect = window.findChild<QWidget *>(QStringLiteral("visionConnectButton"))) {
         result.insert(QStringLiteral("vision_button_width_px"), connect->width());
     }
-    result.insert(QStringLiteral("variant"),
-                  window.greenRegionVariant()
-                          == rb::MainWindow::GreenRegionVariant::StackedV1
-                      ? QStringLiteral("V1-stacked")
-                      : QStringLiteral("V2-side-by-side"));
+    result.insert(QStringLiteral("variant"), QStringLiteral("V1-stacked"));
     return result;
 }
 
@@ -159,44 +154,42 @@ struct PreviewCase {
     int tab{0};
     QString scenario;
     // Task 06 green-region extra: variant selector and scripted Auto Follow state.
-    QString variant;   // "V1" / "V2" / empty for the generic suite.
-    QString state;     // DRY RUN / NOT READY / READY / ARMED / FAULT / ARMED+PLACEHOLDER
+    QString variant;   // "V1" for the green-region suite, empty for the generic suite.
+    QString state;     // DRY RUN / NOT READY / READY / ARMED / STOPPING / FAULT / ARMED+AXIS
     bool panelCrop{false};
 };
 
-// Task 06: every required status x size x variant combination.
+// Task 06: every required status x size combination.
 QList<PreviewCase> greenRegionCases()
 {
     QList<PreviewCase> cases;
-    const QList<QString> variants{QStringLiteral("V1"), QStringLiteral("V2")};
+    const QString variant = QStringLiteral("V1");
     const QList<QSize> sizes{{1420, 880}, {1100, 720}};
     const QList<QString> states{
         QStringLiteral("DRY RUN"), QStringLiteral("NOT READY"),
-        QStringLiteral("READY"), QStringLiteral("ARMED"),
-        QStringLiteral("FAULT"), QStringLiteral("ARMED+PLACEHOLDER")};
+        QStringLiteral("READY"), QStringLiteral("ARMED"), QStringLiteral("STOPPING"),
+        QStringLiteral("FAULT"), QStringLiteral("ARMED+AXIS")};
     const auto slug = [](const QString &state) {
         return QString(state).replace(QStringLiteral(" "), QStringLiteral("-"))
             .replace(QStringLiteral("+"), QStringLiteral("-"));
     };
-    for (const QString &variant : variants) {
-        for (const QSize &size : sizes) {
-            for (const QString &state : states) {
-                PreviewCase item;
-                item.id = QStringLiteral("T06-%1-%2-%3x%4")
-                              .arg(slug(state), variant)
-                              .arg(size.width())
-                              .arg(size.height());
-                item.size = size;
-                item.tab = 0;
-                item.scenario = QStringLiteral("green region %1 %2 %3x%4")
-                                    .arg(state, variant)
-                                    .arg(size.width())
-                                    .arg(size.height());
-                item.variant = variant;
-                item.state = state;
-                item.panelCrop = true;
-                cases.append(item);
-            }
+    for (const QSize &size : sizes) {
+        for (const QString &state : states) {
+            PreviewCase item;
+            item.id = QStringLiteral("T06-%1-%2-%3x%4")
+                          .arg(slug(state), variant)
+                          .arg(size.width())
+                          .arg(size.height());
+            item.size = size;
+            item.tab = 0;
+            item.scenario = QStringLiteral("green region %1 %2 %3x%4")
+                                .arg(state, variant)
+                                .arg(size.width())
+                                .arg(size.height());
+            item.variant = variant;
+            item.state = state;
+            item.panelCrop = true;
+            cases.append(item);
         }
     }
     return cases;
@@ -279,6 +272,24 @@ void applyGreenState(rb::MainWindow &window,
 
     gate->setChecked(true);
     QApplication::processEvents();
+
+    if (item.state == QStringLiteral("STOPPING")) {
+        // Armed, then a STALE safety event: the automatic STOP is sent and its
+        // ACK is deliberately withheld, so the session stays in "stop awaiting".
+        freshenTracking(window, 1);
+        auto *session = window.findChild<rb::vision::VisualDispatchSession *>();
+        if (session != nullptr) session->timerTick();
+        if (auto *arm = window.findChild<QPushButton *>(QStringLiteral("visualArmButton"))) {
+            arm->click();
+        }
+        if (auto *diagnostic = window.findChild<rb::vision::VisualDiagnosticSession *>()) {
+            rb::vision::VisualViewContext stale;
+            stale.gate = rb::vision::DetectionDisplayState::Stale;
+            diagnostic->refresh(stale);
+        }
+        QApplication::processEvents();
+        return;
+    }
 
     if (item.state == QStringLiteral("FAULT")) {
         freshenTracking(window, 1);
@@ -372,7 +383,7 @@ QJsonObject captureCase(rb::MainWindow &window,
     // Keep a scripted TRACKING state fresh across the layout settle above.
     const bool wantsTracking = item.state == QStringLiteral("READY")
         || item.state == QStringLiteral("ARMED")
-        || item.state == QStringLiteral("ARMED+PLACEHOLDER");
+        || item.state == QStringLiteral("ARMED+AXIS");
     if (wantsTracking) {
         freshenTracking(window, 2);
         if (auto *session = window.findChild<rb::vision::VisualDispatchSession *>()) {
@@ -380,7 +391,7 @@ QJsonObject captureCase(rb::MainWindow &window,
         }
         QApplication::processEvents();
         if (item.state == QStringLiteral("ARMED")
-            || item.state == QStringLiteral("ARMED+PLACEHOLDER")) {
+            || item.state == QStringLiteral("ARMED+AXIS")) {
             if (auto *arm = window.findChild<QPushButton *>(QStringLiteral("visualArmButton"))) {
                 arm->click();
             }
@@ -388,18 +399,14 @@ QJsonObject captureCase(rb::MainWindow &window,
                 session->timerTick();
             }
         }
-        if (item.state == QStringLiteral("ARMED+PLACEHOLDER")) {
-            // Static example values for the rows that stay hidden by default.
+        if (item.state == QStringLiteral("ARMED+AXIS")) {
+            // The axis selector is hidden by default; show it to check that the
+            // pinned Arm/Disarm button is not clipped once the row is wired.
             auto *axis = window.findChild<QWidget *>(QStringLiteral("autoFollowAxisSelector"));
-            auto *depth = window.findChild<QWidget *>(QStringLiteral("autoFollowDepthRow"));
             if (axis != nullptr) {
                 axis->setVisible(true);
                 const auto buttons = axis->findChildren<QPushButton *>();
                 if (!buttons.isEmpty()) buttons.first()->setChecked(true);
-            }
-            if (depth != nullptr) {
-                depth->setVisible(true);
-                if (auto *bar = depth->findChild<QProgressBar *>()) bar->setValue(12);
             }
         }
         QApplication::processEvents();
@@ -528,10 +535,6 @@ int main(int argc, char **argv)
             rb::test::VisualControllerFixture controller;
             rb::MainWindow window(&controller, fixture.visionClient.get(),
                                   fixture.visionControlClient.get());
-            window.setGreenRegionVariant(
-                item.variant == QStringLiteral("V2")
-                    ? rb::MainWindow::GreenRegionVariant::SideBySideV2
-                    : rb::MainWindow::GreenRegionVariant::StackedV1);
             if (auto *video = window.findChild<rb::vision::VideoView *>(QStringLiteral("videoView"))) {
                 video->setFrame(rb::test::OperatorConsoleFixture::syntheticVideo(), 1);
             }

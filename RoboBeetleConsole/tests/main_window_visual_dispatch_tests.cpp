@@ -1,4 +1,6 @@
 #include "ui/MainWindow.h"
+#include "ui/AutoFollowState.h"
+#include <string>
 #include "vision/VisualDispatchSession.h"
 #include "vision/VideoView.h"
 #include "vision/VisualCsvLogger.h"
@@ -547,9 +549,9 @@ void autoFollowPanelContract()
     check(!child<QPushButton>(w,"visualDisarmButton"),"the separate Disarm button is gone");
     check(child<QWidget>(w,"autoFollowAxisSelector")&&!child<QWidget>(w,"autoFollowAxisSelector")->isVisible(),
           "the axis selector is reserved but hidden in this preview");
-    check(child<QWidget>(w,"autoFollowDepthRow")&&!child<QWidget>(w,"autoFollowDepthRow")->isVisible(),
-          "the depth row is reserved but hidden in this preview");
-    check(child<QPushButton>(w,"autoFollowZeroDepthButton")!=nullptr,"the zero-depth action is reserved by objectName");
+    check(!child<QWidget>(w,"autoFollowDepthRow")&&!child<QPushButton>(w,"autoFollowZeroDepthButton"),
+          "the depth row is not part of the green region (it lives in the Depth Sensor card)");
+    check(w.size()==QSize(1100,720)||w.width()>=1100,"window realized at the supported size");
 
     // 1. DRY RUN: feature off, ready underneath, nothing armed.
     check(pill->text()=="DRY RUN"&&!action->isEnabled()&&action->text().contains("not ready"),
@@ -606,6 +608,51 @@ void autoFollowPanelContract()
             check(fpill->text()=="FAULT","a latched fault outranks every other state");
             check(!fwarn->isHidden()&&fwarn->text().contains("STOP"),"FAULT shows the alert banner with the cause");
         }
+    }
+    // 5b. STOPPING: disarmed but the automatic STOP is still unconfirmed.
+    {
+        test::VisualControllerFixture sc;MainWindow sw(&sc);
+        sw.resize(1100,720);sw.show();QApplication::processEvents();
+        auto *ss=sw.findChild<VisualDispatchSession*>();auto *sgate=child<QCheckBox>(sw,"visualDispatchEnabled");
+        auto *spill=child<QLabel>(sw,"autoFollowStatePill");auto *sarm=child<QPushButton>(sw,"visualArmButton");
+        if(ss) ss->setTimerEnabled(false);
+        frame(sw);sgate->setChecked(true);
+        ss->timerTick();
+        check(spill->text()=="READY","stopping fixture starts READY");
+        click(sw,"visualArmButton");
+        check(ss->armed()&&spill->text()=="ARMED","stopping fixture arms");
+        auto *diagnostic=sw.findChild<VisualDiagnosticSession*>();
+        VisualViewContext stale;stale.gate=DetectionDisplayState::Stale;diagnostic->refresh(stale);
+        check(!ss->armed()&&ss->stopAwaiting(),"STALE disarms and leaves the automatic STOP unconfirmed");
+        check(spill->text()=="STOPPING","an unconfirmed automatic STOP shows STOPPING, not READY or DRY RUN");
+        check(spill->styleSheet().contains("#F0A92E"),"STOPPING uses the amber fill");
+        check(!sarm->isEnabled()&&sarm->text().contains("stopping"),"Arm is refused while the STOP is unconfirmed");
+        check(!sc.sends.empty()&&sc.sends.back().second==rb::MotionMode::Stop,"the automatic STOP was sent");
+        sc.ack(sc.sends.back().first,CommandTerminalResult::Ok);
+        frame(sw);ss->timerTick();
+        check(!ss->stopAwaiting()&&spill->text()!="STOPPING","an accepted STOP clears STOPPING");
+    }
+    // 5c. Pure priority table: FAULT > STOPPING > ARMED > DRY RUN > READY > NOT READY,
+    // and READY additionally needs eligibility.
+    {
+        using rb::ui::AutoFollowState;using rb::ui::AutoFollowStateInput;using rb::ui::classifyAutoFollowState;
+        AutoFollowStateInput in;in.enabled=true;in.readinessComplete=true;in.eligible=true;
+        check(classifyAutoFollowState(in)==AutoFollowState::Ready,"complete and eligible is READY");
+        in.eligible=false;
+        check(classifyAutoFollowState(in)==AutoFollowState::NotReady,"a complete checklist without eligibility is NOT READY");
+        in.eligible=true;in.readinessComplete=false;
+        check(classifyAutoFollowState(in)==AutoFollowState::NotReady,"eligibility without a complete checklist is NOT READY");
+        in.readinessComplete=true;in.enabled=false;
+        check(classifyAutoFollowState(in)==AutoFollowState::DryRun,"switch off is DRY RUN");
+        in.armed=true;
+        check(classifyAutoFollowState(in)==AutoFollowState::Armed,"armed outranks DRY RUN");
+        in.stopping=true;
+        check(classifyAutoFollowState(in)==AutoFollowState::Stopping,"STOPPING outranks ARMED");
+        in.stopping=true;in.armed=false;in.enabled=false;
+        check(classifyAutoFollowState(in)==AutoFollowState::Stopping,"STOPPING outranks DRY RUN and READY");
+        in.fault=true;
+        check(classifyAutoFollowState(in)==AutoFollowState::Fault,"FAULT outranks STOPPING");
+        check(std::string(rb::ui::autoFollowStateText(AutoFollowState::Stopping))=="STOPPING","state text");
     }
     // 6. Turning the feature off returns to DRY RUN and clears the checklist.
     gate->setChecked(false);

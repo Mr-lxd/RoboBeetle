@@ -18,7 +18,6 @@ class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
-class QProgressBar;
 class QPushButton;
 class QSlider;
 class QSpinBox;
@@ -53,9 +52,6 @@ class MainWindow final : public QMainWindow {
     Q_OBJECT
 
 public:
-    // Task 06 preview: choice between the two green-region layouts.
-    enum class GreenRegionVariant { StackedV1, SideBySideV2 };
-
     explicit MainWindow(
         IConsoleController *controller,
         vision::VisionClient *visionClient = nullptr,
@@ -63,9 +59,6 @@ public:
         vision::DetectionClient *detectionClient = nullptr,
         QWidget *parent = nullptr);
     ~MainWindow() override;
-    // Re-parents the existing green-region children; no widget is recreated.
-    void setGreenRegionVariant(GreenRegionVariant variant);
-    [[nodiscard]] GreenRegionVariant greenRegionVariant() const { return greenVariant_; }
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -101,7 +94,6 @@ private:
     QWidget *createVisionDetailsTab();
     // Task 06 green region (everything after the status text + its stretch).
     void createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summary);
-    void applyGreenRegionVariant();
     void applyAutoFollowCondensation();
     void refreshAutoFollowUi();
     void bindVisionUi();
@@ -162,18 +154,16 @@ private:
     QLabel *autoFollowDetail_{nullptr};
     QLabel *autoFollowFooter_{nullptr};
     QWidget *autoFollowAxisSelector_{nullptr};
-    QWidget *autoFollowDepthRow_{nullptr};
-    QPushButton *autoFollowZeroDepthButton_{nullptr};
     QPushButton *visualArmButton_{nullptr};
     QPushButton *visualDisarmButton_{nullptr};
     int autoFollowMissing_{3};
     QString autoFollowStateText_;
     QString autoFollowChecklistFull_;
     QString autoFollowDetailText_;
+    QString autoFollowBlockedText_; // all items ready but arm() would still refuse
     bool autoFollowCondensed_{false};
     bool autoFollowChecklistWanted_{false};
     QList<QWidget *> autoFollowPinned_;
-    GreenRegionVariant greenVariant_{GreenRegionVariant::StackedV1};
     QString visualDispatchRejection_;
     QString visualOperatorStopStatus_;
     QLabel *visualProposalDetails_{nullptr};

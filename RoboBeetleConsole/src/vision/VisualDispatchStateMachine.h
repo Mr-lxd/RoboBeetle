@@ -62,10 +62,11 @@ public:
     [[nodiscard]] std::optional<ProposedCommand> currentMode() const noexcept { return currentMode_; }
     [[nodiscard]] bool stopTimeoutAlert() const noexcept { return stopTimeoutAlert_; }
     [[nodiscard]] unsigned stopTimeoutCount() const noexcept { return stopTimeoutCount_; }
+    // Pure query: what arm() would answer for this input right now.
+    [[nodiscard]] ArmReason eligibility(const VisualDispatchInput &input) const;
 
 private:
     struct PendingMotion { DispatchRequest request; std::int64_t sentMs; };
-    [[nodiscard]] ArmReason eligibility(const VisualDispatchInput &input) const;
     [[nodiscard]] bool observeTime(std::int64_t nowMs);
     void beginStop(std::int64_t nowMs);
     void sendStop(std::int64_t nowMs);

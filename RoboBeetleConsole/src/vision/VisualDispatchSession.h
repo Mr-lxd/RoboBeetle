@@ -44,6 +44,10 @@ public:
     [[nodiscard]] bool timerEnabled() const { return timer_.isActive(); }
     bool featureEnabled() const { return enabled_; }
     bool armed() const { return machine_.armed(); }
+    // Disarmed, but an automatic or operator STOP is still unconfirmed.
+    [[nodiscard]] bool stopAwaiting() const { return machine_.stopAwaiting(); }
+    // What arm() would answer right now, without arming or mutating state.
+    [[nodiscard]] ArmReason eligibility() const { return machine_.eligibility(input()); }
     ArmReason armReason() const { return reason_; }
     std::optional<ProposedCommand> currentMode() const;
     bool stopTimeoutAlert() const { return machine_.stopTimeoutAlert(); }

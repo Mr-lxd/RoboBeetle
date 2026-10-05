@@ -51,7 +51,7 @@ void testScreenAwareStartupGeometry()
     }
     const QRect available = screen->availableGeometry();
     const int expectedWidth = qMax(1100, qMin(1420, available.width() - 32));
-    const int expectedHeight = qMax(720, qMin(1000, available.height() - 80));
+    const int expectedHeight = qMax(720, qMin(880, available.height() - 80));
     std::fprintf(stdout,
                  "startup_available=%dx%d expected=%dx%d actual=%dx%d\n",
                  available.width(), available.height(), expectedWidth, expectedHeight,
