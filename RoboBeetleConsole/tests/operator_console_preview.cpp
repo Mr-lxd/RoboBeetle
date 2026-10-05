@@ -102,6 +102,8 @@ QJsonObject measureGreenRegion(rb::MainWindow &window)
                 {QStringLiteral("fully_contained"),
                  [&] {
                      if (!widget->isVisible()) return true;
+                     // Compare against the group's own rectangle: the styled
+                     // title margin and padding are part of the clipping region.
                      const QRect mapped(widget->mapTo(autoGroup, QPoint(0, 0)),
                                         widget->size());
                      return autoGroup->rect().contains(mapped);
