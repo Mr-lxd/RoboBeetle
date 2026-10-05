@@ -453,7 +453,7 @@ void testDepthPanelLifecycle()
     injectDepthSnapshot(transport);
     expect(hasLabelText(panel, QStringLiteral("Receiving")),
            "Depth panel must show Receiving after a valid snapshot");
-    expect(hasLabelText(panel, QStringLiteral("1.234 m")),
+    expect(hasLabelText(panel, QStringLiteral("1.23 m")),
            "Depth panel must display millimetre values as metres");
     expect(hasLabelText(panel, QStringLiteral("25.34 C")),
            "Depth panel must display centi-degree values as Celsius");

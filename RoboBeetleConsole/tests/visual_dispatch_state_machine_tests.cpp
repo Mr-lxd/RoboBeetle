@@ -456,7 +456,7 @@ void depthArmingReasons()
         {depthAt(0.2, true, false), ArmReason::DepthNotZeroed, "not zeroed"},
         {depthAt(0.50), ArmReason::DepthHardLimit, "hard limit"},
         {depthAt(0.02), ArmReason::Ready, "surface can arm (ASCEND is gated, not arming)"},
-        {depthAt(0.42), ArmReason::Ready, "soft floor can arm"},
+        {depthAt(0.30), ArmReason::Ready, "soft floor can arm"},
     };
     for (const auto axis : {VisualAxisMode::Pitch, VisualAxisMode::Both}) {
         for (const auto &row : rows) {
@@ -509,8 +509,8 @@ void depthGatesNewCandidates()
     const struct { double depth; ProposedCommand suggestion; ProposedCommand sent; const char *name; } rows[] = {
         {0.20, ProposedCommand::Descend, ProposedCommand::Descend, "normal depth allows DESCEND"},
         {0.20, ProposedCommand::Ascend, ProposedCommand::Ascend, "normal depth allows ASCEND"},
-        {0.40, ProposedCommand::Descend, ProposedCommand::Forward, "soft floor turns DESCEND into FORWARD"},
-        {0.40, ProposedCommand::Ascend, ProposedCommand::Ascend, "soft floor still allows ASCEND"},
+        {0.30, ProposedCommand::Descend, ProposedCommand::Forward, "soft floor turns DESCEND into FORWARD"},
+        {0.30, ProposedCommand::Ascend, ProposedCommand::Ascend, "soft floor still allows ASCEND"},
         {0.02, ProposedCommand::Ascend, ProposedCommand::Forward, "surface turns ASCEND into FORWARD"},
         {0.02, ProposedCommand::Descend, ProposedCommand::Descend, "surface still allows DESCEND"},
         {0.02, ProposedCommand::Forward, ProposedCommand::Forward, "forward is never gated"},
@@ -532,16 +532,16 @@ void confirmedCommandIsStoppedAtLimit()
     {
         PitchFixture f; f.armAndSend(ProposedCommand::Descend); f.ack(1);
         expect(f.policy.currentMode() == ProposedCommand::Descend, "DESCEND confirmed");
-        f.depth(0.41, 100);
+        f.depth(0.30, 100);
         expect(f.port.requests.size() == 2 && f.port.last().command == ProposedCommand::Stop && f.policy.armed(),
                "confirmed DESCEND is stopped at the soft floor and the session stays armed");
         f.policy.acknowledge(f.port.last().id, DispatchOutcome::Ok, 110);
         f.input.suggestion = ProposedCommand::Descend;
-        f.depth(0.41, 500);
+        f.depth(0.30, 500);
         expect(f.port.requests.size() == 2, "no new command within the 1000 ms after an accepted STOP");
-        f.depth(0.41, 1109);
+        f.depth(0.30, 1109);
         expect(f.port.requests.size() == 2, "still blocked at 999 ms");
-        f.depth(0.41, 1110);
+        f.depth(0.30, 1110);
         expect(f.port.requests.size() == 3 && f.port.last().command == ProposedCommand::Forward,
                "after the dwell the gated candidate (FORWARD) follows, not DESCEND");
     }
@@ -566,7 +566,7 @@ void confirmedCommandIsStoppedAtLimit()
     {
         PitchFixture f; f.armAndSend(ProposedCommand::Descend); f.ack(1);
         f.input.state = VisualState::NoTarget; f.input.suggestion = ProposedCommand::Hold;
-        f.depth(0.41, 100);
+        f.depth(0.30, 100);
         expect(f.port.requests.size() == 2 && f.port.last().command == ProposedCommand::Stop && f.policy.armed(),
                "NO_TARGET grace does not delay the depth STOP");
     }
@@ -574,7 +574,7 @@ void confirmedCommandIsStoppedAtLimit()
     {
         PitchFixture f; f.armAndSend(ProposedCommand::Descend);
         const auto descendId = f.port.last().id;
-        f.depth(0.41, 100);
+        f.depth(0.30, 100);
         expect(f.port.requests.size() == 2 && f.port.last().command == ProposedCommand::Stop && f.policy.armed(),
                "an unacknowledged DESCEND is stopped at the soft floor");
         f.policy.acknowledge(descendId, DispatchOutcome::Ok, 120);
@@ -584,19 +584,19 @@ void confirmedCommandIsStoppedAtLimit()
 
 void softFloorLatchFollowsSamplesWhileDisarmed()
 {
-    PitchFixture f(VisualAxisMode::Pitch, 0.42);
+    PitchFixture f(VisualAxisMode::Pitch, 0.30);
     f.input.suggestion = ProposedCommand::Forward;
     f.evaluate(10);                      // disarmed, in the soft-floor band: latch set
-    f.depth(0.38, 20);                   // between release (0.37) and max (0.40): latch holds
+    f.depth(0.23, 20);                   // between release (0.22) and max (0.25): latch holds
     f.input.suggestion = ProposedCommand::Descend;
     expect(f.policy.arm(f.input) == ArmReason::Ready && f.policy.depthEnvelope() == DepthEnvelopeState::SoftFloor,
            "the latch followed the disarmed samples");
     f.policy.evaluate(f.input);
     expect(f.port.requests.size() == 1 && f.port.last().command == ProposedCommand::Forward,
-           "DESCEND at 0.38 m after 0.42 m is gated to FORWARD");
+           "DESCEND at 0.23 m after 0.30 m is gated to FORWARD");
     // And a hard limit leaves the latch set, so 0.52 -> 0.38 is still SoftFloor.
     PitchFixture g;
-    g.depth(0.52, 10); g.depth(0.38, 20);
+    g.depth(0.52, 10); g.depth(0.23, 20);
     expect(g.policy.depthEnvelope() == DepthEnvelopeState::SoftFloor, "hard limit latches the soft floor");
 }
 

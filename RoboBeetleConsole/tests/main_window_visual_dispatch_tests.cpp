@@ -20,6 +20,8 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QProgressBar>
+#include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSlider>
 #include <QSet>
@@ -548,8 +550,9 @@ void autoFollowPanelContract()
     for(const auto *name:{"visionConnectButton","startInferenceButton","snapshotButton","startRecordingButton"})
         check(controlsGroup->isAncestorOf(child<QPushButton>(w,name)),"vision actions live in Vision Controls");
     check(!child<QPushButton>(w,"visualDisarmButton"),"the separate Disarm button is gone");
-    check(child<QWidget>(w,"autoFollowAxisSelector")&&!child<QWidget>(w,"autoFollowAxisSelector")->isVisible(),
-          "the axis selector is reserved but hidden in this preview");
+    check(child<QWidget>(w,"autoFollowAxisSelector")&&child<QWidget>(w,"autoFollowAxisSelector")->isVisible()
+          &&autoGroup->isAncestorOf(child<QWidget>(w,"autoFollowAxisSelector")),
+          "the axis selector is shown inside Auto Follow");
     check(!child<QWidget>(w,"autoFollowDepthRow"),"the depth row is not part of the green region");
     {   // Depth Sensor card: bar and Zero action are always shown; wiring comes later.
         auto *card=child<QWidget>(w,"depthCard");auto *bar=child<QProgressBar>(w,"autoFollowDepthBar");
@@ -570,10 +573,13 @@ void autoFollowPanelContract()
     c.active=false;c.enabled=0;c.known=0;
     session->timerTick();
     check(pill->text()=="NOT READY","feature on without prerequisites is NOT READY");
-    check(!checklist->isHidden()&&checklist->text().contains("Link + control")
-          &&checklist->text().contains("Servos enabled")&&checklist->text().contains("Tracking"),
-          "NOT READY lists every unsatisfied readiness condition");
-    check(checklist->text().contains(QStringLiteral("\u2717")),"unsatisfied conditions are marked as unmet");
+    // One line: the first missing item plus a count; the tooltip lists everything.
+    check(!checklist->isHidden()&&checklist->text().contains("Link + control")&&checklist->text().contains("+2 more"),
+          "NOT READY names the first missing condition and counts the rest");
+    check(checklist->toolTip().contains("Link + control")&&checklist->toolTip().contains("Servos enabled")
+          &&checklist->toolTip().contains("Tracking"),"the checklist tooltip lists every readiness condition");
+    check(checklist->text().contains(QStringLiteral("\u2717"))&&checklist->toolTip().contains(QStringLiteral("\u2717")),
+          "unsatisfied conditions are marked as unmet");
     check(!action->isEnabled()&&action->text().contains("3"),"Arm is disabled and counts three unmet conditions");
     check(alert->isHidden()&&alert->text().isEmpty(),"no alert banner without a fault");
 
@@ -680,5 +686,131 @@ void coveredOperatorStopUi()
           "UI distinguishes covered operator STOP from unconfirmed outcome");
 }
 
+
+// Task 06 PR-D: axis selector, Pitch/Both checklist, Depth Sensor bar and Zero, CSV depth provider.
+DepthControlSample depthSampleAt(double metres,bool fresh=true,bool zeroed=true)
+{
+    DepthControlSample s;s.rawDepthM=metres+0.115;if(zeroed)s.calibratedDepthM=metres;s.ageMs=fresh?20:5000;s.fresh=fresh;return s;
 }
-int main(int argc,char **argv){QApplication app(argc,argv);autoFollowPanelContract();controls();transientSafetyEvents();replayDesktopTransientStale();coveredOperatorStopUi();manualPaths();keyboardPaths();rawRejection();signAndOffMatrix();enableReleaseBranchesAndAlert();negativeAndTimer();loopbackWindowAndCsv();std::printf("main_window_visual_dispatch_tests: %d failures\n",failures);return failures?1:0;}
+bool logContains(MainWindow &w,const QString &text)
+{
+    for(auto *edit:w.findChildren<QPlainTextEdit*>()) if(edit->toPlainText().contains(text)) return true;
+    return false;
+}
+
+void axisSelectorAndChecklist()
+{
+    test::VisualControllerFixture c;MainWindow w(&c);
+    w.resize(1100,720);w.show();QApplication::processEvents();
+    auto *session=w.findChild<VisualDispatchSession*>();auto *gate=child<QCheckBox>(w,"visualDispatchEnabled");
+    auto *yaw=child<QPushButton>(w,"autoFollowAxisYaw");auto *pitch=child<QPushButton>(w,"autoFollowAxisPitch");
+    auto *both=child<QPushButton>(w,"autoFollowAxisBoth");auto *checklist=child<QLabel>(w,"autoFollowChecklist");
+    auto *pill=child<QLabel>(w,"autoFollowStatePill");auto *action=child<QPushButton>(w,"visualArmButton");
+    check(session&&gate&&yaw&&pitch&&both&&checklist&&pill&&action,"axis widgets exist");
+    if(!(session&&gate&&yaw&&pitch&&both&&checklist&&pill&&action))return;
+    session->setTimerEnabled(false);
+    check(yaw->isChecked()&&!pitch->isChecked()&&!both->isChecked()&&session->axisMode()==VisualAxisMode::Yaw,
+          "Yaw is the default axis");
+    gate->setChecked(true);c.enabled=0x1b;c.known=0x1b;frame(w);session->timerTick();
+    check(pill->text()=="READY","Yaw is READY with the original servo mask and no depth");
+
+    pitch->click();
+    check(session->axisMode()==VisualAxisMode::Pitch&&pitch->isChecked()&&!yaw->isChecked(),"clicking Pitch selects the Pitch axis");
+    frame(w,2);session->timerTick();
+    check(pill->text()=="NOT READY","Pitch without the front axis or depth is NOT READY");
+    check(!checklist->isHidden()&&checklist->toolTip().contains("Front axis servo")&&checklist->toolTip().contains("Depth unavailable"),
+          "Pitch checklist adds the front axis and depth items");
+    c.enabled=0x1f;c.known=0x1f;c.depthSample=depthSampleAt(0.1,true,false);
+    frame(w,3);session->timerTick();
+    check(checklist->toolTip().contains("Depth not zeroed"),"unzeroed depth is spelled out in the checklist");
+    check(action->text().contains("Depth not zeroed")&&!action->isEnabled(),"Arm names the missing depth and stays refused");
+    c.depthSample=depthSampleAt(0.1);
+    frame(w,4);session->timerTick();
+    check(pill->text()=="READY"&&action->isEnabled(),"front axis plus zeroed depth makes Pitch READY");
+
+    both->click();
+    check(session->axisMode()==VisualAxisMode::Both&&both->isChecked(),"clicking Both selects the Both axis");
+
+    // Switching while armed stops and disarms.
+    yaw->click();c.enabled=0x1b;c.known=0x1b;frame(w,5);session->timerTick();click(w,"visualArmButton");
+    check(session->armed(),"armed in Yaw");
+    const auto sends=c.sends.size();
+    pitch->click();
+    check(!session->armed()&&c.sends.size()==sends+1&&c.sends.back().second==rb::MotionMode::Stop,
+          "selecting an axis while armed sends one STOP and disarms");
+    check(pill->text()!="ARMED","the pill no longer says ARMED");
+}
+
+void depthBarAndZeroButton()
+{
+    test::VisualControllerFixture c;MainWindow w(&c);
+    w.resize(1100,720);w.show();QApplication::processEvents();
+    auto *session=w.findChild<VisualDispatchSession*>();auto *bar=child<QProgressBar>(w,"autoFollowDepthBar");
+    auto *zero=child<QPushButton>(w,"autoFollowZeroDepthButton");auto *gate=child<QCheckBox>(w,"visualDispatchEnabled");
+    check(session&&bar&&zero&&gate,"depth widgets exist");if(!(session&&bar&&zero&&gate))return;
+    session->setTimerEnabled(false);
+    const QString dot=QString(QChar(0x00B7));
+    check(bar->format()=="Not zeroed"&&!zero->isEnabled(),"no sample: Not zeroed and Zero disabled");
+    c.publishDepth(depthSampleAt(0.1,true,false));
+    check(bar->format()=="Not zeroed"&&zero->isEnabled()&&bar->styleSheet().contains("#9AA7B2"),
+          "fresh but unzeroed: Not zeroed (grey), Zero enabled");
+    c.publishDepth(depthSampleAt(0.0));
+    check(bar->format()=="0.00 m "+dot+" SURFACE"&&bar->value()==0&&bar->styleSheet().contains("#F0A92E"),
+          "zeroed in air shows 0.00 m SURFACE (amber)");
+    c.publishDepth(depthSampleAt(0.15));
+    check(bar->format()=="0.15 m "+dot+" NORMAL"&&bar->value()==150&&bar->styleSheet().contains("#2F80C9"),
+          "normal depth: value in millimetres, default colour");
+    c.publishDepth(depthSampleAt(0.30));
+    check(bar->format().contains("SOFT_FLOOR")&&bar->styleSheet().contains("#F0A92E"),"soft floor is amber");
+    c.publishDepth(depthSampleAt(0.40));
+    check(bar->format().contains("HARD_LIMIT")&&bar->styleSheet().contains("#C53F3F")&&bar->value()==400,"hard limit is red");
+    c.publishDepth(depthSampleAt(0.9));
+    check(bar->value()==500,"the bar clamps at 0.50 m");
+    c.publishDepth(depthSampleAt(0.15,false));
+    check(bar->format()=="Stale"&&bar->styleSheet().contains("#9AA7B2"),"a stale sample shows Stale (grey)");
+
+    // Zero button: failure reasons go to the log.
+    c.publishDepth(depthSampleAt(0.0,true,false));
+    c.zeroResult=false;c.zeroError=QStringLiteral("depth is not steady");
+    zero->click();
+    check(c.zeroCalls==1&&logContains(w,"Zero depth failed: depth is not steady"),"Zero failure reason is logged");
+    c.zeroResult=true;zero->click();
+    check(c.zeroCalls==2,"Zero calls the controller");
+
+    // Armed: Zero is disabled.
+    c.enabled=0x1b;c.known=0x1b;c.publishDepth(depthSampleAt(0.1));
+    frame(w);gate->setChecked(true);session->timerTick();click(w,"visualArmButton");
+    check(session->armed(),"armed for the Zero-disable check");
+    c.publishDepth(depthSampleAt(0.1));
+    check(!zero->isEnabled(),"Zero is disabled while armed");
+    click(w,"visualArmButton");
+    c.publishDepth(depthSampleAt(0.1));
+    check(zero->isEnabled(),"Zero is available again after disarming");
+    c.connected=false;c.publishDepth(depthSampleAt(0.1));
+    check(!zero->isEnabled(),"Zero needs a connected Remote controller");
+}
+
+void csvDepthColumnsAreWired()
+{
+    test::VisualControllerFixture c;MainWindow w(&c);
+    QTemporaryDir dir;check(dir.isValid(),"temp dir");
+    auto *logger=w.findChild<VisualCsvLogger*>();
+    check(logger!=nullptr,"CSV logger exists");if(!logger)return;
+    c.depthSample=depthSampleAt(0.125);
+    check(logger->start(dir.path()),"logger starts");
+    frame(w);
+    logger->flush();
+    QFile file(logger->filePath());check(file.open(QIODevice::ReadOnly),"CSV opens");
+    const auto lines=QString::fromUtf8(file.readAll()).split(QChar(10),Qt::SkipEmptyParts);
+    bool found=false;
+    for(const auto &line:lines){
+        if(!line.startsWith("frame"))continue;
+        const auto cols=line.split(',');
+        // depth_raw_m, depth_cal_m, depth_age_ms, envelope_state are the last four columns.
+        if(cols.size()==42&&qAbs(cols[38].toDouble()-0.24)<1e-9&&qAbs(cols[39].toDouble()-0.125)<1e-9&&cols[40]=="20") found=true;
+    }
+    check(found,"frame rows carry the controller's raw/zeroed depth and age");
+}
+
+}
+int main(int argc,char **argv){QApplication app(argc,argv);autoFollowPanelContract();axisSelectorAndChecklist();depthBarAndZeroButton();csvDepthColumnsAreWired();controls();transientSafetyEvents();replayDesktopTransientStale();coveredOperatorStopUi();manualPaths();keyboardPaths();rawRejection();signAndOffMatrix();enableReleaseBranchesAndAlert();negativeAndTimer();loopbackWindowAndCsv();std::printf("main_window_visual_dispatch_tests: %d failures\n",failures);return failures?1:0;}

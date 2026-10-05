@@ -933,7 +933,7 @@ void testDepthSampleIsEvaluatedImmediately()
         PitchSession s;
         s.armAndConfirm(ProposedCommand::Descend);
         const auto before = s.controller.sends.size();
-        s.controller.publishDepth(sampleAt(0.41));
+        s.controller.publishDepth(sampleAt(0.30));
         expect(s.session->armed() && s.controller.sends.size() == before + 1
                    && s.controller.sends.back().second == rb::MotionMode::Stop,
                "a soft-floor sample stops the dive and keeps the session armed");
@@ -1096,7 +1096,7 @@ void testReadinessIncludesFrontAxisAndDepthInPitch()
         s.controller.depthSample = sampleAt(0.55);
         r = s.session->readiness();
         expect(!r.depthReady && r.depthNote && *r.depthNote == QStringLiteral("Depth at hard limit"), "hard limit");
-        s.controller.depthSample = sampleAt(0.45);
+        s.controller.depthSample = sampleAt(0.30);
         expect(s.session->readiness().depthReady, "the soft floor and surface bands are ready (gated, not refused)");
         s.controller.depthSample = sampleAt(0.0);
         expect(s.session->readiness().depthReady, "surface is ready");

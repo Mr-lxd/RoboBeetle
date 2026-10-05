@@ -10,9 +10,9 @@ struct DepthControlConfig {
     int zeroMinSamples{5};        // 归零至少需要的新鲜样本数
     double zeroMaxRangeM{0.015};  // max range of zeroing samples; sensor resolution is 1 cm, so 0.13-0.12 (>0.01 in floating point) must pass
     double surfaceMarginM{0.02};  // 归零后深度 <= 此值：禁止 ASCEND
-    double softMaxM{0.40};        // >= 此值：DESCEND 改为 FORWARD（软限位）
-    double softReleaseM{0.37};    // 回到此值以下才解除软限位（滞回）
-    double hardMaxM{0.50};        // >= 此值：STOP 并撤防（硬限位）
+    double softMaxM{0.25};        // [Provisional, first water test] >= this: DESCEND becomes FORWARD (soft limit)
+    double softReleaseM{0.22};    // [Provisional, first water test] soft limit releases below this (hysteresis)
+    double hardMaxM{0.35};        // [Provisional, first water test] >= this: STOP and disarm (hard limit)
 };
 
 struct DepthControlSample {

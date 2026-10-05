@@ -155,7 +155,7 @@ struct PreviewCase {
     QString scenario;
     // Task 06 green-region extra: variant selector and scripted Auto Follow state.
     QString variant;   // "V1" for the green-region suite, empty for the generic suite.
-    QString state;     // DRY RUN / NOT READY / READY / ARMED / STOPPING / FAULT / ARMED+AXIS
+    QString state;     // DRY RUN / NOT READY / READY / ARMED / STOPPING / FAULT / PITCH-READY / PITCH-NOT-ZEROED
     bool panelCrop{false};
 };
 
@@ -170,7 +170,8 @@ QList<PreviewCase> greenRegionCases()
     const QList<QString> states{
         QStringLiteral("DRY RUN"), QStringLiteral("NOT READY"),
         QStringLiteral("READY"), QStringLiteral("ARMED"), QStringLiteral("STOPPING"),
-        QStringLiteral("FAULT"), QStringLiteral("ARMED+AXIS")};
+        QStringLiteral("FAULT"), QStringLiteral("PITCH-READY"),
+        QStringLiteral("PITCH-NOT-ZEROED")};
     const auto slug = [](const QString &state) {
         return QString(state).replace(QStringLiteral(" "), QStringLiteral("-"))
             .replace(QStringLiteral("+"), QStringLiteral("-"));
@@ -274,6 +275,21 @@ void applyGreenState(rb::MainWindow &window,
 
     gate->setChecked(true);
     QApplication::processEvents();
+
+    if (item.state == QStringLiteral("PITCH-READY") || item.state == QStringLiteral("PITCH-NOT-ZEROED")) {
+        // Pitch axis with the front axis ready; depth either zeroed (0.12 m, NORMAL) or not.
+        if (auto *pitch = window.findChild<QPushButton *>(QStringLiteral("autoFollowAxisPitch"))) pitch->click();
+        fixture.enabled = 0x1f;
+        fixture.known = 0x1f;
+        rb::DepthControlSample sample;
+        sample.rawDepthM = 0.12 + 0.115;
+        if (item.state == QStringLiteral("PITCH-READY")) sample.calibratedDepthM = 0.12;
+        sample.ageMs = 20;
+        sample.fresh = true;
+        fixture.publishDepth(sample);
+        QApplication::processEvents();
+        return;
+    }
 
     if (item.state == QStringLiteral("STOPPING")) {
         // Armed, then a STALE safety event: the automatic STOP is sent and its
@@ -392,30 +408,20 @@ QJsonObject captureCase(rb::MainWindow &window,
     // Keep a scripted TRACKING state fresh across the layout settle above.
     const bool wantsTracking = item.state == QStringLiteral("READY")
         || item.state == QStringLiteral("ARMED")
-        || item.state == QStringLiteral("ARMED+AXIS");
+        || item.state == QStringLiteral("PITCH-READY")
+        || item.state == QStringLiteral("PITCH-NOT-ZEROED");
     if (wantsTracking) {
         freshenTracking(window, 2);
         if (auto *session = window.findChild<rb::vision::VisualDispatchSession *>()) {
             session->timerTick();
         }
         QApplication::processEvents();
-        if (item.state == QStringLiteral("ARMED")
-            || item.state == QStringLiteral("ARMED+AXIS")) {
+        if (item.state == QStringLiteral("ARMED")) {
             if (auto *arm = window.findChild<QPushButton *>(QStringLiteral("visualArmButton"))) {
                 arm->click();
             }
             if (auto *session = window.findChild<rb::vision::VisualDispatchSession *>()) {
                 session->timerTick();
-            }
-        }
-        if (item.state == QStringLiteral("ARMED+AXIS")) {
-            // The axis selector is hidden by default; show it to check that the
-            // pinned Arm/Disarm button is not clipped once the row is wired.
-            auto *axis = window.findChild<QWidget *>(QStringLiteral("autoFollowAxisSelector"));
-            if (axis != nullptr) {
-                axis->setVisible(true);
-                const auto buttons = axis->findChildren<QPushButton *>();
-                if (!buttons.isEmpty()) buttons.first()->setChecked(true);
             }
         }
         QApplication::processEvents();

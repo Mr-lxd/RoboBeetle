@@ -31,6 +31,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QButtonGroup>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QMessageBox>
@@ -85,7 +86,7 @@ QString formatAngle(const std::array<qint16, 3> &values)
 QString formatDepth(qint32 depthMm)
 {
     return QStringLiteral("%1 m")
-        .arg(static_cast<double>(depthMm) / 1000.0, 0, 'f', 3);
+        .arg(static_cast<double>(depthMm) / 1000.0, 0, 'f', 2);
 }
 
 QString formatTemperature(qint16 temperatureCentiC)
@@ -1154,12 +1155,12 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     autoFollowGroup_->setObjectName(QStringLiteral("autoFollowCard"));
     applySubpanelStyle(autoFollowGroup_);
     auto *autoOuter = new QVBoxLayout(autoFollowGroup_);
-    autoOuter->setContentsMargins(6, 10, 6, 4);
+    autoOuter->setContentsMargins(6, 8, 6, 3);
     autoOuter->setSpacing(4);
     autoFollowGrid_ = new QGridLayout;
     autoFollowGrid_->setObjectName(QStringLiteral("autoFollowGrid"));
     autoFollowGrid_->setContentsMargins(0, 0, 0, 0);
-    autoFollowGrid_->setSpacing(3);
+    autoFollowGrid_->setSpacing(2);
     autoOuter->addLayout(autoFollowGrid_);
 
     autoFollowStatePill_ = new QLabel(QStringLiteral("DRY RUN"), autoFollowGroup_);
@@ -1175,32 +1176,41 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     visualDispatchEnabled_->setToolTip(
         QStringLiteral("Session-only: never persisted and never auto-arms."));
 
-    // Axis selection stays hidden in this preview and is wired by the
-    // follow-up PR. The objectName is reserved here.
+    // Axis selection: Yaw (default) / Pitch / Both. Session-only, never persisted.
     autoFollowAxisSelector_ = new QWidget(autoFollowGroup_);
     autoFollowAxisSelector_->setObjectName(QStringLiteral("autoFollowAxisSelector"));
     auto *axisLayout = new QHBoxLayout(autoFollowAxisSelector_);
     axisLayout->setContentsMargins(0, 0, 0, 0);
     axisLayout->setSpacing(0);
-    for (const QString &axis : {QStringLiteral("Yaw"), QStringLiteral("Pitch"),
-                                QStringLiteral("Both")}) {
-        auto *axisButton = new QPushButton(axis, autoFollowAxisSelector_);
+    axisGroup_ = new QButtonGroup(this);
+    axisGroup_->setExclusive(true);
+    const QStringList axisNames{QStringLiteral("Yaw"), QStringLiteral("Pitch"), QStringLiteral("Both")};
+    for (int i = 0; i < axisNames.size(); ++i) {
+        auto *axisButton = new QPushButton(axisNames.at(i), autoFollowAxisSelector_);
+        axisButton->setObjectName(QStringLiteral("autoFollowAxis%1").arg(axisNames.at(i)));
         axisButton->setCheckable(true);
-        axisButton->setMinimumHeight(28);
+        axisButton->setChecked(i == 0);
+        axisButton->setMinimumHeight(24);
         axisButton->setProperty("consoleActionRole", "secondary");
+        axisButton->setStyleSheet(QStringLiteral(
+            "QPushButton { min-height: 24px; padding: 2px 6px; border-radius: 0px; }"
+            "QPushButton:checked { background: #344B5B; color: #FFFFFF; font-weight: 700; "
+            "  border-color: #344B5B; }"));
+        axisGroup_->addButton(axisButton, i);
         axisLayout->addWidget(axisButton);
     }
-    autoFollowAxisSelector_->setVisible(false);
+    connect(axisGroup_, &QButtonGroup::idClicked, this, &MainWindow::onAxisSelected);
 
     autoFollowChecklist_ = new QLabel(autoFollowGroup_);
     autoFollowChecklist_->setObjectName(QStringLiteral("autoFollowChecklist"));
     autoFollowChecklist_->setWordWrap(true);
+    autoFollowChecklist_->setMaximumHeight(18); // one line of 11 px text
     autoFollowChecklist_->setTextFormat(Qt::PlainText);
     autoFollowChecklist_->setStyleSheet(QStringLiteral("font-size: 11px; color: #566B79;"));
 
     visualArmButton_ = new QPushButton(QStringLiteral("Arm"), autoFollowGroup_);
     visualArmButton_->setObjectName(QStringLiteral("visualArmButton"));
-    applyGreenRegionButtonStyle(visualArmButton_, 36);
+    applyGreenRegionButtonStyle(visualArmButton_, 34);
     visualArmButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
     autoFollowAlert_ = new QLabel(autoFollowGroup_);
@@ -1226,6 +1236,7 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
         autoFollowGroup_);
     autoFollowFooter_->setObjectName(QStringLiteral("autoFollowFooter"));
     autoFollowFooter_->setStyleSheet(QStringLiteral("font-size: 10px; color: #7B8F9D;"));
+    visualArmButton_->setToolTip(autoFollowFooter_->text());
 
     // Dispatch status keeps its frozen objectName: behaviour tests read it.
     visualDispatchStatus_ = new QLabel(autoFollowGroup_);
@@ -1258,7 +1269,9 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     addAuto(visualArmButton_);
     addAuto(autoFollowAlert_);
     addAuto(autoFollowDetail_);
-    addAuto(autoFollowFooter_);
+    // The footer line no longer takes a row (the vertical budget goes to the axis
+    // selector and the checklist); its text lives in the Arm button tooltip.
+    autoFollowFooter_->setVisible(false);
 
     // Pinned rows: never dropped, never clipped. The axis row is pre-wired for
     // the follow-up PR and is hidden in this preview, so it costs nothing.
@@ -2610,30 +2623,32 @@ void MainWindow::applyAutoFollowCondensation()
     const int available = autoFollowGroup_->contentsRect().bottom()
         - autoFollowGrid_->contentsMargins().bottom() - contentBottom;
     if (available <= 0) {
-        autoFollowFooter_->setVisible(false);
         autoFollowChecklist_->setVisible(false);
         autoFollowDetail_->setVisible(false);
         return;
     }
     const int spacing = autoFollowGrid_->verticalSpacing();
-    const int footerCost = autoFollowFooter_->sizeHint().height() + spacing;
+    const int footerCost = 0; // footer is tooltip-only now
     // A hidden label reports an invalid size hint, so derive the checklist cost
     // from its font metrics and its known line count instead.
     const int lineHeight = autoFollowChecklist_->fontMetrics().lineSpacing() + 2;
     const int collapsedCost = lineHeight + spacing;
-    const int expandedCost = lineHeight * 3 + spacing;
+    const int expandedCost = lineHeight * qMax(1, autoFollowChecklistLines_) + spacing;
     const int detailCost = autoFollowDetail_->fontMetrics().lineSpacing() + 4 + spacing;
 
     // 1. Footer goes first.
-    autoFollowFooter_->setVisible(footerCost <= available);
-    const int afterFooter = available - (autoFollowFooter_->isHidden() ? 0 : footerCost);
+    autoFollowFooter_->setVisible(false);
+    const int afterFooter = available - footerCost;
     // 2. The checklist collapses to a one-line summary before it is dropped.
     const bool showChecklist = autoFollowChecklistWanted_ && collapsedCost <= afterFooter;
     autoFollowCondensed_ = showChecklist && expandedCost > afterFooter;
     autoFollowChecklist_->setText(
         autoFollowBlockedText_.isEmpty()
                 && (autoFollowCondensed_ || autoFollowMissing_ == 0)
-            ? QStringLiteral("%1/3 ready").arg(3 - autoFollowMissing_)
+            ? (autoFollowDepthNote_.isEmpty()
+                   ? QStringLiteral("%1/%2 ready").arg(autoFollowTotal_ - autoFollowMissing_).arg(autoFollowTotal_)
+                   : QStringLiteral("%1/%2 ready %3 %4").arg(autoFollowTotal_ - autoFollowMissing_)
+                         .arg(autoFollowTotal_).arg(QChar(0x00B7)).arg(autoFollowDepthNote_))
             : autoFollowChecklistFull_);
     autoFollowChecklist_->setVisible(showChecklist);
     // 3. Detail line last.
@@ -2652,6 +2667,9 @@ void MainWindow::refreshAutoFollowUi()
     const bool armed = visualDispatch_->armed();
     const auto readiness = visualDispatch_->readiness();
     autoFollowMissing_ = readiness.missingCount();
+    autoFollowTotal_ = readiness.totalCount();
+    autoFollowChecklistLines_ = 1;
+    autoFollowDepthNote_ = readiness.depthNote.value_or(QString());
 
     QString fault;
     if (visualDispatch_->stopTimeoutAlert()) {
@@ -2704,17 +2722,41 @@ void MainWindow::refreshAutoFollowUi()
     const auto tick = [](bool ok) {
         return ok ? QStringLiteral("\u2713") : QStringLiteral("\u2717");
     };
+    // One line: the first missing item and how many more follow. The tooltip
+    // carries the full checklist with ticks.
+    QStringList missing;
+    QStringList everything;
+    const auto addItem = [&](bool ok, const QString &text) {
+        everything << QStringLiteral("%1 %2").arg(tick(ok), text);
+        if (!ok) missing << QStringLiteral("%1 %2").arg(tick(false), text);
+    };
+    addItem(readiness.linkAndControl, QStringLiteral("Link + control"));
+    addItem(readiness.servosReady, QStringLiteral("Servos enabled + pose"));
+    addItem(readiness.tracking, QStringLiteral("Tracking target"));
+    if (readiness.pitchActive) {
+        addItem(readiness.frontAxisReady, QStringLiteral("Front axis servo"));
+        addItem(readiness.depthReady, readiness.depthNote.value_or(QStringLiteral("Depth ready")));
+    }
     autoFollowChecklistFull_ = !autoFollowBlockedText_.isEmpty()
         ? autoFollowBlockedText_
-        : QStringLiteral("%1 Link + control\n%2 Servos enabled + pose\n%3 Tracking target")
-              .arg(tick(readiness.linkAndControl))
-              .arg(tick(readiness.servosReady))
-              .arg(tick(readiness.tracking));
-    autoFollowChecklist_->setToolTip(autoFollowChecklistFull_);
-    autoFollowChecklistWanted_ = enabled && !armed && !stopping
+        : missing.size() <= 1 ? missing.value(0)
+        : QStringLiteral("%1  +%2 more").arg(missing.first()).arg(missing.size() - 1);
+    autoFollowChecklistTip_ = everything.join(QLatin1Char(10));
+    autoFollowChecklist_->setToolTip(autoFollowChecklistTip_);
+    // A fault banner takes the checklist line's room.
+    autoFollowChecklistWanted_ = enabled && !armed && !stopping && fault.isEmpty()
         && (autoFollowMissing_ > 0 || !autoFollowBlockedText_.isEmpty());
     autoFollowChecklist_->setVisible(autoFollowChecklistWanted_);
     autoFollowChecklist_->setText(autoFollowChecklistFull_);
+
+    if (axisGroup_ != nullptr) {
+        const int axisIndex = static_cast<int>(visualDispatch_->axisMode());
+        if (axisGroup_->checkedId() != axisIndex) {
+            const QSignalBlocker blocker(axisGroup_);
+            if (auto *button = axisGroup_->button(axisIndex)) button->setChecked(true);
+        }
+    }
+    refreshDepthControlUi();
 
     autoFollowAlert_->setText(fault);
     autoFollowAlert_->setVisible(!fault.isEmpty());
@@ -2738,6 +2780,8 @@ void MainWindow::refreshAutoFollowUi()
         visualArmButton_->setText(QStringLiteral("Disarm"));
     } else if (stopping) {
         visualArmButton_->setText(QStringLiteral("Arm \u00b7 stopping"));
+    } else if (autoFollowMissing_ == 1 && !autoFollowDepthNote_.isEmpty()) {
+        visualArmButton_->setText(QStringLiteral("Arm \u00b7 %1").arg(autoFollowDepthNote_));
     } else if (autoFollowMissing_ > 0) {
         visualArmButton_->setText(QStringLiteral("Arm \u00b7 %1 not ready")
             .arg(autoFollowMissing_));
@@ -2773,6 +2817,59 @@ void MainWindow::refreshAutoFollowUi()
     visualDispatchStatus_->setVisible(false);
 
     applyAutoFollowCondensation();
+}
+
+void MainWindow::onAxisSelected(int axisIndex)
+{
+    if (!visualDispatch_) return;
+    // The session sends the operator STOP and disarms when needed; the UI only refreshes.
+    visualDispatch_->setAxisMode(static_cast<vision::VisualAxisMode>(axisIndex));
+    refreshAutoFollowUi();
+}
+
+// Depth Sensor card: zeroed-depth bar (0 - 0.50 m) and the Zero action.
+void MainWindow::refreshDepthControlUi()
+{
+    if (depthBar_ == nullptr || depthZeroButton_ == nullptr) return;
+    const auto sample = controller_->controlDepthSample();
+    const DepthControlConfig config;
+
+    QString text = QStringLiteral("Not zeroed");
+    QString chunk = QStringLiteral("#9AA7B2"); // grey
+    int millimetres = 0;
+    if (!sample || !sample->fresh) {
+        if (sample || controller_->depthZeroedAtMs().has_value()) text = QStringLiteral("Stale");
+    } else if (!sample->calibratedDepthM) {
+        text = QStringLiteral("Not zeroed");
+    } else {
+        const auto result = evaluateDepthEnvelope(sample, depthUiMemory_, config);
+        depthUiMemory_ = result.next;
+        const double metres = *sample->calibratedDepthM;
+        millimetres = qBound(0, qRound(metres * 1000.0), 500);
+        text = QStringLiteral("%1 m %2 %3").arg(metres, 0, 'f', 2).arg(QChar(0x00B7))
+                   .arg(QString::fromLatin1(depthEnvelopeStateName(result.state)));
+        switch (result.state) {
+        case DepthEnvelopeState::Surface:
+        case DepthEnvelopeState::SoftFloor: chunk = QStringLiteral("#F0A92E"); break; // amber
+        case DepthEnvelopeState::HardLimit: chunk = QStringLiteral("#C53F3F"); break; // red
+        case DepthEnvelopeState::Normal: chunk = QStringLiteral("#2F80C9"); break;
+        default: break;
+        }
+    }
+    depthBar_->setValue(millimetres);
+    depthBar_->setFormat(text);
+    depthBar_->setStyleSheet(QStringLiteral(
+        "QProgressBar { background: #E3E9EF; border: 1px solid #C5D4E0; border-radius: 4px; "
+        "  color: #334A5C; font-size: 10px; font-weight: 600; }"
+        "QProgressBar::chunk { background: %1; border-radius: 3px; }").arg(chunk));
+
+    // Zeroing while armed would shift every limit under the running session.
+    const bool armed = visualDispatch_ != nullptr && visualDispatch_->armed();
+    depthZeroButton_->setEnabled(
+        controller_->backendKind() == ConsoleBackendKind::RemoteRbrp
+        && controller_->isConnected() && sample.has_value() && sample->fresh && !armed);
+    depthZeroButton_->setToolTip(armed ? QStringLiteral("Disarm before zeroing depth")
+                                       : QStringLiteral("Take the current depth as 0"));
 }
 
 void MainWindow::refreshVisualDispatchUi()
@@ -2829,6 +2926,22 @@ void MainWindow::bindVisionUi()
             this, &MainWindow::refreshVisualDispatchUi);
     connect(visualDispatchEnabled_, &QCheckBox::toggled,
             visualDispatch_, &vision::VisualDispatchSession::setFeatureEnabled);
+    // CSV depth columns come from the session (blank until a sample exists).
+    visualCsvLogger_->setDepthInfoProvider([this] { return visualDispatch_->depthCsvInfo(); });
+    connect(depthZeroButton_, &QPushButton::clicked, this, [this] {
+        QString error;
+        if (!controller_->zeroDepth(&error)) {
+            appendLog(QStringLiteral("Zero depth failed: %1").arg(error));
+        }
+        refreshDepthControlUi();
+    });
+    connect(controller_, &IConsoleController::controlDepthSampleChanged,
+            this, &MainWindow::refreshDepthControlUi);
+    // Staleness has no event: look again twice a second.
+    auto *depthRefreshTimer = new QTimer(this);
+    depthRefreshTimer->setInterval(500);
+    connect(depthRefreshTimer, &QTimer::timeout, this, &MainWindow::refreshDepthControlUi);
+    depthRefreshTimer->start();
     refreshVisualDispatchUi();
     connect(visualSession_, &vision::VisualDiagnosticSession::diagnosticChanged, this,
             [this](const vision::VisualDiagnosticSnapshot &snapshot) {
@@ -3574,9 +3687,32 @@ int MainWindow::fullyExpandedWindowHeight() const
 
 // The tools pane keeps its content height; the window minimum follows so the
 // dashboard (video + status columns) is what shrinks when space is short.
+// Auto Follow keeps a constant height: room for the one-line checklist is reserved even while the checklist is hidden, so the
+// block never changes size when the state changes and nothing overlaps. The
+// reserve comes out of the free space above the block.
+void MainWindow::reserveVisionPanelHeight()
+{
+    if (autoFollowGroup_ == nullptr || autoFollowChecklist_ == nullptr
+        || autoFollowGroup_->layout() == nullptr) return;
+    const QString keptText = autoFollowChecklist_->text();
+    const bool keptVisible = !autoFollowChecklist_->isHidden();
+    autoFollowGroup_->setMinimumHeight(0);
+    QStringList lines;
+    lines << QStringLiteral("X Placeholder checklist line");
+    autoFollowChecklist_->setText(lines.join(QLatin1Char(10)));
+    autoFollowChecklist_->setVisible(true);
+    autoFollowGroup_->layout()->activate();
+    const int worstCase = autoFollowGroup_->minimumSizeHint().height();
+    autoFollowChecklist_->setText(keptText);
+    autoFollowChecklist_->setVisible(keptVisible);
+    autoFollowGroup_->layout()->activate();
+    autoFollowGroup_->setMinimumHeight(worstCase);
+}
+
 void MainWindow::updateWorkspaceMinimums()
 {
     if (operatorToolsPane_ == nullptr) return;
+    reserveVisionPanelHeight();
     operatorToolsPane_->setMinimumHeight(operatorToolsRequiredHeight());
     const int needed = fullyExpandedWindowHeight();
     if (minimumHeight() != needed) setMinimumSize(1100, needed);
