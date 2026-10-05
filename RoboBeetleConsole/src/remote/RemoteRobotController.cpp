@@ -711,18 +711,133 @@ void RemoteRobotController::handleDepthTelemetry(const QByteArray &payload)
         depthState_.lastReceivedAtMs = -1;
         depthState_.error = detail;
         emit depthStateChanged();
+        clearControlDepth();
         return;
     }
 
+    const qint64 receivedAtMs = depthNowMs();
     const bool current = snapshot->depthValid()
         && snapshot->sampleAgeMs != DepthSnapshot::UnknownSampleAgeMs;
     depthState_.status = current ? DepthStatus::Receiving : DepthStatus::Stale;
     depthState_.snapshot = snapshot;
-    depthState_.lastReceivedAtMs = nowMs();
+    depthState_.lastReceivedAtMs = receivedAtMs;
     depthState_.error = current
         ? QString{}
         : QStringLiteral("Depth sensor sample is stale or unavailable");
     emit depthStateChanged();
+
+    ControlDepthLatest latest;
+    latest.rawM = static_cast<double>(snapshot->depthMm) / 1000.0;
+    latest.receivedAtMs = receivedAtMs;
+    latest.sampleAgeMs = snapshot->sampleAgeMs == DepthSnapshot::UnknownSampleAgeMs
+        ? -1
+        : static_cast<qint64>(snapshot->sampleAgeMs);
+    latest.depthValid = snapshot->depthValid();
+    controlLatest_ = latest;
+
+    if (current) {
+        // Firmware repeats a frame (keepalive) without a new line: count a
+        // sample only once, identified by the parser's valid-line counter.
+        const quint32 line = snapshot->diagnostics.validLineCount;
+        if (!lastZeroSampleLine_ || *lastZeroSampleLine_ != line) {
+            lastZeroSampleLine_ = line;
+            zeroSamples_.push_back({latest.rawM, receivedAtMs - latest.sampleAgeMs, line});
+            const auto capacity = static_cast<std::size_t>(
+                qMax(1, depthControlConfig_.zeroMinSamples));
+            while (zeroSamples_.size() > capacity)
+                zeroSamples_.pop_front();
+        }
+    } else {
+        // A dropout breaks the run of consecutive samples used for zeroing.
+        zeroSamples_.clear();
+        lastZeroSampleLine_.reset();
+    }
+    emit controlDepthSampleChanged();
+}
+
+void RemoteRobotController::setDepthControlConfig(const DepthControlConfig &config)
+{
+    depthControlConfig_ = config;
+    const auto capacity = static_cast<std::size_t>(qMax(1, config.zeroMinSamples));
+    while (zeroSamples_.size() > capacity)
+        zeroSamples_.pop_front();
+    emit controlDepthSampleChanged();
+}
+
+std::optional<DepthControlSample> RemoteRobotController::controlDepthSample() const
+{
+    if (!controlLatest_)
+        return std::nullopt;
+    DepthControlSample sample;
+    sample.rawDepthM = controlLatest_->depthValid ? controlLatest_->rawM : 0.0;
+    if (controlLatest_->sampleAgeMs >= 0) {
+        sample.ageMs = qMax<qint64>(0, depthNowMs() - controlLatest_->receivedAtMs)
+            + controlLatest_->sampleAgeMs;
+    }
+    sample.fresh = controlLatest_->depthValid && sample.ageMs >= 0
+        && sample.ageMs <= depthControlConfig_.controlFreshMs;
+    if (zeroOffsetM_ && controlLatest_->depthValid)
+        sample.calibratedDepthM = sample.rawDepthM - *zeroOffsetM_;
+    return sample;
+}
+
+bool RemoteRobotController::zeroDepth(QString *error)
+{
+    const auto fail = [error](const QString &reason) {
+        if (error) *error = reason;
+        return false;
+    };
+    const DepthControlConfig &cfg = depthControlConfig_;
+    if (!validDepthControlConfig(cfg))
+        return fail(QStringLiteral("invalid depth control configuration"));
+    if (isMotionActive())
+        return fail(QStringLiteral("robot is moving; stop before zeroing depth"));
+    const auto latest = controlDepthSample();
+    if (!latest || !latest->fresh)
+        return fail(QStringLiteral("no fresh depth sample"));
+    if (zeroSamples_.size() < static_cast<std::size_t>(cfg.zeroMinSamples)) {
+        return fail(QStringLiteral("not enough distinct depth samples (%1 of %2)")
+                        .arg(zeroSamples_.size()).arg(cfg.zeroMinSamples));
+    }
+
+    qint64 oldest = zeroSamples_.front().sampledAtMs;
+    qint64 newest = oldest;
+    double lo = zeroSamples_.front().rawM;
+    double hi = lo;
+    double sum = 0.0;
+    for (const auto &s : zeroSamples_) {
+        oldest = qMin(oldest, s.sampledAtMs);
+        newest = qMax(newest, s.sampledAtMs);
+        lo = qMin(lo, s.rawM);
+        hi = qMax(hi, s.rawM);
+        sum += s.rawM;
+    }
+    const qint64 maxSpanMs = qMax<qint64>(
+        1000, (cfg.zeroMinSamples + 1) * cfg.nominalSamplePeriodMs);
+    if (newest - oldest > maxSpanMs) {
+        return fail(QStringLiteral("depth samples span %1 ms (limit %2 ms)")
+                        .arg(newest - oldest).arg(maxSpanMs));
+    }
+    if (hi - lo > cfg.zeroMaxRangeM) {
+        return fail(QStringLiteral("depth is not steady: range %1 m (limit %2 m)")
+                        .arg(hi - lo, 0, 'f', 4).arg(cfg.zeroMaxRangeM, 0, 'f', 4));
+    }
+
+    zeroOffsetM_ = sum / static_cast<double>(zeroSamples_.size());
+    depthZeroedAtMs_ = depthNowMs();
+    emit logMessage(QStringLiteral("Depth zeroed: offset %1 m").arg(*zeroOffsetM_, 0, 'f', 4));
+    emit controlDepthSampleChanged();
+    return true;
+}
+
+void RemoteRobotController::clearControlDepth()
+{
+    const bool had = controlLatest_.has_value() || !zeroSamples_.empty();
+    controlLatest_.reset();
+    zeroSamples_.clear();
+    lastZeroSampleLine_.reset();
+    if (had)
+        emit controlDepthSampleChanged();
 }
 
 void RemoteRobotController::handleServiceError(
@@ -881,6 +996,7 @@ void RemoteRobotController::failClosedControlState(const QString &reason)
     for (auto it = abandoned.cbegin(); it != abandoned.cend(); ++it)
         emit commandTerminal(it.key(), CommandTerminalResult::OutcomeUnknown, 0xff, terminalNow_() - it->terminalSentMs);
     poseKnownMask_ = 0;
+    clearControlDepth();
     setDisablePendingMask(0U);
     setEnabledMask(0U);
     if (pendingGaitBackend_.has_value() || confirmedGaitBackend_.has_value()) {
@@ -927,6 +1043,7 @@ void RemoteRobotController::resetTelemetry()
     if (depthChanged) {
         emit depthStateChanged();
     }
+    clearControlDepth();
 }
 
 void RemoteRobotController::refreshTelemetryStaleness()
@@ -964,7 +1081,7 @@ void RemoteRobotController::refreshTelemetryStaleness()
 
     if (depthState_.status == DepthStatus::Receiving
         && depthState_.lastReceivedAtMs >= 0
-        && now - depthState_.lastReceivedAtMs >= DepthMonitor::StaleTimeoutMs) {
+        && depthNowMs() - depthState_.lastReceivedAtMs >= DepthMonitor::StaleTimeoutMs) {
         depthState_.status = DepthStatus::Stale;
         depthState_.snapshot.reset();
         depthState_.error =
