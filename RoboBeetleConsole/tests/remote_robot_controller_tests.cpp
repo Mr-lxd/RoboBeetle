@@ -412,8 +412,10 @@ void testRemoteControllerAndUi()
 void testUserReleaseDoesNotReportAuthorityLoss()
 {
     FakeGatewayPeer gateway;
-    rb::RemoteRobotController controller;
+    // Declared before the controller: the controller emits logMessage while it
+    // is destroyed, and the lambda below writes into `logs`.
     QStringList logs;
+    rb::RemoteRobotController controller;
     QObject::connect(&controller, &rb::IConsoleController::logMessage,
                      &controller, [&logs](const QString &message) {
         logs.push_back(message);

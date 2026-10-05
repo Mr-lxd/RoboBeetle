@@ -137,7 +137,8 @@ private:
     void supersedePendingForDisable(quint16 affectedMask);
     void failClosedControlState(const QString &reason);
     void clearControlDepth();
-    [[nodiscard]] qint64 depthNowMs() const { return depthClock_ ? depthClock_() : nowMs(); }
+    // Monotonic: a wall-clock step backwards must not keep an old sample fresh.
+    [[nodiscard]] qint64 depthNowMs() const { return depthClock_ ? depthClock_() : terminalClock_.elapsed(); }
     void resetTelemetry();
     void refreshTelemetryStaleness();
 
