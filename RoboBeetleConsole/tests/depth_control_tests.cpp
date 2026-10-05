@@ -89,6 +89,14 @@ void bad(F mutate, const char *m)
 void invalidConfig()
 {
     expect(rb::validDepthControlConfig(DepthControlConfig{}), "default config valid");
+    {   // Defaults follow the measured ~1.85 Hz sensor (540 ms period).
+        const DepthControlConfig d;
+        expect(d.nominalSamplePeriodMs == 540 && d.controlFreshMs == 1300, "defaults are 540 ms / 1300 ms");
+        expect(d.controlFreshMs >= 2 * d.nominalSamplePeriodMs + 200, "default freshness satisfies the rule");
+        DepthControlConfig tight = d;
+        tight.controlFreshMs = 2 * d.nominalSamplePeriodMs + 199;
+        expect(!rb::validDepthControlConfig(tight), "one millisecond below the rule is invalid");
+    }
     bad([](DepthControlConfig &c) { c.surfaceMarginM = -0.01; }, "negative surface");
     bad([](DepthControlConfig &c) { c.surfaceMarginM = 0.37; }, "surface == softRelease");
     bad([](DepthControlConfig &c) { c.softReleaseM = 0.40; }, "softRelease == softMax");

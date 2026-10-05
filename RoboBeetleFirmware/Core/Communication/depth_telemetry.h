@@ -23,7 +23,7 @@
  * Firmware-side sensor freshness (3000 ms) is a different thing from:
  *  - the telemetry publication interval below,
  *  - the Qt host's control freshness (DepthControlConfig::controlFreshMs,
- *    provisionally 700 ms), which gates automatic ASCEND/DESCEND, and
+ *    provisionally 1300 ms for the ~1.85 Hz sensor), which gates automatic ASCEND/DESCEND, and
  *  - the Qt UI display StaleTimeoutMs (3500 ms).
  * Vendor line cadence is not specified, so this provisional 3000 ms bound
  * is kept; it only decides when old values are scrubbed from telemetry.

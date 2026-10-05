@@ -5,8 +5,8 @@
 namespace rb {
 
 struct DepthControlConfig {
-    std::int64_t nominalSamplePeriodMs{250}; // [Provisional] 固件上报间隔（心跳 250 ms，B′ 方案）；拿到传感器实测频率后更新
-    std::int64_t controlFreshMs{700};  // [Provisional] 控制用新鲜度阈值（界面显示仍用 3500）
+    std::int64_t nominalSamplePeriodMs{540}; // [Provisional] measured sensor rate ~1.85 Hz (2026-10-05)
+    std::int64_t controlFreshMs{1300};  // [Provisional] control freshness (>= 2*period+200); UI display still uses 3500
     int zeroMinSamples{5};        // 归零至少需要的新鲜样本数
     double zeroMaxRangeM{0.01};   // 归零样本的最大极差
     double surfaceMarginM{0.02};  // 归零后深度 <= 此值：禁止 ASCEND
