@@ -1,12 +1,12 @@
 #pragma once
-#include <QtGlobal>
+#include <cstdint>
 #include <optional>
 
 namespace rb {
 
 struct DepthControlConfig {
-    qint64 nominalSamplePeriodMs{100}; // [Provisional] 固件上报间隔；拿到传感器实测频率后更新
-    qint64 controlFreshMs{500};   // [Provisional] 控制用新鲜度阈值（界面显示仍用 3500）
+    std::int64_t nominalSamplePeriodMs{250}; // [Provisional] 固件上报间隔（心跳 250 ms，B′ 方案）；拿到传感器实测频率后更新
+    std::int64_t controlFreshMs{700};  // [Provisional] 控制用新鲜度阈值（界面显示仍用 3500）
     int zeroMinSamples{5};        // 归零至少需要的新鲜样本数
     double zeroMaxRangeM{0.01};   // 归零样本的最大极差
     double surfaceMarginM{0.02};  // 归零后深度 <= 此值：禁止 ASCEND
@@ -18,7 +18,7 @@ struct DepthControlConfig {
 struct DepthControlSample {
     double rawDepthM{0.0};                  // 固件上报的原始深度
     std::optional<double> calibratedDepthM; // 归零后的深度；未归零时为 nullopt
-    qint64 ageMs{-1};                       // 本地收到后经过的时间 + 固件 sampleAgeMs
+    std::int64_t ageMs{-1};                       // 本地收到后经过的时间 + 固件 sampleAgeMs
     bool fresh{false};                      // depthValid 且 ageMs <= controlFreshMs
 };
 

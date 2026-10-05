@@ -14,7 +14,6 @@ add_library(DepthControl STATIC
     src/robot/DepthControl.cpp
 )
 target_include_directories(DepthControl PUBLIC src)
-target_link_libraries(DepthControl PUBLIC Qt6::Core)
 set_target_properties(DepthControl PROPERTIES AUTOMOC OFF)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(DepthControl PRIVATE -Wall -Wextra -Werror)

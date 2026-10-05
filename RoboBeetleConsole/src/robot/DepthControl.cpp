@@ -15,7 +15,7 @@ bool validDepthControlConfig(const DepthControlConfig &c) noexcept
         && c.softReleaseM < c.softMaxM
         && c.softMaxM < c.hardMaxM
         && c.nominalSamplePeriodMs > 0
-        && c.controlFreshMs >= 2 * c.nominalSamplePeriodMs + 100
+        && c.controlFreshMs >= 2 * c.nominalSamplePeriodMs + 200
         && c.zeroMinSamples >= 3
         && c.zeroMaxRangeM > 0.0;
 }
@@ -33,7 +33,7 @@ DepthEnvelopeResult evaluateDepthEnvelope(const std::optional<DepthControlSample
     if (!std::isfinite(d))
         return {DepthEnvelopeState::Unavailable, previous};
     if (d >= config.hardMaxM)
-        return {DepthEnvelopeState::HardLimit, previous};
+        return {DepthEnvelopeState::HardLimit, DepthEnvelopeMemory{true}};
 
     if ((previous.softFloorLatched && d > config.softReleaseM) || d >= config.softMaxM)
         return {DepthEnvelopeState::SoftFloor, DepthEnvelopeMemory{true}};

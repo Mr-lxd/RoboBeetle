@@ -47,6 +47,14 @@ void hysteresis()
     expect(eval(0.380, false).state == DepthEnvelopeState::Normal, "unlatched 0.380 Normal");
     expect(eval(0.010, true).state == DepthEnvelopeState::Surface, "release into Surface");
     expect(eval(0.55, true).next.softFloorLatched, "hard limit keeps latch");
+    {
+        auto hard = eval(0.52, false);
+        expect(hard.state == DepthEnvelopeState::HardLimit, "0.52 HardLimit");
+        expect(hard.next.softFloorLatched, "hard limit sets latch");
+        auto back = eval(0.38, hard.next.softFloorLatched);
+        expect(back.state == DepthEnvelopeState::SoftFloor, "0.52 -> 0.38 is SoftFloor");
+    }
+    expect(eval(0.30, true).state == DepthEnvelopeState::Normal, "0.30 after hard releases");
 }
 
 void unavailable()
@@ -86,13 +94,13 @@ void invalidConfig()
     bad([](DepthControlConfig &c) { c.softReleaseM = 0.40; }, "softRelease == softMax");
     bad([](DepthControlConfig &c) { c.softMaxM = 0.50; }, "softMax == hardMax");
     bad([](DepthControlConfig &c) { c.nominalSamplePeriodMs = 0; }, "zero period");
-    bad([](DepthControlConfig &c) { c.controlFreshMs = 2 * c.nominalSamplePeriodMs + 99; },
-        "fresh below 2*period+100");
+    bad([](DepthControlConfig &c) { c.controlFreshMs = 2 * c.nominalSamplePeriodMs + 199; },
+        "fresh below 2*period+200");
     bad([](DepthControlConfig &c) { c.zeroMinSamples = 2; }, "too few zero samples");
     bad([](DepthControlConfig &c) { c.zeroMaxRangeM = 0.0; }, "zero range");
     DepthControlConfig ok;
-    ok.controlFreshMs = 2 * ok.nominalSamplePeriodMs + 100;
-    expect(rb::validDepthControlConfig(ok), "fresh == 2*period+100 valid");
+    ok.controlFreshMs = 2 * ok.nominalSamplePeriodMs + 200;
+    expect(rb::validDepthControlConfig(ok), "fresh == 2*period+200 valid");
 }
 
 void names()
