@@ -29,6 +29,9 @@
 #include <QKeyEvent>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLinearGradient>
+#include <QMouseEvent>
+#include <QPainter>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QButtonGroup>
@@ -527,9 +530,127 @@ void applyDashboardCardStyle(QGroupBox *box)
     ));
 }
 
+// Reserve the width of the widest expected value so the card never resizes as
+// the number changes. Measured with the card's own 11 px semi-bold value font.
+void reserveValueWidth(QLabel *value, const QString &widest)
+{
+    QFont font = value->font();
+    font.setPixelSize(11);
+    font.setWeight(QFont::DemiBold);
+    value->setMinimumWidth(QFontMetrics(font).horizontalAdvance(widest));
+}
+
+// Small fixed-height screen for the vision dispatch diagnostic text. Each line is
+// elided on the right; lines that do not fit vertically are cut with a final
+// ellipsis. S1 is a dark LCD, S2 an acrylic panel; double-click switches.
+class DiagnosticScreen : public QLabel
+{
+public:
+    explicit DiagnosticScreen(QWidget *parent)
+        : QLabel(parent)
+    {
+        setObjectName(QStringLiteral("visionDiagnosticScreen"));
+        QFont mono(QStringLiteral("Consolas"));
+        mono.setStyleHint(QFont::Monospace);
+        mono.setPointSizeF(9.0);
+        setFont(mono);
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+        setTextFormat(Qt::PlainText);
+        setAppearance(qEnvironmentVariable("ROBOBEETLE_DIAG_SCREEN") == QStringLiteral("S2")
+                          ? Acrylic : Lcd);
+    }
+
+    enum Appearance { Lcd, Acrylic };
+
+    void setAppearance(Appearance appearance)
+    {
+        appearance_ = appearance;
+        setProperty("screenStyle", appearance == Lcd ? "S1" : "S2");
+        update();
+    }
+
+    QSize sizeHint() const override { return {fixedWidth(), 40}; }
+    QSize minimumSizeHint() const override { return {fixedWidth(), 40}; }
+
+protected:
+    void mouseDoubleClickEvent(QMouseEvent *) override
+    {
+        setAppearance(appearance_ == Lcd ? Acrylic : Lcd);
+    }
+
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QRectF frame = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        QColor text;
+        QColor accent;
+        if (appearance_ == Lcd) {
+            painter.setBrush(QColor(0x0F, 0x1A, 0x24));
+            painter.setPen(QPen(QColor(0x2C, 0x45, 0x58), 1));
+            painter.drawRoundedRect(frame, 6, 6);
+            painter.setPen(QPen(QColor(0x1B, 0x2D, 0x3B), 1));
+            painter.drawRoundedRect(frame.adjusted(2, 2, -2, -2), 4, 4);
+            text = QColor(0x9F, 0xE8, 0xD8);
+            accent = QColor(0xFF, 0xE0, 0x82);
+        } else {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(0x5A, 0x7A, 0x96, 36));
+            painter.drawRoundedRect(frame.translated(0, 1.5), 7, 7);
+            QLinearGradient gradient(frame.topLeft(), frame.bottomLeft());
+            gradient.setColorAt(0.0, QColor(0xFF, 0xFF, 0xFF));
+            gradient.setColorAt(1.0, QColor(0xDD, 0xE7, 0xF0));
+            painter.setBrush(gradient);
+            painter.setPen(QPen(QColor(0xB9, 0xCC, 0xDC), 1));
+            painter.drawRoundedRect(frame.adjusted(0, 0, 0, -2), 7, 7);
+            painter.setPen(QPen(QColor(255, 255, 255, 200), 1));
+            painter.drawLine(QPointF(9, 2), QPointF(width() - 9, 2));
+            text = QColor(0x2B, 0x40, 0x52);
+            accent = QColor(0x1C, 0x6A, 0xA8);
+        }
+
+        const QFontMetrics metrics(font());
+        constexpr int padX = 8;
+        constexpr int padY = 6;
+        const int lineHeight = metrics.lineSpacing();
+        const QStringList lines = this->text().split('\n');
+        const int fit = qMax(1, (height() - 2 * padY) / lineHeight);
+        painter.setFont(font());
+        for (int i = 0; i < qMin<int>(fit, lines.size()); ++i) {
+            QString line = lines.at(i);
+            if (i == fit - 1 && lines.size() > fit) {
+                line += QStringLiteral(" ...");
+            }
+            const bool key = i == 0 || line.startsWith(QStringLiteral("Proposed"))
+                || line.startsWith(QStringLiteral("PROPOSED"));
+            painter.setPen(key ? accent : text);
+            painter.drawText(padX, padY + i * lineHeight + metrics.ascent(),
+                             metrics.elidedText(line, Qt::ElideRight, width() - 2 * padX));
+        }
+    }
+
+private:
+    // Fixed so the status text beside the screen never shifts as the lines change:
+    // wide enough for the longest regular line, longer ones are elided.
+    int fixedWidth() const
+    {
+        const QFontMetrics metrics(font());
+        int widest = 0;
+        for (const char *line : {"manual controls live | INFERENCE_OFF",
+                                 "axis=PITCH ey_f=-0.000 pitch_sign=1",
+                                 "DISPATCH ON | ARMED | READY"}) {
+            widest = qMax(widest, metrics.horizontalAdvance(QString::fromLatin1(line)));
+        }
+        return widest + 18;
+    }
+
+    Appearance appearance_{Lcd};
+};
+
 void addDashboardCardHeader(QVBoxLayout *layout,
                             QGroupBox *box,
-                            const QString &text)
+                            const QString &text,
+                            QWidget *trailing = nullptr)
 {
     auto *header = new QHBoxLayout;
     header->setContentsMargins(0, 0, 0, 0);
@@ -551,6 +672,9 @@ void addDashboardCardHeader(QVBoxLayout *layout,
     ));
     header->addWidget(title);
     header->addStretch();
+    if (trailing != nullptr) {
+        header->addWidget(trailing);
+    }
 
     layout->addLayout(header);
 
@@ -914,6 +1038,19 @@ QWidget *MainWindow::createVideoPlaceholder()
     summaryLayout->setContentsMargins(8, 10, 8, 8);
     summaryLayout->setSpacing(4);
 
+    // Left: the dispatch diagnostic screen. Right: the status text, unchanged.
+    auto *statusTop = new QHBoxLayout;
+    statusTop->setContentsMargins(0, 0, 0, 0);
+    statusTop->setSpacing(8);
+    visionDiagnosticScreen_ = new DiagnosticScreen(summary);
+    statusTop->addWidget(visionDiagnosticScreen_);
+    auto *statusBlock = new QWidget(summary);
+    statusBlock->setObjectName(QStringLiteral("visionStatusBlock"));
+    auto *blockLayout = new QVBoxLayout(statusBlock);
+    blockLayout->setContentsMargins(0, 0, 0, 0);
+    blockLayout->setSpacing(2);
+    statusTop->addWidget(statusBlock, 1);
+
     auto *videoStateRow = new QHBoxLayout;
     videoStateRow->setContentsMargins(0, 0, 0, 0);
     videoStateRow->setSpacing(6);
@@ -932,7 +1069,7 @@ QWidget *MainWindow::createVideoPlaceholder()
     videoStateRow->addWidget(visionDot_);
     videoStateRow->addWidget(visionState_);
     videoStateRow->addStretch(1);
-    summaryLayout->addLayout(videoStateRow);
+    blockLayout->addLayout(videoStateRow);
 
     videoFpsSummary_ = new QLabel(QStringLiteral("Video FPS --"), summary);
     videoFpsSummary_->setObjectName(QStringLiteral("videoFpsSummary"));
@@ -940,7 +1077,7 @@ QWidget *MainWindow::createVideoPlaceholder()
         QStringLiteral("Received RBVS frame rate; not inference FPS or unique display FPS."));
     videoFpsSummary_->setStyleSheet(
         QStringLiteral("color: #257A9E; font-size: 13px; font-weight: 700;"));
-    summaryLayout->addWidget(videoFpsSummary_);
+    blockLayout->addWidget(videoFpsSummary_);
 
     videoResolutionSummary_ =
         new QLabel(QStringLiteral("Resolution --"), summary);
@@ -948,19 +1085,19 @@ QWidget *MainWindow::createVideoPlaceholder()
         QStringLiteral("videoResolutionSummary"));
     videoResolutionSummary_->setStyleSheet(
         QStringLiteral("color: #566B79; font-weight: 600;"));
-    summaryLayout->addWidget(videoResolutionSummary_);
+    blockLayout->addWidget(videoResolutionSummary_);
 
     storageFreeSummary_ = new QLabel(QStringLiteral("Storage Free --"), summary);
     storageFreeSummary_->setObjectName(QStringLiteral("storageFreeSummary"));
     storageFreeSummary_->setToolTip(QStringLiteral("Pi free disk space reported by the Vision status API; this is storage, not RAM."));
     storageFreeSummary_->setStyleSheet(
         QStringLiteral("color: #566B79; font-weight: 600;"));
-    summaryLayout->addWidget(storageFreeSummary_);
+    blockLayout->addWidget(storageFreeSummary_);
 
     auto *divider1 = new QFrame(summary);
     divider1->setFrameShape(QFrame::HLine);
     divider1->setStyleSheet(QStringLiteral("color: #D5E0E8;"));
-    summaryLayout->addWidget(divider1);
+    blockLayout->addWidget(divider1);
 
     const bool inferenceAvailable = visionControlClient_ != nullptr;
     auto *inferenceStateRow = new QHBoxLayout;
@@ -982,7 +1119,7 @@ QWidget *MainWindow::createVideoPlaceholder()
     inferenceStateRow->addWidget(inferenceDot_);
     inferenceStateRow->addWidget(inferenceState_);
     inferenceStateRow->addStretch(1);
-    summaryLayout->addLayout(inferenceStateRow);
+    blockLayout->addLayout(inferenceStateRow);
 
     inferencePerformanceSummary_ = new QLabel(
         QStringLiteral("-- FPS / -- ms"), summary);
@@ -992,13 +1129,13 @@ QWidget *MainWindow::createVideoPlaceholder()
         QStringLiteral("Camera capture to inference completion; not ORT-only duration."));
     inferencePerformanceSummary_->setStyleSheet(
         QStringLiteral("color: #6C5AAE; font-size: 13px; font-weight: 700;"));
-    summaryLayout->addWidget(inferencePerformanceSummary_);
+    blockLayout->addWidget(inferencePerformanceSummary_);
 
     inferenceDetectionSummary_ = new QLabel(
         QStringLiteral("Detections --"), summary);
     inferenceDetectionSummary_->setObjectName(
         QStringLiteral("inferenceDetectionSummary"));
-    summaryLayout->addWidget(inferenceDetectionSummary_);
+    blockLayout->addWidget(inferenceDetectionSummary_);
 
     inferenceMemorySummary_ = new QLabel(
         QStringLiteral("Memory -- / --"), summary);
@@ -1006,19 +1143,19 @@ QWidget *MainWindow::createVideoPlaceholder()
         QStringLiteral("inferenceMemorySummary"));
     inferenceMemorySummary_->setToolTip(
         QStringLiteral("Vision process RSS / total system physical memory"));
-    summaryLayout->addWidget(inferenceMemorySummary_);
+    blockLayout->addWidget(inferenceMemorySummary_);
 
     visionControlState_ = new QLabel(
         QStringLiteral("HTTP: Unavailable"), summary);
     visionControlState_->setObjectName(QStringLiteral("visionControlState"));
     visionControlState_->setStyleSheet(
         QStringLiteral("font-weight: 600; color: #566B79;"));
-    summaryLayout->addWidget(visionControlState_);
+    blockLayout->addWidget(visionControlState_);
 
     auto *divider2 = new QFrame(summary);
     divider2->setFrameShape(QFrame::HLine);
     divider2->setStyleSheet(QStringLiteral("color: #D5E0E8;"));
-    summaryLayout->addWidget(divider2);
+    blockLayout->addWidget(divider2);
 
     captureState_ = new QLabel(
         visionControlClient_ != nullptr
@@ -1028,13 +1165,13 @@ QWidget *MainWindow::createVideoPlaceholder()
     captureState_->setObjectName(QStringLiteral("captureState"));
     captureState_->setStyleSheet(
         QStringLiteral("font-weight: 700; color: #566B79;"));
-    summaryLayout->addWidget(captureState_);
+    blockLayout->addWidget(captureState_);
 
     captureCountSummary_ = new QLabel(
         QStringLiteral("Recorded -- | Snapshots --"), summary);
     captureCountSummary_->setObjectName(QStringLiteral("captureCountSummary"));
     captureCountSummary_->setWordWrap(true);
-    summaryLayout->addWidget(captureCountSummary_);
+    blockLayout->addWidget(captureCountSummary_);
 
     visionControlMessage_ = new ui::ElidedLabel(summary);
     visionControlMessage_->setObjectName(QStringLiteral("visionControlMessage"));
@@ -1042,7 +1179,9 @@ QWidget *MainWindow::createVideoPlaceholder()
     visionControlMessage_->setAccessibleName(QStringLiteral("Vision notice"));
     visionControlMessage_->setStyleSheet(
         QStringLiteral("font-size: 10px; color: #7B8F9D;"));
-    summaryLayout->addWidget(visionControlMessage_);
+    blockLayout->addWidget(visionControlMessage_);
+    blockLayout->addStretch(1);
+    summaryLayout->addLayout(statusTop);
     summaryLayout->addStretch(1);
 
     visionConnectButton_ = new QPushButton(QStringLiteral("Connect Video"), summary);
@@ -1297,22 +1436,22 @@ QWidget *MainWindow::createLeakCard()
     auto *layout = new QVBoxLayout(box);
     layout->setContentsMargins(7, 6, 7, 6);
     layout->setSpacing(7);
+    leakDot_ = new QLabel(box);
+    leakDot_->setFixedSize(10, 10);
+    leakDot_->setObjectName(QStringLiteral("leakStatusDot"));
+    leakDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     addDashboardCardHeader(
-        layout, box, QStringLiteral("Leak Detection"));
+        layout, box, QStringLiteral("Leak Detection"), leakDot_);
 
     auto *statusRow = new QHBoxLayout;
     statusRow->setContentsMargins(1, 1, 0, 0);
     statusRow->setSpacing(7);
-    leakDot_ = new QLabel(box);
-    leakDot_->setFixedSize(10, 10);
-    leakDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
     leakStatus_ = new QLabel(QStringLiteral("Unknown"), box);
     leakStatus_->setStyleSheet(QStringLiteral(
         "color: #566B79;"
         "font-size: 12px;"
         "font-weight: 600;"
     ));
-    statusRow->addWidget(leakDot_);
     statusRow->addWidget(leakStatus_);
     statusRow->addStretch();
     layout->addLayout(statusRow);
@@ -1328,25 +1467,13 @@ QWidget *MainWindow::createImuCard()
     auto *layout = new QVBoxLayout(box);
     layout->setContentsMargins(7, 6, 7, 6);
     layout->setSpacing(6);
-    addDashboardCardHeader(
-        layout, box, QStringLiteral("IMU"));
-
-    auto *statusRow = new QHBoxLayout;
-    statusRow->setContentsMargins(1, 0, 0, 0);
-    statusRow->setSpacing(7);
     imuDot_ = new QLabel(box);
     imuDot_->setFixedSize(10, 10);
+    imuDot_->setObjectName(QStringLiteral("imuStatusDot"));
     imuDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
-    imuStatus_ = new QLabel(QStringLiteral("Unknown"), box);
-    imuStatus_->setStyleSheet(QStringLiteral(
-        "color: #566B79;"
-        "font-size: 12px;"
-        "font-weight: 600;"
-    ));
-    statusRow->addWidget(imuDot_);
-    statusRow->addWidget(imuStatus_);
-    statusRow->addStretch();
-    layout->addLayout(statusRow);
+    imuDot_->setToolTip(QStringLiteral("Unknown"));
+    addDashboardCardHeader(
+        layout, box, QStringLiteral("IMU"), imuDot_);
 
     auto *metrics = new QGridLayout;
     metrics->setHorizontalSpacing(10);
@@ -1357,6 +1484,9 @@ QWidget *MainWindow::createImuCard()
     for (QLabel *label : {imuAcc_, imuGyro_, imuAngle_}) {
         label->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
     }
+    reserveValueWidth(imuAcc_, QStringLiteral("-9.999, -9.999, -9.999 g"));
+    reserveValueWidth(imuGyro_, QStringLiteral("-999.9, -999.9, -999.9 dps"));
+    reserveValueWidth(imuAngle_, QStringLiteral("-180.00, -180.00, -180.00 deg"));
     for (int row = 0; row < 3; ++row) {
         auto *label = new QLabel(QStringList{QStringLiteral("Acc"), QStringLiteral("Gyro"), QStringLiteral("Angle")}.at(row), box);
         label->setStyleSheet(QStringLiteral("color: #7B8F9D; font-size: 11px; font-weight: 500;"));
@@ -1379,47 +1509,45 @@ QWidget *MainWindow::createDepthCard()
     auto *layout = new QVBoxLayout(box);
     layout->setContentsMargins(7, 6, 7, 6);
     layout->setSpacing(6);
+    depthDot_ = new QLabel(box);
+    depthDot_->setFixedSize(10, 10);
+    depthDot_->setObjectName(QStringLiteral("depthStatusDot"));
+    depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
+    depthDot_->setToolTip(QStringLiteral("Unknown"));
     addDashboardCardHeader(
-        layout, box, QStringLiteral("Depth Sensor"));
+        layout, box, QStringLiteral("Depth Sensor"), depthDot_);
 
-    // Top row: Depth / Temp / Age side by side.
-    auto *metrics = new QHBoxLayout;
-    metrics->setContentsMargins(1, 0, 0, 0);
-    metrics->setSpacing(10);
+    // Depth / Temp on one row, Age on the next; fixed value widths keep the
+    // card from changing width as the numbers change.
     depthValue_ = new QLabel(QStringLiteral("--"), box);
     depthTemperature_ = new QLabel(QStringLiteral("--"), box);
     depthAge_ = new QLabel(QStringLiteral("--"), box);
-    const QStringList metricNames{QStringLiteral("Depth"), QStringLiteral("Temp"), QStringLiteral("Age")};
-    const QList<QLabel *> metricValues{depthValue_, depthTemperature_, depthAge_};
-    for (int i = 0; i < metricNames.size(); ++i) {
-        auto *name = new QLabel(metricNames.at(i), box);
+    depthValue_->setObjectName(QStringLiteral("depthValue"));
+    depthTemperature_->setObjectName(QStringLiteral("depthTemperature"));
+    depthAge_->setObjectName(QStringLiteral("depthAge"));
+    const auto makeMetric = [box](const QString &nameText, QLabel *value, const QString &widest) {
+        auto *name = new QLabel(nameText, box);
         name->setStyleSheet(QStringLiteral("color: #7B8F9D; font-size: 11px; font-weight: 500;"));
-        metricValues.at(i)->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
+        value->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
+        reserveValueWidth(value, widest);
         auto *pair = new QHBoxLayout;
         pair->setSpacing(4);
         pair->addWidget(name);
-        pair->addWidget(metricValues.at(i));
-        metrics->addLayout(pair);
-    }
+        pair->addWidget(value);
+        return pair;
+    };
+    auto *metrics = new QHBoxLayout;
+    metrics->setContentsMargins(1, 0, 0, 0);
+    metrics->setSpacing(10);
+    metrics->addLayout(makeMetric(QStringLiteral("Depth"), depthValue_, QStringLiteral("99.99 m")));
+    metrics->addLayout(makeMetric(QStringLiteral("Temp"), depthTemperature_, QStringLiteral("99.99 C")));
     metrics->addStretch();
     layout->addLayout(metrics);
-
-    auto *statusRow = new QHBoxLayout;
-    statusRow->setContentsMargins(1, 0, 0, 0);
-    statusRow->setSpacing(7);
-    depthDot_ = new QLabel(box);
-    depthDot_->setFixedSize(10, 10);
-    depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
-    depthStatus_ = new QLabel(QStringLiteral("Unknown"), box);
-    depthStatus_->setStyleSheet(QStringLiteral(
-        "color: #566B79;"
-        "font-size: 12px;"
-        "font-weight: 600;"
-    ));
-    statusRow->addWidget(depthDot_);
-    statusRow->addWidget(depthStatus_);
-    statusRow->addStretch();
-    layout->addLayout(statusRow);
+    auto *ageRow = new QHBoxLayout;
+    ageRow->setContentsMargins(1, 0, 0, 0);
+    ageRow->addLayout(makeMetric(QStringLiteral("Age"), depthAge_, QStringLiteral("99999 ms")));
+    ageRow->addStretch();
+    layout->addLayout(ageRow);
 
     // Zeroed depth 0-0.50 m and the Zero action, always shown. The preview
     // shows "Not zeroed" and a disabled button; the follow-up PR wires them.
@@ -1996,6 +2124,18 @@ QWidget *MainWindow::createMotionPanel()
         motionButtons_[static_cast<std::size_t>(MotionMode::TurnRight)], 1, 2);
     dpad->addWidget(
         motionButtons_[static_cast<std::size_t>(MotionMode::Backward)], 2, 1);
+    for (QPushButton *button : {motionButtons_[static_cast<std::size_t>(MotionMode::Forward)],
+                                motionButtons_[static_cast<std::size_t>(MotionMode::TurnLeft)],
+                                motionStopButton_,
+                                motionButtons_[static_cast<std::size_t>(MotionMode::TurnRight)],
+                                motionButtons_[static_cast<std::size_t>(MotionMode::Backward)]}) {
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        button->setStyleSheet(button->styleSheet() + QStringLiteral("QPushButton { font-size: 15px; }"));
+    }
+    for (int index = 0; index < 3; ++index) {
+        dpad->setRowStretch(index, 1);
+        dpad->setColumnStretch(index, 1);
+    }
 
     // --- Gait / Vertical ---
     auto *gaitGroup = new QGroupBox(QStringLiteral("Gait / Vertical"), page);
@@ -2760,6 +2900,9 @@ void MainWindow::refreshAutoFollowUi()
 
     autoFollowAlert_->setText(fault);
     autoFollowAlert_->setVisible(!fault.isEmpty());
+    // The alert banner is never clipped: while a fault is shown the axis row
+    // gives up its space, so the block keeps its original height budget.
+    autoFollowAxisSelector_->setVisible(fault.isEmpty());
 
     const QString mode = visualDispatch_->currentMode()
         ? QString::fromLatin1(vision::proposedCommandName(*visualDispatch_->currentMode()))
@@ -2883,7 +3026,17 @@ void MainWindow::refreshVisualDispatchUi()
     if (videoView_) {
         videoView_->setVisualDispatchPresentation(
             enabled, visualDispatch_->armed(), visualDispatchStatus_->text());
-        if (visualProposalDetails_) visualProposalDetails_->setText(videoView_->visualDiagnosticText());
+        refreshVisualDiagnosticTexts();
+    }
+}
+
+void MainWindow::refreshVisualDiagnosticTexts()
+{
+    const QString text = videoView_->visualDiagnosticText();
+    if (visualProposalDetails_) visualProposalDetails_->setText(text);
+    if (visionDiagnosticScreen_) {
+        visionDiagnosticScreen_->setText(text);
+        visionDiagnosticScreen_->setToolTip(text);
     }
 }
 
@@ -2962,9 +3115,7 @@ void MainWindow::bindVisionUi()
             videoView_->clearDetectionOverlay(reason);
         }
         videoView_->setVisualDiagnostic(snapshot);
-        if (visualProposalDetails_) {
-            visualProposalDetails_->setText(videoView_->visualDiagnosticText());
-        }
+        refreshVisualDiagnosticTexts();
     });
     if (visionClient_ != nullptr) {
         connect(visionConnectButton_, &QPushButton::clicked, this, [this] {
@@ -3808,26 +3959,22 @@ void MainWindow::setLeakUiState(LeakState state)
 
 void MainWindow::setImuUiState(const ImuMonitorState &state)
 {
-    if (imuStatus_ == nullptr) {
+    if (imuDot_ == nullptr) {
         return;
     }
 
-    imuStatus_->setText(imuStatusText(state.status));
+    imuDot_->setToolTip(imuStatusText(state.status));
     switch (state.status) {
     case ImuStatus::Unknown:
-        imuStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 12px; font-weight: 600;"));
         imuDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
         break;
     case ImuStatus::Receiving:
-        imuStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-size: 12px; font-weight: 600;"));
         imuDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 5px;"));
         break;
     case ImuStatus::Stale:
-        imuStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-size: 12px; font-weight: 600;"));
         imuDot_->setStyleSheet(QStringLiteral("background: #FB8C00; border-radius: 5px;"));
         break;
     case ImuStatus::Error:
-        imuStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-size: 12px; font-weight: 600;"));
         imuDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 5px;"));
         break;
     }
@@ -3866,26 +4013,22 @@ void MainWindow::setImuUiState(const ImuMonitorState &state)
 
 void MainWindow::setDepthUiState(const DepthMonitorState &state)
 {
-    if (depthStatus_ == nullptr) {
+    if (depthDot_ == nullptr) {
         return;
     }
 
-    depthStatus_->setText(depthStatusText(state.status));
+    depthDot_->setToolTip(depthStatusText(state.status));
     switch (state.status) {
     case DepthStatus::Unknown:
-        depthStatus_->setStyleSheet(QStringLiteral("color: #666666; font-size: 12px; font-weight: 600;"));
         depthDot_->setStyleSheet(QStringLiteral("background: #9e9e9e; border-radius: 5px;"));
         break;
     case DepthStatus::Receiving:
-        depthStatus_->setStyleSheet(QStringLiteral("color: #228B22; font-size: 12px; font-weight: 600;"));
         depthDot_->setStyleSheet(QStringLiteral("background: #43A047; border-radius: 5px;"));
         break;
     case DepthStatus::Stale:
-        depthStatus_->setStyleSheet(QStringLiteral("color: #b35c00; font-size: 12px; font-weight: 600;"));
         depthDot_->setStyleSheet(QStringLiteral("background: #FB8C00; border-radius: 5px;"));
         break;
     case DepthStatus::Error:
-        depthStatus_->setStyleSheet(QStringLiteral("color: #B00020; font-size: 12px; font-weight: 600;"));
         depthDot_->setStyleSheet(QStringLiteral("background: #E53935; border-radius: 5px;"));
         break;
     }

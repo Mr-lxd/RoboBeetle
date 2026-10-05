@@ -396,6 +396,12 @@ void enablePaddles(rb::FakeTransport &transport, rb::RobotController &controller
 
 QGroupBox *findGroupBox(const QWidget *root, const QString &title);
 
+QString statusDotTip(const QWidget *panel, const char *dotName)
+{
+    const auto *dot = panel->findChild<QLabel *>(QString::fromLatin1(dotName));
+    return dot != nullptr ? dot->toolTip() : QString();
+}
+
 void testImuPanelLifecycle()
 {
     rb::FakeTransport transport;
@@ -407,7 +413,8 @@ void testImuPanelLifecycle()
     if (panel == nullptr) {
         return;
     }
-    expect(hasLabelText(panel, QStringLiteral("Unknown")),
+    expect(statusDotTip(panel, "imuStatusDot") == QStringLiteral("Unknown")
+               && !hasLabelText(panel, QStringLiteral("Unknown")),
            "IMU panel must start with Unknown status");
     expect(hasLabelText(panel, QStringLiteral("--")),
            "IMU panel must not show live values before reception");
@@ -415,7 +422,8 @@ void testImuPanelLifecycle()
     controller.connectTransport({QStringLiteral("COM_TEST"), 9600});
     transport.simulateConnected();
     injectImuSnapshot(transport);
-    expect(hasLabelText(panel, QStringLiteral("Receiving")),
+    expect(statusDotTip(panel, "imuStatusDot") == QStringLiteral("Receiving")
+               && !hasLabelText(panel, QStringLiteral("Receiving")),
            "IMU panel must show Receiving after a valid snapshot");
     expect(hasLabelText(panel, QStringLiteral("1.000, -2.000, 0.000 g")),
            "IMU panel must display fixed-point Acc values");
@@ -426,7 +434,8 @@ void testImuPanelLifecycle()
 
     controller.imuMonitor()->tick(controller.imuState().lastReceivedAtMs
                                   + rb::ImuMonitor::StaleTimeoutMs);
-    expect(hasLabelText(panel, QStringLiteral("Stale")),
+    expect(statusDotTip(panel, "imuStatusDot") == QStringLiteral("Stale")
+               && !hasLabelText(panel, QStringLiteral("Stale")),
            "IMU panel must show Stale after the liveness window");
     expect(hasLabelText(panel, QStringLiteral("--")),
            "IMU panel must clear old values after becoming stale");
@@ -443,7 +452,8 @@ void testDepthPanelLifecycle()
     if (panel == nullptr) {
         return;
     }
-    expect(hasLabelText(panel, QStringLiteral("Unknown")),
+    expect(statusDotTip(panel, "depthStatusDot") == QStringLiteral("Unknown")
+               && !hasLabelText(panel, QStringLiteral("Unknown")),
            "Depth panel must start with Unknown status");
     expect(hasLabelText(panel, QStringLiteral("--")),
            "Depth panel must not show live values before reception");
@@ -451,7 +461,8 @@ void testDepthPanelLifecycle()
     controller.connectTransport({QStringLiteral("COM_TEST"), 9600});
     transport.simulateConnected();
     injectDepthSnapshot(transport);
-    expect(hasLabelText(panel, QStringLiteral("Receiving")),
+    expect(statusDotTip(panel, "depthStatusDot") == QStringLiteral("Receiving")
+               && !hasLabelText(panel, QStringLiteral("Receiving")),
            "Depth panel must show Receiving after a valid snapshot");
     expect(hasLabelText(panel, QStringLiteral("1.23 m")),
            "Depth panel must display millimetre values as metres");
@@ -460,7 +471,8 @@ void testDepthPanelLifecycle()
 
     controller.depthMonitor()->tick(controller.depthState().lastReceivedAtMs
                                     + rb::DepthMonitor::StaleTimeoutMs);
-    expect(hasLabelText(panel, QStringLiteral("Stale")),
+    expect(statusDotTip(panel, "depthStatusDot") == QStringLiteral("Stale")
+               && !hasLabelText(panel, QStringLiteral("Stale")),
            "Depth panel must show Stale after the liveness window");
     expect(hasLabelText(panel, QStringLiteral("--")),
            "Depth panel must clear old depth values after becoming stale");
@@ -2467,6 +2479,12 @@ void testSlice5DetectionTextOverlayLifecycle()
                && std::abs(view->currentTargetState()->ey + 1.0 / 3.0) < 1e-9
                && view->visualDiagnosticText().contains(QStringLiteral("VISION DRY_RUN")),
            "live metadata calculates original-pixel errors through the existing UI gate");
+    {
+        auto *screen = window.findChild<QLabel *>(QStringLiteral("visionDiagnosticScreen"));
+        expect(screen != nullptr && screen->text() == view->visualDiagnosticText()
+                   && screen->text().contains(QStringLiteral("VISION DRY_RUN")),
+               "the diagnostic screen shows the same text as visualDiagnosticText()");
+    }
     expect(transport.writes().isEmpty(),
            "visual error calculation sends no robot commands");
     expect(view->visualDiagnosticText().contains(QStringLiteral("TRACKING"))

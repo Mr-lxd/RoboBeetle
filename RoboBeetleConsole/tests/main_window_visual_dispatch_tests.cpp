@@ -353,6 +353,13 @@ void enableReleaseBranchesAndAlert() {
     check(s->stopTimeoutAlert()&&child<QLabel>(w,"visualDispatchStatus")->text().contains("STOP TIMEOUT ALERT"),"three STOP timeouts latch visible alert without frames");
     c.ack(c.sends.back().first,CommandTerminalResult::Ok);
     check(child<QLabel>(w,"visualDispatchStatus")->text().contains("STOP TIMEOUT ALERT"),"late STOP confirmation preserves alert");
+    for(const QSize size:{QSize(1420,w.fullyExpandedWindowHeight()),QSize(1100,720)}) {
+        w.resize(size);w.show();QApplication::processEvents();
+        auto *banner=child<QLabel>(w,"autoFollowAlert");auto *card=child<QWidget>(w,"autoFollowCard");auto *controls=child<QWidget>(w,"visionControlsGroup");
+        const QRect bannerRect(banner->mapTo(&w,QPoint(0,0)),banner->size());
+        check(banner->isVisible()&&!bannerRect.intersects(QRect(controls->mapTo(&w,QPoint(0,0)),controls->size()))
+              &&QRect(card->mapTo(&w,QPoint(0,0)),card->size()).contains(bannerRect),"FAULT banner stays inside Auto Follow and clear of Vision Controls");
+    }
     logger->stop();QFile file(logger->filePath());check(file.open(QIODevice::ReadOnly),"retry CSV readable");
     const auto lines=file.readAll().split('\n');const auto cols=lines.front().split(',');
     QSet<QByteArray> policyIds,wireIds;int retries=0;

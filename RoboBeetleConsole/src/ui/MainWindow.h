@@ -117,6 +117,7 @@ private:
     void refreshDepthControlUi();
     void onAxisSelected(int axisIndex);
     void bindVisionUi();
+    void refreshVisualDiagnosticTexts();
     void refreshVisualCsvUi();
     void refreshVisualDispatchUi();
     void bindControllerUi();
@@ -220,6 +221,7 @@ private:
     QSpinBox *visionPort_{nullptr};
     QPushButton *visionConnectButton_{nullptr};
     QLabel *visionState_{nullptr};
+    QLabel *visionDiagnosticScreen_{nullptr};
     QLabel *visionDot_{nullptr};
     QLabel *visionDiagnostics_{nullptr};
     QLabel *videoFpsSummary_{nullptr};
@@ -288,14 +290,12 @@ private:
 
     // IMU card.
     QLabel *imuDot_{nullptr};
-    QLabel *imuStatus_{nullptr};
     QLabel *imuAcc_{nullptr};
     QLabel *imuGyro_{nullptr};
     QLabel *imuAngle_{nullptr};
 
     // Depth card.
     QLabel *depthDot_{nullptr};
-    QLabel *depthStatus_{nullptr};
     QLabel *depthValue_{nullptr};
     QLabel *depthTemperature_{nullptr};
     QLabel *depthAge_{nullptr};
