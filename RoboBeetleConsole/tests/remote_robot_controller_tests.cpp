@@ -1129,6 +1129,32 @@ void testZeroDepth()
            "the sample buffer is empty after reconnect");
 }
 
+// The sensor resolves 1 cm: a steady reading that flips between two adjacent
+// values (0.12 / 0.13, which differ by slightly more than 0.01 in floating
+// point) must still be zeroable with the default configuration.
+void testZeroDepthToleratesOneSensorStep()
+{
+    DepthFixture f;
+    QString error;
+    const double values[] = {0.12, 0.13, 0.12, 0.13, 0.12, 0.13};
+    for (const double v : values) {
+        f.send(v, 10);
+        f.now += 100;
+    }
+    f.now -= 100;
+    expect(f.controller.zeroDepth(&error), "alternating 0.12 / 0.13 samples must zero with default settings");
+    // Two steps (2 cm) is genuinely unsteady and stays refused.
+    DepthFixture g;
+    const double jumpy[] = {0.12, 0.14, 0.12, 0.14, 0.12};
+    for (const double v : jumpy) {
+        g.send(v, 10);
+        g.now += 100;
+    }
+    g.now -= 100;
+    expect(!g.controller.zeroDepth(&error) && error.contains(QStringLiteral("not steady")),
+           "a 2 cm swing is still refused");
+}
+
 void testZeroDepthRejectsUnsteadySamples()
 {
     DepthFixture f;
@@ -1229,6 +1255,7 @@ int main(int argc, char **argv)
     testCommandTimeoutReleasesAuthority();
     testControlDepthAgeAndFreshness();
     testZeroDepth();
+    testZeroDepthToleratesOneSensorStep();
     testZeroDepthRejectsUnsteadySamples();
     testZeroDepthWindowFollowsSamplePeriod();
     testZeroDepthRefusedWhileMoving();

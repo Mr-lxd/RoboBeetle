@@ -93,6 +93,7 @@ void invalidConfig()
         const DepthControlConfig d;
         expect(d.nominalSamplePeriodMs == 540 && d.controlFreshMs == 1300, "defaults are 540 ms / 1300 ms");
         expect(d.controlFreshMs >= 2 * d.nominalSamplePeriodMs + 200, "default freshness satisfies the rule");
+        expect(d.zeroMaxRangeM == 0.015, "zeroing range tolerates one 1 cm sensor step");
         DepthControlConfig tight = d;
         tight.controlFreshMs = 2 * d.nominalSamplePeriodMs + 199;
         expect(!rb::validDepthControlConfig(tight), "one millisecond below the rule is invalid");

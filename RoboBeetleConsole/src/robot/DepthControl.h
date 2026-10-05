@@ -8,7 +8,7 @@ struct DepthControlConfig {
     std::int64_t nominalSamplePeriodMs{540}; // [Provisional] measured sensor rate ~1.85 Hz (2026-10-05)
     std::int64_t controlFreshMs{1300};  // [Provisional] control freshness (>= 2*period+200); UI display still uses 3500
     int zeroMinSamples{5};        // 归零至少需要的新鲜样本数
-    double zeroMaxRangeM{0.01};   // 归零样本的最大极差
+    double zeroMaxRangeM{0.015};  // max range of zeroing samples; sensor resolution is 1 cm, so 0.13-0.12 (>0.01 in floating point) must pass
     double surfaceMarginM{0.02};  // 归零后深度 <= 此值：禁止 ASCEND
     double softMaxM{0.40};        // >= 此值：DESCEND 改为 FORWARD（软限位）
     double softReleaseM{0.37};    // 回到此值以下才解除软限位（滞回）
