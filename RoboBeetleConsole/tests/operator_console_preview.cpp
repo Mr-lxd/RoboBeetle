@@ -1,31 +1,204 @@
 #include "helpers/OperatorConsoleFixture.h"
+#include "helpers/VisualControllerFixture.h"
 #include "ui/MainWindow.h"
+#include "vision/VisualDispatchSession.h"
 #include "vision/VideoView.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLabel>
+#include <QPixmap>
+#include <QProgressBar>
+#include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSplitter>
 #include <QTabWidget>
+#include <QTextStream>
 
 #include <cstdlib>
 
 namespace {
+
+// Task 06 green-region geometry. Reported for the PR so the reviewer can see
+// the real vertical budget at both required window sizes instead of a claim.
+QJsonObject measureGreenRegion(rb::MainWindow &window)
+{
+    QJsonObject result;
+    auto *summary = window.findChild<QWidget *>(QStringLiteral("visionSummaryPanel"));
+    if (summary == nullptr) return result;
+    result.insert(QStringLiteral("panel_geometry"),
+                  QStringLiteral("%1,%2 %3x%4").arg(summary->x()).arg(summary->y())
+                      .arg(summary->width()).arg(summary->height()));
+    if (auto *session = window.findChild<rb::vision::VisualDispatchSession *>()) {
+        const auto ready = session->readiness();
+        result.insert(QStringLiteral("readiness"),
+                      QJsonObject{{QStringLiteral("link_and_control"), ready.linkAndControl},
+                                  {QStringLiteral("servos_ready"), ready.servosReady},
+                                  {QStringLiteral("tracking"), ready.tracking},
+                                  {QStringLiteral("missing"), ready.missingCount()}});
+        result.insert(QStringLiteral("session_armed"), session->armed());
+    }
+    for (const auto &pair : QList<QPair<QString, QString>>{
+             {QStringLiteral("state_pill_text"), QStringLiteral("autoFollowStatePill")},
+             {QStringLiteral("checklist_text"), QStringLiteral("autoFollowChecklist")},
+             {QStringLiteral("alert_text"), QStringLiteral("autoFollowAlert")},
+             {QStringLiteral("arm_button_text"), QStringLiteral("visualArmButton")}}) {
+        auto *label = window.findChild<QWidget *>(pair.second);
+        if (label == nullptr) continue;
+        if (auto *asLabel = qobject_cast<QLabel *>(label)) {
+            result.insert(pair.first, asLabel->text());
+        } else if (auto *asButton = qobject_cast<QPushButton *>(label)) {
+            result.insert(pair.first, asButton->text());
+            result.insert(QStringLiteral("arm_button_enabled"), asButton->isEnabled());
+        }
+        result.insert(pair.first + QStringLiteral("_visible"), label->isVisible());
+    }
+
+    // The status text above the green region is everything up to the stretch.
+    auto *controlsGroup =
+        window.findChild<QWidget *>(QStringLiteral("visionControlsGroup"));
+    auto *autoGroup = window.findChild<QWidget *>(QStringLiteral("autoFollowCard"));
+    auto *host = window.findChild<QWidget *>(QStringLiteral("greenRegionHost"));
+    auto *message = window.findChild<QWidget *>(QStringLiteral("visionControlMessage"));
+    if (host == nullptr) return result;
+    const int hostTop = host->mapTo(summary, QPoint(0, 0)).y();
+    result.insert(QStringLiteral("status_text_height_px"), hostTop);
+    result.insert(QStringLiteral("green_region_available_px"), host->height());
+    result.insert(QStringLiteral("green_region_free_px"),
+                  summary->height() - hostTop - host->height());
+    if (message != nullptr) {
+        result.insert(QStringLiteral("notice_bottom_px"),
+                      message->mapTo(summary, QPoint(0, 0)).y() + message->height());
+    }
+    if (autoGroup != nullptr) {
+        result.insert(QStringLiteral("auto_follow_geometry"),
+                      QStringLiteral("%1,%2 %3x%4")
+                          .arg(autoGroup->mapTo(summary, QPoint(0, 0)).x())
+                          .arg(autoGroup->mapTo(summary, QPoint(0, 0)).y())
+                          .arg(autoGroup->width()).arg(autoGroup->height()));
+        QJsonObject rows;
+        const QStringList names{
+            QStringLiteral("autoFollowStatePill"), QStringLiteral("visualDispatchEnabled"),
+            QStringLiteral("autoFollowChecklist"), QStringLiteral("visualArmButton"),
+            QStringLiteral("autoFollowAlert"), QStringLiteral("autoFollowDetail"),
+            QStringLiteral("autoFollowFooter"), QStringLiteral("autoFollowAxisSelector"),
+            QStringLiteral("autoFollowDepthRow")};
+        for (const QString &name : names) {
+            auto *widget = window.findChild<QWidget *>(name);
+            if (widget == nullptr) continue;
+            rows.insert(name, QJsonObject{
+                {QStringLiteral("visible"), widget->isVisible()},
+                {QStringLiteral("h"), widget->height()},
+                {QStringLiteral("fully_contained"),
+                 [&] {
+                     if (!widget->isVisible()) return true;
+                     const QRect mapped(widget->mapTo(autoGroup, QPoint(0, 0)),
+                                        widget->size());
+                     return autoGroup->rect().contains(mapped);
+                 }()}});
+        }
+        result.insert(QStringLiteral("auto_follow_rows"), rows);
+    }
+    if (controlsGroup != nullptr) {
+        result.insert(QStringLiteral("vision_controls_geometry"),
+                      QStringLiteral("%1,%2 %3x%4")
+                          .arg(controlsGroup->mapTo(summary, QPoint(0, 0)).x())
+                          .arg(controlsGroup->mapTo(summary, QPoint(0, 0)).y())
+                          .arg(controlsGroup->width()).arg(controlsGroup->height()));
+    }
+    if (controlsGroup != nullptr && autoGroup != nullptr) {
+        result.insert(QStringLiteral("side_by_side"),
+                      controlsGroup->x() < autoGroup->x()
+                      || controlsGroup->y() == autoGroup->y());
+        result.insert(QStringLiteral("vision_controls_width_px"), controlsGroup->width());
+        result.insert(QStringLiteral("auto_follow_width_px"), autoGroup->width());
+    }
+    // Widest Vision Controls button, for the side-by-side width verdict.
+    if (auto *connect = window.findChild<QWidget *>(QStringLiteral("visionConnectButton"))) {
+        result.insert(QStringLiteral("vision_button_width_px"), connect->width());
+    }
+    result.insert(QStringLiteral("variant"),
+                  window.greenRegionVariant()
+                          == rb::MainWindow::GreenRegionVariant::StackedV1
+                      ? QStringLiteral("V1-stacked")
+                      : QStringLiteral("V2-side-by-side"));
+    return result;
+}
+
+// Vision Status panel crop at 1:1: the review evidence for this task. The
+// region is mapped through the pixmap's device pixel ratio so a DPI-scaled run
+// crops the real panel rather than a fraction of it.
+void savePanelCrop(rb::MainWindow &window, const QString &path)
+{
+    auto *summary = window.findChild<QWidget *>(QStringLiteral("visionSummaryPanel"));
+    if (summary == nullptr) return;
+    const QPixmap full = window.grab();
+    const qreal dpr = full.devicePixelRatio() > 0.0 ? full.devicePixelRatio() : 1.0;
+    const QPoint origin = summary->mapTo(&window, QPoint(0, 0));
+    const QRect region(QPoint(qRound(origin.x() * dpr), qRound(origin.y() * dpr)),
+                       QSize(qRound(summary->width() * dpr),
+                             qRound(summary->height() * dpr)));
+    full.copy(region.intersected(full.rect())).save(path, "PNG");
+}
 
 struct PreviewCase {
     QString id;
     QSize size;
     int tab{0};
     QString scenario;
+    // Task 06 green-region extra: variant selector and scripted Auto Follow state.
+    QString variant;   // "V1" / "V2" / empty for the generic suite.
+    QString state;     // DRY RUN / NOT READY / READY / ARMED / FAULT / ARMED+PLACEHOLDER
+    bool panelCrop{false};
 };
+
+// Task 06: every required status x size x variant combination.
+QList<PreviewCase> greenRegionCases()
+{
+    QList<PreviewCase> cases;
+    const QList<QString> variants{QStringLiteral("V1"), QStringLiteral("V2")};
+    const QList<QSize> sizes{{1420, 880}, {1100, 720}};
+    const QList<QString> states{
+        QStringLiteral("DRY RUN"), QStringLiteral("NOT READY"),
+        QStringLiteral("READY"), QStringLiteral("ARMED"),
+        QStringLiteral("FAULT"), QStringLiteral("ARMED+PLACEHOLDER")};
+    const auto slug = [](const QString &state) {
+        return QString(state).replace(QStringLiteral(" "), QStringLiteral("-"))
+            .replace(QStringLiteral("+"), QStringLiteral("-"));
+    };
+    for (const QString &variant : variants) {
+        for (const QSize &size : sizes) {
+            for (const QString &state : states) {
+                PreviewCase item;
+                item.id = QStringLiteral("T06-%1-%2-%3x%4")
+                              .arg(slug(state), variant)
+                              .arg(size.width())
+                              .arg(size.height());
+                item.size = size;
+                item.tab = 0;
+                item.scenario = QStringLiteral("green region %1 %2 %3x%4")
+                                    .arg(state, variant)
+                                    .arg(size.width())
+                                    .arg(size.height());
+                item.variant = variant;
+                item.state = state;
+                item.panelCrop = true;
+                cases.append(item);
+            }
+        }
+    }
+    return cases;
+}
 
 QList<PreviewCase> standardCases()
 {
@@ -49,9 +222,9 @@ QList<PreviewCase> standardCases()
     };
 }
 
-QList<PreviewCase> selectedCases(const QString &caseId)
+QList<PreviewCase> selectedCases(const QString &caseId, bool greenOnly)
 {
-    const auto all = standardCases();
+    const auto all = greenOnly ? greenRegionCases() : standardCases();
     if (caseId.isEmpty()) {
         return all;
     }
@@ -61,6 +234,75 @@ QList<PreviewCase> selectedCases(const QString &caseId)
         }
     }
     return {};
+}
+
+// Drive the Auto Follow block into the requested status using only the public
+// controller/session surface. No hardware, no gateway, no real dispatch peers.
+// The diagnostic session ages a snapshot out after 500 ms and the application
+// keeps ticking, so a scripted TRACKING state must be refreshed immediately
+// before the grab rather than once during setup.
+void freshenTracking(rb::MainWindow &window, quint64 frameId)
+{
+    auto *diagnostic = window.findChild<rb::vision::VisualDiagnosticSession *>();
+    if (diagnostic == nullptr) return;
+    rb::vision::DetectionFrame frame{
+        frameId, 1000 + frameId, {640, 480}, {{1, "fish", 0.91, {352.0, 240.0}}}};
+    diagnostic->onDetectionArrival(
+        frame, {rb::vision::DetectionDisplayState::Target, frame});
+    QApplication::processEvents();
+}
+
+// Drive the Auto Follow block into the requested status. State is injected
+// through the preview fixture controller, so this needs no production hook.
+// Arming and the optional placeholder rows are applied by captureCase, after
+// the TRACKING snapshot has been refreshed.
+void applyGreenState(rb::MainWindow &window,
+                     rb::test::VisualControllerFixture &fixture,
+                     const PreviewCase &item)
+{
+    auto *gate = window.findChild<QCheckBox *>(QStringLiteral("visualDispatchEnabled"));
+    if (gate == nullptr) return;
+
+    if (item.state == QStringLiteral("DRY RUN")) return;
+
+    if (item.state == QStringLiteral("NOT READY")) {
+        // Exactly two independent items missing: link/control and servos/pose.
+        gate->setChecked(true);
+        fixture.active = false;
+        fixture.enabled = 0;
+        fixture.known = 0;
+        QApplication::processEvents();
+        return;
+    }
+
+    gate->setChecked(true);
+    QApplication::processEvents();
+
+    if (item.state == QStringLiteral("FAULT")) {
+        freshenTracking(window, 1);
+        if (auto *session = window.findChild<rb::vision::VisualDispatchSession *>()) {
+            session->timerTick();
+        }
+        if (auto *arm = window.findChild<QPushButton *>(QStringLiteral("visualArmButton"))) {
+            arm->click();
+        }
+        // A STALE safety event while armed begins one automatic STOP episode.
+        // Its ACK is never delivered, so the three retry deadlines latch the
+        // STOP-timeout alarm. The link stays up so retries actually run.
+        if (auto *diagnostic = window.findChild<rb::vision::VisualDiagnosticSession *>()) {
+            rb::vision::VisualViewContext stale;
+            stale.gate = rb::vision::DetectionDisplayState::Stale;
+            diagnostic->refresh(stale);
+        }
+        QElapsedTimer wait;
+        wait.start();
+        auto *session = window.findChild<rb::vision::VisualDispatchSession *>();
+        while (session != nullptr && wait.elapsed() < 6000 && !session->stopTimeoutAlert()) {
+            QApplication::processEvents(QEventLoop::AllEvents, 50);
+            session->timerTick();
+        }
+        QApplication::processEvents();
+    }
 }
 
 QByteArray statusBodyFor(const PreviewCase &item)
@@ -125,9 +367,47 @@ QJsonObject captureCase(rb::MainWindow &window,
         tabs->setCurrentIndex(item.tab);
     }
     QApplication::processEvents();
+    // Keep a scripted TRACKING state fresh across the layout settle above.
+    const bool wantsTracking = item.state == QStringLiteral("READY")
+        || item.state == QStringLiteral("ARMED")
+        || item.state == QStringLiteral("ARMED+PLACEHOLDER");
+    if (wantsTracking) {
+        freshenTracking(window, 2);
+        if (auto *session = window.findChild<rb::vision::VisualDispatchSession *>()) {
+            session->timerTick();
+        }
+        QApplication::processEvents();
+        if (item.state == QStringLiteral("ARMED")
+            || item.state == QStringLiteral("ARMED+PLACEHOLDER")) {
+            if (auto *arm = window.findChild<QPushButton *>(QStringLiteral("visualArmButton"))) {
+                arm->click();
+            }
+            if (auto *session = window.findChild<rb::vision::VisualDispatchSession *>()) {
+                session->timerTick();
+            }
+        }
+        if (item.state == QStringLiteral("ARMED+PLACEHOLDER")) {
+            // Static example values for the rows that stay hidden by default.
+            auto *axis = window.findChild<QWidget *>(QStringLiteral("autoFollowAxisSelector"));
+            auto *depth = window.findChild<QWidget *>(QStringLiteral("autoFollowDepthRow"));
+            if (axis != nullptr) {
+                axis->setVisible(true);
+                const auto buttons = axis->findChildren<QPushButton *>();
+                if (!buttons.isEmpty()) buttons.first()->setChecked(true);
+            }
+            if (depth != nullptr) {
+                depth->setVisible(true);
+                if (auto *bar = depth->findChild<QProgressBar *>()) bar->setValue(12);
+            }
+        }
+        QApplication::processEvents();
+    }
     const auto image = window.grab();
     const QString fileName = item.id + QStringLiteral(".png");
     image.save(QDir(directory).filePath(fileName), "PNG");
+    if (item.panelCrop) {
+        savePanelCrop(window, QDir(directory).filePath(item.id + QStringLiteral("-panel.png")));
+    }
 
     QJsonObject result;
     result.insert(QStringLiteral("case_id"), item.id);
@@ -146,6 +426,11 @@ QJsonObject captureCase(rb::MainWindow &window,
     result.insert(QStringLiteral("selected_tab"), item.tab);
     result.insert(QStringLiteral("scenario"), item.scenario);
     result.insert(QStringLiteral("output"), fileName);
+    if (!item.variant.isEmpty()) {
+        result.insert(QStringLiteral("variant"), item.variant);
+        result.insert(QStringLiteral("auto_follow_requested_state"), item.state);
+        result.insert(QStringLiteral("green_region"), measureGreenRegion(window));
+    }
     if (auto *screen = window.screen(); screen != nullptr) {
         const QRect available = screen->availableGeometry();
         result.insert(
@@ -191,18 +476,34 @@ int main(int argc, char **argv)
                                     QStringLiteral("Output directory"), QStringLiteral("directory"));
     QCommandLineOption suiteOption(QStringLiteral("suite"), QStringLiteral("Suite name"), QStringLiteral("suite"));
     QCommandLineOption caseOption(QStringLiteral("case"), QStringLiteral("Single case prefix"), QStringLiteral("case"));
+    QCommandLineOption greenOption(
+        QStringLiteral("green-region"),
+        QStringLiteral("Run the Task 06 green-region suite instead of the standard suite"));
+    QCommandLineOption scaleLabelOption(
+        QStringLiteral("scale-label"),
+        QStringLiteral("Suffix added to emitted case ids and file names"), QStringLiteral("label"));
     parser.addOption(outputOption);
     parser.addOption(suiteOption);
     parser.addOption(caseOption);
+    parser.addOption(greenOption);
+    parser.addOption(scaleLabelOption);
     parser.process(app);
     const QString directory = parser.value(outputOption);
     if (directory.isEmpty()) {
         return 2;
     }
     QDir().mkpath(directory);
-    const auto cases = selectedCases(parser.value(caseOption));
+    const bool greenSuite = parser.isSet(greenOption);
+    const QString scaleLabel = parser.value(scaleLabelOption);
+    auto cases = selectedCases(parser.value(caseOption), greenSuite);
     if (cases.isEmpty()) {
         return 3;
+    }
+    if (!scaleLabel.isEmpty()) {
+        // Keep scaled runs distinct in the merged manifest and in file names.
+        for (auto &item : cases) {
+            item.id += QStringLiteral("-") + scaleLabel;
+        }
     }
 
     const QString qpa = QString::fromLocal8Bit(qgetenv("QT_QPA_PLATFORM"));
@@ -219,6 +520,23 @@ int main(int argc, char **argv)
         fixture.visionControlClient->refreshStatus();
         for (int tick = 0; tick < 50 && !fixture.visionControlClient->hasFreshStatus(); ++tick) {
             QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        }
+        if (greenSuite) {
+            // The green-region statuses need a scriptable authority/servo state.
+            rb::test::VisualControllerFixture controller;
+            rb::MainWindow window(&controller, fixture.visionClient.get(),
+                                  fixture.visionControlClient.get());
+            window.setGreenRegionVariant(
+                item.variant == QStringLiteral("V2")
+                    ? rb::MainWindow::GreenRegionVariant::SideBySideV2
+                    : rb::MainWindow::GreenRegionVariant::StackedV1);
+            if (auto *video = window.findChild<rb::vision::VideoView *>(QStringLiteral("videoView"))) {
+                video->setFrame(rb::test::OperatorConsoleFixture::syntheticVideo(), 1);
+            }
+            applyGreenState(window, controller, item);
+            entries.append(captureCase(window, item, directory, qpa));
+            window.hide();
+            continue;
         }
         rb::MainWindow window(fixture.controller(), fixture.visionClient.get(),
                               fixture.visionControlClient.get());

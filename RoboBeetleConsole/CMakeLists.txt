@@ -122,6 +122,7 @@ if(BUILD_TESTING)
     add_test(NAME visual_dispatch_state_machine_tests COMMAND visual_dispatch_state_machine_tests)
 
     add_executable(visual_dispatch_session_tests tests/visual_dispatch_session_tests.cpp)
+    target_include_directories(visual_dispatch_session_tests PRIVATE tests src)
     target_link_libraries(visual_dispatch_session_tests PRIVATE RoboBeetleCore Qt6::Widgets)
     add_test(NAME visual_dispatch_session_tests COMMAND visual_dispatch_session_tests)
 

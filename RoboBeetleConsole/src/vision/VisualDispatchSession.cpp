@@ -153,27 +153,33 @@ void VisualDispatchSession::disarm()
     emit statusChanged();
 }
 
-void VisualDispatchSession::selectTurnSign(std::optional<int> sign)
-{
-    if (sign && *sign != 1 && *sign != -1) sign.reset();
-    if (selectedSign_ == sign) return;
-    disarm();
-    selectedSign_ = sign;
-    confirmedSign_.reset();
-    emit statusChanged();
-}
-
-void VisualDispatchSession::confirmTurnSign()
-{
-    confirmedSign_ = selectedSign_;
-    emit statusChanged();
-}
 void VisualDispatchSession::manualInput(ManualInputKind kind)
 {
     if (kind == ManualInputKind::NonMotion) return;
     machine_.manualInput(kind);
     clearAssociations();
     emit statusChanged();
+}
+
+AutoFollowReadiness VisualDispatchSession::readiness() const
+{
+    // Pure query: reuse input()'s accessors but never touch machine_ state.
+    AutoFollowReadiness result;
+    result.linkAndControl = controller_->backendKind() == ConsoleBackendKind::RemoteRbrp
+        && controller_->isConnected() && controller_->isControlActive();
+
+    quint16 enabledMask = 0;
+    for (int i = 0; i < kServoCount; ++i) {
+        const auto id = static_cast<ServoId>(i);
+        if (controller_->isServoEnabled(id) && !controller_->isServoDisablePending(id))
+            enabledMask |= 1U << i;
+    }
+    result.servosReady = (enabledMask & requiredServoMask_) == requiredServoMask_
+        && (controller_->inferredPoseKnownMask() & requiredServoMask_) == requiredServoMask_;
+
+    const auto snapshot = snapshot_();
+    result.tracking = snapshot.has_value() && snapshot->state == VisualState::Tracking;
+    return result;
 }
 void VisualDispatchSession::timerTick()
 {

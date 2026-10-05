@@ -211,18 +211,42 @@ void testCompactVisionSurfaceAndDetailsTree()
                    && hiddenRecordingStop != nullptr && !hiddenRecordingStop->isVisible(),
                "normal operation presents one inference toggle and one recording toggle");
 
-        int previousY = -1;
+        // Task 06: the four visible vision actions now form a 2x2 grid inside
+        // their own labelled sub-region, still owned by the Vision Status panel.
         for (const QString &name : visibleControlNames) {
             auto *button = videoCard->findChild<QPushButton *>(name);
             expect(button != nullptr && button->isVisible()
                        && summaryPanel != nullptr
                        && summaryPanel->isAncestorOf(button),
                    "Vision Status owns every visible video/capture action");
-            if (button != nullptr) {
-                const int y = button->mapTo(summaryPanel, QPoint(0, 0)).y();
-                expect(y > previousY,
-                       "Vision Status actions are stacked vertically");
-                previousY = y;
+        }
+        {
+            auto *controlsGroup =
+                videoCard->findChild<QWidget *>(QStringLiteral("visionControlsGroup"));
+            expect(controlsGroup != nullptr && summaryPanel != nullptr
+                       && summaryPanel->isAncestorOf(controlsGroup),
+                   "Vision Controls is its own sub-region of the Vision Status panel");
+            QList<QPushButton *> gridButtons;
+            for (const QString &name : visibleControlNames) {
+                gridButtons.append(videoCard->findChild<QPushButton *>(name));
+            }
+            expect(gridButtons.size() == 4 && gridButtons.at(0) != nullptr
+                       && gridButtons.at(1) != nullptr && gridButtons.at(2) != nullptr
+                       && gridButtons.at(3) != nullptr,
+                   "the 2x2 vision grid has four visible actions");
+            if (gridButtons.size() == 4 && gridButtons.at(0) != nullptr) {
+                const auto top = [&](int index) {
+                    return gridButtons.at(index)->mapTo(summaryPanel, QPoint(0, 0));
+                };
+                expect(top(0).y() == top(1).y() && top(0).x() < top(1).x(),
+                       "the first vision grid row is two side-by-side actions");
+                expect(top(2).y() == top(3).y() && top(2).x() < top(3).x(),
+                       "the second vision grid row is two side-by-side actions");
+                expect(top(2).y() > top(0).y(),
+                       "the second vision grid row sits below the first");
+                expect(qAbs(top(0).x() - top(2).x()) <= 2
+                           && qAbs(top(1).x() - top(3).x()) <= 2,
+                       "the vision grid columns line up");
             }
         }
         auto *fpsSummary = videoCard->findChild<QLabel *>(QStringLiteral("videoFpsSummary"));
@@ -338,6 +362,95 @@ void testMinimumToolPagesUseVerticalScrollOnly()
            "persistent Enable All remains outside page scroll content");
     expect(disableAll != nullptr && disableAll->parentWidget() == actionBar,
            "persistent Disable All remains outside page scroll content");
+    window.close();
+}
+
+// Task 06: at the minimum window size every safety-critical green-region
+// element must be visible and fully inside its own sub-region, and the status
+// text above the green region must keep its full height.
+void testGreenRegionFitsAtMinimumSize()
+{
+    rb::test::OperatorConsoleFixture fixture;
+    fixture.create(false, true);
+    rb::MainWindow window(fixture.controller(), fixture.visionClient.get(),
+                          fixture.visionControlClient.get());
+    window.resize(1100, 720);
+    window.show();
+    QApplication::processEvents();
+
+    auto *summary = window.findChild<QWidget *>(QStringLiteral("visionSummaryPanel"));
+    auto *host = window.findChild<QWidget *>(QStringLiteral("greenRegionHost"));
+    auto *autoGroup = window.findChild<QWidget *>(QStringLiteral("autoFollowCard"));
+    auto *controlsGroup = window.findChild<QWidget *>(QStringLiteral("visionControlsGroup"));
+    expect(summary != nullptr && host != nullptr && autoGroup != nullptr
+               && controlsGroup != nullptr,
+           "Task 06 green region and both sub-regions exist at minimum size");
+    if (summary == nullptr || host == nullptr || autoGroup == nullptr) {
+        window.close();
+        return;
+    }
+
+    // The status text above the green region is fully visible: the notice row
+    // above the region must sit above it and the panel must not clip it.
+    auto *notice = window.findChild<QWidget *>(QStringLiteral("visionControlMessage"));
+    expect(notice != nullptr
+               && notice->mapTo(summary, QPoint(0, 0)).y()
+                   < host->mapTo(summary, QPoint(0, 0)).y(),
+           "the green region starts below every status row of the panel");
+    for (const QString &name : {QStringLiteral("videoFpsSummary"),
+                                QStringLiteral("videoResolutionSummary"),
+                                QStringLiteral("storageFreeSummary"),
+                                QStringLiteral("inferenceMemorySummary"),
+                                QStringLiteral("captureCountSummary")}) {
+        auto *row = window.findChild<QWidget *>(name);
+        expect(row != nullptr && !row->isHidden() && !row->visibleRegion().isEmpty(), "status row stays visible at minimum size");
+        if (row != nullptr) {
+            const QRect mapped(row->mapTo(summary, QPoint(0, 0)), row->size());
+            expect(summary->rect().contains(mapped),
+                   "status row above the green region is never clipped or scrolled");
+        }
+    }
+    // No scroll area may appear inside the Vision Status panel.
+    expect(summary->findChildren<QScrollArea *>().isEmpty(),
+           "the Vision Status panel never needs a scroll area");
+
+    // The pinned Auto Follow elements must be visible and unclipped.
+    for (const QString &name : {QStringLiteral("autoFollowStatePill"),
+                                QStringLiteral("visualDispatchEnabled"),
+                                QStringLiteral("visualArmButton")}) {
+        auto *widget = window.findChild<QWidget *>(name);
+        expect(widget != nullptr && widget->isVisible(),
+               "pinned Auto Follow element is visible at 1100x720");
+        if (widget == nullptr) {
+            continue;
+        }
+        const QRect mapped(widget->mapTo(autoGroup, QPoint(0, 0)), widget->size());
+        expect(autoGroup->rect().contains(mapped),
+               "pinned Auto Follow element is fully inside its sub-region");
+        expect(widget->minimumSizeHint().height() > 0
+                   && widget->height() >= widget->minimumSizeHint().height(),
+               "pinned Auto Follow element is at least its minimum height");
+        expect(!widget->visibleRegion().isEmpty(),
+               "pinned Auto Follow element has a non-empty visible region");
+    }
+    // The combined action stays a comfortable touch target.
+    auto *arm = window.findChild<QPushButton *>(QStringLiteral("visualArmButton"));
+    expect(arm != nullptr && !arm->isHidden() && arm->height() >= 32,
+           "the combined Arm/Disarm action keeps a usable touch height");
+    // Vision Controls keeps all four operator actions visible.
+    for (const QString &name : {QStringLiteral("visionConnectButton"),
+                                QStringLiteral("startInferenceButton"),
+                                QStringLiteral("snapshotButton"),
+                                QStringLiteral("startRecordingButton")}) {
+        auto *button = window.findChild<QPushButton *>(name);
+        expect(button != nullptr && !button->isHidden() && button->height() >= 30,
+               "Vision Controls action stays visible with a usable height");
+        if (button != nullptr && controlsGroup != nullptr) {
+            const QRect mapped(button->mapTo(controlsGroup, QPoint(0, 0)), button->size());
+            expect(controlsGroup->rect().contains(mapped),
+                   "Vision Controls action is fully inside its sub-region");
+        }
+    }
     window.close();
 }
 
@@ -890,6 +1003,7 @@ int main(int argc, char **argv)
     testTreeAndSizing();
     testElidedLabel();
     testCompactVisionSurfaceAndDetailsTree();
+    testGreenRegionFitsAtMinimumSize();
     testMinimumToolPagesUseVerticalScrollOnly();
     testReviewerClosureContracts();
     testPresentationDetailsReflowAndNoSideEffects();
