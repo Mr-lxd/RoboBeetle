@@ -175,7 +175,9 @@ static void test_turn_samples_match_forward_and_axis_bias(void)
            "ASCEND should use the provisional positive FrontAxis bias");
     expect(descend.front_axis_cdeg ==
                MOTION_PROFILE_DESCEND_FRONT_AXIS_BIAS_CDEG,
-           "DESCEND should use the provisional negative FrontAxis bias");
+           "DESCEND should use the configured FrontAxis bias");
+    expect(ascend.front_axis_cdeg == -1000 && descend.front_axis_cdeg == 1000,
+           "ASCEND is a negative and DESCEND a positive FrontAxis bias");
 }
 
 static void test_phase_step(void)

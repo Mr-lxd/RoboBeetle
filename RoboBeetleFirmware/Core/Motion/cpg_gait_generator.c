@@ -1,5 +1,7 @@
 #include "cpg_gait_generator.h"
 
+#include "motion_config.h"
+
 #include <math.h>
 #include <stddef.h>
 #include <string.h>
@@ -44,8 +46,10 @@ void cpg_gait_profile_production_default(
     profile->front_amplitude_deg = 10.0;
     profile->rear_amplitude_deg = 10.0;
     profile->nominal_period_s = 2.0;
-    profile->front_axis_bias_cdeg[MOTION_ASCEND] = 1000.0;
-    profile->front_axis_bias_cdeg[MOTION_DESCEND] = -1000.0;
+    profile->front_axis_bias_cdeg[MOTION_ASCEND] =
+        (double)MOTION_PROFILE_ASCEND_FRONT_AXIS_BIAS_CDEG;
+    profile->front_axis_bias_cdeg[MOTION_DESCEND] =
+        (double)MOTION_PROFILE_DESCEND_FRONT_AXIS_BIAS_CDEG;
 }
 
 void cpg_gait_generator_init_with_profile(
