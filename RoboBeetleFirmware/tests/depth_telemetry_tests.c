@@ -378,22 +378,47 @@ static void test_policy_is_due_at_first_opportunity_and_interval_boundary(void)
     depth_telemetry_policy_t policy = {0};
 
     depth_telemetry_policy_init(&policy);
-    expect(depth_telemetry_policy_is_due(&policy, 0U),
+    expect(depth_telemetry_policy_is_due(&policy, 0U, 0U),
            "depth policy must be due before its first success");
 
-    depth_telemetry_policy_mark_success(&policy, 500U);
-    expect(!depth_telemetry_policy_is_due(&policy, 1499U),
-           "depth policy must wait for the complete one-second interval");
-    expect(depth_telemetry_policy_is_due(&policy, 1500U),
-           "depth policy must be due at the one-second boundary");
-    expect(depth_telemetry_policy_is_due(&policy, 2500U),
-           "depth policy remains due until a success is recorded");
+    depth_telemetry_policy_mark_success(&policy, 500U, 1U);
 
-    depth_telemetry_policy_mark_success(&policy, 2500U);
-    expect(!depth_telemetry_policy_is_due(&policy, 3499U),
+    /* Same sample: nothing until the keepalive interval. */
+    expect(!depth_telemetry_policy_is_due(&policy, 700U, 1U),
+           "an already published sample must not be repeated");
+    expect(!depth_telemetry_policy_is_due(
+               &policy, 500U + DEPTH_TELEMETRY_KEEPALIVE_INTERVAL_MS - 1U, 1U),
+           "keepalive must wait for its full interval");
+    expect(depth_telemetry_policy_is_due(
+               &policy, 500U + DEPTH_TELEMETRY_KEEPALIVE_INTERVAL_MS, 1U),
+           "keepalive must be due at its boundary");
+
+    /* New sample: due at the 200 ms boundary, not before. */
+    expect(!depth_telemetry_policy_is_due(
+               &policy, 500U + DEPTH_TELEMETRY_INTERVAL_MS - 1U, 2U),
+           "a new sample must still wait for the minimum interval");
+    expect(depth_telemetry_policy_is_due(
+               &policy, 500U + DEPTH_TELEMETRY_INTERVAL_MS, 2U),
+           "a new sample must be due at the minimum interval");
+    expect(depth_telemetry_policy_is_due(&policy, 1400U, 2U),
+           "policy remains due until a success is recorded");
+
+    depth_telemetry_policy_mark_success(&policy, 700U, 2U);
+    expect(!depth_telemetry_policy_is_due(&policy, 899U, 2U),
            "successful publication must restart the interval");
-    expect(depth_telemetry_policy_is_due(&policy, 3500U),
-           "policy must become due after the restarted interval");
+    expect(!depth_telemetry_policy_is_due(&policy, 899U, 3U),
+           "a new sample must wait for the restarted interval");
+    expect(depth_telemetry_policy_is_due(&policy, 900U, 3U),
+           "new sample due after the restarted interval");
+}
+
+static void test_policy_interval_is_shorter_than_heartbeat_period(void)
+{
+    /* Heartbeats are 250 ms apart; a 200 ms minimum leaves jitter margin. */
+    expect(DEPTH_TELEMETRY_INTERVAL_MS < 250U,
+           "depth interval must be below the heartbeat period");
+    expect(DEPTH_TELEMETRY_KEEPALIVE_INTERVAL_MS >= DEPTH_TELEMETRY_INTERVAL_MS,
+           "keepalive must not be shorter than the sample interval");
 }
 
 static void test_policy_elapsed_comparison_is_wrap_safe(void)
@@ -401,12 +426,17 @@ static void test_policy_elapsed_comparison_is_wrap_safe(void)
     depth_telemetry_policy_t policy = {0};
 
     depth_telemetry_policy_init(&policy);
-    depth_telemetry_policy_mark_success(&policy, 0xFFFFFF00U);
+    depth_telemetry_policy_mark_success(&policy, 0xFFFFFF9CU, 7U);
 
-    expect(!depth_telemetry_policy_is_due(&policy, 0x000002E7U),
-           "wrapped elapsed time of 999 ms must not be due");
-    expect(depth_telemetry_policy_is_due(&policy, 0x000002E8U),
-           "wrapped elapsed time of 1000 ms must be due");
+    /* 0xFFFFFF9C + 199 ms wraps to 0x00000063; 200 ms to 0x00000064. */
+    expect(!depth_telemetry_policy_is_due(&policy, 0x00000063U, 8U),
+           "wrapped elapsed time of 199 ms must not be due for a new sample");
+    expect(depth_telemetry_policy_is_due(&policy, 0x00000064U, 8U),
+           "wrapped elapsed time of 200 ms must be due for a new sample");
+    expect(!depth_telemetry_policy_is_due(&policy, 0x00000383U, 7U),
+           "wrapped elapsed time of 999 ms must not trigger keepalive");
+    expect(depth_telemetry_policy_is_due(&policy, 0x00000384U, 7U),
+           "wrapped elapsed time of 1000 ms must trigger keepalive");
 }
 
 static void test_policy_null_arguments_are_safe(void)
@@ -414,8 +444,8 @@ static void test_policy_null_arguments_are_safe(void)
     depth_telemetry_policy_t policy = {0};
 
     depth_telemetry_policy_init(NULL);
-    depth_telemetry_policy_mark_success(NULL, 123U);
-    expect(!depth_telemetry_policy_is_due(NULL, 123U),
+    depth_telemetry_policy_mark_success(NULL, 123U, 1U);
+    expect(!depth_telemetry_policy_is_due(NULL, 123U, 1U),
            "null depth policy must not report due");
 
     depth_telemetry_policy_init(&policy);
@@ -484,6 +514,7 @@ int main(void)
     test_decode_rejects_malformed_payloads();
     test_decode_failure_does_not_publish_partial_output();
     test_policy_is_due_at_first_opportunity_and_interval_boundary();
+    test_policy_interval_is_shorter_than_heartbeat_period();
     test_policy_elapsed_comparison_is_wrap_safe();
     test_policy_null_arguments_are_safe();
     test_sensor_freshness_policy_expires_and_recovers();

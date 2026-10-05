@@ -20,15 +20,27 @@
 #define DEPTH_TELEMETRY_SAMPLE_AGE_UNKNOWN UINT16_MAX
 
 /*
- * Firmware-side sensor freshness is separate from the one-second telemetry
- * publication interval and from the Qt host packet StaleTimeoutMs.
+ * Firmware-side sensor freshness (3000 ms) is a different thing from:
+ *  - the telemetry publication interval below,
+ *  - the Qt host's control freshness (DepthControlConfig::controlFreshMs,
+ *    provisionally 700 ms), which gates automatic ASCEND/DESCEND, and
+ *  - the Qt UI display StaleTimeoutMs (3500 ms).
  * Vendor line cadence is not specified, so this provisional 3000 ms bound
- * allows three current one-second publication intervals before a valid depth
- * sample is no longer used for live telemetry. The timeout is intentionally
- * explicit so it can be revised when the vendor cadence is measured.
+ * is kept; it only decides when old values are scrubbed from telemetry.
  */
 #define DEPTH_TELEMETRY_SENSOR_FRESHNESS_TIMEOUT_MS 3000U
-#define DEPTH_TELEMETRY_INTERVAL_MS 1000U
+
+/*
+ * Telemetry rides on accepted Heartbeat ACKs (one every 250 ms, fixed by the
+ * RBRP handshake). A fresh sample is published at most once per
+ * DEPTH_TELEMETRY_INTERVAL_MS; the value must stay below the heartbeat period
+ * so a heartbeat arriving slightly early does not skip a whole beat (which
+ * would degrade the rate to 500 ms). Without a new sample a frame is still
+ * sent every DEPTH_TELEMETRY_KEEPALIVE_INTERVAL_MS so the host sees
+ * sensor-stopped state and diagnostics.
+ */
+#define DEPTH_TELEMETRY_INTERVAL_MS 200U
+#define DEPTH_TELEMETRY_KEEPALIVE_INTERVAL_MS 1000U
 
 /* Names matching the protocol's DepthSnapshot terminology. */
 #define DEPTH_SNAPSHOT_MESSAGE_ID DEPTH_TELEMETRY_MESSAGE_ID
@@ -83,18 +95,23 @@ bool depth_telemetry_sensor_sample_is_current(
 typedef struct
 {
     uint32_t last_success_ms;
+    uint32_t last_published_valid_line_count;
     bool has_success;
 } depth_telemetry_policy_t;
 
 void depth_telemetry_policy_init(
     depth_telemetry_policy_t *policy);
 
+/* Due when a new valid line arrived and INTERVAL_MS has elapsed, or when
+ * KEEPALIVE_INTERVAL_MS has elapsed since the last published frame. */
 bool depth_telemetry_policy_is_due(
     const depth_telemetry_policy_t *policy,
-    uint32_t now_ms);
+    uint32_t now_ms,
+    uint32_t valid_line_count);
 
 void depth_telemetry_policy_mark_success(
     depth_telemetry_policy_t *policy,
-    uint32_t now_ms);
+    uint32_t now_ms,
+    uint32_t valid_line_count);
 
 #endif /* ROBOBEETLE_DEPTH_TELEMETRY_H */
