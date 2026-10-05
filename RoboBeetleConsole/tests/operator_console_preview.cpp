@@ -164,7 +164,9 @@ QList<PreviewCase> greenRegionCases()
 {
     QList<PreviewCase> cases;
     const QString variant = QStringLiteral("V1");
-    const QList<QSize> sizes{{1420, 880}, {1100, 720}};
+    // {w, 0}: default size with fully expanded Operator tools; {1100, 720} is
+    // clamped up to the window minimum.
+    const QList<QSize> sizes{{1420, 0}, {1100, 720}};
     const QList<QString> states{
         QStringLiteral("DRY RUN"), QStringLiteral("NOT READY"),
         QStringLiteral("READY"), QStringLiteral("ARMED"), QStringLiteral("STOPPING"),
@@ -179,13 +181,13 @@ QList<PreviewCase> greenRegionCases()
             item.id = QStringLiteral("T06-%1-%2-%3x%4")
                           .arg(slug(state), variant)
                           .arg(size.width())
-                          .arg(size.height());
+                          .arg(size.height() > 0 ? QString::number(size.height()) : QStringLiteral("default"));
             item.size = size;
             item.tab = 0;
             item.scenario = QStringLiteral("green region %1 %2 %3x%4")
                                 .arg(state, variant)
                                 .arg(size.width())
-                                .arg(size.height());
+                                .arg(size.height() > 0 ? QString::number(size.height()) : QStringLiteral("default"));
             item.variant = variant;
             item.state = state;
             item.panelCrop = true;
@@ -373,9 +375,16 @@ QJsonObject captureCase(rb::MainWindow &window,
                         const QString &directory,
                         const QString &qpa)
 {
-    window.resize(item.size);
+    // Height 0 means "the default size": fully expanded Operator tools.
+    window.resize(item.size.height() > 0 ? item.size
+                                         : QSize(item.size.width(), window.fullyExpandedWindowHeight()));
     window.show();
     QApplication::processEvents();
+    if (item.size.height() <= 0) {
+        window.settleStartupGeometry();
+        window.resize(item.size.width(), window.fullyExpandedWindowHeight());
+        QApplication::processEvents();
+    }
     if (auto *tabs = window.findChild<QTabWidget *>(QStringLiteral("operatorToolsTabs"))) {
         tabs->setCurrentIndex(item.tab);
     }
@@ -416,6 +425,10 @@ QJsonObject captureCase(rb::MainWindow &window,
     image.save(QDir(directory).filePath(fileName), "PNG");
     if (item.panelCrop) {
         savePanelCrop(window, QDir(directory).filePath(item.id + QStringLiteral("-panel.png")));
+        if (auto *depthCard = window.findChild<QWidget *>(QStringLiteral("depthCard"))) {
+            depthCard->grab().save(
+                QDir(directory).filePath(item.id + QStringLiteral("-depthcard.png")), "PNG");
+        }
     }
 
     QJsonObject result;

@@ -14,6 +14,7 @@
 #include "vision/VisualDispatchSession.h"
 
 #include <QCloseEvent>
+#include <QShowEvent>
 #include <QAbstractSpinBox>
 #include <QComboBox>
 #include <QCheckBox>
@@ -30,6 +31,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QMessageBox>
 #include <QRegularExpression>
@@ -611,19 +613,7 @@ MainWindow::MainWindow(
             committedPiHost_, visionControlClient_->port());
     }
     setWindowTitle(QStringLiteral("RoboBeetle Console"));
-    setMinimumSize(1100, 720);
-    const QScreen *startupScreen = QGuiApplication::primaryScreen();
-    if (startupScreen != nullptr) {
-        const QRect available = startupScreen->availableGeometry();
-        const int initialWidth = qMax(1100, qMin(1420, available.width() - 32));
-        const int initialHeight = qMax(720, qMin(880, available.height() - 80));
-        resize(initialWidth, initialHeight);
-        const QSize frameSize = frameGeometry().size();
-        move(available.center()
-             - QPoint(frameSize.width() / 2, frameSize.height() / 2));
-    } else {
-        resize(1420, 880);
-    }
+    setMinimumSize(1100, 720); // raised to the content-driven minimum once the UI exists
 
     auto *central = new QWidget(this);
     central->setObjectName(QStringLiteral("appCanvas"));
@@ -633,7 +623,8 @@ MainWindow::MainWindow(
     root->setContentsMargins(8, 8, 8, 8);
     root->setSpacing(8);
 
-    root->addWidget(createConnectionBar());
+    connectionBar_ = createConnectionBar();
+    root->addWidget(connectionBar_);
     operatorToolsPane_ = createOperatorTools();
     workspaceSplitter_ = new QSplitter(Qt::Vertical, central);
     workspaceSplitter_->setObjectName(QStringLiteral("workspaceSplitter"));
@@ -690,7 +681,10 @@ MainWindow::MainWindow(
         "QPlainTextEdit { background: #fbfcfd; border: 1px solid #c4ccd4; "
         "  border-radius: 4px; color: #334A5C; }"));
 
+    updateWorkspaceMinimums();
+    applyStartupGeometry();
     initializeWorkspaceSizes();
+    QTimer::singleShot(0, this, [this] { updateWorkspaceMinimums(); });
 
     setConnectedUi(false);
     setLeakUiState(controller_->leakState());
@@ -1375,6 +1369,28 @@ QWidget *MainWindow::createDepthCard()
     addDashboardCardHeader(
         layout, box, QStringLiteral("Depth Sensor"));
 
+    // Top row: Depth / Temp / Age side by side.
+    auto *metrics = new QHBoxLayout;
+    metrics->setContentsMargins(1, 0, 0, 0);
+    metrics->setSpacing(10);
+    depthValue_ = new QLabel(QStringLiteral("--"), box);
+    depthTemperature_ = new QLabel(QStringLiteral("--"), box);
+    depthAge_ = new QLabel(QStringLiteral("--"), box);
+    const QStringList metricNames{QStringLiteral("Depth"), QStringLiteral("Temp"), QStringLiteral("Age")};
+    const QList<QLabel *> metricValues{depthValue_, depthTemperature_, depthAge_};
+    for (int i = 0; i < metricNames.size(); ++i) {
+        auto *name = new QLabel(metricNames.at(i), box);
+        name->setStyleSheet(QStringLiteral("color: #7B8F9D; font-size: 11px; font-weight: 500;"));
+        metricValues.at(i)->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
+        auto *pair = new QHBoxLayout;
+        pair->setSpacing(4);
+        pair->addWidget(name);
+        pair->addWidget(metricValues.at(i));
+        metrics->addLayout(pair);
+    }
+    metrics->addStretch();
+    layout->addLayout(metrics);
+
     auto *statusRow = new QHBoxLayout;
     statusRow->setContentsMargins(1, 0, 0, 0);
     statusRow->setSpacing(7);
@@ -1392,25 +1408,33 @@ QWidget *MainWindow::createDepthCard()
     statusRow->addStretch();
     layout->addLayout(statusRow);
 
-    auto *metrics = new QGridLayout;
-    metrics->setHorizontalSpacing(10);
-    metrics->setVerticalSpacing(2);
-    depthValue_ = new QLabel(QStringLiteral("--"), box);
-    depthTemperature_ = new QLabel(QStringLiteral("--"), box);
-    depthAge_ = new QLabel(QStringLiteral("--"), box);
-    for (QLabel *label : {depthValue_, depthTemperature_, depthAge_}) {
-        label->setStyleSheet(QStringLiteral("color: #405A6B; font-size: 11px; font-weight: 600;"));
-    }
-    for (int row = 0; row < 3; ++row) {
-        auto *label = new QLabel(QStringList{QStringLiteral("Depth"), QStringLiteral("Temp"), QStringLiteral("Age")}.at(row), box);
-        label->setStyleSheet(QStringLiteral("color: #7B8F9D; font-size: 11px; font-weight: 500;"));
-        metrics->addWidget(label, row, 0);
-    }
-    metrics->addWidget(depthValue_, 0, 1);
-    metrics->addWidget(depthTemperature_, 1, 1);
-    metrics->addWidget(depthAge_, 2, 1);
-    metrics->setColumnStretch(1, 1);
-    layout->addLayout(metrics);
+    // Zeroed depth 0-0.50 m and the Zero action, always shown. The preview
+    // shows "Not zeroed" and a disabled button; the follow-up PR wires them.
+    auto *zeroRow = new QHBoxLayout;
+    zeroRow->setContentsMargins(0, 0, 0, 0);
+    zeroRow->setSpacing(6);
+    depthBar_ = new QProgressBar(box);
+    depthBar_->setObjectName(QStringLiteral("autoFollowDepthBar"));
+    depthBar_->setRange(0, 500); // millimetres below the zeroed surface
+    depthBar_->setValue(0);
+    depthBar_->setTextVisible(true);
+    depthBar_->setFormat(QStringLiteral("Not zeroed"));
+    depthBar_->setAlignment(Qt::AlignCenter);
+    depthBar_->setFixedHeight(16);
+    depthBar_->setToolTip(QStringLiteral("Zeroed depth, 0 - 0.50 m"));
+    depthBar_->setStyleSheet(QStringLiteral(
+        "QProgressBar { background: #E3E9EF; border: 1px solid #C5D4E0; border-radius: 4px; "
+        "  color: #566B79; font-size: 10px; font-weight: 600; }"
+        "QProgressBar::chunk { background: #2F80C9; border-radius: 3px; }"));
+    depthZeroButton_ = new QPushButton(QStringLiteral("Zero"), box);
+    depthZeroButton_->setObjectName(QStringLiteral("autoFollowZeroDepthButton"));
+    depthZeroButton_->setProperty("consoleActionRole", "secondary");
+    depthZeroButton_->setFixedHeight(24);
+    depthZeroButton_->setStyleSheet(QStringLiteral("QPushButton { min-height: 20px; padding: 1px 10px; }"));
+    depthZeroButton_->setEnabled(false);
+    zeroRow->addWidget(depthBar_, 1);
+    zeroRow->addWidget(depthZeroButton_);
+    layout->addLayout(zeroRow);
     layout->addStretch();
     return box;
 }
@@ -1482,7 +1506,7 @@ QWidget *MainWindow::createStatusColumn()
 
     leak->setMinimumHeight(60);
     imu->setMinimumHeight(96);
-    depth->setMinimumHeight(92);
+    depth->setMinimumHeight(112);
     protocol->setMinimumHeight(110);
     actuator->setMinimumHeight(145);
 
@@ -3504,6 +3528,98 @@ void MainWindow::updateVideoSurfaceGeometry()
     videoView_->setFixedSize(targetWidth, targetHeight);
 }
 
+int MainWindow::operatorToolsRequiredHeight() const
+{
+    if (operatorToolsTabs_ == nullptr || operatorToolsPane_ == nullptr) return 0;
+    // Preferred content of the tallest page. Scroll-area pages use the size of
+    // the widget they scroll so nothing needs a scrollbar; the Vision Details
+    // page holds flexible log views, so its (small) minimum is what counts.
+    int content = 0;
+    for (int index = 0; index < operatorToolsTabs_->count(); ++index) {
+        QWidget *page = operatorToolsTabs_->widget(index);
+        if (auto *scroll = qobject_cast<QScrollArea *>(page)) {
+            content = qMax(content, scroll->widget()->sizeHint().height());
+        } else {
+            content = qMax(content, page->minimumSizeHint().height());
+        }
+    }
+    const int tabChrome = operatorToolsTabs_->tabBar()->sizeHint().height() + 8;
+    const auto *bar = operatorToolsPane_->findChild<QWidget *>(QStringLiteral("operatorActionBar"));
+    const int actionBar = bar != nullptr ? bar->sizeHint().height() : 0;
+    const int spacing = operatorToolsPane_->layout() != nullptr
+        ? operatorToolsPane_->layout()->spacing() : 0;
+    return actionBar + spacing + tabChrome + content;
+}
+
+int MainWindow::fullyExpandedWindowHeight() const
+{
+    // Size hints depend on the stylesheet. Hidden widgets can still report
+    // slightly smaller hints than they will have once shown, so main() settles
+    // the startup geometry again after one invisible show (settleStartupGeometry).
+    const_cast<MainWindow *>(this)->ensurePolished();
+    for (QWidget *child : findChildren<QWidget *>()) child->ensurePolished();
+
+    if (workspaceSplitter_ == nullptr || centralWidget() == nullptr
+        || centralWidget()->layout() == nullptr || connectionBar_ == nullptr) {
+        return 720;
+    }
+    const auto *rootLayout = centralWidget()->layout();
+    const QMargins margins = rootLayout->contentsMargins();
+    const int dashboard = workspaceSplitter_->widget(0)->minimumSizeHint().height();
+    const int total = margins.top() + margins.bottom() + connectionBar_->sizeHint().height()
+        + rootLayout->spacing() + dashboard + workspaceSplitter_->handleWidth()
+        + operatorToolsRequiredHeight();
+    return qMax(720, total);
+}
+
+// The tools pane keeps its content height; the window minimum follows so the
+// dashboard (video + status columns) is what shrinks when space is short.
+void MainWindow::updateWorkspaceMinimums()
+{
+    if (operatorToolsPane_ == nullptr) return;
+    operatorToolsPane_->setMinimumHeight(operatorToolsRequiredHeight());
+    const int needed = fullyExpandedWindowHeight();
+    if (minimumHeight() != needed) setMinimumSize(1100, needed);
+}
+
+// Default size = everything fully expanded; if the screen cannot hold that,
+// open maximized instead of clipping the operator tools.
+void MainWindow::applyStartupGeometry()
+{
+    const int needed = fullyExpandedWindowHeight();
+    const QScreen *startupScreen = QGuiApplication::primaryScreen();
+    if (startupScreen == nullptr) {
+        resize(1420, needed);
+        return;
+    }
+    const QRect available = startupScreen->availableGeometry();
+    const int initialWidth = qMax(1100, qMin(1420, available.width() - 32));
+    constexpr int kFrameAllowance = 40; // title bar and borders
+    if (needed + kFrameAllowance > available.height()) {
+        resize(initialWidth, needed);
+        startupMaximize_ = true;
+        return;
+    }
+    resize(initialWidth, needed);
+    const QSize frameSize = frameGeometry().size();
+    move(available.center() - QPoint(frameSize.width() / 2, frameSize.height() / 2));
+}
+
+// Layouts are active by the time the first show event arrives, so this is the
+// first moment the size hints are final; raise the minimum then.
+void MainWindow::showEvent(QShowEvent *event)
+{
+    QMainWindow::showEvent(event);
+    updateWorkspaceMinimums();
+}
+
+void MainWindow::settleStartupGeometry()
+{
+    updateWorkspaceMinimums();
+    applyStartupGeometry();
+    initializeWorkspaceSizes();
+}
+
 void MainWindow::initializeWorkspaceSizes()
 {
     if (workspaceSplitter_ == nullptr) {
@@ -3519,8 +3635,7 @@ void MainWindow::initializeWorkspaceSizes()
         }
         return;
     }
-    const int availableHeight = qMax(0, height() - 100);
-    const int toolsHeight = availableHeight > 760 ? 260 : 240;
+    const int toolsHeight = operatorToolsRequiredHeight();
     const int total = qMax(400, workspaceSplitter_->height());
     workspaceSplitter_->setSizes({qMax(1, total - toolsHeight), toolsHeight});
     workspaceSplitter_->setStretchFactor(0, 1);

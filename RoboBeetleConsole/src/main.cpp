@@ -43,6 +43,17 @@ int main(int argc, char *argv[])
         &visionClient,
         &visionControlClient,
         &detectionClient);
+    // Hidden widgets under-report their size hints, so show once off-screen to
+    // get real metrics, then settle the default geometry before the first
+    // visible frame: the size where Operator tools are fully expanded, or a
+    // maximized window if the screen cannot hold it.
+    window.setAttribute(Qt::WA_DontShowOnScreen, true);
     window.show();
+    QCoreApplication::processEvents();
+    window.hide();
+    window.setAttribute(Qt::WA_DontShowOnScreen, false);
+    window.settleStartupGeometry();
+    if (window.startupWantsMaximized()) window.showMaximized();
+    else window.show();
     return application.exec();
 }

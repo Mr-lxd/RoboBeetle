@@ -51,15 +51,20 @@ void testScreenAwareStartupGeometry()
     }
     const QRect available = screen->availableGeometry();
     const int expectedWidth = qMax(1100, qMin(1420, available.width() - 32));
-    const int expectedHeight = qMax(720, qMin(880, available.height() - 80));
+    // The default height is the one that fully expands Operator tools; a screen
+    // too short for it makes startup ask for a maximized window instead.
+    const int expectedHeight = window.fullyExpandedWindowHeight();
+    const bool shouldMaximize = expectedHeight + 40 > available.height();
     std::fprintf(stdout,
                  "startup_available=%dx%d expected=%dx%d actual=%dx%d\n",
                  available.width(), available.height(), expectedWidth, expectedHeight,
                  window.size().width(), window.size().height());
-    expect(window.minimumSize() == QSize(1100, 720),
-           "startup geometry preserves the exact 1100x720 minimum");
+    expect(window.minimumSize() == QSize(1100, expectedHeight) && expectedHeight >= 720,
+           "startup minimum is 1100 wide and as tall as the fully expanded layout (never below 720)");
     expect(window.size() == QSize(expectedWidth, expectedHeight),
-           "startup geometry clamps the comfortable target to available screen space");
+           "startup geometry is the fully expanded size");
+    expect(window.startupWantsMaximized() == shouldMaximize,
+           "startup maximizes exactly when the screen cannot hold the fully expanded size");
 
     window.show();
     QApplication::processEvents();
@@ -70,7 +75,8 @@ void testScreenAwareStartupGeometry()
                  availableCenter.x(), availableCenter.y(), windowCenter.x(),
                  windowCenter.y(), (windowCenter - availableCenter).manhattanLength());
     const bool centerCheckReliable = QGuiApplication::platformName() != QStringLiteral("windows");
-    expect(!centerCheckReliable || (windowCenter - availableCenter).manhattanLength() <= 4,
+    expect(!centerCheckReliable || window.startupWantsMaximized()
+               || (windowCenter - availableCenter).manhattanLength() <= 4,
            centerCheckReliable
                ? "startup geometry centers the window on the available screen"
                : "native Windows QPA reports the OS-adjusted frame center separately");
@@ -129,8 +135,10 @@ void testTreeAndSizing()
             expect(tabs->tabText(i) == expected.at(i), "U15: frozen operator tab order");
         }
     }
-    expect(window.minimumSize() == QSize(1100, 720), "U08: root minimum is exactly 1100x720");
-    expect(window.size() == QSize(1100, 720), "U08: minimum request settles at 1100x720");
+    expect(window.minimumSize() == QSize(1100, window.fullyExpandedWindowHeight()),
+           "U08: root minimum is 1100 wide and the fully expanded height");
+    expect(window.size() == window.minimumSize(),
+           "U08: a smaller request settles at the minimum");
     expect(window.findChild<QPushButton *>(QStringLiteral("motionStopButton")) != nullptr,
            "U17: D-pad center Motion Stop exists");
     expect(window.findChild<QPushButton *>(QStringLiteral("enableAllButton")) != nullptr,
@@ -540,6 +548,10 @@ void testReviewerClosureContracts()
                QStringLiteral("actuatorScrollArea")) == nullptr,
            "feedback: Actuator Control no longer owns a separate dashboard column");
 
+    // At the exact window minimum the rail sits on its content minima (a pixel
+    // or two under the nominal budgets); the budget applies once it expands.
+    window.resize(window.width(), window.height() + 80);
+    QApplication::processEvents();
     expect(leakCard != nullptr && leakCard->height() >= 60
                && imuCard != nullptr && imuCard->height() >= 96
                && depthCard != nullptr && depthCard->height() >= 92
@@ -813,17 +825,76 @@ void testReviewerClosureContracts()
     window.close();
 }
 
+// Operator tools never get less than their content needs; the video/dashboard
+// area gives way, and at the default size no tab needs a scrollbar.
+void testOperatorToolsKeepFullHeight()
+{
+    rb::test::OperatorConsoleFixture fixture;
+    fixture.create(false, true);
+    rb::MainWindow window(fixture.controller(), fixture.visionClient.get(),
+                          fixture.visionControlClient.get());
+    window.show();
+    QApplication::processEvents();
+    window.settleStartupGeometry();
+    QApplication::processEvents();
+
+    auto *pane = window.findChild<QWidget *>(QStringLiteral("operatorToolsPane"));
+    auto *tabs = window.findChild<QTabWidget *>(QStringLiteral("operatorToolsTabs"));
+    auto *splitter = window.findChild<QSplitter *>(QStringLiteral("workspaceSplitter"));
+    auto *video = window.findChild<rb::vision::VideoView *>(QStringLiteral("videoView"));
+    expect(pane != nullptr && tabs != nullptr && splitter != nullptr && video != nullptr,
+           "tools-height test finds its widgets");
+    if (pane == nullptr || tabs == nullptr || splitter == nullptr || video == nullptr) return;
+
+    const int required = window.operatorToolsRequiredHeight();
+    expect(required > 0 && pane->minimumHeight() == required,
+           "the tools pane minimum equals the required content height");
+    expect(window.minimumHeight() == window.fullyExpandedWindowHeight() && window.minimumHeight() >= 720,
+           "the window minimum follows the fully expanded height");
+    expect(window.size().height() >= window.fullyExpandedWindowHeight(),
+           "the default height is at least the fully expanded height");
+    window.resize(window.width(), window.fullyExpandedWindowHeight());
+    QApplication::processEvents();
+    expect(pane->height() >= required, "the tools pane has its required height at the default size");
+    for (int index = 0; index < tabs->count(); ++index) {
+        tabs->setCurrentIndex(index);
+        QApplication::processEvents();
+        if (auto *scroll = qobject_cast<QScrollArea *>(tabs->widget(index))) {
+            expect(scroll->verticalScrollBar()->maximum() == 0,
+                   "no operator tab needs a scrollbar at the default size");
+        }
+    }
+    tabs->setCurrentIndex(0);
+
+    // Asking for less is refused at the minimum; asking for more gives the extra to the video side.
+    window.resize(window.width(), 600);
+    QApplication::processEvents();
+    expect(window.height() == window.fullyExpandedWindowHeight() && pane->height() >= required,
+           "a smaller request never takes height from the tools pane");
+    const int videoAtMinimum = video->height();
+    window.resize(window.width(), window.fullyExpandedWindowHeight() + 160);
+    QApplication::processEvents();
+    expect(pane->height() >= required && splitter->sizes().at(0) > splitter->sizes().at(1),
+           "extra height goes to the dashboard, not to the tools");
+    expect(video->height() >= videoAtMinimum, "the video area is the part that yields");
+    window.close();
+}
+
 void testPresentationDetailsReflowAndNoSideEffects()
 {
     rb::test::OperatorConsoleFixture fixture;
     fixture.create(false, true);
     rb::MainWindow window(fixture.controller(), fixture.visionClient.get(),
                           fixture.visionControlClient.get());
-    window.resize(1420, 880);
+    // The window cannot be shorter than the fully expanded layout, so the
+    // "comfortable" heights below are relative to that minimum.
     window.show();
+    QApplication::processEvents(); // hints settle once the window has been shown
+    const int baseHeight = qMax(880, window.fullyExpandedWindowHeight());
+    window.resize(1420, baseHeight);
     QApplication::processEvents();
-    expect(window.size() == QSize(1420, 880),
-           "U09: 1420x880 settles exactly");
+    expect(window.size() == QSize(1420, baseHeight),
+           "U09: 1420 x comfortable height settles exactly");
 
     auto *splitter = window.findChild<QSplitter *>(QStringLiteral("workspaceSplitter"));
     auto *tabs = window.findChild<QTabWidget *>(QStringLiteral("operatorToolsTabs"));
@@ -847,17 +918,17 @@ void testPresentationDetailsReflowAndNoSideEffects()
     expect(video != nullptr && qAbs(video->width() * 3 - video->height() * 4) <= 6,
            "U04: normal VideoView remains source-aspect matched");
     const int videoHeight880 = video == nullptr ? 0 : video->height();
-    window.resize(1420, 1000);
+    window.resize(1420, baseHeight + 120);
     QApplication::processEvents();
     expect(video != nullptr
                && video->height() >= videoHeight880
                && qAbs(video->width() * 3 - video->height() * 4) <= 6,
            "U05: extra vertical space never shrinks or distorts the source-matched video");
-    expect(window.size() == QSize(1420, 1000), "U09: 1420x1000 settles exactly");
-    window.resize(1600, 1000);
+    expect(window.size() == QSize(1420, baseHeight + 120), "U09: taller window settles exactly");
+    window.resize(1600, baseHeight + 120);
     QApplication::processEvents();
-    expect(window.size() == QSize(1600, 1000),
-           "U09: 1600x1000 settles exactly");
+    expect(window.size() == QSize(1600, baseHeight + 120),
+           "U09: wider window settles exactly");
     if (tabs != nullptr) {
         tabs->setCurrentIndex(0);
         QApplication::processEvents();
@@ -1007,5 +1078,6 @@ int main(int argc, char **argv)
     testMinimumToolPagesUseVerticalScrollOnly();
     testReviewerClosureContracts();
     testPresentationDetailsReflowAndNoSideEffects();
+    testOperatorToolsKeepFullHeight();
     return failures == 0 ? 0 : 1;
 }

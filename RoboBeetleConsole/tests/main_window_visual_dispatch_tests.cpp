@@ -19,6 +19,7 @@
 #include <QDoubleSpinBox>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSlider>
 #include <QSet>
@@ -549,9 +550,16 @@ void autoFollowPanelContract()
     check(!child<QPushButton>(w,"visualDisarmButton"),"the separate Disarm button is gone");
     check(child<QWidget>(w,"autoFollowAxisSelector")&&!child<QWidget>(w,"autoFollowAxisSelector")->isVisible(),
           "the axis selector is reserved but hidden in this preview");
-    check(!child<QWidget>(w,"autoFollowDepthRow")&&!child<QPushButton>(w,"autoFollowZeroDepthButton"),
-          "the depth row is not part of the green region (it lives in the Depth Sensor card)");
-    check(w.size()==QSize(1100,720)||w.width()>=1100,"window realized at the supported size");
+    check(!child<QWidget>(w,"autoFollowDepthRow"),"the depth row is not part of the green region");
+    {   // Depth Sensor card: bar and Zero action are always shown; wiring comes later.
+        auto *card=child<QWidget>(w,"depthCard");auto *bar=child<QProgressBar>(w,"autoFollowDepthBar");
+        auto *zero=child<QPushButton>(w,"autoFollowZeroDepthButton");
+        check(card&&bar&&zero&&card->isAncestorOf(bar)&&card->isAncestorOf(zero)&&!autoGroup->isAncestorOf(zero),
+              "the depth bar and Zero button live in the Depth Sensor card, not in Auto Follow");
+        check(bar&&bar->isVisible()&&bar->minimum()==0&&bar->maximum()==500&&bar->value()==0&&bar->format()=="Not zeroed",
+              "the bar covers 0-0.50 m and shows Not zeroed");
+        check(zero&&zero->isVisible()&&!zero->isEnabled(),"Zero is shown but disabled in this preview");
+    }
 
     // 1. DRY RUN: feature off, ready underneath, nothing armed.
     check(pill->text()=="DRY RUN"&&!action->isEnabled()&&action->text().contains("not ready"),

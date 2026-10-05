@@ -11,6 +11,7 @@
 #include <optional>
 
 class QCloseEvent;
+class QShowEvent;
 class QComboBox;
 class QCheckBox;
 class QDoubleSpinBox;
@@ -18,6 +19,7 @@ class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
+class QProgressBar;
 class QPushButton;
 class QSlider;
 class QSpinBox;
@@ -59,9 +61,24 @@ public:
         vision::DetectionClient *detectionClient = nullptr,
         QWidget *parent = nullptr);
     ~MainWindow() override;
+    // Height the Operator tools pane needs so that no tab has to scroll for its
+    // preferred content (action bar + tab bar + tallest page). The pane never
+    // gets less than this; the video/dashboard area gives way first.
+    [[nodiscard]] int operatorToolsRequiredHeight() const;
+    // Smallest window height that honours operatorToolsRequiredHeight() while
+    // the dashboard keeps its own minimum. This is also the default height.
+    [[nodiscard]] int fullyExpandedWindowHeight() const;
+    // True when the screen cannot hold fullyExpandedWindowHeight(); main() then
+    // shows the window maximized. The window itself keeps a plain resize so
+    // callers (tests, previews) stay in control of the geometry.
+    [[nodiscard]] bool startupWantsMaximized() const noexcept { return startupMaximize_; }
+    // Re-evaluates minimum/default geometry with real (shown) size hints. main()
+    // calls it after one invisible show so the first visible frame is final.
+    void settleStartupGeometry();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
@@ -111,6 +128,8 @@ private:
     void reflowActuatorCards();
     void updateVideoSurfaceGeometry();
     void initializeWorkspaceSizes();
+    void updateWorkspaceMinimums();
+    void applyStartupGeometry();
     // Refresh helpers.
     void setConnectedUi(bool connected);
     void refreshServoUi(int index);
@@ -154,6 +173,11 @@ private:
     QLabel *autoFollowDetail_{nullptr};
     QLabel *autoFollowFooter_{nullptr};
     QWidget *autoFollowAxisSelector_{nullptr};
+    // Depth Sensor card: zeroed-depth bar and Zero action (wired by the follow-up PR).
+    QProgressBar *depthBar_{nullptr};
+    QPushButton *depthZeroButton_{nullptr};
+    QWidget *connectionBar_{nullptr};
+    bool startupMaximize_{false};
     QPushButton *visualArmButton_{nullptr};
     QPushButton *visualDisarmButton_{nullptr};
     int autoFollowMissing_{3};
