@@ -8,6 +8,8 @@ MotionMode motionMode(ProposedCommand command)
     case ProposedCommand::Forward: return MotionMode::Forward;
     case ProposedCommand::TurnLeft: return MotionMode::TurnLeft;
     case ProposedCommand::TurnRight: return MotionMode::TurnRight;
+    case ProposedCommand::Ascend: return MotionMode::Ascend;
+    case ProposedCommand::Descend: return MotionMode::Descend;
     default: return MotionMode::Stop;
     }
 }
@@ -68,6 +70,10 @@ VisualDispatchSession::VisualDispatchSession(IConsoleController *c, SnapshotProv
         clearAssociations(true);
         emit statusChanged();
     });
+    // The controller can emit this while it is being destroyed: the session is
+    // the context object, so the connection dies with the session (or first).
+    connect(controller_, &IConsoleController::controlDepthSampleChanged,
+            this, &VisualDispatchSession::depthSampleChanged);
     timer_.start();
 }
 VisualDispatchSession::VisualDispatchSession(IConsoleController *controller,
@@ -76,8 +82,72 @@ VisualDispatchSession::VisualDispatchSession(IConsoleController *controller,
         [diagnostic] { return std::optional{diagnostic->snapshot()}; },
         [diagnostic] { return diagnostic->monotonicNowMs(); }, config, parent)
 {
+    diagnostic_ = diagnostic;
     connect(diagnostic, &VisualDiagnosticSession::diagnosticChanged,
             this, &VisualDispatchSession::diagnosticChanged);
+}
+
+void VisualDispatchSession::depthSampleChanged()
+{
+    // Pitch/Both only, and only while there is something to protect.
+    if (!enabled_ || axis_ == VisualAxisMode::Yaw
+        || !(machine_.armed() || machine_.stopAwaiting())) return;
+    deliverDepth(controller_->controlDepthSample());
+}
+
+void VisualDispatchSession::deliverDepth(const std::optional<DepthControlSample> &depth)
+{
+    // Queue the sample by value: a later in-range sample must not erase a
+    // transient hard-limit reading, and arrival order is preserved.
+    depthQueue_.push_back(depth);
+    drainDepthQueue();
+}
+
+void VisualDispatchSession::drainDepthQueue()
+{
+    if (submitting_ || evaluating_) {
+        if (!depthDrainScheduled_) {
+            depthDrainScheduled_ = true;
+            QTimer::singleShot(0, this, [this] {
+                depthDrainScheduled_ = false;
+                drainDepthQueue();
+            });
+        }
+        return;
+    }
+    while (!depthQueue_.empty()) {
+        const auto depth = depthQueue_.front();
+        depthQueue_.pop_front();
+        evaluating_ = true;
+        auto in = input();
+        in.depth = depth;
+        machine_.evaluate(in);
+        evaluating_ = false;
+        emit statusChanged();
+    }
+}
+
+void VisualDispatchSession::setAxisMode(VisualAxisMode axis)
+{
+    if (axis_ == axis) return;
+    // Same rule as Disarm: one operator STOP when armed or a STOP is unconfirmed.
+    disarm();
+    axis_ = axis;
+    if (diagnostic_) diagnostic_->setAxisMode(axis);
+    reason_ = ArmReason::NotTracking;
+    emit statusChanged();
+}
+
+VisualDepthCsvInfo VisualDispatchSession::depthCsvInfo() const
+{
+    VisualDepthCsvInfo info;
+    info.envelope = QString::fromLatin1(depthEnvelopeStateName(machine_.depthEnvelope()));
+    if (const auto sample = controller_->controlDepthSample()) {
+        info.rawM = sample->rawDepthM;
+        info.calibratedM = sample->calibratedDepthM;
+        if (sample->ageMs >= 0) info.ageMs = sample->ageMs;
+    }
+    return info;
 }
 
 void VisualDispatchSession::diagnosticChanged(const VisualDiagnosticSnapshot &snapshot)
@@ -110,6 +180,8 @@ VisualDispatchInput VisualDispatchSession::input(const VisualDiagnosticSnapshot 
     }
     result.poseKnownMask = controller_->inferredPoseKnownMask();
     result.confirmedTurnSign = confirmedSign_;
+    result.axis = axis_;
+    result.depth = controller_->controlDepthSample();
     // The diagnostic snapshot owns video grace and freshness. Use its state
     // verbatim and pair its proposal with the filtered error from that result.
     const auto latest = eventSnapshot ? std::nullopt : snapshot_();
@@ -179,6 +251,32 @@ AutoFollowReadiness VisualDispatchSession::readiness() const
 
     const auto snapshot = snapshot_();
     result.tracking = snapshot.has_value() && snapshot->state == VisualState::Tracking;
+
+    // Pitch/Both add the front axis servo and a usable depth reading. The
+    // yaw-only checklist above keeps its meaning unchanged.
+    result.pitchActive = axis_ != VisualAxisMode::Yaw;
+    if (result.pitchActive) {
+        result.frontAxisReady = (enabledMask & kFrontAxisServoMask) == kFrontAxisServoMask
+            && (controller_->inferredPoseKnownMask() & kFrontAxisServoMask) == kFrontAxisServoMask;
+        VisualDispatchInput probe;
+        probe.depth = controller_->controlDepthSample();
+        switch (machine_.envelopeFor(probe)) {
+        case DepthEnvelopeState::Unavailable:
+            result.depthReady = false;
+            result.depthNote = QStringLiteral("Depth unavailable");
+            break;
+        case DepthEnvelopeState::NotZeroed:
+            result.depthReady = false;
+            result.depthNote = QStringLiteral("Depth not zeroed");
+            break;
+        case DepthEnvelopeState::HardLimit:
+            result.depthReady = false;
+            result.depthNote = QStringLiteral("Depth at hard limit");
+            break;
+        default:
+            break;
+        }
+    }
     return result;
 }
 void VisualDispatchSession::timerTick()
@@ -248,7 +346,8 @@ void VisualDispatchSession::terminal(quint32 id, CommandTerminalResult result,
         if (association.command != ProposedCommand::Stop && raw == 6
             && result == CommandTerminalResult::Rejected
             && requiredServoMask_ != 0
-            && (controller_->inferredPoseKnownMask() & requiredServoMask_) == requiredServoMask_) {
+            && (controller_->inferredPoseKnownMask() & machine_.requiredMask(axis_))
+                == machine_.requiredMask(axis_)) {
             poseMismatch_ = QStringLiteral("可能是姿态未知（Qt 推断与固件不一致）");
         }
         machine_.acknowledge(association.policyId, policyOutcome(result), now_());

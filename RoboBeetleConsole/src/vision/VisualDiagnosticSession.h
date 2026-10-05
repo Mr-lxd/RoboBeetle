@@ -26,6 +26,8 @@ struct VisualDiagnosticSnapshot {
     VisualCommandResult command;
     bool awaitingVideo{false};
     int turnSign{1};
+    VisualAxisMode axis{VisualAxisMode::Yaw};
+    int pitchSign{1};
     QString policyVersion;
     QString policyHash;
     AssociationStatus associationStatus{AssociationStatus::Unlocked};
@@ -46,12 +48,15 @@ public:
     void beginSession(quint64 sessionId);
     void onDetectionArrival(const DetectionFrame &frame, const VisualViewContext &context);
     void refresh(const VisualViewContext &context);
+    void setAxisMode(VisualAxisMode axis);
+    [[nodiscard]] VisualAxisMode axisMode() const noexcept { return axis_; }
     [[nodiscard]] const VisualDiagnosticSnapshot &snapshot() const noexcept { return snapshot_; }
 signals:
     void diagnosticChanged(const rb::vision::VisualDiagnosticSnapshot &snapshot);
 private:
     void evaluate(std::optional<quint64> arrivedId);
     VisualPolicyConfig config_;
+    VisualAxisMode axis_{VisualAxisMode::Yaw};
     NowMs nowMs_;
     QElapsedTimer clock_;
     QTimer wakeup_;

@@ -306,7 +306,8 @@ std::optional<quint32> RemoteRobotController::submitVisualMotion(MotionMode mode
         return std::nullopt;
     }
     if (mode != MotionMode::Stop && mode != MotionMode::Forward
-        && mode != MotionMode::TurnLeft && mode != MotionMode::TurnRight) {
+        && mode != MotionMode::TurnLeft && mode != MotionMode::TurnRight
+        && mode != MotionMode::Ascend && mode != MotionMode::Descend) {
         return std::nullopt;
     }
     PendingCommand pending;

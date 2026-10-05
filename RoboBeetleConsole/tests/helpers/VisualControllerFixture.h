@@ -10,6 +10,7 @@ public:
     quint16 enabled{0x1b},known{0x1b};
     quint32 next{1};
     bool motionActive{false};
+    std::optional<DepthControlSample> depthSample;
     std::function<void()> beforeManual;
     std::vector<QString> manualRecords;
     bool manual(const QString &action) { if (beforeManual) beforeManual(); manualRecords.push_back(action); return true; }
@@ -34,6 +35,8 @@ public:
     bool setFrontRearCoordination(FrontRearCoordination)override{return manual(QStringLiteral("coordination"));}
     std::optional<quint32> submitVisualMotion(MotionMode mode)override{if(!active)return {};auto id=next++;sends.emplace_back(id,mode);if(synchronous)emit commandTerminal(id,CommandTerminalResult::Ok,0,1);return id;}
     quint16 inferredPoseKnownMask()const override{return known;}
+    std::optional<DepthControlSample> controlDepthSample()const override{return depthSample;}
+    void publishDepth(std::optional<DepthControlSample> sample){depthSample=sample;emit controlDepthSampleChanged();}
     bool isConnected()const override{return connected;}
     bool isControlActive()const override{return active;}
     ControlAuthorityState authorityState()const override{return active?ControlAuthorityState::Owned:ControlAuthorityState::Unowned;}
