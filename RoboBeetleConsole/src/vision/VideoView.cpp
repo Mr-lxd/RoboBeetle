@@ -117,6 +117,8 @@ QString VideoView::visualDiagnosticText() const
                   << QStringLiteral("u=%1 v=%2")
                          .arg(t.target.originalPoint.x(), 0, 'f', 1)
                          .arg(t.target.originalPoint.y(), 0, 'f', 1)
+                  << QStringLiteral("area=%1 cells")
+                         .arg(t.target.areaCells ? QString::number(*t.target.areaCells) : QStringLiteral("--"))
                   << QStringLiteral("ex=%1 ey=%2")
                          .arg(t.ex, 0, 'f', 3).arg(t.ey, 0, 'f', 3);
         } else {

@@ -134,6 +134,28 @@ void emptyDetectionArrayIsValid()
     }
 }
 
+void areaCellsIsOptionalPositiveInteger()
+{
+    const auto decode = [](const QJsonValue &area, bool include) {
+        QJsonObject d = detection();
+        if (include) d.insert(QStringLiteral("component_area_cells"), area);
+        DetectionStreamDecoder decoder;
+        return decoder.feed(line(1, 100, 640, 480, QJsonArray{d}));
+    };
+    auto present = decode(4, true);
+    expect(!present.fatal && present.frames.size() == 1
+               && present.frames.front().detections.front().areaCells == std::optional<int>(4),
+           "component_area_cells is decoded");
+    auto missing = decode(0, false);
+    expect(!missing.fatal && missing.frames.size() == 1
+               && !missing.frames.front().detections.front().areaCells.has_value(),
+           "a missing component_area_cells is accepted as unknown");
+    for (const QJsonValue &bad : {QJsonValue(0), QJsonValue(-1), QJsonValue(2.5), QJsonValue(QStringLiteral("3")),
+                                  QJsonValue(true), QJsonValue(QJsonValue::Null)}) {
+        expect(decode(bad, true).fatal, "invalid component_area_cells is fatal protocol input");
+    }
+}
+
 void invalidSchemaFailsClosed()
 {
     {
@@ -270,6 +292,7 @@ int main()
     fragmentedValidRecordParsesOnlyWhenComplete();
     multipleRecordsPreserveWireOrder();
     emptyDetectionArrayIsValid();
+    areaCellsIsOptionalPositiveInteger();
     invalidSchemaFailsClosed();
     freshnessGateMatchesFrozenUiContract();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

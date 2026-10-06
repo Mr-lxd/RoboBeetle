@@ -41,7 +41,7 @@ struct VisualPolicyConfig {
 
 // File recording limits are independent of command-policy provenance.
 struct VisualCsvConfig {
-    static constexpr std::string_view schema_version{"visual-csv-v4"};
+    static constexpr std::string_view schema_version{"visual-csv-v5"};
     std::int64_t max_file_bytes{32 * 1024 * 1024};
     int flush_ms{250};
 };
