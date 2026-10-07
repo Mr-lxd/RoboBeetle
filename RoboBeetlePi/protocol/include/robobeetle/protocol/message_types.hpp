@@ -19,6 +19,7 @@ enum class MessageType : std::uint8_t {
     LeakStatus = 0x20,
     ImuSnapshot = 0x21,
     DepthSnapshot = 0x22,
+    MotionStateBatch = 0x23,
 };
 
 enum class AckResult : std::uint8_t {
@@ -49,6 +50,7 @@ constexpr bool is_known_message_type(std::uint8_t value)
     case MessageType::LeakStatus:
     case MessageType::ImuSnapshot:
     case MessageType::DepthSnapshot:
+    case MessageType::MotionStateBatch:
         return true;
     }
     return false;

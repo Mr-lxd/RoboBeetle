@@ -1,4 +1,5 @@
 #include "robobeetle/gateway/rbrp_codec.hpp"
+#include "robobeetle/protocol/motion_state.hpp"
 
 #include <algorithm>
 #include <array>
@@ -111,6 +112,7 @@ bool is_known_message_kind(RbrpMessageKind kind) noexcept
     case RbrpMessageKind::ImuTelemetry:
     case RbrpMessageKind::DepthTelemetry:
     case RbrpMessageKind::ServiceError:
+    case RbrpMessageKind::MotionStateTelemetry:
         return true;
     default:
         return false;
@@ -154,6 +156,9 @@ expected_payload_size(RbrpMessageKind kind) noexcept
 
 bool payload_size_is_valid(RbrpMessageKind kind, std::size_t size) noexcept
 {
+    if (kind == RbrpMessageKind::MotionStateTelemetry) {
+        return size == 32U || size == 54U || size == 76U;
+    }
     if (kind == RbrpMessageKind::CommandRequest) {
         return size >= 1U && size <= 4U;
     }
@@ -370,6 +375,11 @@ RbrpEncodeResult encode_gateway_message(const GatewayMessage &message)
                 put_le32(encoded, 28U, payload.diagnostics.rx_buffer_overflow_count);
                 put_le32(encoded, 32U, payload.diagnostics.hard_rearm_failure_count);
                 put_le32(encoded, 36U, payload.diagnostics.uart_error_count);
+            } else if constexpr (std::is_same_v<T, GatewayMotionStateTelemetry>) {
+                kind = RbrpMessageKind::MotionStateTelemetry;
+                const auto payload_bytes = encode_motion_state_telemetry(payload);
+                if (!payload_bytes) return encode_invalid(RbrpEncodeStatus::InvalidPayloadLength);
+                encoded = *payload_bytes;
             } else if constexpr (std::is_same_v<T, ServiceErrorMessage>) {
                 kind = RbrpMessageKind::ServiceError;
                 encoded.reserve(8U);
@@ -381,6 +391,28 @@ RbrpEncodeResult encode_gateway_message(const GatewayMessage &message)
             return encode_frame(kind, message.request_id, encoded);
         },
         message.payload);
+}
+
+std::optional<Bytes> encode_motion_state_telemetry(const GatewayMotionStateTelemetry &t)
+{
+    if (!protocol::decode_motion_state_batch(t.batch_payload)) return std::nullopt;
+    Bytes p(16U + t.batch_payload.size(), 0);
+    protocol::motion_wire::put(p, 0, t.link_epoch, 4);
+    protocol::motion_wire::put(p, 4, t.pi_rx_ms, 8);
+    protocol::motion_wire::put(p, 12, t.gateway_drop_total, 4);
+    std::copy(t.batch_payload.begin(), t.batch_payload.end(), p.begin() + 16);
+    return p;
+}
+
+std::optional<GatewayMotionStateTelemetry> decode_motion_state_telemetry(const Bytes &p)
+{
+    if (!payload_size_is_valid(RbrpMessageKind::MotionStateTelemetry, p.size())) return std::nullopt;
+    Bytes batch(p.begin() + 16, p.end());
+    if (!protocol::decode_motion_state_batch(batch)) return std::nullopt;
+    return GatewayMotionStateTelemetry{
+        static_cast<std::uint32_t>(protocol::motion_wire::get(p, 0, 4)),
+        protocol::motion_wire::get(p, 4, 8),
+        static_cast<std::uint32_t>(protocol::motion_wire::get(p, 12, 4)), std::move(batch)};
 }
 
 bool RbrpDecoder::fail(RbrpFramingError error) noexcept

@@ -69,6 +69,11 @@ decode_remote_message(const RbrpFrame &frame);
 [[nodiscard]] RbrpEncodeResult
 encode_gateway_message(const GatewayMessage &message);
 
+[[nodiscard]] std::optional<Bytes>
+encode_motion_state_telemetry(const GatewayMotionStateTelemetry &telemetry);
+[[nodiscard]] std::optional<GatewayMotionStateTelemetry>
+decode_motion_state_telemetry(const Bytes &payload);
+
 class RbrpDecoder final {
 public:
     static constexpr std::size_t kHeaderSize = 16U;
