@@ -135,7 +135,7 @@ QString VideoView::visualDiagnosticText() const
                          .arg(c.ey_f ? QString::number(*c.ey_f, 'f', 3) : QStringLiteral("--"))
                          .arg(s.pitchSign);
         if (!dispatchEnabled_)
-            lines << QStringLiteral("turn_sign=%1 (实机符号未验证)").arg(s.turnSign);
+            lines << QStringLiteral("turn_sign=%1").arg(s.turnSign);
         if (s.awaitingVideo) { lines << QStringLiteral("waiting for video"); }
         QString lock = QStringLiteral("lock: %1").arg(QString::fromLatin1(associationStatusName(s.associationStatus)));
         if (s.associationStatus == AssociationStatus::Associated) {

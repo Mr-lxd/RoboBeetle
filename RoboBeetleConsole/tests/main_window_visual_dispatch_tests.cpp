@@ -229,7 +229,7 @@ void controls() {
     c.ack(c.sends.back().first,CommandTerminalResult::Busy,7);
     check(status->text().contains("operator STOP: BUSY"),"operator STOP terminal result shown");
     gate->setChecked(false);check(c.sends.size()==n+1,"OFF after completed disarm emits no extra STOP");
-    check(v->visualDiagnosticText().contains(QStringLiteral("turn_sign=1 (\u5b9e\u673a\u7b26\u53f7\u672a\u9a8c\u8bc1)")),"OFF preserves exact legacy diagnostic sign line");
+    check(v->visualDiagnosticText().contains(QStringLiteral("turn_sign=1")),"OFF preserves configured diagnostic sign line");
     MainWindow second(&c);check(!child<QCheckBox>(second,"visualDispatchEnabled")->isChecked(),"second instance never persists gate");
 }
 void manualPaths() {
