@@ -190,7 +190,7 @@ core node 1 -> rear_right_cdeg
 core node 2 -> rear_left_cdeg
 ~~~
 
-The production Forward profile uses front and rear logical target amplitudes of 10 degrees, sets every core period parameter to `T=2.0 s` as a nominal period parameter, and records `nominal_period_s=2.0`. The signed source-compatible target convention is:
+The production Forward profile uses front and rear logical target amplitudes of 10 degrees, sets every core period parameter to `T=2.5162 s` as a nominal period parameter, and records `nominal_period_s=2.5162`, calibrated for an actual period of approximately 2.000 s. The signed source-compatible target convention is:
 
 ~~~text
 R = {-front_amplitude, +rear_amplitude, +rear_amplitude, -front_amplitude}
@@ -215,17 +215,17 @@ RoboBeetleFirmware/tests/test_cpg_safety_catchup.c covers the active-motion -> t
 
 ## Long-run period evidence
 
-The production nominal-period profile was run for 5000 deterministic 10 ms steps with a 5000 ms transient exclusion. The test detects unwrapped phase[1] crossings at successive 2*pi thresholds.
+The production Forward, Turn Left, and Turn Right profiles are each run for 2000 deterministic 10 ms steps with a 5000 ms transient exclusion. The test tracks unwrapped phase[1] crossings at successive 2*pi thresholds continuously from startup, linearly interpolates each crossing time, and retains only events at or after 5 s; the mean period is the first-to-last event span divided by the complete interval count. The earlier 1.504827586 s statistic incorrectly included startup crossings after the exclusion cutoff.
 
-The current host result is:
+The current host result is identical for all three modes:
 
 ~~~text
-nominal_period_s=2.000000000
-measured_period_s=1.504827586
-measured_frequency_hz=0.664527956
-ratio=0.752413793
-cycles=29
+nominal_period_s=2.516200000
+measured_period_s=2.000053309
+measured_frequency_hz=0.499986673
+ratio=0.794870562
+cycles=7
 transient_exclusion_ms=5000
 ~~~
 
-This result is intentionally not labeled as 0.5 Hz. The actual frequency is an emergent result of the source-compatible nu_i dependence on beta, theta_dot, k_v, and the coupled state. The `T=2.0 s` value remains a nominal period parameter until a target-representative long-run measurement says otherwise.
+The test requires an actual period of 2.0 +/- 0.01 s. The actual frequency remains an emergent result of the source-compatible nu_i dependence on beta, theta_dot, k_v, and the coupled state; the nominal parameter is not intrinsically the actual period. The calibration evidence is in `D:\RoboBeetle-results\task12-cpg-period-2026-10-07`; changes to beta, amplitude, coupling, or the 10 ms timestep require recalibration. This host result does not establish physical-clock or hardware timing.
