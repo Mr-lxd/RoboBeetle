@@ -226,9 +226,18 @@ struct GatewayDepthTelemetry {
     GatewayDepthTelemetryDiagnostics diagnostics;
 };
 
+// Prefix at 0/4/12: link epoch u32 / Pi CLOCK_MONOTONIC ms u64 / drops u32.
+// Original MotionStateBatch bytes follow unchanged at offset 16 (max 76 B total).
+struct GatewayMotionStateTelemetry {
+    std::uint32_t link_epoch{0};
+    std::uint64_t pi_rx_ms{0};
+    std::uint32_t gateway_drop_total{0};
+    Bytes batch_payload;
+};
+
 using GatewayTelemetryEvent =
     std::variant<GatewayLeakTelemetry, GatewayImuTelemetry,
-                 GatewayDepthTelemetry>;
+                 GatewayDepthTelemetry, GatewayMotionStateTelemetry>;
 
 struct GatewayStateLinkEvent {
     GatewayApplicationSessionState session_state{
@@ -382,15 +391,6 @@ struct ServiceErrorMessage {
     ServiceErrorCode error_code{ServiceErrorCode::None};
     RbrpMessageKind related_kind{RbrpMessageKind::Hello};
     std::uint32_t detail{0};
-};
-
-// Prefix at 0/4/12: link epoch u32 / Pi CLOCK_MONOTONIC ms u64 / drops u32.
-// Original MotionStateBatch bytes follow unchanged at offset 16 (max 76 B total).
-struct GatewayMotionStateTelemetry {
-    std::uint32_t link_epoch{0};
-    std::uint64_t pi_rx_ms{0};
-    std::uint32_t gateway_drop_total{0};
-    Bytes batch_payload;
 };
 
 using GatewayMessagePayload =

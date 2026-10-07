@@ -53,6 +53,7 @@ private:
     std::vector<GatewayApplicationEvent>
     map_events(const std::vector<application::ApplicationEvent> &events) const;
 
+    std::uint32_t link_epoch_{0};
     std::string device_path_;
     application::OnboardApplication application_;
 };
