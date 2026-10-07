@@ -65,6 +65,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Communication/jy901s_transport_stm32.c
     Core/Communication/depth_transport_stm32.c
     Core/Communication/depth_telemetry.c
+    Core/Communication/motion_state_codec.c
+    Core/Communication/motion_state_sampler.c
     Core/Communication/imu_telemetry_policy.c
     Core/Communication/telemetry_scheduler.c
     Core/Communication/protocol_dispatcher.c

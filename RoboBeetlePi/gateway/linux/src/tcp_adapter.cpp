@@ -1,6 +1,7 @@
 #include "robobeetle/gateway/tcp_adapter.hpp"
 
 #include "robobeetle/gateway/rbrp_codec.hpp"
+#include "robobeetle/gateway/motion_telemetry_fifo.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -160,6 +161,7 @@ struct TcpAdapter::Impl {
     std::array<std::optional<PendingFrame>,
                TcpAdapter::kTelemetrySlotCount>
         telemetry;
+    MotionTelemetryFifo motion;
     std::deque<CloseSourceSignal> close_signals;
 
     RbrpDecoder decoder;
@@ -224,6 +226,7 @@ struct TcpAdapter::Impl {
         for (auto &slot : telemetry) {
             slot.reset();
         }
+        motion = MotionTelemetryFifo{};
         in_flight.reset();
         decoder.reset();
     }
@@ -453,6 +456,11 @@ struct TcpAdapter::Impl {
                 return;
             }
         }
+        if (auto fragment = motion.pop()) {
+            const auto encoded = encode_gateway_message(GatewayMessage{0U, std::move(*fragment)});
+            // Motion payloads were validated by publish before entering this queue.
+            in_flight = PendingFrame{current_source, encoded.wire, 0U, false, 0U};
+        }
     }
 
     void write_client()
@@ -548,7 +556,7 @@ struct TcpAdapter::Impl {
                 polled_client_fd = client_fd;
                 polled_source_id = current_source;
                 if (client_fd >= 0 &&
-                    (in_flight.has_value() || !critical.empty() ||
+                    (in_flight.has_value() || !critical.empty() || !motion.empty() ||
                      std::any_of(telemetry.begin(), telemetry.end(),
                                  [](const auto &slot) {
                                      return slot.has_value();
@@ -710,6 +718,13 @@ bool TcpAdapter::publish(const GatewayOutbound &output)
         if (output.source == 0U || output.source != impl.current_source) {
             stale = true;
         } else {
+            if (const auto *fragment = std::get_if<GatewayMotionStateTelemetry>(&output.message.payload)) {
+                // Overflow is telemetry loss, never critical backpressure.
+                // The helper updates the count in every frame dequeued later.
+                (void)impl.motion.push(*fragment);
+                impl.notify_worker();
+                return true;
+            }
             Impl::PendingFrame pending{
                 output.source, encoded.wire, 0U,
                 is_telemetry(output.message.payload), 0U};

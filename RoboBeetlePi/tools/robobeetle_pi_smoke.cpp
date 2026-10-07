@@ -145,6 +145,11 @@ void print_event(const app::DepthTelemetry &event)
               << " valid_lines=" << event.diagnostics.valid_line_count << '\n';
 }
 
+void print_event(const app::MotionStateTelemetry &event)
+{
+    std::cout << "MotionStateBatch payload_bytes=" << event.batch_payload.size() << '\n';
+}
+
 void print_event(const app::TelemetryMalformed &event)
 {
     std::cout << "TelemetryMalformed type=" << unsigned(event.message_type)

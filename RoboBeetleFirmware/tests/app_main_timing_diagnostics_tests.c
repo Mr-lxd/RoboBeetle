@@ -206,7 +206,7 @@ int main(void)
     send_heartbeat(&uart1, 1U);
     send_heartbeat(&uart1, 2U);
     send_heartbeat(&uart1, 3U);
-    expect(tx_call_count == 6U,
+    expect(tx_call_count == 9U,
            "normal diagnostic Heartbeats must preserve ACK and optional TX");
     expect(blocking_tx_call_count == 0U,
            "normal diagnostic Heartbeats must not use blocking TX");

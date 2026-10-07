@@ -544,6 +544,14 @@ void uart_transport_stm32_init(UART_HandleTypeDef *huart)
     transport_diagnostics.rx_needs_rearm = rx_needs_rearm;
 }
 
+bool uart_transport_stm32_motion_pending(void)
+{
+    const uint32_t primask = uart_transport_irq_save();
+    const bool pending = tx_queue.motion.occupied;
+    uart_transport_irq_restore(primask);
+    return pending;
+}
+
 uart_tx_enqueue_result_t uart_transport_stm32_enqueue(
     const uint8_t *data,
     uint16_t length,

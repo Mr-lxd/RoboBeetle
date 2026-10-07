@@ -16,7 +16,7 @@
 namespace {
 using namespace rb::vision;
 int failures = 0;
-const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets,policy_request_id,request_id,dispatch_command,dispatch_result,ack_rtt_ms,axis_mode,ey_f,pitch_sign,depth_raw_m,depth_cal_m,depth_age_ms,envelope_state,sel_area_cells\n";
+const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets,policy_request_id,request_id,dispatch_command,dispatch_result,ack_rtt_ms,axis_mode,ey_f,pitch_sign,depth_raw_m,depth_cal_m,depth_age_ms,envelope_state,sel_area_cells,gyro_z,roll,pitch,gait_phase,motion_age_ms\n";
 void check(bool ok, const char *why) {
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", why); ++failures; }
 }
@@ -89,12 +89,12 @@ void defaultsAndFirstFrame() {
           "successful start emits one recording state change");
     logger.record(sample()); logger.flush();
     const auto bytes = contents(logger.filePath());
-    check(bytes.startsWith(header), "header has the exact ordered 43 columns");
+    check(bytes.startsWith(header), "header has the exact ordered 48 columns");
     const auto rows = csv(bytes);
     check(rows.size() == 2, "first target snapshot produces exactly one frame without initial transition");
     if (rows.size() >= 2) {
-        check(rows[1].size() == 43, "frame has exactly 43 columns");
-        if (rows[1].size() == 43) check(rows[1][0] == "frame" && rows[1][1] == "123"
+        check(rows[1].size() == 48, "frame has exactly 48 columns");
+        if (rows[1].size() == 48) check(rows[1][0] == "frame" && rows[1][1] == "123"
             && rows[1][3] == "10" && rows[1][4] == "1010" && rows[1][5] == "2"
             && rows[1][6] == "fish" && rows[1][7] == "0.875" && rows[1][8] == "120.5"
             && rows[1][9] == "240.25" && rows[1][12] == "-0.25"
@@ -132,7 +132,7 @@ void transitionsAndHold() {
     check(rows.size() == 4, "timer-only state/effective changes produce transitions; repeats/proposal-only changes do not");
     if (rows.size() == 4) {
         for (int r = 1; r < rows.size(); ++r) {
-            check(rows[r].size() == 43 && rows[r][0] == "transition", "transition retains exact column count");
+            check(rows[r].size() == 48 && rows[r][0] == "transition", "transition retains exact column count");
             for (int c = 2; c <= 11; ++c) check(rows[r][c].isEmpty(), "transition frame/target columns stay empty");
         }
         check(rows[1][15] == "HOLD" && rows[1][16] == "TURN_LEFT" && rows[1][12] == "-0.25",
@@ -157,7 +157,7 @@ void awaitingVideoAndMissingTarget() {
     logger.stop();
     const auto rows = csv(contents(logger.filePath()));
     check(rows.size() == 5, "awaiting-video ID records once, video catchup can still produce a true transition");
-    if (rows.size() == 5 && rows[2].size() == 43 && rows[4].size() == 43) {
+    if (rows.size() == 5 && rows[2].size() == 48 && rows[4].size() == 48) {
         check(rows[2][0] == "frame" && rows[2][3] == "11" && rows[2][20] == "0"
               && rows[2][6] == "fish" && rows[2][10].toDouble() == 0.5
               && std::abs(rows[2][12].toDouble() + 0.025) < 1e-12
@@ -188,7 +188,7 @@ void pendingReplacementAndInvalidation() {
         logger.record(s); logger.record(s); logger.stop();
         const auto rows = csv(contents(logger.filePath()));
         check(rows.size() == 3, "replacement or invalidation produces exactly two ordered rows");
-        if (rows.size() != 3 || rows[1].size() != 43 || rows[2].size() != 43) continue;
+        if (rows.size() != 3 || rows[1].size() != 48 || rows[2].size() != 48) continue;
         check(rows[1][0] == "frame" && rows[1][3] == "10" && rows[1][20] == "1"
               && rows[1][1] == "623" && rows[1][2] == "123",
               "fallback row precedes replacement/transition and retains original 500 ms arrival gap");
@@ -210,7 +210,7 @@ void pendingReplacementAndInvalidation() {
     auto next = sample(0, 2); next.localMonoMs = 150;
     logger.record(next); logger.stop();
     const auto rows = csv(contents(logger.filePath()));
-    check(rows.size() == 3 && rows[1].size() == 43 && rows[2].size() == 43 && rows[1][3] == "10" && rows[1][19] == "1"
+    check(rows.size() == 3 && rows[1].size() == 48 && rows[2].size() == 48 && rows[1][3] == "10" && rows[1][19] == "1"
           && rows[1][20] == "1" && rows[1][1] == "150" && rows[1][2] == "123"
           && rows[2][3] == "0" && rows[2][19] == "2",
           "session reset flushes the old pending ID before a low ID from the new session");
@@ -241,7 +241,7 @@ void csvReproducesEma() {
     int accepted = 0, awaiting = 0;
     for (qsizetype i = 1; i < rows.size(); ++i) {
         const auto &r = rows[i];
-        if (r.size() != 43 || r[0] != "frame") continue;
+        if (r.size() != 48 || r[0] != "frame") continue;
         if (r[20] == "1") { ++awaiting; continue; }
         bool exOk = false, filteredOk = false;
         const double ex = r[10].toDouble(&exOk), filtered = r[12].toDouble(&filteredOk);
@@ -268,7 +268,7 @@ void closingPendingFrame() {
             if (explicitStop) { logger.stop(); logger.stop(); }
         }
         const auto rows = csv(contents(path));
-        check(rows.size() == 2 && rows[1].size() == 43 && rows[1][20] == "1"
+        check(rows.size() == 2 && rows[1].size() == 48 && rows[1][20] == "1"
               && rows[1][1] == "133" && rows[1][2] == "123",
               "stop or destructor flushes unresolved pending frame once at the last evaluation time");
         check(changes == (explicitStop ? 1 : 0),
@@ -289,7 +289,7 @@ void arrivalBeforeRecording() {
         }
         logger.stop();
         const auto rows = csv(contents(logger.filePath()));
-        check(rows.size() == 2 && rows[1].size() == 43 && rows[1][2] == "123"
+        check(rows.size() == 2 && rows[1].size() == 48 && rows[1][2] == "123"
               && rows[1][1] == (awaiting ? "158" : "143"),
               "enabling CSV preserves the ID arrival already observed while recording was off");
     }
@@ -306,8 +306,8 @@ void escapingAndLocale() {
     const auto bytes = contents(logger.filePath()); const auto rows = csv(bytes);
     check(bytes.contains(QString::fromUtf8("鱼").toUtf8()) && bytes.contains("\"\"blue\"\""),
           "CSV is UTF-8 and doubles embedded quotes");
-    check(rows.size() == 2 && rows[1].size() == 43, "embedded commas/quotes/newlines preserve one CSV record");
-    if (rows.size() == 2 && rows[1].size() == 43) check(rows[1][6] == s.target->target.className
+    check(rows.size() == 2 && rows[1].size() == 48, "embedded commas/quotes/newlines preserve one CSV record");
+    if (rows.size() == 2 && rows[1].size() == 48) check(rows[1][6] == s.target->target.className
         && rows[1][17] == s.policyVersion && rows[1][18] == s.policyHash
         && rows[1][7] == "0.875" && rows[1][8] == "120.5", "escaped text roundtrips and numbers ignore system locale");
 }
@@ -442,9 +442,9 @@ void associationRowsFromSession() {
     std::optional<double> ema; int accepted=0,waiting=0,frame2=0;
     for(qsizetype i=1;i<rows.size();++i) {
         const auto &r=rows[i];
-        check(r.size() == 43,"association schema has forty-three columns");
-        if(r.size() != 43)continue;
-        check(r[21]=="visual-csv-v5","every row including transition identifies schema");
+        check(r.size() == 48,"association schema has forty-eight columns");
+        if(r.size() != 48)continue;
+        check(r[21]=="visual-csv-v6","every row including transition identifies schema");
         if(r[0]=="transition") {
             for(int col=23;col<30;++col)check(r[col].isEmpty(),"transition excludes new frame fields");
             continue;
@@ -499,7 +499,7 @@ void dispatchRowsPreserveDiagnostics() {
     check(rows.size() == 12, "nine dispatch events plus unresolved frame and one transition");
     if (rows.size() != 12) return;
     const auto col = [&](const char *name) { return rows[0].indexOf(QString::fromLatin1(name)); };
-    for (const auto &r : rows) check(r.size() == 43, "every v5 record has 43 columns");
+    for (const auto &r : rows) check(r.size() == 48, "every v6 record has 48 columns");
     check(rows[1][col("policy_request_id")] == "91" && rows[1][col("request_id")] == "501"
           && rows[1][col("dispatch_command")] == "FORWARD" && rows[1][col("dispatch_result")] == "SENT"
           && rows[1][col("ack_rtt_ms")].isEmpty(), "send row records policy and wire IDs with no invented RTT");
@@ -514,7 +514,7 @@ void dispatchRowsPreserveDiagnostics() {
     for (int i : {10,11}) for (int c = 30; c < 35; ++c)
         check(rows[i][c].isEmpty(), "diagnostic rows leave all dispatch columns blank");
     check(rows[11][col("row_kind")] == "transition", "dispatch preserves diagnostic transition baseline");
-    for (int i=1; i<rows.size(); ++i) check(rows[i][col("schema_version")] == "visual-csv-v5", "all rows carry v5 schema");
+    for (int i=1; i<rows.size(); ++i) check(rows[i][col("schema_version")] == "visual-csv-v6", "all rows carry v6 schema");
 }
 
 // Task 06 PR-C: schema v4 appends axis, vertical and depth columns after the 35 v3 columns.
@@ -544,7 +544,7 @@ void pitchAndDepthColumns() {
     check(rows.size() >= 4, "pitch fixture produced frame and transition rows");
     if (rows.size() < 4) return;
     const auto col = [&](const char *name) { return rows[0].indexOf(QString::fromLatin1(name)); };
-    check(rows[0].size() == 43 && col("axis_mode") == 35 && col("envelope_state") == 41 && col("sel_area_cells") == 42,
+    check(rows[0].size() == 48 && col("axis_mode") == 35 && col("envelope_state") == 41 && col("sel_area_cells") == 42,
           "v4 appends seven columns after ack_rtt_ms without moving the old ones");
     check(rows[1][col("axis_mode")] == "YAW" && rows[1][col("pitch_sign")] == "1"
               && rows[1][col("ey_f")].isEmpty() && rows[1][col("depth_raw_m")].isEmpty()
@@ -552,7 +552,7 @@ void pitchAndDepthColumns() {
           "no depth provider leaves the depth columns blank");
     int frames = 0;
     for (const auto &row : rows) {
-        if (row.size() != 43 || row[0] != "frame" || row[col("axis_mode")] != "PITCH") continue;
+        if (row.size() != 48 || row[0] != "frame" || row[col("axis_mode")] != "PITCH") continue;
         ++frames;
         check(row[col("ey_f")] == "0.5" && row[col("pitch_sign")] == "1"
                   && row[col("depth_raw_m")] == "0.25" && row[col("depth_cal_m")] == "0.125"
@@ -564,7 +564,7 @@ void pitchAndDepthColumns() {
     check(rows[1][col("sel_area_cells")] == "5",
           "frame row carries the selected target's area");
     for (const auto &row : rows) {
-        if (row.size() == 43 && row[0] == "transition")
+        if (row.size() == 48 && row[0] == "transition")
             check(row[col("axis_mode")] == "YAW" || row[col("axis_mode")] == "PITCH",
                   "transition rows carry the axis too");
     }
@@ -573,8 +573,8 @@ void pitchAndDepthColumns() {
     logger.flush();
     const auto after = csv(contents(logger.filePath()));
     const auto &last = after.last();
-    bool blank = last.size() == 43 && last[0] == "dispatch" && last[col("dispatch_command")] == "DESCEND";
-    for (int c = 35; c < 43 && last.size() == 43; ++c) blank = blank && last[c].isEmpty();
+    bool blank = last.size() == 48 && last[0] == "dispatch" && last[col("dispatch_command")] == "DESCEND";
+    for (int c = 35; c < 48 && last.size() == 48; ++c) blank = blank && last[c].isEmpty();
     check(blank, "dispatch rows record DESCEND and leave all v4 columns blank");
 }
 

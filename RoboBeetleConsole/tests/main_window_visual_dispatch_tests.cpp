@@ -813,8 +813,8 @@ void csvDepthColumnsAreWired()
     for(const auto &line:lines){
         if(!line.startsWith("frame"))continue;
         const auto cols=line.split(',');
-        // depth_raw_m, depth_cal_m, depth_age_ms, envelope_state are the last four columns.
-        if(cols.size()==43&&qAbs(cols[38].toDouble()-0.24)<1e-9&&qAbs(cols[39].toDouble()-0.125)<1e-9&&cols[40]=="20") found=true;
+        // v6 appends motion columns; the existing depth columns retain their indices.
+        if(cols.size()==48&&qAbs(cols[38].toDouble()-0.24)<1e-9&&qAbs(cols[39].toDouble()-0.125)<1e-9&&cols[40]=="20") found=true;
     }
     check(found,"frame rows carry the controller's raw/zeroed depth and age");
 }

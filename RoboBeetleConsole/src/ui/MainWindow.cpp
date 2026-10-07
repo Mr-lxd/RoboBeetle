@@ -11,6 +11,9 @@
 #include "vision/InferenceUiState.h"
 #include "vision/VisualDiagnosticSession.h"
 #include "vision/VisualCsvLogger.h"
+#include "remote/RemoteRobotController.h"
+#include <QFileInfo>
+#include <numbers>
 #include "vision/VisualDispatchSession.h"
 
 #include <QCloseEvent>
@@ -2341,6 +2344,12 @@ QWidget *MainWindow::createTelemetryDetailsTab()
     depthDiagnostics_->setWordWrap(true);
     form->addRow(QStringLiteral("IMU Diagnostics"), imuDiagnostics_);
     form->addRow(QStringLiteral("Depth Diagnostics"), depthDiagnostics_);
+    if (dynamic_cast<RemoteRobotController *>(controller_)) {
+        motionTelemetryDiagnostics_ = new QLabel(QStringLiteral("Gyro: 0 Hz | Missing batches: 0 | Missing fragments: 0 | Firmware samples dropped: 0 | Gateway fragments dropped: 0"), tab);
+        motionTelemetryDiagnostics_->setWordWrap(true);
+        motionTelemetryDiagnostics_->setObjectName(QStringLiteral("motionTelemetryDiagnostics"));
+        form->addRow(QStringLiteral("Motion Telemetry"), motionTelemetryDiagnostics_);
+    }
     layout->addLayout(form);
     layout->addStretch();
     return tab;
@@ -2698,6 +2707,12 @@ void MainWindow::refreshVisualCsvUi()
             .arg(visualCsvLogger_->filePath().isEmpty() ? QString{}
                  : QStringLiteral(" - saved:\n") + visualCsvLogger_->filePath()));
     }
+    if (auto *remote = dynamic_cast<RemoteRobotController *>(controller_)) {
+        if (!remote->motionCsvPath().isEmpty())
+            visualCsvStatus_->setText(visualCsvStatus_->text() + QStringLiteral("\nMotion CSV: ") + remote->motionCsvPath());
+        if (!remote->motionCsvError().isEmpty())
+            visualCsvStatus_->setText(visualCsvStatus_->text() + QStringLiteral("\nMotion CSV error: ") + remote->motionCsvError());
+    }
 }
 
 // Auto Follow condensation. Only optional rows are dropped, always from the
@@ -3007,6 +3022,42 @@ void MainWindow::bindVisionUi()
     visualCsvLogger_ = new vision::VisualCsvLogger({}, this);
     connect(visualCsvLogger_, &vision::VisualCsvLogger::recordingChanged,
             this, &MainWindow::refreshVisualCsvUi);
+    if (auto *remote = dynamic_cast<RemoteRobotController *>(controller_)) {
+        visualCsvLogger_->setMotionInfoProvider([remote](quint64 captureNs) {
+            vision::VisualMotionCsvInfo info;
+            if (const auto record = remote->motionMonitor().atCapture(captureNs)) {
+                const auto &s = record->sample;
+                if (s.gyro_valid) info.gyroZ = s.gyro_tenth_dps[2] / 10.0;
+                if (s.angle_valid) {
+                    info.roll = s.roll_centidegrees / 100.0;
+                    info.pitch = s.pitch_centidegrees / 100.0;
+                }
+                if (s.phase_valid) info.gaitPhase = s.phase_u16 * 2.0 * std::numbers::pi / 65536;
+                info.motionAgeMs = double(captureNs) / 1e6 - record->samplePiMs;
+            }
+            return info;
+        });
+        connect(visualCsvLogger_, &vision::VisualCsvLogger::recordingChanged, this, [this, remote] {
+            if (visualCsvLogger_->isRecording()) {
+                const QFileInfo visual(visualCsvLogger_->filePath());
+                if (!remote->startMotionRecording(visual.absolutePath(), visual.completeBaseName().mid(7))) {
+                    visualCsvLogger_->stop();
+                }
+            } else remote->stopMotionRecording();
+            refreshVisualCsvUi();
+        });
+        connect(remote, &RemoteRobotController::motionRecordingFailed, this, [this] {
+            visualCsvLogger_->stop();
+            refreshVisualCsvUi();
+        });
+        connect(remote, &RemoteRobotController::motionTelemetryChanged, this, [this, remote] {
+            if (!motionTelemetryDiagnostics_) return;
+            const auto &m = remote->motionMonitor();
+            motionTelemetryDiagnostics_->setText(QStringLiteral("Gyro: %1 Hz | Missing batches: %2 | Missing fragments: %3 | Firmware samples dropped: %4 | Gateway fragments dropped: %5")
+                .arg(m.gyroRateHz(), 0, 'f', 1).arg(m.batchGapTotal()).arg(m.fragmentGapTotal())
+                .arg(m.samplerDropTotal()).arg(m.gatewayDropTotal()));
+        });
+    }
     connect(visualCsvEnabled_, &QCheckBox::toggled, this, [this](bool enabled) {
         if (enabled) {
             if (visualCsvLogger_->start(visualCsvDirectory_->text())) {

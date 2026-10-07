@@ -1,5 +1,6 @@
 #include "robobeetle/application/onboard_application.hpp"
 #include "robobeetle/protocol/message_types.hpp"
+#include "robobeetle/protocol/motion_state.hpp"
 
 #include <utility>
 
@@ -42,6 +43,14 @@ std::vector<ApplicationEvent> translate(std::vector<link_core::LinkEvent> raw)
             break;
         case protocol::MessageType::DepthSnapshot:
             append_telemetry(events, event.frame, decode_depth);
+            break;
+        case protocol::MessageType::MotionStateBatch:
+            if (protocol::decode_motion_state_batch(event.frame.payload)) {
+                events.emplace_back(MotionStateTelemetry{event.frame.payload});
+            } else {
+                events.emplace_back(TelemetryMalformed{event.frame.message_type,
+                    event.frame.sequence, TelemetryMalformedReason::InvalidValue});
+            }
             break;
         default:
             break;

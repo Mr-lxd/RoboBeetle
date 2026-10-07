@@ -30,6 +30,7 @@ enum class RbrpMessageKind : Byte {
     ImuTelemetry = 0x87,
     DepthTelemetry = 0x88,
     ServiceError = 0x89,
+    MotionStateTelemetry = 0x8A,
 };
 
 enum class RobotCommandKind : Byte {
@@ -225,9 +226,18 @@ struct GatewayDepthTelemetry {
     GatewayDepthTelemetryDiagnostics diagnostics;
 };
 
+// Prefix at 0/4/12: link epoch u32 / Pi CLOCK_MONOTONIC ms u64 / drops u32.
+// Original MotionStateBatch bytes follow unchanged at offset 16 (max 76 B total).
+struct GatewayMotionStateTelemetry {
+    std::uint32_t link_epoch{0};
+    std::uint64_t pi_rx_ms{0};
+    std::uint32_t gateway_drop_total{0};
+    Bytes batch_payload;
+};
+
 using GatewayTelemetryEvent =
     std::variant<GatewayLeakTelemetry, GatewayImuTelemetry,
-                 GatewayDepthTelemetry>;
+                 GatewayDepthTelemetry, GatewayMotionStateTelemetry>;
 
 struct GatewayStateLinkEvent {
     GatewayApplicationSessionState session_state{
@@ -387,7 +397,8 @@ using GatewayMessagePayload =
     std::variant<HelloReply, AcquireReply, ControlStateMessage,
                  CommandSubmittedMessage, GatewayCommandOutcomeMessage,
                  GatewayLeakTelemetry, GatewayImuTelemetry,
-                 GatewayDepthTelemetry, ServiceErrorMessage>;
+                 GatewayDepthTelemetry, ServiceErrorMessage,
+                 GatewayMotionStateTelemetry>;
 
 struct GatewayMessage {
     RequestId request_id{0};

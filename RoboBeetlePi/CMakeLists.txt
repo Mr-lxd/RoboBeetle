@@ -51,6 +51,7 @@ add_library(rbp2_rbrp_codec STATIC
 )
 target_include_directories(rbp2_rbrp_codec PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/protocol/include
 )
 target_compile_features(rbp2_rbrp_codec PUBLIC cxx_std_17)
 
@@ -137,6 +138,19 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 if(BUILD_TESTING)
+    enable_language(C)
+    add_executable(rbp2_motion_state_codec_tests
+        tests/motion_state_codec_tests.cpp
+        ../RoboBeetleFirmware/Core/Communication/motion_state_codec.c
+        ../RoboBeetleFirmware/Core/Src/rb_protocol_v2.c
+    )
+    target_include_directories(rbp2_motion_state_codec_tests PRIVATE
+        ../RoboBeetleFirmware/Core/Communication
+        ../RoboBeetleFirmware/Core/Inc
+    )
+    target_link_libraries(rbp2_motion_state_codec_tests PRIVATE rbp2_protocol rbp2_rbrp_codec)
+    add_test(NAME rbp2_motion_state_codec_tests COMMAND rbp2_motion_state_codec_tests)
+
     add_executable(rbp2_rbrp_codec_tests tests/rbrp_codec_tests.cpp)
     target_include_directories(rbp2_rbrp_codec_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/gateway/include
@@ -173,6 +187,10 @@ if(BUILD_TESTING)
     )
     target_link_libraries(rbp2_protocol_tests PRIVATE rbp2_protocol rbp2_link_core rbp2_transport)
     add_test(NAME rbp2_protocol_tests COMMAND rbp2_protocol_tests)
+
+    add_executable(rbp2_motion_telemetry_fifo_tests tests/motion_telemetry_fifo_tests.cpp)
+    target_link_libraries(rbp2_motion_telemetry_fifo_tests PRIVATE rbp2_rbrp_codec)
+    add_test(NAME rbp2_motion_telemetry_fifo_tests COMMAND rbp2_motion_telemetry_fifo_tests)
 
     add_executable(rbp2_robot_codec_tests tests/robot_codec_tests.cpp)
     target_include_directories(rbp2_robot_codec_tests PRIVATE
@@ -256,6 +274,7 @@ if(BUILD_TESTING)
             rbp2_gateway_core_tests
             rbp2_protocol_tests
             rbp2_robot_codec_tests
+            rbp2_motion_telemetry_fifo_tests
             PROPERTIES ENVIRONMENT "PATH=${rbp2_test_compiler_bin};$ENV{PATH}"
         )
     endif()

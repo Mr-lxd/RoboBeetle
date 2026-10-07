@@ -21,6 +21,7 @@ enum class MessageType : quint8 {
     LeakStatus = 0x20,
     ImuSnapshot = 0x21,
     DepthSnapshot = 0x22,
+    MotionStateBatch = 0x23,
 };
 
 enum class AckResult : quint8 {
@@ -51,6 +52,7 @@ constexpr bool isKnownMessageType(quint8 value)
     case MessageType::LeakStatus:
     case MessageType::ImuSnapshot:
     case MessageType::DepthSnapshot:
+    case MessageType::MotionStateBatch:
         return true;
     }
     return false;

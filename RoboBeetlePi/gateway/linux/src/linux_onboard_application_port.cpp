@@ -2,6 +2,7 @@
 
 #include "robobeetle/protocol/message_types.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <type_traits>
 #include <utility>
@@ -18,6 +19,8 @@ RbrpMessageKind telemetry_kind(std::uint8_t type) noexcept
         return RbrpMessageKind::ImuTelemetry;
     case protocol::MessageType::DepthSnapshot:
         return RbrpMessageKind::DepthTelemetry;
+    case protocol::MessageType::MotionStateBatch:
+        return RbrpMessageKind::MotionStateTelemetry;
     default:
         return RbrpMessageKind::Hello;
     }
@@ -29,6 +32,7 @@ bool is_telemetry_type(std::uint8_t type) noexcept
     case protocol::MessageType::LeakStatus:
     case protocol::MessageType::ImuSnapshot:
     case protocol::MessageType::DepthSnapshot:
+    case protocol::MessageType::MotionStateBatch:
         return true;
     default:
         return false;
@@ -84,7 +88,9 @@ LinuxOnboardApplicationPort::LinuxOnboardApplicationPort(
 
 int LinuxOnboardApplicationPort::open()
 {
-    return application_.open(device_path_.c_str());
+    const int error = application_.open(device_path_.c_str());
+    if (error == 0) ++link_epoch_;
+    return error;
 }
 
 GatewayApplicationSessionState LinuxOnboardApplicationPort::map_session_state(
@@ -178,6 +184,7 @@ std::vector<GatewayApplicationEvent> LinuxOnboardApplicationPort::map_events(
     mapped.reserve(events.size());
     std::optional<std::pair<RbrpMessageKind, std::uint16_t>> telemetry_frame;
 
+    std::uint64_t motion_rx_ms = 0;
     for (const auto &event : events) {
         if (const auto *raw =
                 std::get_if<link_core::LinkEvent>(&event)) {
@@ -190,6 +197,13 @@ std::vector<GatewayApplicationEvent> LinuxOnboardApplicationPort::map_events(
                 telemetry_frame.reset();
             }
 
+            if (raw->type == link_core::LinkEventType::FrameReceived &&
+                raw->frame.message_type == static_cast<std::uint8_t>(protocol::MessageType::MotionStateBatch)) {
+                // Stamp each fragment once after serial event translation.
+                // Linux steady_clock uses the same CLOCK_MONOTONIC domain as video.
+                motion_rx_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            }
             switch (raw->type) {
             case link_core::LinkEventType::RequestAccepted:
             case link_core::LinkEventType::RequestRejected:
@@ -277,6 +291,14 @@ std::vector<GatewayApplicationEvent> LinuxOnboardApplicationPort::map_events(
                 value.diagnostics.uart_error_count =
                     depth->diagnostics.uart_error_count;
                 mapped.emplace_back(GatewayTelemetryEvent{value});
+            }
+            telemetry_frame.reset();
+            continue;
+        }
+        if (const auto *motion = std::get_if<application::MotionStateTelemetry>(&event)) {
+            if (telemetry_frame && telemetry_frame->first == RbrpMessageKind::MotionStateTelemetry) {
+                mapped.emplace_back(GatewayTelemetryEvent{GatewayMotionStateTelemetry{
+                    link_epoch_, motion_rx_ms, 0, motion->batch_payload}});
             }
             telemetry_frame.reset();
             continue;

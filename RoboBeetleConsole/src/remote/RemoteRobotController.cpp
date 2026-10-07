@@ -60,6 +60,8 @@ RemoteRobotController::RemoteRobotController(QObject *parent, TerminalNowMs term
       session_(this), terminalNow_(std::move(terminalNow))
 {
     terminalClock_.start();
+    connect(&motionCsvLogger_, &MotionStateCsvLogger::failed,
+            this, &RemoteRobotController::motionRecordingFailed);
     if (!terminalNow_) terminalNow_ = [this] { return terminalClock_.elapsed(); };
     motionStopTimer_.setSingleShot(true);
     motionModeTransitionTimer_.setSingleShot(true);
@@ -501,6 +503,17 @@ void RemoteRobotController::handleFrame(quint8 rawKind, quint32 requestId,
     case Kind::DepthTelemetry:
         handleDepthTelemetry(payload);
         break;
+    case Kind::MotionStateTelemetry: {
+        const auto telemetry = decodeMotionStateTelemetry(payload);
+        if (!telemetry) { emit logMessage(QStringLiteral("Invalid MotionStateTelemetry")); break; }
+        if (motionMonitor_.linkEpoch() && *motionMonitor_.linkEpoch() != telemetry->link_epoch) {
+            motionMonitor_.finishBatch();
+            motionCsvLogger_.recordTotals(motionMonitor_);
+        }
+        for (const auto &record : motionMonitor_.accept(*telemetry)) motionCsvLogger_.record(record);
+        emit motionTelemetryChanged();
+        break;
+    }
     case Kind::ServiceError:
         handleServiceError(requestId, payload);
         break;
@@ -1024,6 +1037,10 @@ void RemoteRobotController::failClosedControlState(const QString &reason)
 
 void RemoteRobotController::resetTelemetry()
 {
+    motionMonitor_.finishBatch();
+    motionCsvLogger_.recordTotals(motionMonitor_);
+    motionMonitor_.reset();
+    emit motionTelemetryChanged();
     lastLeakTelemetryAtMs_ = -1;
     setLeakState(LeakState::Unknown);
 
@@ -1045,6 +1062,16 @@ void RemoteRobotController::resetTelemetry()
         emit depthStateChanged();
     }
     clearControlDepth();
+}
+
+bool RemoteRobotController::startMotionRecording(const QString &directory, const QString &session) {
+    return motionCsvLogger_.start(directory, session);
+}
+void RemoteRobotController::stopMotionRecording() {
+    // Recording may stop mid-batch while the Remote stream continues. Only a
+    // subsequent batch or actual stream/epoch end establishes missing tails.
+    motionCsvLogger_.recordTotals(motionMonitor_);
+    motionCsvLogger_.stop();
 }
 
 void RemoteRobotController::refreshTelemetryStaleness()

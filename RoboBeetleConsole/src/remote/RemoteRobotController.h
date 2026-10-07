@@ -2,6 +2,8 @@
 
 #include "controller/IConsoleController.h"
 #include "remote/RbrpClientSession.h"
+#include "robot/MotionStateMonitor.h"
+#include "robot/MotionStateCsvLogger.h"
 
 #include <QElapsedTimer>
 #include <QHash>
@@ -99,13 +101,23 @@ public:
         return pendingFrontRearCoordination_.has_value();
     }
     [[nodiscard]] bool isMotionActive() const override;
+    [[nodiscard]] const MotionStateMonitor &motionMonitor() const { return motionMonitor_; }
+    bool startMotionRecording(const QString &directory, const QString &session);
+    void stopMotionRecording();
+    QString motionCsvPath() const { return motionCsvLogger_.filePath(); }
+    QString motionCsvError() const { return motionCsvLogger_.lastError(); }
     [[nodiscard]] bool isMotionReady(MotionMode mode) const override;
     [[nodiscard]] bool isMotionTransitioning() const override
     {
         return motionModeTransitionTimer_.isActive();
     }
 
+signals:
+    void motionTelemetryChanged();
+    void motionRecordingFailed();
 private:
+    MotionStateMonitor motionMonitor_;
+    MotionStateCsvLogger motionCsvLogger_;
     struct PendingCommand {
         robobeetle::gateway::RobotCommandKind kind{
             robobeetle::gateway::RobotCommandKind::StopMotion};
