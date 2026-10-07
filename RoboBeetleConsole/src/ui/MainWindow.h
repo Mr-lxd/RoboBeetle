@@ -302,6 +302,7 @@ private:
 
     // Telemetry details tab (holds the long IMU/Depth diagnostics text).
     QLabel *imuDiagnostics_{nullptr};
+    QLabel *motionTelemetryDiagnostics_{nullptr};
     QLabel *depthDiagnostics_{nullptr};
 
     // Servo cards (one per semantic actuator).

@@ -8,7 +8,7 @@
 
 namespace rb::vision {
 namespace {
-const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets,policy_request_id,request_id,dispatch_command,dispatch_result,ack_rtt_ms,axis_mode,ey_f,pitch_sign,depth_raw_m,depth_cal_m,depth_age_ms,envelope_state,sel_area_cells\n";
+const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets,policy_request_id,request_id,dispatch_command,dispatch_result,ack_rtt_ms,axis_mode,ey_f,pitch_sign,depth_raw_m,depth_cal_m,depth_age_ms,envelope_state,sel_area_cells,gyro_z,roll,pitch,gait_phase,motion_age_ms\n";
 
 QString escaped(QString field)
 {
@@ -107,7 +107,7 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
                                std::optional<qint64> arrivalMs) const
 {
     QStringList fields;
-    fields.reserve(43);
+    fields.reserve(48);
     fields << (transition ? QStringLiteral("transition") : QStringLiteral("frame"))
            << QString::number(s.localMonoMs)
            << (!transition && arrivalMs ? QString::number(*arrivalMs) : QString{});
@@ -175,6 +175,14 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
     // v5 addition: selected target's component area, frame rows only.
     fields << (!transition && !s.awaitingVideo && s.target && s.target->target.areaCells
                    ? QString::number(*s.target->target.areaCells) : QString{});
+    // Pi capture time selects the nearest past mapped gyro, independent of GUI time.
+    if (!transition && s.captureTimestampNs && motionInfo_) {
+        const auto m = motionInfo_(*s.captureTimestampNs);
+        for (const auto &value : {m.gyroZ, m.roll, m.pitch, m.gaitPhase, m.motionAgeMs})
+            fields << (value ? number(*value) : QString{});
+    } else {
+        for (int i = 0; i < 5; ++i) fields << QString{};
+    }
     for (QString &field : fields) field = escaped(std::move(field));
     return (fields.join(QLatin1Char(',')) + QLatin1Char('\n')).toUtf8();
 }
@@ -185,7 +193,7 @@ void VisualCsvLogger::recordDispatch(const VisualDispatchRecord &record)
     // Dispatch events do not consume or finalize diagnostic frames, nor alter
     // their session, deduplication floor or transition baseline.
     QStringList fields;
-    for (int i = 0; i < 43; ++i) fields << QString{};
+    for (int i = 0; i < 48; ++i) fields << QString{};
     fields[0] = record.result == QStringLiteral("SENT")
         || record.result == QStringLiteral("LOCAL_REJECTED")
         ? QStringLiteral("dispatch") : QStringLiteral("outcome");

@@ -96,6 +96,10 @@ add_library(RoboBeetleCore
     src/robot/ServoDescriptor.cpp
     src/robot/RobotController.h
     src/robot/RobotController.cpp
+    src/robot/MotionStateMonitor.h
+    src/robot/MotionStateMonitor.cpp
+    src/robot/MotionStateCsvLogger.h
+    src/robot/MotionStateCsvLogger.cpp
 )
 
 target_include_directories(RoboBeetleCore PUBLIC
@@ -123,6 +127,10 @@ target_link_libraries(RoboBeetleConsole PRIVATE RoboBeetleCore Qt6::Widgets)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(motion_state_monitor_tests tests/motion_state_monitor_tests.cpp)
+    target_link_libraries(motion_state_monitor_tests PRIVATE RoboBeetleCore)
+    add_test(NAME motion_state_monitor_tests COMMAND motion_state_monitor_tests)
+
     add_executable(motion_state_codec_tests tests/motion_state_codec_tests.cpp)
     target_link_libraries(motion_state_codec_tests PRIVATE RoboBeetleCore)
     add_test(NAME motion_state_codec_tests COMMAND motion_state_codec_tests)
