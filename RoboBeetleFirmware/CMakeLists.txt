@@ -40,6 +40,10 @@ option(ROBOBEETLE_MOTION_TIMING_REDUCED_TELEMETRY
        "Suppress optional telemetry in a diagnostics image"
        OFF)
 
+option(JY901S_ONESHOT_CONFIG_20HZ
+       "Configure JY901S for ACC/GYRO/ANGLE at 20 Hz once during startup"
+       OFF)
+
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
 
@@ -106,6 +110,12 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
 )
+
+if(JY901S_ONESHOT_CONFIG_20HZ)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+        JY901S_ONESHOT_CONFIG_20HZ=1
+    )
+endif()
 
 if(ROBOBEETLE_CPG_TARGET_BENCHMARK)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
