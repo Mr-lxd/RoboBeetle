@@ -113,6 +113,16 @@ uart_tx_enqueue_result_t uart_tx_queue_offer(
         return UART_TX_ENQUEUED;
     }
 
+    if (kind == UART_TX_MESSAGE_MOTION)
+    {
+        if (queue->motion.occupied)
+        {
+            return UART_TX_MOTION_FULL;
+        }
+        uart_tx_copy_frame(&queue->motion, data, length, kind);
+        return UART_TX_ENQUEUED;
+    }
+
     for (index = 0U;
          index < UART_TX_TELEMETRY_QUEUE_CAPACITY;
          ++index)
@@ -195,14 +205,21 @@ bool uart_tx_queue_begin_next(
 
         if (index >= UART_TX_TELEMETRY_QUEUE_CAPACITY)
         {
-            return false;
+            if (!queue->motion.occupied)
+            {
+                return false;
+            }
+            queue->active = queue->motion;
+            uart_tx_clear_frame(&queue->motion);
         }
-
-        queue->active = queue->telemetry[index];
-        uart_tx_clear_frame(&queue->telemetry[index]);
-        --queue->telemetry_count;
-        queue->telemetry_cursor = (uint8_t)(
-            (index + 1U) % UART_TX_TELEMETRY_QUEUE_CAPACITY);
+        else
+        {
+            queue->active = queue->telemetry[index];
+            uart_tx_clear_frame(&queue->telemetry[index]);
+            --queue->telemetry_count;
+            queue->telemetry_cursor = (uint8_t)(
+                (index + 1U) % UART_TX_TELEMETRY_QUEUE_CAPACITY);
+        }
     }
 
     queue->active.token = 0U;
@@ -338,6 +355,14 @@ void uart_tx_queue_drop_pending(
     }
 
     queue->control_head = 0U;
+    if (queue->motion.occupied)
+    {
+        if (dropped_count != NULL)
+        {
+            ++dropped_count[UART_TX_MESSAGE_MOTION];
+        }
+        uart_tx_clear_frame(&queue->motion);
+    }
     queue->control_count = 0U;
     queue->telemetry_count = 0U;
 }
@@ -351,7 +376,8 @@ uint32_t uart_tx_queue_pending_count(
     }
 
     return (uint32_t)queue->control_count +
-           (uint32_t)queue->telemetry_count;
+           (uint32_t)queue->telemetry_count +
+           (queue->motion.occupied ? 1U : 0U);
 }
 
 void uart_tx_queue_get_stats(

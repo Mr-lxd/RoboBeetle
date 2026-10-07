@@ -53,6 +53,8 @@ void uart_transport_stm32_on_abort_transmit_complete(
 void uart_transport_stm32_on_error(UART_HandleTypeDef *huart);
 void uart_transport_stm32_process(void);
 
+bool uart_transport_stm32_motion_pending(void);
+
 uart_tx_enqueue_result_t uart_transport_stm32_enqueue(
     const uint8_t *data,
     uint16_t length,

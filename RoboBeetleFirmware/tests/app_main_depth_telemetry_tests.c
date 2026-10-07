@@ -1,5 +1,6 @@
 #include "app_main.h"
 #include "depth_telemetry.h"
+#include "motion_state_codec.h"
 #include "rb_protocol_v2.h"
 #include "stm32f4xx_hal.h"
 #include "uart_transport_stm32.h"
@@ -403,7 +404,7 @@ static void run_depth_rate_scenario(
 
         expect(tx_frame_count > before,
                "a Heartbeat must at least produce its ACK");
-        expect(tx_frame_count - before <= 3U,
+        expect(tx_frame_count - before <= 4U,
                "a Heartbeat must be followed by at most two telemetry frames");
         if (tx_frame_count > before)
         {
@@ -494,15 +495,19 @@ int main(void)
     /* B': the first Heartbeat publishes the new depth sample and one
      * Leak/IMU frame, always after its ACK; later Heartbeats at the same tick
      * repeat nothing that is not due. */
-    expect(tx_frame_count == 6U,
-           "three Heartbeats should produce three ACKs plus three telemetry frames");
+    expect(tx_frame_count == 9U,
+           "three Heartbeats should produce three ACKs, three old telemetry frames, and three empty motion batches");
     expect_tx_type(0U, RBP2_MSG_ACK, 4U);
     expect_tx_type(1U, RBP2_MSG_DEPTH_SNAPSHOT,
                    DEPTH_TELEMETRY_PAYLOAD_LENGTH);
     expect_tx_type(2U, RBP2_MSG_LEAK_STATUS, 1U);
-    expect_tx_type(3U, RBP2_MSG_ACK, 4U);
-    expect_tx_type(4U, RBP2_MSG_IMU_SNAPSHOT, 56U);
-    expect_tx_type(5U, RBP2_MSG_ACK, 4U);
+    expect_tx_type(3U, RBP2_MSG_MOTION_STATE_BATCH, 16U);
+    expect_tx_type(4U, RBP2_MSG_ACK, 4U);
+    expect_tx_type(5U, RBP2_MSG_IMU_SNAPSHOT, 56U);
+    expect_tx_type(6U, RBP2_MSG_MOTION_STATE_BATCH, 16U);
+    expect_tx_type(7U, RBP2_MSG_ACK, 4U);
+
+    expect_tx_type(8U, RBP2_MSG_MOTION_STATE_BATCH, 16U);
 
     expect(decode_tx_frame(1U, &depth_frame),
            "DepthSnapshot frame did not decode");
@@ -620,6 +625,50 @@ int main(void)
            "a stale actuator frame must be rejected before SafetySupervisor disables outputs");
 
     test_depth_rate_follows_heartbeats(&uart1, &uart6);
+
+    /* New gyro events retain their own samples; ANGLE alone creates none. */
+    const uint8_t imu_types[] = {0x53U, 0x52U, 0x52U, 0x52U};
+    for (size_t packet = 0; packet < sizeof imu_types; ++packet)
+    {
+        uint8_t imu_frame[11] = {0x55U, imu_types[packet], 0U, 0x10U};
+        for (size_t byte = 0; byte < 10U; ++byte) imu_frame[10] += imu_frame[byte];
+        test_tick += 5U;
+        for (size_t byte = 0; byte < sizeof imu_frame; ++byte)
+            inject_byte(&uart3, imu_frame[byte], jy901s_transport_stm32_on_rx_complete);
+        app_main_process();
+    }
+    const size_t motion_first = tx_frame_count;
+    send_heartbeat(&uart1, 100U);
+    app_main_process();
+    while (uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_ACTIVE)
+    {
+        uart1.gState = HAL_UART_STATE_READY;
+        uart_transport_stm32_on_tx_complete(&uart1);
+    }
+    unsigned motion_samples = 0, motion_fragments = 0;
+    for (size_t i = motion_first; i < tx_frame_count; ++i)
+    {
+        rbp2_frame_t frame;
+        rb_motion_state_batch_t batch;
+        if (decode_tx_frame(i, &frame) && frame.type == RBP2_MSG_MOTION_STATE_BATCH)
+        {
+            expect(rb_motion_state_decode(frame.payload, frame.payload_length, &batch),
+                   "motion fragment must decode");
+            expect(batch.fragment_count == 2U && batch.fragment_index == motion_fragments,
+                   "three gyros must form two ordered fragments");
+            for (unsigned j = 0; j < batch.sample_count; ++j)
+            {
+                expect(batch.samples[j].gyro_valid && batch.samples[j].angle_valid,
+                       "gyro samples must carry the preceding angle");
+                expect(batch.samples[j].angle_age_ms == 5U * (motion_samples + 1U),
+                       "angle age must follow real event timestamps");
+                ++motion_samples;
+            }
+            ++motion_fragments;
+        }
+    }
+    expect(motion_samples == 3U && motion_fragments == 2U,
+           "only the three gyro events may generate motion samples");
 
     if (failures == 0)
     {

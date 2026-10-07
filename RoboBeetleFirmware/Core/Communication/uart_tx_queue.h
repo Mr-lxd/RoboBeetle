@@ -15,6 +15,7 @@ typedef enum
     UART_TX_MESSAGE_LEAK,
     UART_TX_MESSAGE_IMU,
     UART_TX_MESSAGE_DEPTH,
+    UART_TX_MESSAGE_MOTION,
     UART_TX_MESSAGE_KIND_COUNT
 } uart_tx_message_kind_t;
 
@@ -25,7 +26,8 @@ typedef enum
     UART_TX_CONTROL_FULL,
     UART_TX_TELEMETRY_FULL,
     UART_TX_INVALID,
-    UART_TX_TRANSPORT_ERROR
+    UART_TX_TRANSPORT_ERROR,
+    UART_TX_MOTION_FULL
 } uart_tx_enqueue_result_t;
 
 typedef enum
@@ -67,6 +69,7 @@ typedef struct
     uart_tx_frame_t control[UART_TX_CONTROL_QUEUE_CAPACITY];
     uart_tx_frame_t telemetry[UART_TX_TELEMETRY_QUEUE_CAPACITY];
     uart_tx_frame_t active;
+    uart_tx_frame_t motion;
     uint8_t control_head;
     uint8_t control_count;
     uint8_t telemetry_count;

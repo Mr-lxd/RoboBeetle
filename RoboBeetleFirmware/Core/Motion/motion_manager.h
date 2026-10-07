@@ -49,6 +49,7 @@ typedef struct
     uint32_t stop_elapsed_ms;
     uint32_t last_tick_ms;
     uint8_t scheduler_started;
+    bool phase_tick_valid;
     joint_targets_t last_targets;
     joint_targets_t start_from_targets;
     joint_targets_t stop_start_targets;

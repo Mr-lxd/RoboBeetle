@@ -42,6 +42,7 @@ $warningArgs = @('-std=c11', '-Wall', '-Wextra', '-Werror')
 $halWarningArgs = @('-Wno-pointer-to-int-cast', '-Wno-int-to-pointer-cast')
 
 $cases = @(
+    @{ Name = 'motion_state_sampler_tests'; Sources = @('tests/motion_state_sampler_tests.c', 'Core/Communication/motion_state_sampler.c', 'Core/Communication/uart_tx_queue.c'); Link = @() },
     @{ Name = 'protocol_golden_vectors'; Sources = @('tests/protocol_golden_vectors.c', 'Core/Src/rb_protocol_v2.c'); Link = @() },
     @{ Name = 'ring_buffer_tests'; Sources = @('tests/ring_buffer_tests.c', 'Core/Communication/ring_buffer.c'); Link = @() },
     @{ Name = 'uart_tx_queue_tests'; Sources = @('tests/uart_tx_queue_tests.c', 'Core/Communication/uart_tx_queue.c'); Link = @() },
@@ -73,6 +74,7 @@ $cases = @(
         'Core/Communication/depth_transport_stm32.c',
         'Core/Communication/depth_telemetry.c',
         'Core/Communication/motion_state_codec.c',
+        'Core/Communication/motion_state_sampler.c',
         'Core/Communication/imu_telemetry_policy.c',
         'Core/Communication/telemetry_scheduler.c',
         'Core/Communication/protocol_dispatcher.c',
@@ -106,6 +108,7 @@ $cases = @(
         'Core/Communication/depth_transport_stm32.c',
         'Core/Communication/depth_telemetry.c',
         'Core/Communication/motion_state_codec.c',
+        'Core/Communication/motion_state_sampler.c',
         'Core/Communication/imu_telemetry_policy.c',
         'Core/Communication/telemetry_scheduler.c',
         'Core/Communication/protocol_dispatcher.c',
@@ -150,6 +153,7 @@ $cases = @(
         'Core/Communication/depth_transport_stm32.c',
         'Core/Communication/depth_telemetry.c',
         'Core/Communication/motion_state_codec.c',
+        'Core/Communication/motion_state_sampler.c',
         'Core/Communication/imu_telemetry_policy.c',
         'Core/Communication/telemetry_scheduler.c',
         'Core/Communication/protocol_dispatcher.c',
@@ -182,6 +186,7 @@ $cases = @(
         'Core/Communication/depth_transport_stm32.c',
         'Core/Communication/depth_telemetry.c',
         'Core/Communication/motion_state_codec.c',
+        'Core/Communication/motion_state_sampler.c',
         'Core/Communication/imu_telemetry_policy.c',
         'Core/Communication/telemetry_scheduler.c',
         'Core/Communication/protocol_dispatcher.c',

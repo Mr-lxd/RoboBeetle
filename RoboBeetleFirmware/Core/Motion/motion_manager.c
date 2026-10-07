@@ -833,6 +833,7 @@ motion_manager_result_t motion_manager_start(
     manager->start_from_targets = start_targets;
     manager->stop_start_targets = start_targets;
     manager->scheduler_started = 0U;
+    manager->phase_tick_valid = false;
 #if MOTION_TIMING_DIAGNOSTICS_ACTIVE
     if (start_from_stopped)
     {
@@ -935,6 +936,11 @@ motion_manager_result_t motion_manager_process(
 #endif
     const motion_manager_result_t result =
         motion_manager_tick(manager, elapsed_ms);
+    if ((result == MOTION_MANAGER_RESULT_OK) &&
+        (manager->state == MOTION_STATE_RUNNING))
+    {
+        manager->phase_tick_valid = true;
+    }
 #if MOTION_TIMING_DIAGNOSTICS_ACTIVE
     motion_timing_diagnostics_motion_tick_end((uint32_t)result);
 #endif
@@ -975,6 +981,7 @@ void motion_manager_stop_immediate(
     manager->transition_elapsed_ms = 0U;
     manager->stop_elapsed_ms = 0U;
     manager->scheduler_started = 0U;
+    manager->phase_tick_valid = false;
     manager->write_mask = 0U;
     manager->active_mode = MOTION_STOP;
     manager->transition_mode = MOTION_STOP;

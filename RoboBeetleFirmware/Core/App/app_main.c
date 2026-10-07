@@ -18,6 +18,7 @@
 #include "depth_telemetry.h"
 #include "depth_transport_stm32.h"
 #include "motion_manager.h"
+#include "motion_state_sampler.h"
 #include "cpg_gait_generator.h"
 #include "experimental_flex_gait_generator.h"
 #include "simple_gait_generator.h"
@@ -30,6 +31,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <math.h>
 
 #ifndef MOTION_DEFAULT_GAIT_BACKEND_CPG
 /* Normal bench image: validate the source-compatible CPG backend. */
@@ -80,6 +82,10 @@ static telemetry_scheduler_t telemetry_scheduler;
 static jy901s_parser_t jy901s_parser;
 static depth_parser_t depth_parser;
 static volatile uint32_t jy901s_last_valid_frame_ms;
+#if !MOTION_TIMING_REDUCED_TELEMETRY_ACTIVE
+static motion_state_sampler_t motion_state_sampler;
+static uint32_t jy901s_last_angle_ms;
+#endif
 
 static bool protocol_send_ack(
     uint16_t request_sequence,
@@ -192,6 +198,7 @@ static void protocol_feed_byte(
 #else
                 if (ack_sent && outcome.heartbeat_accepted)
                 {
+                    motion_state_sampler_begin_batch(&motion_state_sampler);
                     const leak_sensor_state_t state =
                         leak_sensor_state(&leak_sensor);
 
@@ -364,6 +371,95 @@ static bool protocol_send_ack(
 }
 
 #if !MOTION_TIMING_REDUCED_TELEMETRY_ACTIVE
+static uint16_t motion_state_age(uint32_t now_ms, uint32_t then_ms)
+{
+    const uint32_t age = now_ms - then_ms;
+    return age > 65534U ? 65534U : (uint16_t)age;
+}
+
+static int16_t motion_state_fixed(float value, float scale)
+{
+    const float scaled = value * scale;
+    if (scaled >= 32767.0f) return 32767;
+    if (scaled <= -32768.0f) return -32768;
+    return (int16_t)(scaled >= 0.0f ? scaled + 0.5f : scaled - 0.5f);
+}
+
+/* This is a read-only snapshot. No generator advance/sample is performed. */
+static void motion_state_capture(uint32_t now_ms)
+{
+    const jy901s_imu_state_t *imu = &jy901s_parser.state;
+    rb_motion_state_sample_t sample = {0};
+    const double cycle = 6.28318530717958647692;
+    double phase;
+    sample.mcu_ms = now_ms;
+    sample.gyro_tenth_dps[0] = motion_state_fixed(imu->gyro_x_dps, 10.0f);
+    sample.gyro_tenth_dps[1] = motion_state_fixed(imu->gyro_y_dps, 10.0f);
+    sample.gyro_tenth_dps[2] = motion_state_fixed(imu->gyro_z_dps, 10.0f);
+    sample.gyro_valid = true;
+    sample.angle_valid = imu->angle_valid;
+    if (sample.angle_valid)
+    {
+        sample.roll_centidegrees = motion_state_fixed(imu->angle_roll_deg, 100.0f);
+        sample.pitch_centidegrees = motion_state_fixed(imu->angle_pitch_deg, 100.0f);
+    }
+    sample.angle_age_ms = sample.angle_valid
+        ? motion_state_age(now_ms, jy901s_last_angle_ms) : 65535U;
+    sample.backend = (uint8_t)motion_manager.gait_backend;
+    sample.state = (uint8_t)motion_manager.state;
+    sample.active_mode = (uint8_t)motion_manager.active_mode;
+    sample.target_mode = motion_manager.state == MOTION_STATE_STOPPING
+        ? MOTION_STOP : motion_manager.transition != MOTION_MANAGER_TRANSITION_NONE
+        ? (uint8_t)motion_manager.transition_mode : sample.active_mode;
+    sample.coordination = (uint8_t)motion_manager.front_rear_coordination;
+    sample.transition = motion_manager.state == MOTION_STATE_STOPPING ||
+        motion_manager.transition != MOTION_MANAGER_TRANSITION_NONE;
+    sample.phase_valid = motion_manager.state == MOTION_STATE_RUNNING &&
+        motion_manager.phase_tick_valid;
+    sample.phase_age_ms = sample.phase_valid
+        ? motion_state_age(now_ms, motion_manager.last_tick_ms) : 65535U;
+    switch (motion_manager.gait_backend)
+    {
+        case MOTION_GAIT_BACKEND_CPG:
+            phase = cpg_gait_generator.core.phase[3];
+            break;
+        case MOTION_GAIT_BACKEND_EXPERIMENTAL_FLEX:
+            phase = cycle * experimental_flex_gait_generator.phase_ms / 2000.0;
+            break;
+        default:
+            phase = simple_gait_generator.phase_rad;
+            break;
+    }
+    phase = fmod(phase, cycle);
+    if (phase < 0.0) phase += cycle;
+    sample.phase_u16 = (uint16_t)(phase * 65536.0 / cycle);
+    motion_state_sampler_push(&motion_state_sampler, &sample);
+}
+
+static void protocol_send_motion_fragment(void)
+{
+    rb_motion_state_batch_t batch;
+    uint8_t payload[RB_MOTION_STATE_MAX_PAYLOAD];
+    uint8_t wire[RBP2_MAX_WIRE_SIZE];
+    if (uart_transport_stm32_motion_pending())
+    {
+        return;
+    }
+    if (!motion_state_sampler_fragment(&motion_state_sampler, HAL_GetTick(), &batch))
+    {
+        return;
+    }
+    const size_t payload_length = rb_motion_state_encode(&batch, payload, sizeof payload);
+    const size_t wire_length = rbp2_encode_wire(RBP2_MSG_MOTION_STATE_BATCH,
+        protocol_telemetry_sequence, payload, (uint16_t)payload_length, wire, sizeof wire);
+    if (wire_length != 0U && uart_transport_stm32_enqueue(wire,
+            (uint16_t)wire_length, UART_TX_MESSAGE_MOTION) == UART_TX_ENQUEUED)
+    {
+        ++protocol_telemetry_sequence;
+        motion_state_sampler_accept_fragment(&motion_state_sampler);
+    }
+}
+
 static bool protocol_send_leak_status(
     leak_sensor_state_t state)
 {
@@ -623,6 +719,10 @@ void app_main_init(
     depth_telemetry_policy_init(&depth_telemetry_policy);
     telemetry_scheduler_init(&telemetry_scheduler);
     jy901s_last_valid_frame_ms = 0U;
+#if !MOTION_TIMING_REDUCED_TELEMETRY_ACTIVE
+    motion_state_sampler_init(&motion_state_sampler);
+    jy901s_last_angle_ms = 0U;
+#endif
     jy901s_transport_stm32_init(jy901s_uart);
     depth_transport_stm32_init(depth_uart);
 }
@@ -684,6 +784,16 @@ void app_main_process(void)
             if (event != JY901S_PARSER_EVENT_NONE)
             {
                 jy901s_last_valid_frame_ms = HAL_GetTick();
+#if !MOTION_TIMING_REDUCED_TELEMETRY_ACTIVE
+                if (event == JY901S_PARSER_EVENT_ANGLE)
+                {
+                    jy901s_last_angle_ms = jy901s_last_valid_frame_ms;
+                }
+                else if (event == JY901S_PARSER_EVENT_GYRO)
+                {
+                    motion_state_capture(jy901s_last_valid_frame_ms);
+                }
+#endif
             }
         }
 #if MOTION_TIMING_DIAGNOSTICS_ACTIVE
@@ -741,6 +851,9 @@ void app_main_process(void)
             app_main_apply_safety_stop();
         }
     }
+#if !MOTION_TIMING_REDUCED_TELEMETRY_ACTIVE
+    protocol_send_motion_fragment();
+#endif
     uart_transport_stm32_process();
 #if MOTION_TIMING_DIAGNOSTICS_ACTIVE
     motion_timing_diagnostics_loop_end(app_loop_start);
