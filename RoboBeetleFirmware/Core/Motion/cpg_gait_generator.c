@@ -45,7 +45,8 @@ void cpg_gait_profile_production_default(
     (void)memset(profile, 0, sizeof(*profile));
     profile->front_amplitude_deg = 10.0;
     profile->rear_amplitude_deg = 10.0;
-    profile->nominal_period_s = 2.0;
+    /* Actual ~2.000 s: D:\RoboBeetle-results\task12-cpg-period-2026-10-07; beta/amplitude/coupling/timestep changes require recalibration. */
+    profile->nominal_period_s = 2.5162;
     profile->front_axis_bias_cdeg[MOTION_ASCEND] =
         (double)MOTION_PROFILE_ASCEND_FRONT_AXIS_BIAS_CDEG;
     profile->front_axis_bias_cdeg[MOTION_DESCEND] =

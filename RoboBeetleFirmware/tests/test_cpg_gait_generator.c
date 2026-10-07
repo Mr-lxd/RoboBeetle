@@ -55,13 +55,13 @@ static void test_production_profile_and_initialization(void)
     cpg_gait_generator_init(&generator);
     assert(generator.profile.front_amplitude_deg == 10.0);
     assert(generator.profile.rear_amplitude_deg == 10.0);
-    assert(generator.profile.nominal_period_s == 2.0);
+    assert(generator.profile.nominal_period_s == 2.5162);
     assert(generator.profile.front_axis_bias_cdeg[MOTION_ASCEND] == -1000.0);
     assert(generator.profile.front_axis_bias_cdeg[MOTION_DESCEND] == 1000.0);
-    assert(generator.core.params.period_s[0] == 2.0);
-    assert(generator.core.params.period_s[1] == 2.0);
-    assert(generator.core.params.period_s[2] == 2.0);
-    assert(generator.core.params.period_s[3] == 2.0);
+    assert(generator.core.params.period_s[0] == 2.5162);
+    assert(generator.core.params.period_s[1] == 2.5162);
+    assert(generator.core.params.period_s[2] == 2.5162);
+    assert(generator.core.params.period_s[3] == 2.5162);
     assert(generator.core.params.target_amplitude[0] == -10.0);
     assert(generator.core.params.target_amplitude[1] == 10.0);
     assert(generator.core.params.target_amplitude[2] == 10.0);
