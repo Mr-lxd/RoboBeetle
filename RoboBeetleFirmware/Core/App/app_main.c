@@ -23,6 +23,9 @@
 #include "experimental_flex_gait_generator.h"
 #include "simple_gait_generator.h"
 #include "motion_timing_diagnostics.h"
+#if defined(JY901S_ONESHOT_CONFIG_20HZ) && JY901S_ONESHOT_CONFIG_20HZ
+#include "jy901s_oneshot_config.h"
+#endif
 #if defined(ROBOBEETLE_CPG_TARGET_BENCHMARK) && \
     ROBOBEETLE_CPG_TARGET_BENCHMARK
 #include "cpg_target_benchmark.h"
@@ -712,6 +715,23 @@ void app_main_init(
         &servo_service,
         &safety_supervisor,
         &motion_manager);
+#if defined(JY901S_ONESHOT_CONFIG_20HZ) && JY901S_ONESHOT_CONFIG_20HZ
+    /* Maintenance image only; finish before any serial RX transport is armed. */
+    HAL_Delay(200U);
+    for (size_t command = 0U; command < 4U; ++command)
+    {
+        (void)HAL_UART_Transmit(
+            jy901s_uart,
+            jy901s_oneshot_config_commands[command],
+            sizeof(jy901s_oneshot_config_commands[command]),
+            20U);
+        if (command < 3U)
+        {
+            HAL_Delay(100U);
+        }
+    }
+    HAL_Delay(200U);
+#endif
     uart_transport_stm32_init(uart);
     jy901s_parser_init(&jy901s_parser);
     imu_telemetry_policy_init(&imu_telemetry_policy);
