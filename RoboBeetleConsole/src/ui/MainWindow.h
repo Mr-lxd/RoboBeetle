@@ -1,6 +1,9 @@
 #pragma once
 
 #include "controller/IConsoleController.h"
+#include "input/GamepadMapper.h"
+#include "input/XInputGamepad.h"
+#include <QElapsedTimer>
 #include "vision/DetectionMetadata.h"
 
 #include <QMainWindow>
@@ -145,6 +148,8 @@ private:
     void refreshMotionUi();
     void refreshGaitSelectorsUi();
     void refreshAuthorityUi();
+    void pollGamepad();
+    void disableGamepad();
     void refreshVisionUi();
     void refreshCaptureUi();
     void refreshInferenceUi();
@@ -269,6 +274,14 @@ private:
     QPushButton *connectButton_{nullptr};
     QPushButton *acquireButton_{nullptr};
     QPushButton *releaseButton_{nullptr};
+    QPushButton *gamepadToggleButton_{nullptr};
+    QLabel *gamepadStatusLabel_{nullptr};
+    GamepadMapper gamepadMapper_;
+    XInputGamepad gamepadReader_;
+    DepthEnvelopeMemory gamepadDepthMemory_;
+    QElapsedTimer gamepadClock_;
+    std::optional<bool> gamepadPreviousAccepted_;
+    bool pollingGamepad_{false};
     QLabel *connectionStatus_{nullptr};
     QLabel *authorityStatus_{nullptr};
     QPushButton *enableAllButton_{nullptr};
