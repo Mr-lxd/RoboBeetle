@@ -30,7 +30,17 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(VisualDispatchPolicy PRIVATE -Wall -Wextra -Werror)
 endif()
 
+add_library(GamepadMapper STATIC src/input/GamepadMapper.h src/input/GamepadMapper.cpp)
+target_include_directories(GamepadMapper PUBLIC src)
+target_link_libraries(GamepadMapper PUBLIC DepthControl Qt6::Core)
+set_target_properties(GamepadMapper PROPERTIES AUTOMOC OFF)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(GamepadMapper PRIVATE -Wall -Wextra -Werror)
+endif()
+
 add_library(RoboBeetleCore
+    src/input/XInputGamepad.h
+    src/input/XInputGamepad.cpp
     src/controller/IConsoleController.h
     src/protocol/Crc16.h
     src/protocol/Crc16.cpp
@@ -107,7 +117,7 @@ target_include_directories(RoboBeetleCore PUBLIC
     ../RoboBeetlePi/gateway/include
     ../RoboBeetlePi/protocol/include
 )
-target_link_libraries(RoboBeetleCore PUBLIC DepthControl Qt6::Core Qt6::Gui Qt6::Network Qt6::SerialPort VisualDispatchPolicy)
+target_link_libraries(RoboBeetleCore PUBLIC GamepadMapper DepthControl Qt6::Core Qt6::Gui Qt6::Network Qt6::SerialPort VisualDispatchPolicy)
 
 set(RB_CONSOLE_UI_SOURCES
     src/ui/MainWindow.h
@@ -127,6 +137,10 @@ target_link_libraries(RoboBeetleConsole PRIVATE RoboBeetleCore Qt6::Widgets)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(gamepad_mapper_tests tests/gamepad_mapper_tests.cpp)
+    set_target_properties(gamepad_mapper_tests PROPERTIES AUTOMOC OFF)
+    target_link_libraries(gamepad_mapper_tests PRIVATE GamepadMapper)
+    add_test(NAME gamepad_mapper_tests COMMAND gamepad_mapper_tests)
     add_executable(motion_state_monitor_tests tests/motion_state_monitor_tests.cpp)
     target_link_libraries(motion_state_monitor_tests PRIVATE RoboBeetleCore)
     add_test(NAME motion_state_monitor_tests COMMAND motion_state_monitor_tests)
