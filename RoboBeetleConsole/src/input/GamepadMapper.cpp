@@ -36,6 +36,11 @@ GamepadOutput GamepadMapper::update(const GamepadInput &in)
     }
     const bool justEnabled = !enabled_;
     enabled_ = true;
+    if (justEnabled) awaitingCenter_ = true;
+    if (awaitingCenter_ && std::abs(in.leftX) < .35 && std::abs(in.leftY) < .35
+        && std::abs(in.rightX) < .35 && std::abs(in.rightY) < .35) {
+        awaitingCenter_ = false;
+    }
     forward_ = forward_ ? in.leftY >= .35 : in.leftY > .5;
     if (rightAxis_ != Axis::None) {
         const double value = rightAxis_ == Axis::Horizontal ? in.rightX : in.rightY;
@@ -61,7 +66,7 @@ GamepadOutput GamepadMapper::update(const GamepadInput &in)
         if (*bSuppressed_ == wanted) return {};
         bSuppressed_.reset();
     }
-    if (justEnabled) return {}; // enabling never dispatches a stick request
+    if (justEnabled || awaitingCenter_) return {}; // B remains available before this stick gate
     const bool vertical = active_ == MotionMode::Ascend || active_ == MotionMode::Descend;
     if ((vertical && (in.depth == DepthEnvelopeState::Unavailable || in.depth == DepthEnvelopeState::NotZeroed))
         || (active_ == MotionMode::Ascend && in.depth == DepthEnvelopeState::Surface)

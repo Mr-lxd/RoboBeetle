@@ -1,5 +1,6 @@
 #pragma once
 #include <QLibrary>
+#include <QElapsedTimer>
 
 namespace rb {
 struct XInputGamepadState {
@@ -11,8 +12,11 @@ struct XInputGamepadState {
 class XInputGamepad {
 public:
     XInputGamepad();
-    XInputGamepadState poll() const;
+    XInputGamepadState poll();
 private:
+    QElapsedTimer scanClock_;
+    qint64 lastScanMs_{-2000};
+    int connectedSlot_{-1}; // XInput slots 0..3; -1 means disconnected
     QLibrary library_;
     QFunctionPointer getState_{nullptr};
 };

@@ -24,6 +24,7 @@ private:
     Axis rightAxis_{Axis::None};
     int rightDirection_{0};
     bool forward_{false}, bWasDown_{false}, enabled_{false};
+    bool awaitingCenter_{true};
     MotionMode active_{MotionMode::Stop};
     std::optional<MotionMode> offered_;
     std::int64_t offeredAt_{0};

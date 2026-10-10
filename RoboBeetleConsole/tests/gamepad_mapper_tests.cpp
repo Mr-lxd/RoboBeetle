@@ -22,6 +22,37 @@ struct Driver {
         return out;
     }
 };
+void centerBeforeDriving() {
+    GamepadMapper mapper;
+    GamepadInput in;
+    in.connected = in.authority = in.enabled = true;
+    in.depth = DepthEnvelopeState::Normal;
+    in.leftY = 1;
+    expect(!mapper.update(in).command, "enable with held stick sends nothing");
+    in.nowMs = 20;
+    expect(!mapper.update(in).command, "held stick waits for center across polls");
+    in.b = true;
+    expect(mapper.update(in).command == MotionMode::Stop, "B still stops while waiting for center");
+    in.b = false; in.leftY = 0; in.rightX = .35;
+    mapper.update(in);
+    in.leftY = 1; in.nowMs = 40;
+    expect(!mapper.update(in).command, "all axes must be strictly below center threshold");
+    in.leftY = 0; in.rightX = 0; in.leftX = .4;
+    mapper.update(in);
+    in.leftY = 1;
+    expect(!mapper.update(in).command, "unmapped left horizontal also must center");
+    in.leftX = 0; in.leftY = 0;
+    expect(!mapper.update(in).command, "center itself sends nothing");
+    in.leftY = 1; in.nowMs = 60;
+    expect(mapper.update(in).command == MotionMode::Forward, "push after center starts forward");
+    in.previousAccepted = true; in.connected = false;
+    const auto disconnected = mapper.update(in);
+    expect(disconnected.disable && disconnected.command == MotionMode::Stop, "disconnect closes driving");
+    in.previousAccepted.reset(); in.connected = true;
+    expect(!mapper.update(in).command, "re-enable with held stick sends nothing");
+    in.nowMs = 600;
+    expect(!mapper.update(in).command, "re-enable requires a new center observation");
+}
 void directions() {
     for (const auto mode : {MotionMode::Forward, MotionMode::TurnLeft, MotionMode::TurnRight,
                             MotionMode::Ascend, MotionMode::Descend}) {
@@ -119,7 +150,7 @@ void depth() {
 }
 }
 int main() {
-    directions(); hysteresisAndPriority(); spacingAndLatest(); bAndDisable(); depth();
+    centerBeforeDriving(); directions(); hysteresisAndPriority(); spacingAndLatest(); bAndDisable(); depth();
     if (!failures) std::puts("Gamepad mapper rules passed");
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }
