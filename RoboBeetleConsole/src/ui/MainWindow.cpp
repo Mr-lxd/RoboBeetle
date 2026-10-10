@@ -812,6 +812,7 @@ QWidget *MainWindow::createConnectionBar()
         auto *label = new QLabel(text, bar);
         label->setStyleSheet(QStringLiteral("color: #566B79; font-size: 11px; font-weight: 600;"));
         row->addWidget(label);
+        return label;
     };
 
     addLabel(QStringLiteral("Pi Host"));
@@ -900,23 +901,28 @@ QWidget *MainWindow::createConnectionBar()
     releaseButton_->setVisible(remote);
     row->addWidget(acquireButton_);
     row->addWidget(releaseButton_);
-    gamepadToggleButton_ = new QPushButton(QStringLiteral("Gamepad"), bar);
+    auto *gamepadTitle = addLabel(QStringLiteral("Gamepad"));
+    gamepadTitle->setVisible(remote);
+    gamepadToggleButton_ = new QPushButton(QStringLiteral("Connect"), bar);
     gamepadToggleButton_->setObjectName(QStringLiteral("gamepadToggleButton"));
     gamepadToggleButton_->setCheckable(true);
-    gamepadToggleButton_->setFixedSize(72, 32);
-    gamepadToggleButton_->setProperty("consoleActionRole", "secondary");
+    gamepadToggleButton_->setFixedSize(78, 32);
+    gamepadToggleButton_->setProperty("consoleActionRole", "primary");
+    gamepadToggleButton_->setStyleSheet(connectButton_->styleSheet());
     gamepadToggleButton_->setVisible(remote);
     row->addWidget(gamepadToggleButton_);
-    gamepadStatusLabel_ = new QLabel(QStringLiteral("未检测到手柄"), bar);
-    gamepadStatusLabel_->setObjectName(QStringLiteral("gamepadStatusLabel"));
-    gamepadStatusLabel_->setStyleSheet(QStringLiteral("font-size: 11px; color: #455A64;"));
-    gamepadStatusLabel_->setVisible(remote);
-    row->addWidget(gamepadStatusLabel_);
     connect(gamepadToggleButton_, &QPushButton::toggled, this, [this](bool enabled) {
-        if (enabled && !controller_->isControlActive()) {
+        if (enabled && (!controller_->isControlActive() || !gamepadDetected_)) {
             const QSignalBlocker blocker(gamepadToggleButton_);
             gamepadToggleButton_->setChecked(false);
+            refreshGamepadUi();
+            return;
         }
+        gamepadWaitingMode_.reset();
+        appendLog(enabled
+            ? QStringLiteral("Gamepad connected (#%1): center both sticks, then push").arg(gamepadSlot_)
+            : QStringLiteral("Gamepad disconnected: operator"));
+        refreshGamepadUi();
         pollGamepad();
     });
 
@@ -960,7 +966,7 @@ QWidget *MainWindow::createConnectionBar()
     }
     connect(connectButton_, &QPushButton::clicked, this, [this] {
         if (controller_->isConnected()) {
-            disableGamepad();
+            disableGamepad(QStringLiteral("robot link disconnected"));
             controller_->disconnectController();
             return;
         }
@@ -980,7 +986,7 @@ QWidget *MainWindow::createConnectionBar()
     connect(acquireButton_, &QPushButton::clicked,
             controller_, &IConsoleController::acquireControl);
     connect(releaseButton_, &QPushButton::clicked, this, [this] {
-        disableGamepad();
+        disableGamepad(QStringLiteral("Release"));
         controller_->releaseControl();
     });
     return bar;
@@ -4361,10 +4367,27 @@ void MainWindow::refreshGaitSelectorsUi()
     frontRearCoordinationStatus_->setText(coordinationStatus);
 }
 
-void MainWindow::disableGamepad()
+void MainWindow::refreshGamepadUi()
+{
+    if (!gamepadToggleButton_) return;
+    const bool active = controller_->backendKind() == ConsoleBackendKind::RemoteRbrp
+        && controller_->isConnected() && controller_->isControlActive();
+    gamepadToggleButton_->setText(gamepadToggleButton_->isChecked()
+        ? QStringLiteral("Disconnect") : QStringLiteral("Connect"));
+    gamepadToggleButton_->setEnabled(active && gamepadDetected_);
+    gamepadToggleButton_->setToolTip(!gamepadDetected_ ? QStringLiteral("No gamepad detected")
+        : !active ? QStringLiteral("Acquire control first") : QString{});
+}
+
+void MainWindow::disableGamepad(const QString &reason)
 {
     if (gamepadToggleButton_ && gamepadToggleButton_->isChecked()) {
-        gamepadToggleButton_->setChecked(false); // synchronous poll, before Release/disconnect
+        const QSignalBlocker blocker(gamepadToggleButton_);
+        gamepadToggleButton_->setChecked(false);
+        gamepadWaitingMode_.reset();
+        appendLog(QStringLiteral("Gamepad disconnected: %1").arg(reason));
+        refreshGamepadUi();
+        pollGamepad(); // synchronous STOP path, before Release/disconnect
     }
 }
 
@@ -4374,8 +4397,8 @@ void MainWindow::pollGamepad()
         || controller_->backendKind() != ConsoleBackendKind::RemoteRbrp) return;
     pollingGamepad_ = true;
     const auto pad = gamepadReader_.poll();
-    gamepadStatusLabel_->setText(pad.connected
-        ? QStringLiteral("手柄 #%1 已连接").arg(pad.slot) : QStringLiteral("未检测到手柄"));
+    gamepadDetected_ = pad.connected;
+    gamepadSlot_ = pad.slot;
     const auto depth = evaluateDepthEnvelope(controller_->controlDepthSample(), gamepadDepthMemory_, {});
     gamepadDepthMemory_ = depth.next;
     GamepadInput input;
@@ -4389,15 +4412,17 @@ void MainWindow::pollGamepad()
     gamepadPreviousAccepted_.reset();
     const auto output = gamepadMapper_.update(input);
     if (output.disable) {
-        const QSignalBlocker blocker(gamepadToggleButton_);
-        gamepadToggleButton_->setChecked(false);
+        disableGamepad(!pad.connected ? QStringLiteral("receiver disconnected")
+            : !input.authority ? QStringLiteral("control lost") : QStringLiteral("depth hard limit"));
     }
+    refreshGamepadUi();
     if (output.command) {
         const auto mode = *output.command;
         const bool stop = mode == MotionMode::Stop;
-        // Busy starts remain in the mapper as the latest stick request. Avoid
-        // logging and manualInput churn until the controller can submit them.
+        // Busy starts remain in the mapper as the latest stick request.
+        // Log entry to waiting once; manualInput still runs only on submission.
         if (stop || controller_->isMotionReady(mode)) {
+            gamepadWaitingMode_.reset();
             if (visualDispatch_) visualDispatch_->manualInput(stop
                 ? vision::ManualInputKind::Stop : vision::ManualInputKind::Motion);
             gamepadPreviousAccepted_ = stop ? controller_->stopMotion() : controller_->startMotion(mode);
@@ -4407,7 +4432,14 @@ void MainWindow::pollGamepad()
             refreshMotionUi();
         } else {
             gamepadPreviousAccepted_ = false;
+            if (gamepadWaitingMode_ != mode) {
+                appendLog(QStringLiteral("Gamepad: %1 waiting (motion not ready)")
+                    .arg(motionModeText(mode).toUpper().replace(' ', '_')));
+                gamepadWaitingMode_ = mode;
+            }
         }
+    } else {
+        gamepadWaitingMode_.reset();
     }
     pollingGamepad_ = false;
 }
@@ -4417,8 +4449,9 @@ void MainWindow::refreshAuthorityUi()
     if (gamepadToggleButton_) {
         const bool active = controller_->backendKind() == ConsoleBackendKind::RemoteRbrp
             && controller_->isConnected() && controller_->isControlActive();
-        gamepadToggleButton_->setEnabled(active);
-        if (!active) disableGamepad();
+        if (!active) disableGamepad(controller_->isConnected()
+            ? QStringLiteral("control lost") : QStringLiteral("robot link disconnected"));
+        refreshGamepadUi();
     }
     if (authorityStatus_ == nullptr || acquireButton_ == nullptr
         || releaseButton_ == nullptr) {
