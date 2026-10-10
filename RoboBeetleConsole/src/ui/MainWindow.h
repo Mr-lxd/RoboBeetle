@@ -149,7 +149,8 @@ private:
     void refreshGaitSelectorsUi();
     void refreshAuthorityUi();
     void pollGamepad();
-    void disableGamepad();
+    void disableGamepad(const QString &reason);
+    void refreshGamepadUi();
     void refreshVisionUi();
     void refreshCaptureUi();
     void refreshInferenceUi();
@@ -275,7 +276,9 @@ private:
     QPushButton *acquireButton_{nullptr};
     QPushButton *releaseButton_{nullptr};
     QPushButton *gamepadToggleButton_{nullptr};
-    QLabel *gamepadStatusLabel_{nullptr};
+    bool gamepadDetected_{false};
+    int gamepadSlot_{0};
+    std::optional<MotionMode> gamepadWaitingMode_;
     GamepadMapper gamepadMapper_;
     XInputGamepad gamepadReader_;
     DepthEnvelopeMemory gamepadDepthMemory_;
