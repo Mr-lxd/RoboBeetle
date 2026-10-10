@@ -645,6 +645,13 @@ int main(void)
         uart1.gState = HAL_UART_STATE_READY;
         uart_transport_stm32_on_tx_complete(&uart1);
     }
+    /* schema2 carries one sample per frame; service the third fragment. */
+    app_main_process();
+    while (uart_transport_stm32_get_state() == UART_TRANSPORT_STATE_ACTIVE)
+    {
+        uart1.gState = HAL_UART_STATE_READY;
+        uart_transport_stm32_on_tx_complete(&uart1);
+    }
     unsigned motion_samples = 0, motion_fragments = 0;
     for (size_t i = motion_first; i < tx_frame_count; ++i)
     {
@@ -654,8 +661,8 @@ int main(void)
         {
             expect(rb_motion_state_decode(frame.payload, frame.payload_length, &batch),
                    "motion fragment must decode");
-            expect(batch.fragment_count == 2U && batch.fragment_index == motion_fragments,
-                   "three gyros must form two ordered fragments");
+            expect(batch.schema == 2U && batch.sample_count == 1U && batch.fragment_count == 3U && batch.fragment_index == motion_fragments,
+                   "three gyros must form three schema2 ordered fragments");
             for (unsigned j = 0; j < batch.sample_count; ++j)
             {
                 expect(batch.samples[j].gyro_valid && batch.samples[j].angle_valid,
@@ -667,7 +674,7 @@ int main(void)
             ++motion_fragments;
         }
     }
-    expect(motion_samples == 3U && motion_fragments == 2U,
+    expect(motion_samples == 3U && motion_fragments == 3U,
            "only the three gyro events may generate motion samples");
 
     if (failures == 0)

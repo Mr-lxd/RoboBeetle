@@ -34,7 +34,7 @@ std::vector<MotionStateRecord> MotionStateMonitor::accept(const MotionStateTelem
         batchFinished_ = false;
     }
     if (b->fragment_count != fragmentCount_) return {};
-    const quint16 bit = quint16(1U << b->fragment_index);
+    const quint32 bit = quint32(1U << b->fragment_index);
     if (seenFragments_ & bit) return {};
     seenFragments_ |= bit;
     if (std::popcount(seenFragments_) == fragmentCount_) batchFinished_ = true;
@@ -52,7 +52,7 @@ std::vector<MotionStateRecord> MotionStateMonitor::accept(const MotionStateTelem
     // Keep raw minimum. It includes unknown queue/transport bias. wireMs is only
     // the selected anchor's known 115200 8N1 wire-time reference, NOT an error bound.
     anchors_.push_back({t.pi_rx_ms, qint64(t.pi_rx_ms) - unwrappedTx_,
-                       (28.0 + 22.0 * b->sample_count) / 11.52});
+                       (28.0 + (b->schema_version==2?35.0:22.0) * b->sample_count) / 11.52});
     while (anchors_.size() > 4096) anchors_.pop_front();
     const auto anchor = std::min_element(anchors_.begin(), anchors_.end(),
         [](const auto &a, const auto &c) { return a.offsetMs < c.offsetMs; });
@@ -67,6 +67,22 @@ std::vector<MotionStateRecord> MotionStateMonitor::accept(const MotionStateTelem
             t.gateway_drop_total, b->batch_seq, b->fragment_index, quint8(i),
             quint64(sampleMcu), t.pi_rx_ms, double(sampleMcu + anchor->offsetMs),
             anchor->wireMs, batchGaps_, fragmentGaps_};
+        if (s.backend!=1 || s.state!=1 || !s.phase_valid || (periodVersion_ && *periodVersion_!=s.cpg_param_version)) {
+            previousPhase_.reset(); previousPhaseMs_.reset(); lastWrapMs_.reset(); periods_.clear(); discardFirstPeriod_=true;
+        }
+        periodVersion_=s.cpg_param_version;
+        if (s.backend==1 && s.state==1 && s.phase_valid) {
+            if (previousPhase_ && s.phase_u16<*previousPhase_) {
+                const double delta=65536.0-*previousPhase_+s.phase_u16;
+                const double wrap=*previousPhaseMs_+(double(sampleMcu)-*previousPhaseMs_)*(65536.0-*previousPhase_)/delta;
+                if (lastWrapMs_) {
+                    if (discardFirstPeriod_) discardFirstPeriod_=false;
+                    else { periods_.push_back((wrap-*lastWrapMs_)/1000); if (periods_.size()>3) periods_.pop_front(); }
+                }
+                lastWrapMs_=wrap;
+            }
+            previousPhase_=s.phase_u16; previousPhaseMs_=double(sampleMcu);
+        }
         records.push_back(r);
         history_.push_back(r);
     }
@@ -80,6 +96,10 @@ std::optional<MotionStateRecord> MotionStateMonitor::atCapture(quint64 captureNs
     for (const auto &r : history_)
         if (r.samplePiMs <= captureMs && (!nearest || r.samplePiMs >= nearest->samplePiMs)) nearest = r;
     return nearest;
+}
+std::optional<double> MotionStateMonitor::measuredCpgPeriod() const {
+    if (periods_.size()<3) return {};
+    return (periods_[0]+periods_[1]+periods_[2])/3;
 }
 double MotionStateMonitor::gyroRateHz() const {
     double first = 0, last = 0;

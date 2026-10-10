@@ -608,6 +608,7 @@ void motion_manager_init_with_backends(
     manager->safety_supervisor = safety_supervisor;
     manager->registered_generators[MOTION_GAIT_BACKEND_SIMPLE_GAIT] = simple_gait;
     manager->registered_generators[MOTION_GAIT_BACKEND_CPG] = cpg;
+    manager->cpg_generator = (cpg_gait_generator_t *)cpg.context;
     manager->registered_generators[MOTION_GAIT_BACKEND_EXPERIMENTAL_FLEX] =
         experimental_flex;
     manager->gait_backend = MOTION_GAIT_BACKEND_UNSPECIFIED;
@@ -834,6 +835,7 @@ motion_manager_result_t motion_manager_start(
     manager->stop_start_targets = start_targets;
     manager->scheduler_started = 0U;
     manager->phase_tick_valid = false;
+    manager->stop_reason = MOTION_STOP_REASON_NONE;
 #if MOTION_TIMING_DIAGNOSTICS_ACTIVE
     if (start_from_stopped)
     {
@@ -875,6 +877,7 @@ motion_manager_result_t motion_manager_request_stop_at(
         return MOTION_MANAGER_RESULT_OK;
     }
 
+    manager->stop_reason = MOTION_STOP_REASON_OPERATOR;
     manager->stop_start_targets = manager->last_targets;
     manager->stop_elapsed_ms = 0U;
     // The graceful-stop clock starts when the request is accepted, not at
@@ -912,6 +915,7 @@ motion_manager_result_t motion_manager_process(
             MOTION_TIMING_TERMINATION_SAFETY_STOP);
 #endif
         motion_manager_stop_immediate(manager);
+        manager->stop_reason = MOTION_STOP_REASON_LINK_LOST;
         return MOTION_MANAGER_RESULT_HOST_NOT_ALIVE;
     }
 
@@ -1025,4 +1029,22 @@ bool motion_manager_is_active(
     const motion_manager_t *manager)
 {
     return (manager != NULL) && motion_manager_is_running_state(manager);
+}
+
+motion_manager_result_t motion_manager_set_cpg_parameters(motion_manager_t *m,const cpg_parameters_t *p) {
+    if (!m || !m->cpg_generator) return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
+    if (m->safety_supervisor && !safety_supervisor_is_host_alive(m->safety_supervisor))
+        return MOTION_MANAGER_RESULT_HOST_NOT_ALIVE;
+    if(m->state==MOTION_STATE_FAULTED) return MOTION_MANAGER_RESULT_INVALID_STATE;
+    if(m->state!=MOTION_STATE_STOPPED) return MOTION_MANAGER_RESULT_BUSY;
+    cpg_parameters_result_t result=cpg_parameters_validate(p);
+    if(result==CPG_PARAMETERS_INVALID_PAYLOAD) return MOTION_MANAGER_RESULT_INVALID_PAYLOAD;
+    if(result!=CPG_PARAMETERS_OK) return MOTION_MANAGER_RESULT_OUT_OF_RANGE;
+    cpg_parameters_t current; cpg_gait_generator_get_parameters(m->cpg_generator,&current);
+    if(!cpg_parameters_equal(&current,p)) {
+        /* Validation is complete. Main-loop-only update cannot interleave with sampling. */
+        cpg_gait_generator_apply_parameters(m->cpg_generator,p);
+        ++m->cpg_parameter_version;
+    }
+    return MOTION_MANAGER_RESULT_OK;
 }

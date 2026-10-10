@@ -113,6 +113,7 @@ bool is_known_message_kind(RbrpMessageKind kind) noexcept
     case RbrpMessageKind::DepthTelemetry:
     case RbrpMessageKind::ServiceError:
     case RbrpMessageKind::MotionStateTelemetry:
+    case RbrpMessageKind::CpgParametersTelemetry:
         return true;
     default:
         return false;
@@ -123,6 +124,8 @@ std::optional<std::size_t>
 expected_payload_size(RbrpMessageKind kind) noexcept
 {
     switch (kind) {
+    case RbrpMessageKind::CpgParametersTelemetry:
+        return 75U;
     case RbrpMessageKind::Hello:
         return 2U;
     case RbrpMessageKind::AcquireControl:
@@ -157,10 +160,10 @@ expected_payload_size(RbrpMessageKind kind) noexcept
 bool payload_size_is_valid(RbrpMessageKind kind, std::size_t size) noexcept
 {
     if (kind == RbrpMessageKind::MotionStateTelemetry) {
-        return size == 32U || size == 54U || size == 76U;
+        return size == 32U || size == 54U || size == 76U || size == 67U;
     }
     if (kind == RbrpMessageKind::CommandRequest) {
-        return size >= 1U && size <= 4U;
+        return (size >= 1U && size <= 4U) || size == 59U;
     }
     const auto expected = expected_payload_size(kind);
     return expected.has_value() && *expected == size;
@@ -220,6 +223,14 @@ RbrpMessageDecodeResult decode_remote_message(const RbrpFrame &frame)
         CommandRequest request;
         request.command_kind = frame.payload[0];
         switch (static_cast<RobotCommandKind>(request.command_kind)) {
+        case RobotCommandKind::SetCpgParameters: {
+            const auto p=protocol::decode_cpg_parameters(Bytes(frame.payload.begin()+1,frame.payload.end()));
+            if (p) request.command=SetCpgParameters{*p};
+            break;
+        }
+        case RobotCommandKind::QueryCpgParameters:
+            if (frame.payload.size()==1) request.command=QueryCpgParameters{};
+            break;
         case RobotCommandKind::EnableServos:
             if (frame.payload.size() == 3U) {
                 request.command = EnableServos{read_le16(frame.payload.data() + 1U)};
@@ -375,6 +386,12 @@ RbrpEncodeResult encode_gateway_message(const GatewayMessage &message)
                 put_le32(encoded, 28U, payload.diagnostics.rx_buffer_overflow_count);
                 put_le32(encoded, 32U, payload.diagnostics.hard_rearm_failure_count);
                 put_le32(encoded, 36U, payload.diagnostics.uart_error_count);
+            } else if constexpr (std::is_same_v<T, GatewayCpgParametersTelemetry>) {
+                kind=RbrpMessageKind::CpgParametersTelemetry;
+                if (!protocol::decode_cpg_snapshot(payload.snapshot_payload)) return encode_invalid(RbrpEncodeStatus::InvalidPayloadLength);
+                encoded.resize(12); put_le32(encoded,0,payload.link_epoch);
+                for (unsigned i=0;i<8;++i) encoded[4+i]=Byte(payload.pi_rx_ms>>(8*i));
+                encoded.insert(encoded.end(),payload.snapshot_payload.begin(),payload.snapshot_payload.end());
             } else if constexpr (std::is_same_v<T, GatewayMotionStateTelemetry>) {
                 kind = RbrpMessageKind::MotionStateTelemetry;
                 const auto payload_bytes = encode_motion_state_telemetry(payload);

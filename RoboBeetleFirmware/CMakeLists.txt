@@ -74,6 +74,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Communication/imu_telemetry_policy.c
     Core/Communication/telemetry_scheduler.c
     Core/Communication/protocol_dispatcher.c
+    Core/Motion/cpg_parameters.c
     Core/Motion/cpg_core.c
     Core/Motion/cpg_gait_generator.c
     Core/Motion/experimental_flex_gait_generator.c

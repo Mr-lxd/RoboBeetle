@@ -1,5 +1,6 @@
 #pragma once
 
+#include "robobeetle/protocol/cpg_parameters.hpp"
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -31,6 +32,7 @@ enum class RbrpMessageKind : Byte {
     DepthTelemetry = 0x88,
     ServiceError = 0x89,
     MotionStateTelemetry = 0x8A,
+    CpgParametersTelemetry = 0x8B,
 };
 
 enum class RobotCommandKind : Byte {
@@ -43,6 +45,8 @@ enum class RobotCommandKind : Byte {
     SetGaitBackend = 0x07,
     SetServoPwm = 0x08,
     SetFrontRearCoordination = 0x09,
+    SetCpgParameters = 0x0A,
+    QueryCpgParameters = 0x0B,
 };
 
 enum class MotionMode : Byte {
@@ -101,10 +105,13 @@ struct SetFrontRearCoordination {
     FrontRearCoordination coordination{FrontRearCoordination::SameDirection};
 };
 
+struct SetCpgParameters { protocol::CpgParameters parameters; };
+struct QueryCpgParameters {};
+
 using RobotCommand = std::variant<EnableServos, DisableServos, SetServoAngle,
                                   SetServoPwm, NeutralServos, StartMotion,
                                   StopMotion, SetGaitBackend,
-                                  SetFrontRearCoordination>;
+                                  SetFrontRearCoordination, SetCpgParameters, QueryCpgParameters>;
 
 enum class GatewayApplicationSubmitStatus {
     Submitted,
@@ -235,9 +242,15 @@ struct GatewayMotionStateTelemetry {
     Bytes batch_payload;
 };
 
+struct GatewayCpgParametersTelemetry {
+    std::uint32_t link_epoch{};
+    std::uint64_t pi_rx_ms{};
+    Bytes snapshot_payload;
+};
+
 using GatewayTelemetryEvent =
     std::variant<GatewayLeakTelemetry, GatewayImuTelemetry,
-                 GatewayDepthTelemetry, GatewayMotionStateTelemetry>;
+                 GatewayDepthTelemetry, GatewayMotionStateTelemetry, GatewayCpgParametersTelemetry>;
 
 struct GatewayStateLinkEvent {
     GatewayApplicationSessionState session_state{
@@ -398,7 +411,7 @@ using GatewayMessagePayload =
                  CommandSubmittedMessage, GatewayCommandOutcomeMessage,
                  GatewayLeakTelemetry, GatewayImuTelemetry,
                  GatewayDepthTelemetry, ServiceErrorMessage,
-                 GatewayMotionStateTelemetry>;
+                 GatewayMotionStateTelemetry, GatewayCpgParametersTelemetry>;
 
 struct GatewayMessage {
     RequestId request_id{0};

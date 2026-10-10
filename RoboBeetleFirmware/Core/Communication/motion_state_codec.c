@@ -22,14 +22,16 @@ static int16_t geti16(const uint8_t *p) {
 
 size_t rb_motion_state_encode(const rb_motion_state_batch_t *b, uint8_t *p, size_t capacity) {
     size_t length, i, axis;
-    if (!b || !p || b->sample_count > 2 || b->fragment_count == 0 || b->fragment_count > 16 ||
+    const uint8_t schema=b && b->schema ? b->schema : 1;
+    const size_t sample_size=schema==2 ? 35U : 22U;
+    if (!b || !p || (schema!=1 && schema!=2) || b->sample_count > (schema==2?1:2) || b->fragment_count == 0 || b->fragment_count > (schema==2?32:16) ||
         b->fragment_index >= b->fragment_count)
         return 0;
-    length = 16U + 22U * b->sample_count;
+    length = 16U + sample_size * b->sample_count;
     if (capacity < length)
         return 0;
     memset(p, 0, length);
-    p[0] = 1;
+    p[0] = schema;
     p[1] = b->sample_count;
     put16(p + 2, b->batch_seq);
     p[4] = b->fragment_index;
@@ -38,7 +40,7 @@ size_t rb_motion_state_encode(const rb_motion_state_batch_t *b, uint8_t *p, size
     put32(p + 12, b->sampler_drop_total);
     for (i = 0; i < b->sample_count; ++i) {
         const rb_motion_state_sample_t *s = &b->samples[i];
-        uint8_t *q = p + 16 + 22 * i;
+        uint8_t *q = p + 16 + sample_size * i;
         put32(q, s->mcu_ms);
         for (axis = 0; axis < 3; ++axis)
             put16(q + 4 + axis * 2, (uint16_t)s->gyro_tenth_dps[axis]);
@@ -51,16 +53,25 @@ size_t rb_motion_state_encode(const rb_motion_state_batch_t *b, uint8_t *p, size
                           (s->phase_valid << 5) | (s->gyro_valid << 6) | (s->angle_valid << 7));
         put16(q + 18, s->angle_age_ms);
         put16(q + 20, s->phase_age_ms);
+        if(schema==2) {
+            q[22]=s->control_mode; q[23]=s->stop_reason;
+            put16(q+24,s->parameter_version); q[26]=s->throttle; q[27]=(uint8_t)s->turn; q[28]=(uint8_t)s->pitch;
+            put16(q+29,s->fr_phase_u16); put16(q+31,s->rr_phase_u16); put16(q+33,s->rl_phase_u16);
+        }
     }
     return length;
 }
 
 bool rb_motion_state_decode(const uint8_t *p, size_t length, rb_motion_state_batch_t *b) {
     size_t i, axis;
-    if (!p || !b || length < 16 || p[0] != 1 || p[1] > 2 || length != 16U + 22U * p[1] ||
-        get16(p + 6) != 0 || p[5] == 0 || p[5] > 16 || p[4] >= p[5])
+    if (!p || !b || length < 16 || (p[0] != 1 && p[0] != 2)) return false;
+    const uint8_t schema=p[0];
+    const size_t sample_size=schema==2?35U:22U;
+    if (p[1] > (schema==2?1:2) || length != 16U + sample_size * p[1] ||
+        get16(p + 6) != 0 || p[5] == 0 || p[5] > (schema==2?32:16) || p[4] >= p[5])
         return false;
     memset(b, 0, sizeof *b);
+    b->schema=schema;
     b->sample_count = p[1];
     b->batch_seq = get16(p + 2);
     b->fragment_index = p[4];
@@ -69,7 +80,7 @@ bool rb_motion_state_decode(const uint8_t *p, size_t length, rb_motion_state_bat
     b->sampler_drop_total = get32(p + 12);
     for (i = 0; i < b->sample_count; ++i) {
         rb_motion_state_sample_t *s = &b->samples[i];
-        const uint8_t *q = p + 16 + 22 * i;
+        const uint8_t *q = p + 16 + sample_size * i;
         if (q[16] & 0x80U)
             return false;
         s->mcu_ms = get32(q);
@@ -89,6 +100,11 @@ bool rb_motion_state_decode(const uint8_t *p, size_t length, rb_motion_state_bat
         s->angle_valid = (q[17] & 0x80U) != 0;
         s->angle_age_ms = get16(q + 18);
         s->phase_age_ms = get16(q + 20);
+        if(schema==2) {
+            s->control_mode=q[22]; s->stop_reason=q[23]; s->parameter_version=get16(q+24);
+            s->throttle=q[26]; s->turn=(int8_t)q[27]; s->pitch=(int8_t)q[28];
+            s->fr_phase_u16=get16(q+29); s->rr_phase_u16=get16(q+31); s->rl_phase_u16=get16(q+33);
+        }
     }
     return true;
 }

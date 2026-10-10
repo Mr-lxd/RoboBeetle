@@ -2,6 +2,7 @@
 #define ROBOBEETLE_MOTION_MANAGER_H
 
 #include "gait_generator.h"
+#include "cpg_gait_generator.h"
 #include "joint_targets.h"
 #include "motion_types.h"
 
@@ -20,6 +21,9 @@ typedef enum
     MOTION_MANAGER_RESULT_BUSY,
     MOTION_MANAGER_RESULT_HARDWARE_FAILURE,
     MOTION_MANAGER_RESULT_INVALID_BACKEND,
+    MOTION_MANAGER_RESULT_INVALID_STATE,
+    MOTION_MANAGER_RESULT_OUT_OF_RANGE,
+    MOTION_MANAGER_RESULT_INVALID_PAYLOAD,
     MOTION_MANAGER_RESULT_INVALID_COORDINATION
 } motion_manager_result_t;
 
@@ -32,6 +36,9 @@ typedef enum
 
 typedef struct
 {
+    cpg_gait_generator_t *cpg_generator;
+    uint16_t cpg_parameter_version;
+    uint8_t stop_reason;
     servo_service_t *servo_service;
     safety_supervisor_t *safety_supervisor;
     gait_generator_t generator;
@@ -70,6 +77,8 @@ void motion_manager_init_with_backends(
     gait_generator_t cpg,
     gait_generator_t experimental_flex,
     motion_gait_backend_t initial_backend);
+
+motion_manager_result_t motion_manager_set_cpg_parameters(motion_manager_t *manager, const cpg_parameters_t *parameters);
 
 motion_manager_result_t motion_manager_set_gait_backend(
     motion_manager_t *manager,

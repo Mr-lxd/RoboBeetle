@@ -1,6 +1,7 @@
 #pragma once
 
 #include "robot/DepthControl.h"
+#include "robobeetle/protocol/cpg_parameters.hpp"
 #include "robot/DepthMonitor.h"
 #include "robot/ImuMonitor.h"
 #include "robot/LeakStatus.h"
@@ -76,6 +77,14 @@ public:
         return false;
     }
     [[nodiscard]] virtual std::optional<qint64> depthZeroedAtMs() const { return std::nullopt; }
+    using CpgParameters = robobeetle::protocol::CpgParameters;
+    virtual bool setCpgParameters(const CpgParameters &) { return false; }
+    virtual std::optional<CpgParameters> cpgParameters() const { return {}; }
+    virtual bool hasCpgSchema2() const { return false; }
+    virtual quint8 cpgFeatureLevel() const { return 0; }
+    virtual bool isCpgParametersPending() const { return false; }
+    virtual QString cpgParametersError() const { return {}; }
+    virtual std::optional<double> measuredCpgPeriod() const { return {}; }
     virtual bool setGaitBackend(GaitBackend backend) = 0;
     virtual bool setFrontRearCoordination(FrontRearCoordination coordination) = 0;
 
@@ -117,6 +126,7 @@ signals:
     void depthStateChanged();
     void controlDepthSampleChanged(); // 每收到一个深度样本、归零或清除时发出
     void motionStateChanged(rb::MotionState state, rb::MotionMode mode);
+    void cpgParametersChanged();
     void gaitBackendStateChanged();
     void frontRearCoordinationStateChanged();
     void protocolMonitorChanged(const rb::ProtocolMonitor &monitor);

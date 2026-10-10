@@ -120,6 +120,8 @@ target_include_directories(RoboBeetleCore PUBLIC
 target_link_libraries(RoboBeetleCore PUBLIC GamepadMapper DepthControl Qt6::Core Qt6::Gui Qt6::Network Qt6::SerialPort VisualDispatchPolicy)
 
 set(RB_CONSOLE_UI_SOURCES
+    src/ui/CpgParametersPanel.h
+    src/ui/CpgParametersPanel.cpp
     src/ui/MainWindow.h
     src/ui/MainWindow.cpp
     src/vision/VideoView.h
