@@ -950,7 +950,10 @@ QWidget *MainWindow::createConnectionBar()
         std::clamp(settings.value("Gamepad/Proportional/v1/deadzone", .15).toDouble(), .05, .35);
     proportionalMapper_.gamma = std::clamp(settings.value("Gamepad/Proportional/v1/gamma", 1.5).toDouble(), 1., 3.);
     connect(controller_, &IConsoleController::proportionalStopped, this,
-            [this] { proportionalMapper_.requireCenter(); });
+            [this] {
+                proportionalMapper_.requireCenter();
+                gamepadOwnsProportional_ = false;
+            });
     connect(gamepadMode, qOverload<int>(&QComboBox::currentIndexChanged), this,
             [this]
             {
@@ -962,7 +965,40 @@ QWidget *MainWindow::createConnectionBar()
             {
                 QDialog dialog(this);
                 dialog.setWindowTitle(QStringLiteral("Proportional Tuning"));
-                auto *form = new QFormLayout(&dialog);
+                auto *layout = new QVBoxLayout(&dialog);
+                auto *tabs = new QTabWidget(&dialog);
+                tabs->setObjectName(QStringLiteral("proportionalTuningTabs"));
+                auto *gamepadPage = new QWidget(tabs);
+                auto *form = new QFormLayout(gamepadPage);
+                tabs->addTab(gamepadPage, QStringLiteral("Gamepad proportional"));
+                const bool gamepadTunable = gamepadMode_->currentIndex() == 1
+                    && controller_->motionState() == MotionState::Stopped && !controller_->isMotionActive()
+                    && !controller_->proportionalActive() && !controller_->proportionalPending();
+                gamepadPage->setEnabled(gamepadTunable);
+                auto *visualPage = new QWidget(tabs);
+                auto *visualForm = new QFormLayout(visualPage);
+                tabs->addTab(visualPage, QStringLiteral("Visual approach"));
+                const bool visualTunable = visualDispatch_
+                    && visualDispatch_->executionMode() == vision::VisualExecutionMode::Proportional
+                    && !visualDispatch_->armed() && !visualDispatch_->stopAwaiting();
+                visualPage->setEnabled(visualTunable);
+                if (visualTunable) tabs->setCurrentWidget(visualPage);
+                const auto a = visualDispatch_->approachConfig();
+                const auto q = visualDispatch_->proportionalConfig();
+                const QString visualLabels[]{"Area EMA alpha [Provisional]", "Slow area (cells)", "Resume area (cells)", "Stop area (cells)", "Arrive dwell (ms)", "Resume dwell (ms)", "Maximum throttle", "Minimum throttle", "Minimum turning throttle", "Turn factor", "Pitch factor", "Maximum scale", "Turn gain", "Pitch limit (deg)", "Slew (/s)"};
+                const double visualValues[]{a.alphaArea,a.slowArea,a.resumeArea,a.stopArea,double(a.arriveDwellMs),double(a.resumeDwellMs),a.tMax,a.tMin,a.tTurnMin,a.kTurn,a.kPitch,q.max_scale/1000.,q.turn_gain/1000.,q.pitch_limit_cdeg/100.,q.slew_per_second/1000.};
+                const double visualLo[]{.01,.01,.01,.01,0,0,.01,.01,.01,.01,.01,.1,0,0,.1};
+                const double visualHi[]{1,576,576,576,60000,60000,1,1,1,1,1,1,2,20,10};
+                QDoubleSpinBox *visualFields[15];
+                for (int i=0;i<15;++i) {
+                    visualFields[i]=new QDoubleSpinBox(visualPage);
+                    visualFields[i]->setObjectName(QStringLiteral("visualApproachParameter%1").arg(i));
+                    visualFields[i]->setDecimals(i==4 || i==5 ? 0 : 2);
+                    visualFields[i]->setRange(visualLo[i],visualHi[i]);
+                    visualFields[i]->setValue(visualValues[i]);
+                    visualForm->addRow(visualLabels[i],visualFields[i]);
+                }
+                layout->addWidget(tabs);
                 const QString labels[]{"Maximum scale", "Turn gain", "Pitch limit (deg)",
                                        "Slew (/s)",     "Deadzone",  "Gamma"};
                 const double lo[]{.1, 0, 0, .1, .05, 1}, hi[]{1, 2, 20, 10, .35, 3};
@@ -989,14 +1025,41 @@ QWidget *MainWindow::createConnectionBar()
                         &dialog, [&]
                         {
                             const double defaults[]{1, 1, 10, 2, .15, 1.5};
-                            for (int i = 0; i < 6; ++i)
-                                fields[i]->setValue(defaults[i]);
+                            if (tabs->currentWidget() == gamepadPage) {
+                                for (int i = 0; i < 6; ++i) fields[i]->setValue(defaults[i]);
+                            } else {
+                                const double defaultsVisual[]{.3,8,14,20,1000,1000,.6,.15,.3,1,.5,1,1,10,2};
+                                for (int i=0;i<15;++i) visualFields[i]->setValue(defaultsVisual[i]);
+                            }
                         });
-                form->addRow(buttons);
-                connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+                layout->addWidget(buttons);
+                connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+                    if (visualTunable) {
+                        auto next = a;
+                        next.alphaArea=visualFields[0]->value(); next.slowArea=visualFields[1]->value();
+                        next.resumeArea=visualFields[2]->value(); next.stopArea=visualFields[3]->value();
+                        next.arriveDwellMs=qint64(visualFields[4]->value()); next.resumeDwellMs=qint64(visualFields[5]->value());
+                        next.tMax=visualFields[6]->value(); next.tMin=visualFields[7]->value();
+                        next.tTurnMin=visualFields[8]->value(); next.kTurn=visualFields[9]->value(); next.kPitch=visualFields[10]->value();
+                        if (!visualDispatch_->setApproachConfig(next)) {
+                            QMessageBox::warning(&dialog, QStringLiteral("Invalid visual approach"),
+                                QStringLiteral("Require 0 < slow < resume < stop, minimum throttle <= turning minimum <= maximum throttle."));
+                            return;
+                        }
+                        IConsoleController::ProportionalConfig nextQ{
+                            quint16(std::lround(visualFields[11]->value()*1000)),quint16(std::lround(visualFields[12]->value()*1000)),
+                            quint16(std::lround(visualFields[13]->value()*100)),quint16(std::lround(visualFields[14]->value()*1000))};
+                        visualDispatch_->setProportionalConfig(nextQ);
+                        QSettings cfg;
+                        const QString names[]{"alphaArea","slowArea","resumeArea","stopArea","arriveDwellMs","resumeDwellMs","tMax","tMin","tTurnMin","kTurn","kPitch","maxScale","turnGain","pitchLimit","slew"};
+                        for (int i=0;i<15;++i) cfg.setValue(QStringLiteral("Visual/Approach/v1/")+names[i],visualFields[i]->value());
+                    }
+                    dialog.accept();
+                });
                 connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
                 if (dialog.exec() != QDialog::Accepted)
                     return;
+                if (!gamepadTunable) return;
                 proportionalConfig_ = {
                     static_cast<quint16>(std::lround(fields[0]->value() * 1000)),
                     static_cast<quint16>(std::lround(fields[1]->value() * 1000)),
@@ -1026,6 +1089,11 @@ QWidget *MainWindow::createConnectionBar()
                     gamepadToggleButton_->setChecked(false);
                     refreshGamepadUi();
                     return;
+                }
+                if (enabled && gamepadMode_->currentIndex() == 1 && visualDispatch_
+                    && visualDispatch_->ownsProportionalChannel()) {
+                    visualDispatch_->manualInput(vision::ManualInputKind::Motion);
+                    gamepadVisualTakeoverWaiting_ = true;
                 }
                 gamepadWaitingMode_.reset();
                 proportionalMapper_.requireCenter();
@@ -1430,6 +1498,40 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     auto *axisLayout = new QHBoxLayout(autoFollowAxisSelector_);
     axisLayout->setContentsMargins(0, 0, 0, 0);
     axisLayout->setSpacing(0);
+    auto *execLabel = new QLabel(QStringLiteral("Exec"), autoFollowAxisSelector_);
+    visualExecutionMode_ = new QComboBox(autoFollowAxisSelector_);
+    visualExecutionMode_->setObjectName(QStringLiteral("visualExecutionMode"));
+    visualExecutionMode_->addItems({QStringLiteral("Discrete"), QStringLiteral("Proportional")});
+    visualExecutionMode_->setFixedHeight(28);
+    visualExecutionMode_->setFixedWidth(98);
+    visualExecutionMode_->setStyleSheet(QStringLiteral("font-size: 10px; padding: 0px 2px;"));
+    execLabel->setStyleSheet(QStringLiteral("font-size: 10px;"));
+    visualDryRun_ = new QCheckBox(QStringLiteral("Dry run"), autoFollowAxisSelector_);
+    visualDryRun_->setObjectName(QStringLiteral("visualDryRun"));
+    visualDryRun_->setEnabled(false);
+    visualDryRun_->setStyleSheet(QStringLiteral("font-size: 10px; spacing: 2px;"));
+    visualDryRun_->setToolTip(QStringLiteral("Simulate visual approach without robot control writes"));
+    axisLayout->addWidget(execLabel);
+    axisLayout->addWidget(visualExecutionMode_);
+    axisLayout->addSpacing(4);
+    axisLayout->addWidget(visualDryRun_);
+    axisLayout->addSpacing(4);
+    connect(visualExecutionMode_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (!visualDispatch_) return;
+        if (index == 0 && visualDispatch_->executionMode() == vision::VisualExecutionMode::Proportional
+            && !visualDispatch_->armed() && !visualDispatch_->stopAwaiting())
+            visualDispatch_->setDryRun(false);
+        visualDispatch_->setExecutionMode(static_cast<vision::VisualExecutionMode>(index));
+        if (visualDispatch_->executionMode() == vision::VisualExecutionMode::Discrete) {
+            visualDispatch_->setDryRun(false); visualDryRun_->setChecked(false);
+        }
+        refreshAutoFollowUi();
+        refreshGamepadUi();
+    });
+    connect(visualDryRun_, &QCheckBox::toggled, this, [this](bool checked) {
+        if (visualDispatch_) visualDispatch_->setDryRun(checked);
+        refreshAutoFollowUi();
+    });
     axisGroup_ = new QButtonGroup(this);
     axisGroup_->setExclusive(true);
     const QStringList axisNames{QStringLiteral("Yaw"), QStringLiteral("Pitch"), QStringLiteral("Both")};
@@ -1439,9 +1541,10 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
         axisButton->setCheckable(true);
         axisButton->setChecked(i == 0);
         axisButton->setMinimumHeight(24);
+        axisButton->setFixedWidth(i == 0 ? 31 : 34);
         axisButton->setProperty("consoleActionRole", "secondary");
         axisButton->setStyleSheet(QStringLiteral(
-            "QPushButton { min-height: 24px; padding: 2px 6px; border-radius: 0px; }"
+            "QPushButton { min-height: 24px; padding: 2px 1px; border-radius: 0px; font-size: 10px; }"
             "QPushButton:checked { background: #344B5B; color: #FFFFFF; font-weight: 700; "
             "  border-color: #344B5B; }"));
         axisGroup_->addButton(axisButton, i);
@@ -1497,7 +1600,12 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     connect(visualArmButton_, &QPushButton::clicked, this, [this] {
         if (!visualDispatch_) return;
         if (visualDispatch_->armed()) visualDispatch_->disarm();
-        else visualDispatch_->arm();
+        else {
+            visualDispatch_->setChannelBusy(
+                (gamepadMode_->currentIndex() == 1 && gamepadToggleButton_->isChecked())
+                || gamepadOwnsProportional_);
+            visualDispatch_->arm();
+        }
     });
 
     // Order inside Auto Follow. The state pill and the dispatch switch share the
@@ -2222,8 +2330,10 @@ QWidget *MainWindow::createMotionPanel()
         "QPushButton:pressed { background: #AAB7C0; }"));
     motionStopButton_->setToolTip(QStringLiteral("Stop the active motion."));
     connect(motionStopButton_, &QPushButton::clicked, this, [this] {
+        const bool visualStops = visualDispatch_ && visualDispatch_->ownsProportionalChannel()
+            && !visualDispatch_->dryRun();
         if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Stop);
-        controller_->stopMotion();
+        if (!visualStops) controller_->stopMotion();
         refreshMotionUi();
     });
     dpad->addWidget(motionStopButton_, 1, 1);
@@ -2928,7 +3038,7 @@ void MainWindow::refreshAutoFollowUi()
     if (!visualDispatch_) return;
     const bool remote =
         controller_->backendKind() == ConsoleBackendKind::RemoteRbrp;
-    const bool enabled = visualDispatch_->featureEnabled() && remote;
+    const bool enabled = visualDispatch_->featureEnabled() && (remote || visualDispatch_->dryRun());
     const bool armed = visualDispatch_->armed();
     const auto readiness = visualDispatch_->readiness();
     autoFollowMissing_ = readiness.missingCount();
@@ -2979,7 +3089,33 @@ void MainWindow::refreshAutoFollowUi()
                 : state == QStringLiteral("NOT READY")
                     ? QStringLiteral("background: #FBE3B8; color: #7A4A06;")
                     : QStringLiteral("background: #E3E9EF; color: #4A5C6B;");
-    autoFollowStatePill_->setText(state);
+    const auto approach = visualDispatch_->approachInfo();
+    const bool visualProportional = visualDispatch_->executionMode() == vision::VisualExecutionMode::Proportional;
+    QString shownState = state;
+    if (approach.proportional && armed && !stopping) {
+        shownState = approach.state == QStringLiteral("ARRIVED") ? QStringLiteral("Arrived")
+            : QStringLiteral("Approach %1").arg(approach.area.value_or(0) / visualDispatch_->approachConfig().stopArea, 0, 'f', 2);
+    }
+    // The checked Dry run control stays visible in the execution row; keeping
+    // it out of the state pill leaves room for the dispatch switch.
+    autoFollowStatePill_->setText(shownState);
+    autoFollowStatePill_->setToolTip(approach.proportional
+        ? QStringLiteral("Area %1 cells / stop %2 cells; ratio is an area proxy").arg(approach.area ? QString::number(*approach.area, 'f', 2) : QStringLiteral("--")).arg(visualDispatch_->approachConfig().stopArea)
+        : QString());
+    if (approach.proportional && approach.setpoint) {
+        autoFollowStatePill_->setToolTip(autoFollowStatePill_->toolTip()
+            + QStringLiteral("; target throttle %1, turn %2, pitch %3")
+                .arg(approach.setpoint->throttle / 1000., 0, 'f', 2)
+                .arg(approach.setpoint->turn / 1000., 0, 'f', 2)
+                .arg(approach.setpoint->pitch / 1000., 0, 'f', 2));
+    }
+    if (visualExecutionMode_) {
+        const QSignalBlocker blockExec(visualExecutionMode_), blockDry(visualDryRun_);
+        visualExecutionMode_->setCurrentIndex(static_cast<int>(visualDispatch_->executionMode()));
+        visualDryRun_->setChecked(visualDispatch_->dryRun());
+        visualExecutionMode_->setEnabled(!armed && !stopping);
+        visualDryRun_->setEnabled(!armed && !stopping && visualProportional);
+    }
     autoFollowStatePill_->setStyleSheet(pillStyle + QStringLiteral(
         "border-radius: 4px; padding: 3px 8px; font-size: 12px; font-weight: 800;"
         " letter-spacing: 1px;"));
@@ -3083,6 +3219,7 @@ void MainWindow::refreshAutoFollowUi()
     if (!visualDispatch_->poseMismatch().isEmpty()) status += '\n' + visualDispatch_->poseMismatch();
     visualDispatchStatus_->setText(status);
     visualDispatchStatus_->setVisible(false);
+    refreshGamepadUi();
 
     applyAutoFollowCondensation();
 }
@@ -3209,7 +3346,7 @@ void MainWindow::bindVisionUi()
     connect(visualCsvEnabled_, &QCheckBox::toggled, this, [this](bool enabled) {
         if (enabled) {
             if (visualCsvLogger_->start(visualCsvDirectory_->text())) {
-                visualCsvLogger_->record(visualSession_->snapshot());
+                visualCsvLogger_->record(visualSession_->snapshot(), visualDispatch_->approachInfo());
             }
         } else {
             visualCsvLogger_->stop();
@@ -3223,8 +3360,37 @@ void MainWindow::bindVisionUi()
     });
     visualSession_ = new vision::VisualDiagnosticSession({}, {}, this);
     visualDispatch_ = new vision::VisualDispatchSession(controller_, visualSession_, {}, this);
+    {
+        QSettings settings;
+        const QString prefix = QStringLiteral("Visual/Approach/v1/");
+        auto a = visualDispatch_->approachConfig();
+        a.alphaArea=settings.value(prefix+"alphaArea",a.alphaArea).toDouble();
+        a.slowArea=settings.value(prefix+"slowArea",a.slowArea).toDouble();
+        a.resumeArea=settings.value(prefix+"resumeArea",a.resumeArea).toDouble();
+        a.stopArea=settings.value(prefix+"stopArea",a.stopArea).toDouble();
+        a.arriveDwellMs=settings.value(prefix+"arriveDwellMs",a.arriveDwellMs).toLongLong();
+        a.resumeDwellMs=settings.value(prefix+"resumeDwellMs",a.resumeDwellMs).toLongLong();
+        a.tMax=settings.value(prefix+"tMax",a.tMax).toDouble();
+        a.tMin=settings.value(prefix+"tMin",a.tMin).toDouble();
+        a.tTurnMin=settings.value(prefix+"tTurnMin",a.tTurnMin).toDouble();
+        a.kTurn=settings.value(prefix+"kTurn",a.kTurn).toDouble();
+        a.kPitch=settings.value(prefix+"kPitch",a.kPitch).toDouble();
+        visualDispatch_->setApproachConfig(a);
+        IConsoleController::ProportionalConfig q{
+            quint16(std::lround(settings.value(prefix+"maxScale",1.).toDouble()*1000)),
+            quint16(std::lround(settings.value(prefix+"turnGain",1.).toDouble()*1000)),
+            quint16(std::lround(settings.value(prefix+"pitchLimit",10.).toDouble()*100)),
+            quint16(std::lround(settings.value(prefix+"slew",2.).toDouble()*1000))};
+        if (robobeetle::protocol::valid_proportional_config(q)) visualDispatch_->setProportionalConfig(q);
+    }
+
     connect(visualDispatch_, &vision::VisualDispatchSession::dispatchRecorded,
             visualCsvLogger_, &vision::VisualCsvLogger::recordDispatch);
+    connect(visualDispatch_, &vision::VisualDispatchSession::approachEvent,
+            visualCsvLogger_, &vision::VisualCsvLogger::recordApproachEvent);
+    connect(visualCsvLogger_, &vision::VisualCsvLogger::recordingChanged, this, [this] {
+        if (visualCsvLogger_->isRecording()) visualDispatch_->recordApproachConfiguration();
+    });
     connect(visualDispatch_, &vision::VisualDispatchSession::dispatchRecorded, this,
             [this](const vision::VisualDispatchRecord &record) {
         if (record.policyId == 0 && record.command == vision::ProposedCommand::Stop)
@@ -3259,7 +3425,7 @@ void MainWindow::bindVisionUi()
     refreshVisualDispatchUi();
     connect(visualSession_, &vision::VisualDiagnosticSession::diagnosticChanged, this,
             [this](const vision::VisualDiagnosticSnapshot &snapshot) {
-        visualCsvLogger_->record(snapshot);
+        visualCsvLogger_->record(snapshot, visualDispatch_->approachInfo());
         refreshAutoFollowUi();
         if (videoView_ == nullptr) { return; }
         const auto gate = visualDisplayContext().gate;
@@ -4507,7 +4673,10 @@ void MainWindow::refreshGamepadUi()
     const bool tunable = controller_->motionState() == MotionState::Stopped &&
                          !controller_->isMotionActive() && !controller_->proportionalActive() &&
                          !controller_->proportionalPending();
-    gamepadConfigButton_->setEnabled(tunable && gamepadMode_->currentIndex() == 1);
+    const bool visualTunable = visualDispatch_
+        && visualDispatch_->executionMode() == vision::VisualExecutionMode::Proportional
+        && !visualDispatch_->armed() && !visualDispatch_->stopAwaiting();
+    gamepadConfigButton_->setEnabled((tunable && gamepadMode_->currentIndex() == 1) || visualTunable);
     gamepadConfigButton_->setToolTip(
         gamepadMode_->currentIndex() != 1
             ? QStringLiteral("Select Proportional mode to tune it")
@@ -4565,9 +4734,34 @@ void MainWindow::pollGamepad()
         if (controller_->isMotionActive() && !controller_->proportionalActive() &&
             !controller_->proportionalPending())
             proportionalMapper_.requireCenter();
-        auto output = proportionalMapper_.update(input, controller_->proportionalActive(),
-                                                 controller_->proportionalPending());
-        if (controller_->proportionalActive() && forbidden)
+        if (visualDispatch_) {
+            visualDispatch_->setChannelBusy(input.enabled || gamepadOwnsProportional_);
+            const bool manualStick = std::abs(input.leftX) > proportionalMapper_.deadzone
+                || std::abs(input.leftY) > proportionalMapper_.deadzone
+                || std::abs(input.rightX) > proportionalMapper_.deadzone
+                || std::abs(input.rightY) > proportionalMapper_.deadzone;
+            if (input.enabled && manualStick && visualDispatch_->ownsProportionalChannel()) {
+                visualDispatch_->manualInput(vision::ManualInputKind::Motion);
+                gamepadVisualTakeoverWaiting_ = true;
+                proportionalMapper_.requireCenter();
+            }
+        }
+        if (visualDispatch_ && visualDispatch_->ownsProportionalChannel() && !input.enabled && !input.b) {
+            pollingGamepad_ = false;
+            return;
+        }
+        if (gamepadVisualTakeoverWaiting_) {
+            proportionalMapper_.requireCenter();
+            if (controller_->motionState() == MotionState::Stopped
+                && !controller_->proportionalActive() && !controller_->proportionalPending()
+                && (!visualDispatch_ || !visualDispatch_->stopAwaiting()))
+                gamepadVisualTakeoverWaiting_ = false;
+            else input.enabled = false;
+        }
+        const bool ownsActive = gamepadOwnsProportional_ && controller_->proportionalActive();
+        const bool ownsPending = gamepadOwnsProportional_ && controller_->proportionalPending();
+        auto output = proportionalMapper_.update(input, ownsActive, ownsPending);
+        if (ownsActive && forbidden)
         {
             output.stop = true;
             proportionalMapper_.requireCenter();
@@ -4575,30 +4769,37 @@ void MainWindow::pollGamepad()
         }
         if (output.stop)
         {
-            if (visualDispatch_)
-                visualDispatch_->manualInput(vision::ManualInputKind::Stop);
-            controller_->stopMotion();
+            const bool visualStops = visualDispatch_ && visualDispatch_->ownsProportionalChannel()
+                && !visualDispatch_->dryRun();
+            if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Stop);
+            if (!visualStops) controller_->stopMotion();
         }
         if (output.disable)
             disableGamepad(!pad.connected ? QStringLiteral("receiver disconnected")
                                           : QStringLiteral("safety stop"));
-        if (output.start && controller_->isMotionReady(MotionMode::Forward))
+        if (output.start && !gamepadVisualTakeoverWaiting_ && controller_->isMotionReady(MotionMode::Forward))
         {
             if (visualDispatch_)
                 visualDispatch_->manualInput(vision::ManualInputKind::Motion);
-            controller_->startProportional(proportionalConfig_, proportionalMapper_.deadzone,
-                                           proportionalMapper_.gamma);
+            gamepadOwnsProportional_ = controller_->startProportional(
+                proportionalConfig_, proportionalMapper_.deadzone, proportionalMapper_.gamma);
         }
-        if (output.stream && !output.stop)
+        if (output.stream && !output.stop && gamepadOwnsProportional_)
         {
-            if (visualDispatch_)
-                visualDispatch_->manualInput(vision::ManualInputKind::Motion);
             controller_->setProportionalInput(output.throttle, output.turn, output.pitch);
         }
         refreshGamepadUi();
         refreshMotionUi();
         pollingGamepad_ = false;
         return;
+    }
+    if (gamepadVisualTakeoverWaiting_) {
+        gamepadMapper_ = GamepadMapper{};
+        if (controller_->motionState() == MotionState::Stopped
+            && !controller_->proportionalActive() && !controller_->proportionalPending()
+            && (!visualDispatch_ || !visualDispatch_->stopAwaiting()))
+            gamepadVisualTakeoverWaiting_ = false;
+        else input.enabled = false;
     }
     const auto output = gamepadMapper_.update(input);
     if (output.disable) {
@@ -4609,13 +4810,23 @@ void MainWindow::pollGamepad()
     if (output.command) {
         const auto mode = *output.command;
         const bool stop = mode == MotionMode::Stop;
+        if (!stop && visualDispatch_ && visualDispatch_->ownsProportionalChannel()) {
+            visualDispatch_->manualInput(vision::ManualInputKind::Motion);
+            gamepadVisualTakeoverWaiting_ = true;
+            gamepadMapper_ = GamepadMapper{};
+            gamepadWaitingMode_.reset();
+            pollingGamepad_ = false;
+            return;
+        }
         // Busy starts remain in the mapper as the latest stick request.
         // Log entry to waiting once; manualInput still runs only on submission.
         if (stop || controller_->isMotionReady(mode)) {
             gamepadWaitingMode_.reset();
+            const bool visualStops = visualDispatch_ && visualDispatch_->ownsProportionalChannel()
+                && !visualDispatch_->dryRun();
             if (visualDispatch_) visualDispatch_->manualInput(stop
                 ? vision::ManualInputKind::Stop : vision::ManualInputKind::Motion);
-            gamepadPreviousAccepted_ = stop ? controller_->stopMotion() : controller_->startMotion(mode);
+            gamepadPreviousAccepted_ = stop ? (visualStops || controller_->stopMotion()) : controller_->startMotion(mode);
             const auto name = stop ? QStringLiteral("STOP") : motionModeText(mode).toUpper().replace(' ', '_');
             appendLog(QStringLiteral("Gamepad: %1%2").arg(name,
                 *gamepadPreviousAccepted_ ? QString{} : QStringLiteral(" (not accepted)")));

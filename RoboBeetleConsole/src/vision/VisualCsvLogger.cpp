@@ -8,7 +8,7 @@
 
 namespace rb::vision {
 namespace {
-const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets,policy_request_id,request_id,dispatch_command,dispatch_result,ack_rtt_ms,axis_mode,ey_f,pitch_sign,depth_raw_m,depth_cal_m,depth_age_ms,envelope_state,sel_area_cells,gyro_z,roll,pitch,gait_phase,motion_age_ms\n";
+const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets,policy_request_id,request_id,dispatch_command,dispatch_result,ack_rtt_ms,axis_mode,ey_f,pitch_sign,depth_raw_m,depth_cal_m,depth_age_ms,envelope_state,sel_area_cells,gyro_z,roll,pitch,gait_phase,motion_age_ms,exec_mode,dry_run,area_f,approach_state,throttle,turn,pitch_setpoint,actually_submitted,approach_event\n";
 
 QString escaped(QString field)
 {
@@ -18,6 +18,16 @@ QString escaped(QString field)
         return QLatin1Char('"') + field + QLatin1Char('"');
     }
     return field;
+}
+void approachColumns(QStringList &fields, const VisualApproachCsvInfo &info)
+{
+    if (!info.proportional) { for (int i=0;i<9;++i) fields << QString{}; return; }
+    fields << QStringLiteral("PROPORTIONAL") << (info.dryRun ? "1" : "0")
+           << (info.area ? QString::number(*info.area,'g',17) : QString{}) << info.state;
+    if (info.setpoint) fields << QString::number(info.setpoint->throttle)
+        << QString::number(info.setpoint->turn) << QString::number(info.setpoint->pitch);
+    else fields << QString{} << QString{} << QString{};
+    fields << (info.submitted ? "1" : "0") << info.event;
 }
 QString number(double value)
 {
@@ -104,10 +114,10 @@ bool VisualCsvLogger::append(const QByteArray &bytes)
 }
 
 QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transition,
-                               std::optional<qint64> arrivalMs) const
+                               std::optional<qint64> arrivalMs, const VisualApproachCsvInfo &approach) const
 {
     QStringList fields;
-    fields.reserve(48);
+    fields.reserve(57);
     fields << (transition ? QStringLiteral("transition") : QStringLiteral("frame"))
            << QString::number(s.localMonoMs)
            << (!transition && arrivalMs ? QString::number(*arrivalMs) : QString{});
@@ -183,10 +193,29 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
     } else {
         for (int i = 0; i < 5; ++i) fields << QString{};
     }
+    auto paired=approach;
+    if (transition) paired.submitted=false;
+    approachColumns(fields,paired);
     for (QString &field : fields) field = escaped(std::move(field));
     return (fields.join(QLatin1Char(',')) + QLatin1Char('\n')).toUtf8();
 }
 
+void VisualCsvLogger::recordApproachEvent(const VisualApproachCsvInfo &info)
+{
+    if (!recording_ || !info.proportional || info.event.isEmpty()) return;
+    QStringList fields;
+    for (int i=0;i<48;++i) fields << QString{};
+    fields[0]=QStringLiteral("event");fields[1]=QString::number(info.nowMs);
+    if(info.frameId)fields[3]=QString::number(*info.frameId);
+    fields[19]=QString::number(info.sessionId);
+    fields[21]=QString::fromLatin1(VisualCsvConfig::schema_version.data());
+    fields[33]=info.detail;
+    auto eventInfo = info;
+    eventInfo.submitted = false;
+    approachColumns(fields,eventInfo);
+    for(auto &f:fields)f=escaped(std::move(f));
+    append((fields.join(',')+'\n').toUtf8());
+}
 void VisualCsvLogger::recordDispatch(const VisualDispatchRecord &record)
 {
     if (!recording_) return;
@@ -206,6 +235,9 @@ void VisualCsvLogger::recordDispatch(const VisualDispatchRecord &record)
     fields[32] = QString::fromLatin1(proposedCommandName(record.command));
     fields[33] = record.result;
     if (record.ackRttMs >= 0) fields[34] = QString::number(record.ackRttMs);
+    auto info=record.approach.value_or(VisualApproachCsvInfo{});
+    info.submitted = info.submitted && record.result==QStringLiteral("SENT");
+    approachColumns(fields,info);
     for (QString &field : fields) field = escaped(std::move(field));
     append((fields.join(QLatin1Char(',')) + QLatin1Char('\n')).toUtf8());
 }
@@ -216,12 +248,12 @@ bool VisualCsvLogger::finishPending(qint64 evaluationMs)
     // Keep this ID's arrival metadata, but timestamp the evaluation that ends its wait.
     auto unfinished = *pendingFrame_;
     unfinished.localMonoMs = evaluationMs;
-    if (!append(row(unfinished, false, pendingArrivalMs_))) return false;
+    if (!append(row(unfinished, false, pendingArrivalMs_, pendingApproach_))) return false;
     pendingFrame_.reset();
     return true;
 }
 
-void VisualCsvLogger::record(const VisualDiagnosticSnapshot &s)
+void VisualCsvLogger::record(const VisualDiagnosticSnapshot &s, const VisualApproachCsvInfo &approach)
 {
     if (!observedSessionId_ || *observedSessionId_ != s.sessionId) {
         observedSessionId_ = s.sessionId;
@@ -247,20 +279,21 @@ void VisualCsvLogger::record(const VisualDiagnosticSnapshot &s)
     }
     if (pendingFrame_ && s.frameId == pendingFrame_->frameId && !s.awaitingVideo) {
         // The first evaluated snapshot for this ID carries the actual ex/EMA result.
-        if (!append(row(s, false, pendingArrivalMs_))) return;
+        if (!append(row(s, false, pendingArrivalMs_, approach))) return;
         pendingFrame_.reset();
     }
     if (s.frameId && (!highestFrameId_ || *s.frameId > *highestFrameId_)) {
         if (s.awaitingVideo) {
             pendingFrame_ = s;
+        pendingApproach_ = approach;
             pendingArrivalMs_ = observedArrivalMs_;
-        } else if (!append(row(s, false, observedArrivalMs_))) {
+        } else if (!append(row(s, false, observedArrivalMs_, approach))) {
             return;
         }
         highestFrameId_ = s.frameId;
     }
     if (previousState_ && (*previousState_ != s.state || *previousEffective_ != s.command.effective)) {
-        if (!append(row(s, true))) return;
+        if (!append(row(s, true, std::nullopt, approach))) return;
     }
     previousState_ = s.state;
     previousEffective_ = s.command.effective;

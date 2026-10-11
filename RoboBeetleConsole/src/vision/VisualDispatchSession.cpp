@@ -35,8 +35,15 @@ DispatchOutcome policyOutcome(CommandTerminalResult result)
 }
 }
 VisualDispatchSession::VisualDispatchSession(IConsoleController *c, SnapshotProvider s, NowMs n, VisualDispatchConfig config, QObject *p)
-    : QObject(p), controller_(c), snapshot_(std::move(s)), now_(std::move(n)), machine_(*this,config), requiredServoMask_(config.requiredServoMask)
+    : QObject(p), controller_(c), snapshot_(std::move(s)), now_(std::move(n)), machine_(*this,config), proportionalMachine_(c,config), requiredServoMask_(config.requiredServoMask)
 {
+    proportionalMachine_.record=[this](const VisualDispatchRecord &record){ emit dispatchRecorded(record); };
+    proportionalMachine_.event=[this](const VisualApproachCsvInfo &info){ emit approachEvent(info); };
+    connect(controller_, &IConsoleController::proportionalTelemetryChanged, this, [this] {
+        if (!enabled_ || !proportional()) return;
+        proportionalMachine_.telemetry(now_());
+        timerTick();
+    });
     clock_.start();
     if (!now_) now_ = [this] { return clock_.elapsed(); };
     timer_.setTimerType(Qt::PreciseTimer);
@@ -46,7 +53,7 @@ VisualDispatchSession::VisualDispatchSession(IConsoleController *c, SnapshotProv
         [this](quint32 id, CommandTerminalResult result, quint8 raw, qint64 rtt) {
             // Only reentrant submissions defer: ordinary unknown outcomes must
             // trigger the safety STOP before the controller releases authority.
-            if (submitting_) {
+            if (submitting_ || (proportional() && evaluating_)) {
                 QTimer::singleShot(0, this, [this, id, result, raw, rtt] {
                     terminal(id, result, raw, rtt);
                 });
@@ -57,7 +64,7 @@ VisualDispatchSession::VisualDispatchSession(IConsoleController *c, SnapshotProv
     connect(controller_, &IConsoleController::authorityStateChanged, this,
             [this](ControlAuthorityState, bool active) {
         if (active) return;
-        if (enabled_) machine_.evaluate(input());
+        if (enabled_) evaluateInput(input());
         else machine_.manualInput(ManualInputKind::Motion);
         clearAssociations(true);
         emit statusChanged();
@@ -65,7 +72,7 @@ VisualDispatchSession::VisualDispatchSession(IConsoleController *c, SnapshotProv
     connect(controller_, &IConsoleController::connectionStateChanged, this,
             [this](TransportState state) {
         if (state == TransportState::Connected) return;
-        if (enabled_) machine_.evaluate(input());
+        if (enabled_) evaluateInput(input());
         else machine_.manualInput(ManualInputKind::Motion);
         clearAssociations(true);
         emit statusChanged();
@@ -91,7 +98,7 @@ void VisualDispatchSession::depthSampleChanged()
 {
     // Pitch/Both only, and only while there is something to protect.
     if (!enabled_ || axis_ == VisualAxisMode::Yaw
-        || !(machine_.armed() || machine_.stopAwaiting())) return;
+        || !(armed() || stopAwaiting())) return;
     deliverDepth(controller_->controlDepthSample());
 }
 
@@ -121,7 +128,7 @@ void VisualDispatchSession::drainDepthQueue()
         evaluating_ = true;
         auto in = input();
         in.depth = depth;
-        machine_.evaluate(in);
+        evaluateInput(in);
         evaluating_ = false;
         emit statusChanged();
     }
@@ -141,7 +148,7 @@ void VisualDispatchSession::setAxisMode(VisualAxisMode axis)
 VisualDepthCsvInfo VisualDispatchSession::depthCsvInfo() const
 {
     VisualDepthCsvInfo info;
-    info.envelope = QString::fromLatin1(depthEnvelopeStateName(machine_.depthEnvelope()));
+    info.envelope = QString::fromLatin1(depthEnvelopeStateName(depthEnvelope()));
     if (const auto sample = controller_->controlDepthSample()) {
         info.rawM = sample->rawDepthM;
         info.calibratedM = sample->calibratedDepthM;
@@ -152,7 +159,7 @@ VisualDepthCsvInfo VisualDispatchSession::depthCsvInfo() const
 
 void VisualDispatchSession::diagnosticChanged(const VisualDiagnosticSnapshot &snapshot)
 {
-    if (!enabled_ || (snapshot.state != VisualState::Stale
+    if (!enabled_ || (!proportional() && snapshot.state != VisualState::Stale
         && snapshot.state != VisualState::InferenceOff && snapshot.state != VisualState::Lost)) return;
     if (submitting_ || evaluating_) {
         // Retain the event's value: a newer snapshot may already be TRACKING
@@ -161,7 +168,7 @@ void VisualDispatchSession::diagnosticChanged(const VisualDiagnosticSnapshot &sn
         return;
     }
     evaluating_ = true;
-    machine_.evaluate(input(&snapshot));
+    evaluateInput(input(&snapshot), &snapshot);
     evaluating_ = false;
     emit statusChanged();
 }
@@ -208,13 +215,20 @@ ArmReason VisualDispatchSession::arm()
         emit statusChanged();
         return reason_;
     }
-    reason_ = machine_.arm(input());
+    evaluating_=true;
+    reason_ = proportional() ? proportionalMachine_.arm(input(), snapshot_()) : machine_.arm(input());
+    evaluating_=false;
     emit statusChanged();
     return reason_;
 }
 
 void VisualDispatchSession::disarm()
 {
+    if (proportional()) {
+        proportionalMachine_.disarm(now_());
+        emit statusChanged();
+        return;
+    }
     const bool stop = machine_.armed() || machine_.stopAwaiting();
     machine_.manualInput(ManualInputKind::Motion);
     clearAssociations();
@@ -228,6 +242,7 @@ void VisualDispatchSession::disarm()
 void VisualDispatchSession::manualInput(ManualInputKind kind)
 {
     if (kind == ManualInputKind::NonMotion) return;
+    if (proportional()) { proportionalMachine_.disarm(now_()); emit statusChanged(); return; }
     machine_.manualInput(kind);
     clearAssociations();
     emit statusChanged();
@@ -250,6 +265,10 @@ AutoFollowReadiness VisualDispatchSession::readiness() const
         && (controller_->inferredPoseKnownMask() & requiredServoMask_) == requiredServoMask_;
 
     const auto snapshot = snapshot_();
+    if (proportional()) {
+        result.linkAndControl = dryRun() || result.linkAndControl;
+        result.servosReady = dryRun() || ((enabledMask & 0x1f)==0x1f && (controller_->inferredPoseKnownMask() & 0x1f)==0x1f);
+    }
     result.tracking = snapshot.has_value() && snapshot->state == VisualState::Tracking;
 
     // Pitch/Both add the front axis servo and a usable depth reading. The
@@ -277,18 +296,23 @@ AutoFollowReadiness VisualDispatchSession::readiness() const
             break;
         }
     }
+    if (proportional()) {
+        if (dryRun()) result.frontAxisReady=true;
+        if (!snapshot || !snapshot->target || !snapshot->target->target.areaCells) result.tracking=false;
+    }
     return result;
 }
 void VisualDispatchSession::timerTick()
 {
     if (!enabled_ || submitting_ || evaluating_) return;
     evaluating_ = true;
-    machine_.evaluate(input());
+    evaluateInput(input());
     evaluating_ = false;
     emit statusChanged();
 }
 std::optional<ProposedCommand> VisualDispatchSession::currentMode() const
 {
+    if (proportional()) return proportionalMachine_.currentMode();
     return machine_.modeConfirmed() ? machine_.currentMode() : std::nullopt;
 }
 
@@ -332,6 +356,12 @@ void VisualDispatchSession::submit(quint64 policyId, ProposedCommand command,
 void VisualDispatchSession::terminal(quint32 id, CommandTerminalResult result,
                                      quint8 raw, qint64 rtt)
 {
+    if (proportional()) {
+        proportionalMachine_.terminal(id,result,raw,rtt,now_());
+        timerTick();
+        emit statusChanged();
+        return;
+    }
     auto it = associations_.find(id);
     if (it == associations_.end()) return;
     const auto association = *it;
@@ -369,5 +399,56 @@ void VisualDispatchSession::clearAssociations(bool includeOperator)
         emit dispatchRecorded({now_(), it->policyId, it.key(), it->command,
                                QStringLiteral("OUTCOME_UNKNOWN"), 0xff, -1});
     }
+}
+void VisualDispatchSession::recordApproachConfiguration()
+{
+    if (!proportional()) return;
+    auto info=approachInfo();info.proportional=true;info.dryRun=dryRun();info.nowMs=now_();info.event=QStringLiteral("CONFIG");
+    const auto &c=approachConfig();const auto &q=proportionalConfig();
+    info.detail=QStringLiteral("alpha_area=%1;A_slow=%2;A_resume=%3;A_stop=%4;arrive_dwell_ms=%5;resume_dwell_ms=%6;t_max=%7;t_min=%8;t_turn_min=%9;k_turn=%10;k_pitch=%11;max_scale=%12;turn_gain=%13;pitch_limit_cdeg=%14;slew_per_second=%15")
+        .arg(c.alphaArea).arg(c.slowArea).arg(c.resumeArea).arg(c.stopArea).arg(c.arriveDwellMs).arg(c.resumeDwellMs)
+        .arg(c.tMax).arg(c.tMin).arg(c.tTurnMin).arg(c.kTurn).arg(c.kPitch)
+        .arg(q.max_scale).arg(q.turn_gain).arg(q.pitch_limit_cdeg).arg(q.slew_per_second);
+    emit approachEvent(info);
+}
+bool VisualDispatchSession::setExecutionMode(VisualExecutionMode mode)
+{
+    if (armed() || stopAwaiting()) return false;
+    execution_=mode;
+    recordApproachConfiguration();
+    emit statusChanged();
+    return true;
+}
+bool VisualDispatchSession::setDryRun(bool enabled)
+{
+    if (!proportional() || armed() || stopAwaiting()) return false;
+    proportionalMachine_.dryRun=enabled;
+    recordApproachConfiguration();
+    emit statusChanged();
+    return true;
+}
+bool VisualDispatchSession::setApproachConfig(const VisualApproachConfig &config)
+{
+    if (armed() || stopAwaiting() || !validVisualApproachConfig(config)) return false;
+    proportionalMachine_.config=config;
+    recordApproachConfiguration();
+    emit statusChanged();
+    return true;
+}
+void VisualDispatchSession::setProportionalConfig(const IConsoleController::ProportionalConfig &config)
+{
+    if (!armed() && !stopAwaiting() && robobeetle::protocol::valid_proportional_config(config)) {
+        proportionalMachine_.q=config;
+        recordApproachConfiguration();
+    }
+}
+ArmReason VisualDispatchSession::eligibility() const
+{
+    return proportional() ? proportionalMachine_.eligibility(input(),snapshot_()) : machine_.eligibility(input());
+}
+void VisualDispatchSession::evaluateInput(const VisualDispatchInput &in,const VisualDiagnosticSnapshot *snapshot)
+{
+    if (proportional()) proportionalMachine_.evaluate(in,snapshot ? std::optional{*snapshot} : snapshot_());
+    else machine_.evaluate(in);
 }
 } // namespace rb::vision

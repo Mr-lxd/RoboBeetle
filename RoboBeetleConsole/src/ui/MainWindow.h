@@ -172,6 +172,8 @@ private:
     quint64 visualSessionId_{0};
     vision::VisualDispatchSession *visualDispatch_{nullptr};
     QCheckBox *visualDispatchEnabled_{nullptr};
+    QComboBox *visualExecutionMode_{nullptr};
+    QCheckBox *visualDryRun_{nullptr};
     QLabel *visualDispatchStatus_{nullptr};
     // Task 06 green region. Sub-region A keeps the frozen vision actions;
     // sub-region B is the new Auto Follow block.
@@ -283,6 +285,8 @@ private:
     std::optional<MotionMode> gamepadWaitingMode_;
     QComboBox *gamepadMode_{nullptr};
     QPushButton *gamepadConfigButton_{nullptr};
+    bool gamepadOwnsProportional_{false};
+    bool gamepadVisualTakeoverWaiting_{false};
     ProportionalGamepadMapper proportionalMapper_;
     IConsoleController::ProportionalConfig proportionalConfig_;
     GamepadMapper gamepadMapper_;

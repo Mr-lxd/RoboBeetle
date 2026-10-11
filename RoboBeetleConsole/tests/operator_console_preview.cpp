@@ -6,6 +6,8 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QTimer>
 #include <QCommandLineParser>
 #include <QGroupBox>
 #include <QDir>
@@ -64,6 +66,29 @@ class CpgPreviewController : public rb::test::VisualControllerFixture
     {
         return motionActive ? std::optional<double>{2.0} : std::nullopt;
     }
+};
+
+// Every submission terminates locally; this fixture has no socket or transport.
+class ApproachPreviewController : public rb::test::VisualControllerFixture {
+public:
+    int simulatedCalls{0};
+    bool propActive{false}, propPending{false};
+    ApproachPreviewController() { enabled=known=0x1f; }
+    bool hasCpgSchema2() const override { return true; }
+    quint8 cpgFeatureLevel() const override { return 2; }
+    bool proportionalActive() const override { return propActive; }
+    bool proportionalPending() const override { return propPending; }
+    std::optional<quint32> submitVisualProportionalStart(const ProportionalConfig &) override {
+        ++simulatedCalls; const auto id=next++; propPending=true;
+        QTimer::singleShot(0,this,[this,id] { propPending=false; propActive=true; motionActive=true; emit motionStateChanged(rb::MotionState::Running,rb::MotionMode::Forward); ack(id,rb::CommandTerminalResult::Ok); });
+        return id;
+    }
+    std::optional<quint32> submitVisualProportionalStop() override {
+        ++simulatedCalls; const auto id=next++; propPending=propActive=false; motionActive=false;
+        QTimer::singleShot(0,this,[this,id] { ack(id,rb::CommandTerminalResult::Ok); emit proportionalStopped(); });
+        return id;
+    }
+    bool setProportionalInput(quint16,qint16,qint16) override { ++simulatedCalls; return propActive; }
 };
 
 // Task 06 green-region geometry. Reported for the PR so the reviewer can see
@@ -296,12 +321,13 @@ QList<PreviewCase> selectedCases(const QString &caseId, bool greenOnly, const QS
 // The diagnostic session ages a snapshot out after 500 ms and the application
 // keeps ticking, so a scripted TRACKING state must be refreshed immediately
 // before the grab rather than once during setup.
-void freshenTracking(rb::MainWindow &window, quint64 frameId)
+void freshenTracking(rb::MainWindow &window, quint64 frameId, std::optional<int> area = std::nullopt)
 {
     auto *diagnostic = window.findChild<rb::vision::VisualDiagnosticSession *>();
     if (diagnostic == nullptr) return;
     rb::vision::DetectionFrame frame{
         frameId, 1000 + frameId, {640, 480}, {{1, "fish", 0.91, {352.0, 240.0}}}};
+    frame.detections.front().areaCells = area;
     diagnostic->onDetectionArrival(
         frame, {rb::vision::DetectionDisplayState::Target, frame});
     QApplication::processEvents();
@@ -485,6 +511,11 @@ QJsonObject captureCase(rb::MainWindow &window,
         }
         QApplication::processEvents();
     }
+    if (item.variant == QStringLiteral("Task20")) {
+        freshenTracking(window, 3, item.state == QStringLiteral("Arrived") ? 24 : 6);
+        if (auto *session=window.findChild<rb::vision::VisualDispatchSession *>()) session->timerTick();
+        QApplication::processEvents();
+    }
     const auto image = window.grab();
     const QString fileName = item.id + QStringLiteral(".png");
     image.save(QDir(directory).filePath(fileName), "PNG");
@@ -540,6 +571,8 @@ QJsonObject captureCase(rb::MainWindow &window,
     }
     result.insert(QStringLiteral("selected_tab"), item.tab);
     result.insert(QStringLiteral("scenario"), item.scenario);
+    result.insert(QStringLiteral("fully_expanded_height"), window.fullyExpandedWindowHeight());
+    result.insert(QStringLiteral("minimum_height_le_992"), window.fullyExpandedWindowHeight() <= 992);
     result.insert(QStringLiteral("output"), fileName);
     if (!item.variant.isEmpty()) {
         result.insert(QStringLiteral("variant"), item.variant);
@@ -605,6 +638,8 @@ int main(int argc, char **argv)
         QStringLiteral("cpg-parameters"),
         QStringLiteral("Capture Task 19 CPG panel with a fake controller"));
     parser.addOption(cpgOption);
+    QCommandLineOption approachOption(QStringLiteral("visual-approach"), QStringLiteral("Capture Task 20 execution modes with local fake transport"));
+    parser.addOption(approachOption);
     QCommandLineOption fixesOption(
         QStringLiteral("fixes"),
         QStringLiteral("Run the desktop-fix suite with diagnostic screen style label (S1)"),
@@ -620,6 +655,38 @@ int main(int argc, char **argv)
     const QString fixesStyle = parser.value(fixesOption);
     const bool greenSuite = parser.isSet(greenOption) || !fixesStyle.isEmpty();
     const QString scaleLabel = parser.value(scaleLabelOption);
+    if (parser.isSet(approachOption)) {
+        QJsonArray entries;
+        int fakeCalls=0;
+        bool withinBudget=true;
+        for (const QString &state : {QStringLiteral("Discrete"),QStringLiteral("Approach"),QStringLiteral("Arrived"),QStringLiteral("Dry run")}) {
+            ApproachPreviewController controller;
+            if (state == QStringLiteral("Dry run")) controller.active=controller.connected=false;
+            rb::MainWindow window(&controller);
+            auto *session=window.findChild<rb::vision::VisualDispatchSession *>();
+            session->setTimerEnabled(false);
+            if (auto *video=window.findChild<rb::vision::VideoView *>("videoView")) video->setFrame(rb::test::OperatorConsoleFixture::syntheticVideo(),1);
+            if (state != QStringLiteral("Discrete")) window.findChild<QComboBox *>("visualExecutionMode")->setCurrentIndex(1);
+            if (state == QStringLiteral("Dry run")) {
+                controller.active=controller.connected=false;
+                window.findChild<QCheckBox *>("visualDryRun")->setChecked(true);
+            }
+            window.findChild<QCheckBox *>("visualDispatchEnabled")->setChecked(true);
+            freshenTracking(window,1,state == QStringLiteral("Arrived") ? 24 : 6);
+            session->timerTick();
+            if (state != QStringLiteral("Discrete")) window.findChild<QPushButton *>("visualArmButton")->click();
+            QApplication::processEvents(); session->timerTick(); QApplication::processEvents();
+            PreviewCase item{QStringLiteral("Task20-")+QString(state).replace(' ','-'),QSize(1280,0),0,state,QStringLiteral("Task20"),state,true};
+            entries.append(captureCase(window,item,directory,QString::fromLocal8Bit(qgetenv("QT_QPA_PLATFORM"))));
+            withinBudget &= window.fullyExpandedWindowHeight()<=992;
+            fakeCalls += controller.simulatedCalls;
+            if (state == QStringLiteral("Dry run") && controller.simulatedCalls != 0) return 6;
+        }
+        QFile manifest(QDir(directory).filePath(QStringLiteral("manifest.json")));
+        if (!manifest.open(QIODevice::WriteOnly)) return 4;
+        manifest.write(QJsonDocument(QJsonObject{{"fake_controller",true},{"robot_control_writes",0},{"fake_controller_calls",fakeCalls},{"minimum_height_le_992",withinBudget},{"entries",entries}}).toJson(QJsonDocument::Indented));
+        return withinBudget ? 0 : 7;
+    }
     if (parser.isSet(cpgOption))
     {
         CpgPreviewController controller;

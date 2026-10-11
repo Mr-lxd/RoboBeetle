@@ -79,6 +79,8 @@ add_library(RoboBeetleCore
     src/vision/VisualTargetStateMachine.cpp
     src/vision/VisualCommandPolicy.h
     src/vision/VisualCommandPolicy.cpp
+    src/vision/VisualApproachPolicy.cpp
+    src/vision/VisualProportionalDispatchStateMachine.cpp
     src/vision/VisualDispatchSession.h
     src/vision/VisualDispatchSession.cpp
     src/vision/VisualDiagnosticSession.h
@@ -139,6 +141,23 @@ target_link_libraries(RoboBeetleConsole PRIVATE RoboBeetleCore Qt6::Widgets)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(visual_approach_csv_tests tests/visual_approach_csv_tests.cpp)
+    target_link_libraries(visual_approach_csv_tests PRIVATE RoboBeetleCore)
+    add_test(NAME visual_approach_csv_tests COMMAND visual_approach_csv_tests)
+    add_executable(visual_approach_policy_tests tests/visual_approach_policy_tests.cpp)
+    target_link_libraries(visual_approach_policy_tests PRIVATE RoboBeetleCore)
+    add_test(NAME visual_approach_policy_tests COMMAND visual_approach_policy_tests)
+    add_executable(visual_proportional_session_tests tests/visual_proportional_session_tests.cpp)
+    target_include_directories(visual_proportional_session_tests PRIVATE tests)
+    target_link_libraries(visual_proportional_session_tests PRIVATE RoboBeetleCore)
+    add_test(NAME visual_proportional_session_tests COMMAND visual_proportional_session_tests)
+    add_executable(visual_proportional_remote_tests tests/visual_proportional_remote_tests.cpp)
+    target_link_libraries(visual_proportional_remote_tests PRIVATE RoboBeetleCore Qt6::Widgets)
+    add_test(NAME visual_proportional_remote_tests COMMAND visual_proportional_remote_tests)
+    add_executable(main_window_visual_approach_tests tests/main_window_visual_approach_tests.cpp ${RB_CONSOLE_UI_SOURCES})
+    target_link_libraries(main_window_visual_approach_tests PRIVATE RoboBeetleCore Qt6::Widgets)
+    add_test(NAME main_window_visual_approach_tests COMMAND main_window_visual_approach_tests)
+    set_tests_properties(main_window_visual_approach_tests PROPERTIES RUN_SERIAL TRUE)
     add_executable(proportional_gamepad_mapper_tests tests/proportional_gamepad_mapper_tests.cpp)
     set_target_properties(proportional_gamepad_mapper_tests PROPERTIES AUTOMOC OFF)
     target_link_libraries(proportional_gamepad_mapper_tests PRIVATE GamepadMapper)

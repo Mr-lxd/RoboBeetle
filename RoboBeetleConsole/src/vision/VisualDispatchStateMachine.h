@@ -48,7 +48,7 @@ inline constexpr std::uint16_t kFrontAxisServoMask = 0x0004;
 enum class ArmReason {
     Ready, InvalidConfig, InvalidTime, LinkDisconnected, ControlNotOwned,
     ServosNotEnabled, PoseUnknown, TurnSignUnconfirmed, NotTracking,
-    DepthUnavailable, DepthNotZeroed, DepthHardLimit
+    DepthUnavailable, DepthNotZeroed, DepthHardLimit, AreaUnavailable, ProportionalUnavailable, ProportionalChannelBusy, MotionNotStopped
 };
 [[nodiscard]] const char *armReasonName(ArmReason reason) noexcept;
 
