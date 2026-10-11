@@ -248,6 +248,7 @@ $task19Sources = @('Core/Motion/cpg_parameters.c', 'Core/Motion/cpg_gait_generat
     'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c')
 $cases += @{ Name = 'cpg_parameters_tests'; Sources = @('tests/cpg_parameters_tests.c') + $task19Sources; Link = @('-lm') }
 $cases += @{ Name = 'cpg_protocol_tests'; Sources = @('tests/cpg_protocol_tests.c','Core/Communication/protocol_dispatcher.c') + $task19Sources; Link = @('-lm') }
+$cases += @{ Name = 'proportional_motion_tests'; Sources = @('tests/proportional_motion_tests.c','Core/Communication/protocol_dispatcher.c','Core/Motion/simple_gait_generator.c','Core/Motion/experimental_flex_gait_generator.c') + $task19Sources; Link = @('-lm') }
 $cases += @{ Name = 'motion_state_codec_tests'; Sources = @('tests/motion_state_codec_tests.c','Core/Communication/motion_state_codec.c'); Link = @() }
 foreach ($coord in @('same','opposite')) {
     foreach ($apply in @(0,1)) {

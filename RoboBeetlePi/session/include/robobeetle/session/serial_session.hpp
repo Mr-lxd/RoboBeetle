@@ -50,6 +50,9 @@ public:
     // Logical outcome allocation may throw, but physical cleanup still
     // completes before propagation. Destruction contains all such exceptions.
     std::vector<link_core::LinkEvent> abort(TimeMs now_ms);
+    bool submit_latest_setpoint(const protocol::Bytes &payload);
+    void clear_latest_setpoint();
+
     link_core::SubmitResult submit_request(protocol::Byte request_type,
                                            const protocol::Bytes &payload,
                                            TimeMs now_ms);

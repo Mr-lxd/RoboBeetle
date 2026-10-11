@@ -29,12 +29,16 @@ public:
     quint32 gatewayDropTotal() const { return gatewayDrops_; }
     std::optional<quint32> linkEpoch() const { return epoch_; }
 private:
-    std::optional<quint16> periodVersion_;
-    std::optional<quint16> previousPhase_;
-    std::optional<double> previousPhaseMs_, lastWrapMs_;
-    bool discardFirstPeriod_{true};
-    std::deque<double> periods_;
-    struct Anchor { quint64 piRxMs; qint64 offsetMs; double wireMs; };
+  std::optional<quint16> periodVersion_;
+  std::optional<quint16> previousPhase_;
+  std::optional<double> previousPhaseMs_, lastWrapMs_;
+  bool discardFirstPeriod_{true};
+  std::deque<double> periods_;
+  struct Anchor
+  {
+      quint64 piRxMs;
+      qint64 offsetMs;
+      double wireMs; };
     std::deque<Anchor> anchors_;
     std::deque<MotionStateRecord> history_;
     std::optional<quint32> epoch_, lastTx_;

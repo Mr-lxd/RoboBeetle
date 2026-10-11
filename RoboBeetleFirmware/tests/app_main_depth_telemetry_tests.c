@@ -661,7 +661,8 @@ int main(void)
         {
             expect(rb_motion_state_decode(frame.payload, frame.payload_length, &batch),
                    "motion fragment must decode");
-            expect(batch.schema == 2U && batch.sample_count == 1U && batch.fragment_count == 3U && batch.fragment_index == motion_fragments,
+            expect(batch.schema == 2U && batch.sample_count == 1U && batch.fragment_count == 3U &&
+                       batch.fragment_index == motion_fragments,
                    "three gyros must form three schema2 ordered fragments");
             for (unsigned j = 0; j < batch.sample_count; ++j)
             {

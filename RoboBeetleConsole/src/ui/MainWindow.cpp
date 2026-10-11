@@ -3,6 +3,9 @@
 #include "ui/AutoFollowState.h"
 #include "ui/CpgParametersPanel.h"
 #include <QStandardItemModel>
+#include <QSettings>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include "ui/ElidedLabel.h"
 
 #include "robot/ServoDescriptor.h"
@@ -905,10 +908,11 @@ QWidget *MainWindow::createConnectionBar()
     row->addWidget(releaseButton_);
     auto *gamepadGroup = new QWidget(bar);
     auto *gamepadLayout = new QGridLayout(gamepadGroup);
-    gamepadLayout->setContentsMargins(0,0,0,0);
+    gamepadLayout->setContentsMargins(0, 0, 0, 0);
     gamepadLayout->setSpacing(3);
-    auto *gamepadTitle = new QLabel(QStringLiteral("Gamepad"),gamepadGroup);
-    gamepadTitle->setStyleSheet(QStringLiteral("color: #566B79; font-size: 11px; font-weight: 600;"));
+    auto *gamepadTitle = new QLabel(QStringLiteral("Gamepad"), gamepadGroup);
+    gamepadTitle->setStyleSheet(
+        QStringLiteral("color: #566B79; font-size: 11px; font-weight: 600;"));
     gamepadTitle->setVisible(remote);
     gamepadToggleButton_ = new QPushButton(QStringLiteral("Connect"), bar);
     gamepadToggleButton_->setObjectName(QStringLiteral("gamepadToggleButton"));
@@ -917,35 +921,115 @@ QWidget *MainWindow::createConnectionBar()
     gamepadToggleButton_->setProperty("consoleActionRole", "primary");
     gamepadToggleButton_->setStyleSheet(connectButton_->styleSheet());
     gamepadToggleButton_->setVisible(remote);
-    gamepadLayout->addWidget(gamepadTitle,0,0);
-    gamepadLayout->addWidget(gamepadToggleButton_,0,1);
-    auto *modeLabel=new QLabel(QStringLiteral("Mode"),gamepadGroup);
+    gamepadLayout->addWidget(gamepadTitle, 0, 0);
+    gamepadLayout->addWidget(gamepadToggleButton_, 0, 1);
+    auto *modeLabel = new QLabel(QStringLiteral("Mode"), gamepadGroup);
     modeLabel->setStyleSheet(gamepadTitle->styleSheet());
-    gamepadLayout->addWidget(modeLabel,1,0);
-    auto *gamepadMode=new QComboBox(bar); gamepadMode->setObjectName(QStringLiteral("gamepadModeCombo"));
-    gamepadMode->addItems({QStringLiteral("Discrete"),QStringLiteral("Proportional")});
-    if (auto *model=qobject_cast<QStandardItemModel*>(gamepadMode->model())) {
-        model->item(1)->setEnabled(false);
-        model->item(1)->setToolTip(QStringLiteral("Proportional control is available in PR-2"));
-    }
-    gamepadMode->setToolTip(QStringLiteral("Proportional control is available in PR-2"));
-    gamepadLayout->addWidget(gamepadMode,1,1);
+    gamepadLayout->addWidget(modeLabel, 1, 0);
+    auto *gamepadMode = gamepadMode_ = new QComboBox(bar);
+    gamepadMode->setObjectName(QStringLiteral("gamepadModeCombo"));
+    gamepadMode->addItems({QStringLiteral("Discrete"), QStringLiteral("Proportional")});
+    gamepadLayout->addWidget(gamepadMode, 1, 1);
+    gamepadConfigButton_ = new QPushButton(QStringLiteral("Configure"), bar);
+    gamepadConfigButton_->setObjectName(QStringLiteral("gamepadConfigButton"));
+    gamepadLayout->addWidget(gamepadConfigButton_, 2, 1);
+    QSettings settings;
+    proportionalConfig_.max_scale = settings.value("Gamepad/Proportional/v1/maxScale", 1000).toUInt();
+    proportionalConfig_.turn_gain = settings.value("Gamepad/Proportional/v1/turnGain", 1000).toUInt();
+    proportionalConfig_.pitch_limit_cdeg = settings.value("Gamepad/Proportional/v1/pitchLimit", 1000).toUInt();
+    proportionalConfig_.slew_per_second = settings.value("Gamepad/Proportional/v1/slew", 2000).toUInt();
+    if (!robobeetle::protocol::valid_proportional_config(proportionalConfig_))
+        proportionalConfig_ = {};
+    proportionalMapper_.deadzone =
+        std::clamp(settings.value("Gamepad/Proportional/v1/deadzone", .15).toDouble(), .05, .35);
+    proportionalMapper_.gamma = std::clamp(settings.value("Gamepad/Proportional/v1/gamma", 1.5).toDouble(), 1., 3.);
+    connect(controller_, &IConsoleController::proportionalStopped, this,
+            [this] { proportionalMapper_.requireCenter(); });
+    connect(gamepadMode, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this]
+            {
+                proportionalMapper_.requireCenter();
+                refreshGamepadUi();
+            });
+    connect(gamepadConfigButton_, &QPushButton::clicked, this,
+            [this]
+            {
+                QDialog dialog(this);
+                dialog.setWindowTitle(QStringLiteral("Proportional Gamepad"));
+                auto *form = new QFormLayout(&dialog);
+                const QString labels[]{"Maximum scale", "Turn gain", "Pitch limit (deg)",
+                                       "Slew (/s)",     "Deadzone",  "Gamma"};
+                const double lo[]{.1, 0, 0, .1, .05, 1}, hi[]{1, 2, 20, 10, .35, 3};
+                const double values[]{proportionalConfig_.max_scale / 1000.,
+                                      proportionalConfig_.turn_gain / 1000.,
+                                      proportionalConfig_.pitch_limit_cdeg / 100.,
+                                      proportionalConfig_.slew_per_second / 1000.,
+                                      proportionalMapper_.deadzone,
+                                      proportionalMapper_.gamma};
+                QDoubleSpinBox *fields[6];
+                for (int i = 0; i < 6; ++i)
+                {
+                    fields[i] = new QDoubleSpinBox(&dialog);
+                    fields[i]->setDecimals(2);
+                    fields[i]->setRange(lo[i], hi[i]);
+                    fields[i]->setSingleStep(i == 2 ? .1 : .05);
+                    fields[i]->setValue(values[i]);
+                    form->addRow(labels[i], fields[i]);
+                }
+                auto *buttons = new QDialogButtonBox(
+                    QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::RestoreDefaults,
+                    &dialog);
+                connect(buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked,
+                        &dialog, [&]
+                        {
+                            const double defaults[]{1, 1, 10, 2, .15, 1.5};
+                            for (int i = 0; i < 6; ++i)
+                                fields[i]->setValue(defaults[i]);
+                        });
+                form->addRow(buttons);
+                connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+                connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+                if (dialog.exec() != QDialog::Accepted)
+                    return;
+                proportionalConfig_ = {
+                    static_cast<quint16>(std::lround(fields[0]->value() * 1000)),
+                    static_cast<quint16>(std::lround(fields[1]->value() * 1000)),
+                    static_cast<quint16>(std::lround(fields[2]->value() * 100)),
+                    static_cast<quint16>(std::lround(fields[3]->value() * 1000))};
+                proportionalMapper_.deadzone = fields[4]->value();
+                proportionalMapper_.gamma = fields[5]->value();
+                QSettings cfg;
+                cfg.setValue("Gamepad/Proportional/v1/maxScale", proportionalConfig_.max_scale);
+                cfg.setValue("Gamepad/Proportional/v1/turnGain", proportionalConfig_.turn_gain);
+                cfg.setValue("Gamepad/Proportional/v1/pitchLimit", proportionalConfig_.pitch_limit_cdeg);
+                cfg.setValue("Gamepad/Proportional/v1/slew", proportionalConfig_.slew_per_second);
+                cfg.setValue("Gamepad/Proportional/v1/deadzone", proportionalMapper_.deadzone);
+                cfg.setValue("Gamepad/Proportional/v1/gamma", proportionalMapper_.gamma);
+            });
     gamepadGroup->setVisible(remote);
     row->addWidget(gamepadGroup);
-    connect(gamepadToggleButton_, &QPushButton::toggled, this, [this](bool enabled) {
-        if (enabled && (!controller_->isControlActive() || !gamepadDetected_)) {
-            const QSignalBlocker blocker(gamepadToggleButton_);
-            gamepadToggleButton_->setChecked(false);
-            refreshGamepadUi();
-            return;
-        }
-        gamepadWaitingMode_.reset();
-        appendLog(enabled
-            ? QStringLiteral("Gamepad connected (#%1): center both sticks, then push").arg(gamepadSlot_)
-            : QStringLiteral("Gamepad disconnected: operator"));
-        refreshGamepadUi();
-        pollGamepad();
-    });
+    connect(gamepadToggleButton_, &QPushButton::toggled, this,
+            [this](bool enabled)
+            {
+                if (enabled &&
+                    (!controller_->isControlActive() || !gamepadDetected_ ||
+                     (gamepadMode_->currentIndex() == 1 &&
+                      (!controller_->hasCpgSchema2() || controller_->cpgFeatureLevel() < 2))))
+                {
+                    const QSignalBlocker blocker(gamepadToggleButton_);
+                    gamepadToggleButton_->setChecked(false);
+                    refreshGamepadUi();
+                    return;
+                }
+                gamepadWaitingMode_.reset();
+                proportionalMapper_.requireCenter();
+                appendLog(enabled ? QStringLiteral(
+                                        "Gamepad connected (#%1): center both sticks, then push")
+                                        .arg(gamepadSlot_)
+                                  : QStringLiteral("Gamepad disconnected: operator"));
+                refreshGamepadUi();
+                pollGamepad();
+            });
 
     row->addStretch(1);
     auto *stateLabel = new QLabel(QStringLiteral("State"), bar);
@@ -2092,12 +2176,8 @@ QWidget *MainWindow::createMotionPanel()
     dpad->setSpacing(6);
 
     const MotionMode dpadModes[] = {
-        MotionMode::Forward,
-        MotionMode::TurnLeft,
-        MotionMode::TurnRight,
-        MotionMode::Backward,
-        MotionMode::Ascend,
-        MotionMode::Descend,
+        MotionMode::Forward,  MotionMode::TurnLeft, MotionMode::TurnRight,
+        MotionMode::Backward, MotionMode::Ascend,   MotionMode::Descend,
     };
     for (const MotionMode mode : dpadModes) {
         auto *button = new QPushButton(motionModeText(mode), motionGroup);
@@ -2110,8 +2190,7 @@ QWidget *MainWindow::createMotionPanel()
         if (mode == MotionMode::Backward) {
             button->setText(QStringLiteral("Backward"));
             button->setEnabled(false);
-            button->setToolTip(QStringLiteral(
-                "Backward is not supported"));
+            button->setToolTip(QStringLiteral("Backward is not supported"));
         }
         connect(button, &QPushButton::clicked, this, [this, mode] {
             if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
@@ -2144,16 +2223,17 @@ QWidget *MainWindow::createMotionPanel()
     dpad->addWidget(motionStopButton_, 1, 1);
     dpad->addWidget(
         motionButtons_[static_cast<std::size_t>(MotionMode::TurnRight)], 1, 2);
-    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)],2,0);
-    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Backward)],2,1);
-    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Descend)],2,2);
-    for (QPushButton *button : {motionButtons_[static_cast<std::size_t>(MotionMode::Forward)],
-                                motionButtons_[static_cast<std::size_t>(MotionMode::TurnLeft)],
-                                motionStopButton_,
-                                motionButtons_[static_cast<std::size_t>(MotionMode::TurnRight)],
-                                motionButtons_[static_cast<std::size_t>(MotionMode::Backward)],
-                                motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)],
-                                motionButtons_[static_cast<std::size_t>(MotionMode::Descend)]}) {
+    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)], 2, 0);
+    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Backward)], 2, 1);
+    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Descend)], 2, 2);
+    for (QPushButton *button :
+         {motionButtons_[static_cast<std::size_t>(MotionMode::Forward)],
+          motionButtons_[static_cast<std::size_t>(MotionMode::TurnLeft)], motionStopButton_,
+          motionButtons_[static_cast<std::size_t>(MotionMode::TurnRight)],
+          motionButtons_[static_cast<std::size_t>(MotionMode::Backward)],
+          motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)],
+          motionButtons_[static_cast<std::size_t>(MotionMode::Descend)]})
+    {
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         button->setStyleSheet(button->styleSheet() + QStringLiteral("QPushButton { font-size: 15px; }"));
     }
@@ -2199,25 +2279,35 @@ QWidget *MainWindow::createMotionPanel()
     frontRearCoordinationStatus_->setStyleSheet(
         QStringLiteral("font-weight: 700; color: #405A6B;"));
 
-    gaitLayout->addWidget(new QLabel(QStringLiteral("Backend"),gaitGroup),0,0);
-    gaitLayout->addWidget(gaitBackendCombo_,1,0);
-    auto *gaitCurrentLabel=new QLabel(QStringLiteral("Current"),gaitGroup);
+    gaitLayout->addWidget(new QLabel(QStringLiteral("Backend"), gaitGroup), 0, 0);
+    gaitLayout->addWidget(gaitBackendCombo_, 1, 0);
+    auto *gaitCurrentLabel = new QLabel(QStringLiteral("Current"), gaitGroup);
     gaitCurrentLabel->setObjectName(QStringLiteral("gaitBackendCurrentLabel"));
-    gaitLayout->addWidget(gaitCurrentLabel,0,1); gaitLayout->addWidget(gaitBackendStatus_,1,1);
-    gaitLayout->addWidget(new QLabel(QStringLiteral("Front / Rear"),gaitGroup),0,2);
-    gaitLayout->addWidget(frontRearCoordinationCombo_,1,2);
+    gaitLayout->addWidget(gaitCurrentLabel, 0, 1);
+    gaitLayout->addWidget(gaitBackendStatus_, 1, 1);
+    gaitLayout->addWidget(new QLabel(QStringLiteral("Front / Rear"), gaitGroup), 0, 2);
+    gaitLayout->addWidget(frontRearCoordinationCombo_, 1, 2);
     frontRearCoordinationCombo_->setToolTip(QStringLiteral("Flips rear stroke direction"));
     frontRearCoordinationStatus_->hide();
-    for (int col=0;col<3;++col) gaitLayout->setColumnStretch(col,1);
-    auto *gaitAndParameters=new QWidget(page); auto *gaitColumn=new QVBoxLayout(gaitAndParameters);
-    gaitColumn->setContentsMargins(0,0,0,0); gaitColumn->setSpacing(6);
+    for (int col = 0; col < 3; ++col)
+        gaitLayout->setColumnStretch(col, 1);
+    auto *gaitAndParameters = new QWidget(page);
+    auto *gaitColumn = new QVBoxLayout(gaitAndParameters);
+    gaitColumn->setContentsMargins(0, 0, 0, 0);
+    gaitColumn->setSpacing(6);
     gaitColumn->addWidget(gaitGroup);
-    cpgPanel_=new ui::CpgParametersPanel(gaitAndParameters); gaitColumn->addWidget(cpgPanel_);
-    connect(cpgPanel_,&ui::CpgParametersPanel::applyRequested,this,[this] {
-        if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
-        controller_->setCpgParameters(cpgPanel_->parameters()); cpgPanel_->refresh(*controller_);
+    cpgPanel_ = new ui::CpgParametersPanel(gaitAndParameters);
+    gaitColumn->addWidget(cpgPanel_);
+    connect(cpgPanel_, &ui::CpgParametersPanel::applyRequested, this, [this] {
+        if (visualDispatch_)
+            visualDispatch_->manualInput(vision::ManualInputKind::Motion);
+        controller_->setCpgParameters(cpgPanel_->parameters());
+        cpgPanel_->refresh(*controller_);
     });
-    connect(controller_,&IConsoleController::cpgParametersChanged,this,[this] { if (cpgPanel_) cpgPanel_->refresh(*controller_); });
+    connect(controller_, &IConsoleController::cpgParametersChanged, this, [this] {
+        if (cpgPanel_)
+            cpgPanel_->refresh(*controller_);
+    });
 
     // --- Runtime Log ---
     auto *logGroup = new QGroupBox(QStringLiteral("Log"), page);
@@ -4167,7 +4257,7 @@ void MainWindow::refreshServoUi(int index)
     const bool supported = controller_->isServoSupported(id);
     const bool enabled = controller_->isServoEnabled(id);
     const bool pendingDisable = controller_->isServoDisablePending(id);
-    const bool motionActive = controller_->isMotionActive();
+    const bool motionActive = controller_->isMotionActive() && !controller_->proportionalActive();
     if (enableButtons_[index] != nullptr) {
         enableButtons_[index]->setText(
             enabled ? QStringLiteral("Release") : QStringLiteral("Enable"));
@@ -4241,11 +4331,11 @@ void MainWindow::setAngleUiEnabled(int index, bool enabled)
         return;
     }
     const ServoId id = descriptor->id;
-    const bool actionable = enabled && controller_->isControlActive()
-        && controller_->isServoSupported(id) && descriptor->angleSupported
-        && !descriptor->calibrationPending && controller_->isServoEnabled(id)
-        && !controller_->isServoDisablePending(id)
-        && !controller_->isMotionActive();
+    const bool actionable = enabled && controller_->isControlActive() &&
+                            controller_->isServoSupported(id) && descriptor->angleSupported &&
+                            !descriptor->calibrationPending && controller_->isServoEnabled(id) &&
+                            !controller_->isServoDisablePending(id) &&
+                            (!controller_->isMotionActive() || controller_->proportionalActive());
     if (angleSpins_[index] != nullptr) {
         angleSpins_[index]->setEnabled(actionable);
     }
@@ -4313,7 +4403,8 @@ void MainWindow::refreshMotionUi()
 
 void MainWindow::refreshGaitSelectorsUi()
 {
-    if (cpgPanel_) cpgPanel_->refresh(*controller_);
+    if (cpgPanel_)
+        cpgPanel_->refresh(*controller_);
     if (gaitBackendCombo_ == nullptr || gaitBackendStatus_ == nullptr
         || frontRearCoordinationCombo_ == nullptr
         || frontRearCoordinationStatus_ == nullptr) {
@@ -4380,6 +4471,24 @@ void MainWindow::refreshGamepadUi()
     if (!gamepadToggleButton_) return;
     const bool active = controller_->backendKind() == ConsoleBackendKind::RemoteRbrp
         && controller_->isConnected() && controller_->isControlActive();
+    const bool editable = !gamepadToggleButton_->isChecked() &&
+                          controller_->motionState() == MotionState::Stopped &&
+                          !controller_->isMotionActive();
+    const bool compatible = controller_->hasCpgSchema2() && controller_->cpgFeatureLevel() >= 2;
+    gamepadMode_->setEnabled(editable);
+    if (auto *model = qobject_cast<QStandardItemModel *>(gamepadMode_->model()))
+        model->item(1)->setEnabled(compatible);
+    gamepadMode_->setToolTip(
+        !editable ? QStringLiteral("Stop motion and disconnect Gamepad before changing mode")
+        : !compatible
+            ? QStringLiteral(
+                  "Proportional control requires compatible Console, gateway and firmware")
+            : QString{});
+    gamepadConfigButton_->setEnabled(editable && gamepadMode_->currentIndex() == 1);
+    gamepadConfigButton_->setToolTip(
+        !editable ? QStringLiteral("Stop motion and disconnect Gamepad before configuring")
+        : gamepadMode_->currentIndex() != 1 ? QStringLiteral("Select Proportional mode to configure")
+                                          : QString{});
     gamepadToggleButton_->setText(gamepadToggleButton_->isChecked()
         ? QStringLiteral("Disconnect") : QStringLiteral("Connect"));
     gamepadToggleButton_->setEnabled(active && gamepadDetected_);
@@ -4418,6 +4527,53 @@ void MainWindow::pollGamepad()
     input.depth = depth.state; input.nowMs = gamepadClock_.elapsed();
     input.previousAccepted = gamepadPreviousAccepted_;
     gamepadPreviousAccepted_.reset();
+    if (gamepadMode_->currentIndex() == 1)
+    {
+        const auto actual = controller_->actualProportionalPitch();
+        const bool forbidden =
+            (depth.state == DepthEnvelopeState::Unavailable ||
+             depth.state == DepthEnvelopeState::NotZeroed)
+                ? actual != 0
+                : (depth.state == DepthEnvelopeState::Surface && actual > 0) ||
+                      (depth.state == DepthEnvelopeState::SoftFloor && actual < 0);
+        if (controller_->isMotionActive() && !controller_->proportionalActive() &&
+            !controller_->proportionalPending())
+            proportionalMapper_.requireCenter();
+        auto output = proportionalMapper_.update(input, controller_->proportionalActive(),
+                                                 controller_->proportionalPending());
+        if (controller_->proportionalActive() && forbidden)
+        {
+            output.stop = true;
+            proportionalMapper_.requireCenter();
+            appendLog(QStringLiteral("Proportional STOP: depth boundary"));
+        }
+        if (output.stop)
+        {
+            if (visualDispatch_)
+                visualDispatch_->manualInput(vision::ManualInputKind::Stop);
+            controller_->stopMotion();
+        }
+        if (output.disable)
+            disableGamepad(!pad.connected ? QStringLiteral("receiver disconnected")
+                                          : QStringLiteral("safety stop"));
+        if (output.start && controller_->isMotionReady(MotionMode::Forward))
+        {
+            if (visualDispatch_)
+                visualDispatch_->manualInput(vision::ManualInputKind::Motion);
+            controller_->startProportional(proportionalConfig_, proportionalMapper_.deadzone,
+                                           proportionalMapper_.gamma);
+        }
+        if (output.stream && !output.stop)
+        {
+            if (visualDispatch_)
+                visualDispatch_->manualInput(vision::ManualInputKind::Motion);
+            controller_->setProportionalInput(output.throttle, output.turn, output.pitch);
+        }
+        refreshGamepadUi();
+        refreshMotionUi();
+        pollingGamepad_ = false;
+        return;
+    }
     const auto output = gamepadMapper_.update(input);
     if (output.disable) {
         disableGamepad(!pad.connected ? QStringLiteral("receiver disconnected")

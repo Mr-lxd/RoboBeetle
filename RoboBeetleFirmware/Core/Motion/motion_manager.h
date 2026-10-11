@@ -36,6 +36,25 @@ typedef enum
 
 typedef struct
 {
+    uint16_t max_scale;
+    uint16_t turn_gain;
+    uint16_t pitch_limit_cdeg;
+    uint16_t slew_per_second;
+} proportional_config_t;
+
+typedef struct
+{
+    motion_control_mode_t control_mode;
+    proportional_config_t proportional_config;
+    bool proportional_session_valid;
+    bool proportional_sequence_valid;
+    uint8_t proportional_session_id;
+    uint16_t proportional_sequence;
+    uint32_t proportional_last_input_ms;
+    float proportional_throttle, proportional_turn, proportional_pitch;
+    float slewed_throttle, slewed_turn, slewed_pitch;
+    float effective_throttle, effective_turn, effective_pitch;
+    float stop_throttle, stop_turn, stop_pitch;
     cpg_gait_generator_t *cpg_generator;
     uint16_t cpg_parameter_version;
     uint8_t stop_reason;
@@ -63,6 +82,14 @@ typedef struct
     uint32_t operational_clamp_count;
 } motion_manager_t;
 
+motion_manager_result_t motion_manager_start_proportional(motion_manager_t *manager,
+                                                          const proportional_config_t *config,
+                                                          uint8_t session_id, uint32_t now_ms);
+
+bool motion_manager_update_proportional(motion_manager_t *manager, uint8_t session_id,
+                                        uint16_t sequence, uint16_t throttle, int16_t turn,
+                                        int16_t pitch, uint32_t now_ms);
+
 void motion_manager_init(
     motion_manager_t *manager,
     servo_service_t *servo_service,
@@ -78,7 +105,8 @@ void motion_manager_init_with_backends(
     gait_generator_t experimental_flex,
     motion_gait_backend_t initial_backend);
 
-motion_manager_result_t motion_manager_set_cpg_parameters(motion_manager_t *manager, const cpg_parameters_t *parameters);
+motion_manager_result_t motion_manager_set_cpg_parameters(motion_manager_t *manager,
+                                                          const cpg_parameters_t *parameters);
 
 motion_manager_result_t motion_manager_set_gait_backend(
     motion_manager_t *manager,

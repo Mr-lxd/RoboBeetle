@@ -1,6 +1,7 @@
 #pragma once
 #include "robot/MotionStateMonitor.h"
 #include <QFile>
+#include "robobeetle/protocol/proportional_control.hpp"
 #include "robobeetle/protocol/cpg_parameters.hpp"
 #include <QObject>
 #include <QTimer>
@@ -13,8 +14,11 @@ public:
     ~MotionStateCsvLogger() override;
     bool start(const QString &directory, const QString &sessionId);
     void record(const MotionStateRecord &);
-    void recordParameters(quint32 epoch, quint64 piRxMs, const robobeetle::protocol::CpgParametersSnapshot &);
+    void recordParameters(quint32 epoch, quint64 piRxMs,
+                          const robobeetle::protocol::CpgParametersSnapshot &);
     // Empty sample columns distinguish end/epoch totals from gyro rows.
+    void recordProportionalConfiguration(const robobeetle::protocol::ProportionalConfig &, double,
+                                         double);
     void recordTotals(const MotionStateMonitor &);
     void stop();
     bool isRecording() const { return file_.isOpen(); }
@@ -29,6 +33,6 @@ private:
     QTimer timer_;
     QString session_, error_;
     qint64 bytes_{};
-    std::optional<std::pair<quint32,quint16>> recordedParameters_;
+    std::optional<std::pair<quint32, quint16>> recordedParameters_;
 };
 } // namespace rb

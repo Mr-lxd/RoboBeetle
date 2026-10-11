@@ -37,6 +37,7 @@ public:
     std::optional<quint32> sendCommand(quint8 commandKind,
                                        const QByteArray &commandPayload);
 
+    bool sendProportionalInput(const QByteArray &payload);
     [[nodiscard]] bool isConnected() const;
     [[nodiscard]] bool canAcquireControl() const;
     [[nodiscard]] bool helloComplete() const { return helloComplete_; }

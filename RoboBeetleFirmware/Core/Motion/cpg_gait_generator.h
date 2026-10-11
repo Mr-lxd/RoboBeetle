@@ -34,8 +34,10 @@ void cpg_gait_generator_init_with_profile(
     cpg_gait_generator_t *generator,
     const cpg_gait_profile_t *profile);
 
-void cpg_gait_generator_get_parameters(const cpg_gait_generator_t *generator, cpg_parameters_t *parameters);
-void cpg_gait_generator_apply_parameters(cpg_gait_generator_t *generator, const cpg_parameters_t *parameters);
+void cpg_gait_generator_get_parameters(const cpg_gait_generator_t *generator,
+                                       cpg_parameters_t *parameters);
+void cpg_gait_generator_apply_parameters(cpg_gait_generator_t *generator,
+                                         const cpg_parameters_t *parameters);
 
 void cpg_gait_generator_reset(
     cpg_gait_generator_t *generator);

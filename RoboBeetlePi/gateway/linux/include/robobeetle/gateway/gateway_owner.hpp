@@ -70,6 +70,7 @@ private:
     std::condition_variable bridge_changed_;
     std::deque<ControlSourceId> pending_connections_;
     std::deque<SourceLostSignal> pending_source_losses_;
+    std::optional<RemoteEnvelope> pending_setpoint_;
     std::deque<RemoteEnvelope> pending_inbound_;
     std::size_t pending_inbound_bytes_{0};
     std::size_t inbound_messages_high_water_{0};

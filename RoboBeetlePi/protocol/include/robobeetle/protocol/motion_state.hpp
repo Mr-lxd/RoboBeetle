@@ -53,10 +53,11 @@ inline std::int16_t i16(const Bytes &p, std::size_t o) {
 
 inline std::optional<Bytes> encode_motion_state_batch(const MotionStateBatch &b) {
     if ((b.schema_version != 1 && b.schema_version != 2) ||
-        b.sample_count > (b.schema_version==2?1:2) || b.fragment_count == 0 || b.fragment_count > (b.schema_version==2?32:16) ||
+        b.sample_count > (b.schema_version == 2 ? 1 : 2) || b.fragment_count == 0 ||
+        b.fragment_count > (b.schema_version == 2 ? 32 : 16) ||
         b.fragment_index >= b.fragment_count)
         return std::nullopt;
-    const auto sample_size=b.schema_version==2?35U:22U;
+    const auto sample_size = b.schema_version == 2 ? 35U : 22U;
     Bytes p(16 + sample_size * b.sample_count, 0);
     p[0] = b.schema_version;
     p[1] = b.sample_count;
@@ -81,24 +82,31 @@ inline std::optional<Bytes> encode_motion_state_batch(const MotionStateBatch &b)
                     (s.phase_valid << 5) | (s.gyro_valid << 6) | (s.angle_valid << 7);
         motion_wire::put(p, o + 18, s.angle_age_ms, 2);
         motion_wire::put(p, o + 20, s.phase_age_ms, 2);
-        if (b.schema_version==2) {
-            p[o+22]=s.control_mode; p[o+23]=s.stop_reason;
-            motion_wire::put(p,o+24,s.cpg_param_version,2);
-            p[o+26]=s.effective_throttle; p[o+27]=Byte(s.effective_turn); p[o+28]=Byte(s.effective_pitch);
-            motion_wire::put(p,o+29,s.phase_fr_u16,2); motion_wire::put(p,o+31,s.phase_rr_u16,2); motion_wire::put(p,o+33,s.phase_rl_u16,2);
+        if (b.schema_version == 2)
+        {
+            p[o + 22] = s.control_mode;
+            p[o + 23] = s.stop_reason;
+            motion_wire::put(p, o + 24, s.cpg_param_version, 2);
+            p[o + 26] = s.effective_throttle;
+            p[o + 27] = Byte(s.effective_turn);
+            p[o + 28] = Byte(s.effective_pitch);
+            motion_wire::put(p, o + 29, s.phase_fr_u16, 2);
+            motion_wire::put(p, o + 31, s.phase_rr_u16, 2);
+            motion_wire::put(p, o + 33, s.phase_rl_u16, 2);
         }
     }
     return p;
 }
 
 inline std::optional<MotionStateBatch> decode_motion_state_batch(const Bytes &p) {
-    if (p.size()<16 || (p[0]!=1 && p[0]!=2)) return std::nullopt;
-    const auto sample_size=p[0]==2?35U:22U;
-    if (p[1] > (p[0]==2?1:2) || p.size() != 16U + sample_size * p[1] ||
-        motion_wire::get(p,6,2)!=0 || p[5]==0 || p[5]>(p[0]==2?32:16) || p[4]>=p[5])
+    if (p.size() < 16 || (p[0] != 1 && p[0] != 2))
+        return std::nullopt;
+    const auto sample_size = p[0] == 2 ? 35U : 22U;
+    if (p[1] > (p[0] == 2 ? 1 : 2) || p.size() != 16U + sample_size * p[1] ||
+        motion_wire::get(p, 6, 2) != 0 || p[5] == 0 || p[5] > (p[0] == 2 ? 32 : 16) || p[4] >= p[5])
         return std::nullopt;
     MotionStateBatch b{};
-    b.schema_version=p[0];
+    b.schema_version = p[0];
     b.sample_count = p[1];
     b.batch_seq = motion_wire::get(p, 2, 2);
     b.fragment_index = p[4];
@@ -127,13 +135,23 @@ inline std::optional<MotionStateBatch> decode_motion_state_batch(const Bytes &p)
         s.angle_valid = p[o + 17] & 0x80U;
         s.angle_age_ms = motion_wire::get(p, o + 18, 2);
         s.phase_age_ms = motion_wire::get(p, o + 20, 2);
-        if (b.schema_version==2) {
-            s.control_mode=p[o+22]; s.stop_reason=p[o+23]; s.cpg_param_version=motion_wire::get(p,o+24,2);
-            s.effective_throttle=p[o+26];
-            s.effective_turn=static_cast<std::int8_t>(p[o+27]<128?p[o+27]:int(p[o+27])-256);
-            s.effective_pitch=static_cast<std::int8_t>(p[o+28]<128?p[o+28]:int(p[o+28])-256);
-            if (s.control_mode>1 || s.stop_reason>8 || s.effective_throttle>100 || s.effective_turn<-100 || s.effective_turn>100 || s.effective_pitch<-100 || s.effective_pitch>100) return std::nullopt;
-            s.phase_fr_u16=motion_wire::get(p,o+29,2); s.phase_rr_u16=motion_wire::get(p,o+31,2); s.phase_rl_u16=motion_wire::get(p,o+33,2);
+        if (b.schema_version == 2)
+        {
+            s.control_mode = p[o + 22];
+            s.stop_reason = p[o + 23];
+            s.cpg_param_version = motion_wire::get(p, o + 24, 2);
+            s.effective_throttle = p[o + 26];
+            s.effective_turn =
+                static_cast<std::int8_t>(p[o + 27] < 128 ? p[o + 27] : int(p[o + 27]) - 256);
+            s.effective_pitch =
+                static_cast<std::int8_t>(p[o + 28] < 128 ? p[o + 28] : int(p[o + 28]) - 256);
+            if (s.control_mode > 1 || s.stop_reason > 8 || s.effective_throttle > 100 ||
+                s.effective_turn < -100 || s.effective_turn > 100 || s.effective_pitch < -100 ||
+                s.effective_pitch > 100)
+                return std::nullopt;
+            s.phase_fr_u16 = motion_wire::get(p, o + 29, 2);
+            s.phase_rr_u16 = motion_wire::get(p, o + 31, 2);
+            s.phase_rl_u16 = motion_wire::get(p, o + 33, 2);
         }
     }
     return b;
