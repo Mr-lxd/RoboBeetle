@@ -783,15 +783,14 @@ void testGaitBackendPanelLifecycle()
         }
     }
     expect(selectorLayout != nullptr && gaitLabel != nullptr && coordinationLabel != nullptr &&
+               gaitConfirmed != nullptr && gaitCurrent != nullptr &&
                gridRowForWidget(selectorLayout, gaitLabel) == 0 &&
-               gridRowForWidget(selectorLayout, coordinationLabel) == 0,
-           "Backend and Front / Rear headings share the A prime header row");
-    expect(selectorLayout != nullptr && gaitConfirmed != nullptr && gaitCurrent != nullptr &&
+               gridRowForWidget(selectorLayout, combo) == 0 &&
                gridRowForWidget(selectorLayout, gaitCurrent) == 0 &&
-               gridRowForWidget(selectorLayout, combo) == 1 &&
-               gridRowForWidget(selectorLayout, gaitConfirmed) == 1 &&
-               gridRowForWidget(selectorLayout, coordinationCombo) == 1,
-           "Backend, Current and Front / Rear values share the A prime value row");
+               gridRowForWidget(selectorLayout, gaitConfirmed) == 0 &&
+               gridRowForWidget(selectorLayout, coordinationLabel) == 0 &&
+               gridRowForWidget(selectorLayout, coordinationCombo) == 0,
+           "Backend, Current and Front / Rear labels and values share one row");
     expect(coordinationConfirmed != nullptr && coordinationConfirmed->isHidden(),
            "coordination confirmation uses the existing selector without a duplicate status row");
     expect(!combo->isEnabled(),

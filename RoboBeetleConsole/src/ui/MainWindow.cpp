@@ -2285,17 +2285,19 @@ QWidget *MainWindow::createMotionPanel()
     frontRearCoordinationStatus_->setStyleSheet(
         QStringLiteral("font-weight: 700; color: #405A6B;"));
 
+    // One row: label and control side by side, to keep the tools area short.
+    gaitLayout->setHorizontalSpacing(6);
     gaitLayout->addWidget(new QLabel(QStringLiteral("Backend"), gaitGroup), 0, 0);
-    gaitLayout->addWidget(gaitBackendCombo_, 1, 0);
+    gaitLayout->addWidget(gaitBackendCombo_, 0, 1);
     auto *gaitCurrentLabel = new QLabel(QStringLiteral("Current"), gaitGroup);
     gaitCurrentLabel->setObjectName(QStringLiteral("gaitBackendCurrentLabel"));
-    gaitLayout->addWidget(gaitCurrentLabel, 0, 1);
-    gaitLayout->addWidget(gaitBackendStatus_, 1, 1);
-    gaitLayout->addWidget(new QLabel(QStringLiteral("Front / Rear"), gaitGroup), 0, 2);
-    gaitLayout->addWidget(frontRearCoordinationCombo_, 1, 2);
+    gaitLayout->addWidget(gaitCurrentLabel, 0, 2);
+    gaitLayout->addWidget(gaitBackendStatus_, 0, 3);
+    gaitLayout->addWidget(new QLabel(QStringLiteral("Front / Rear"), gaitGroup), 0, 4);
+    gaitLayout->addWidget(frontRearCoordinationCombo_, 0, 5);
     frontRearCoordinationCombo_->setToolTip(QStringLiteral("Flips rear stroke direction"));
     frontRearCoordinationStatus_->hide();
-    for (int col = 0; col < 3; ++col)
+    for (int col : {1, 3, 5})
         gaitLayout->setColumnStretch(col, 1);
     auto *gaitAndParameters = new QWidget(page);
     auto *gaitColumn = new QVBoxLayout(gaitAndParameters);
