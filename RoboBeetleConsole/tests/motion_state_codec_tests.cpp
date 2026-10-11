@@ -1,5 +1,6 @@
 #include "protocol/MotionStateCodec.h"
 #include "protocol/PacketCodec.h"
+#include "robobeetle/protocol/proportional_control.hpp"
 #include "robot/MotionStateCsvLogger.h"
 #include <QCoreApplication>
 
@@ -18,6 +19,7 @@ static void writeCompatibilityCsv(const QString &directory)
     parameters.version = 7;
     logger.recordParameters(1, 901000, parameters);
     logger.recordParameters(1, 901000, parameters); // one event for the same version
+    logger.recordProportionalConfiguration({1000, 1000, 1000, 2000}, .15, 1.5);
     for (unsigned i = 0; i < 600; ++i)
     {
         rb::MotionStateRecord record;
@@ -48,6 +50,18 @@ static void writeCompatibilityCsv(const QString &directory)
 
 int main(int argc, char **argv)
 {
+    using namespace robobeetle::protocol;
+    const Bytes startGolden{0xe8, 0x03, 0xe8, 0x03, 0xe8, 0x03, 0xd0, 0x07, 0x42};
+    const Bytes streamGolden{0x42, 0x34, 0x12, 0xe8, 0x03, 0x18, 0xfc, 0xe8, 0x03};
+    assert(encode_proportional_start({{}, 0x42}) == startGolden);
+    const auto startDecoded = decode_proportional_start(startGolden);
+    assert(startDecoded && startDecoded->session_id == 0x42 &&
+           startDecoded->config.slew_per_second == 2000);
+    assert(encode_proportional_setpoint({0x42, 0x1234, 1000, -1000, 1000}) == streamGolden);
+    const auto streamDecoded = decode_proportional_setpoint(streamGolden);
+    assert(streamDecoded && streamDecoded->sequence == 0x1234 && streamDecoded->turn == -1000 &&
+           streamDecoded->pitch == 1000);
+
     QCoreApplication app(argc, argv);
     for (unsigned count = 0; count <= 2; ++count) {
         rb::MotionStateBatch batch{};

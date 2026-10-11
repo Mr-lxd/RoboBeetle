@@ -1,5 +1,6 @@
 #pragma once
 
+#include "robobeetle/protocol/proportional_control.hpp"
 #include "robot/DepthControl.h"
 #include "robobeetle/protocol/cpg_parameters.hpp"
 #include "robot/DepthMonitor.h"
@@ -68,6 +69,12 @@ public:
     virtual bool neutralServo(ServoId id) = 0;
     virtual bool startMotion(MotionMode mode) = 0;
     virtual bool stopMotion() = 0;
+    using ProportionalConfig = robobeetle::protocol::ProportionalConfig;
+    virtual bool startProportional(const ProportionalConfig &, double, double) { return false; }
+    virtual bool proportionalActive() const { return false; }
+    virtual bool proportionalPending() const { return false; }
+    virtual bool setProportionalInput(quint16, qint16, qint16) { return false; }
+    virtual qint16 actualProportionalPitch() const { return 0; }
     virtual std::optional<quint32> submitVisualMotion(MotionMode) { return std::nullopt; }
     [[nodiscard]] virtual quint16 inferredPoseKnownMask() const { return 0; }
     [[nodiscard]] virtual std::optional<DepthControlSample> controlDepthSample() const { return std::nullopt; }
@@ -135,25 +142,27 @@ public:
     [[nodiscard]] virtual bool isMotionTransitioning() const = 0;
 
 signals:
-    void commandTerminal(quint32 requestId, rb::CommandTerminalResult result, quint8 rawResult, qint64 rttMs);
-    void serialPortsChanged(const QStringList &ports);
-    void connectionStateChanged(rb::TransportState state);
-    void controlAvailabilityChanged();
-    void authorityStateChanged(rb::ControlAuthorityState state, bool active);
-    void servoStateChanged(int servoIndex, bool enabled);
-    void servoDisablePendingChanged(int servoIndex, bool pending);
-    void leakStateChanged(rb::LeakState state);
-    void imuStateChanged();
-    void depthStateChanged();
-    void controlDepthSampleChanged(); // 每收到一个深度样本、归零或清除时发出
-    void motionStateChanged(rb::MotionState state, rb::MotionMode mode);
-    void cpgParametersChanged();
-    void gaitBackendStateChanged();
-    void frontRearCoordinationStateChanged();
-    void protocolMonitorChanged(const rb::ProtocolMonitor &monitor);
-    void txHexChanged(const QString &hex);
-    void rxHexChanged(const QString &hex);
-    void logMessage(const QString &message);
+  void proportionalStopped();
+  void commandTerminal(quint32 requestId, rb::CommandTerminalResult result, quint8 rawResult,
+                       qint64 rttMs);
+  void serialPortsChanged(const QStringList &ports);
+  void connectionStateChanged(rb::TransportState state);
+  void controlAvailabilityChanged();
+  void authorityStateChanged(rb::ControlAuthorityState state, bool active);
+  void servoStateChanged(int servoIndex, bool enabled);
+  void servoDisablePendingChanged(int servoIndex, bool pending);
+  void leakStateChanged(rb::LeakState state);
+  void imuStateChanged();
+  void depthStateChanged();
+  void controlDepthSampleChanged(); // 每收到一个深度样本、归零或清除时发出
+  void motionStateChanged(rb::MotionState state, rb::MotionMode mode);
+  void cpgParametersChanged();
+  void gaitBackendStateChanged();
+  void frontRearCoordinationStateChanged();
+  void protocolMonitorChanged(const rb::ProtocolMonitor &monitor);
+  void txHexChanged(const QString &hex);
+  void rxHexChanged(const QString &hex);
+  void logMessage(const QString &message);
 };
 
 } // namespace rb

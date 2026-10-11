@@ -57,6 +57,12 @@ public:
         const protocol::Bytes &payload,
         TimeMs now_ms);
 
+    bool submit_latest_setpoint(const protocol::Bytes &payload);
+    void clear_latest_setpoint()
+    {
+        latest_setpoint_.reset();
+    }
+
     [[nodiscard]] LinkState state() const { return state_; }
     [[nodiscard]] std::size_t queued_ordinary_count() const
     {
@@ -154,6 +160,7 @@ private:
     TimeMs next_heartbeat_due_ms_{0U};
     std::optional<TimeMs> first_heartbeat_dispatch_ms_;
     std::optional<TimeMs> last_good_heartbeat_ack_ms_;
+    std::optional<protocol::Bytes> latest_setpoint_;
     std::optional<PendingOrdinary> pending_ordinary_;
     std::deque<QueuedOrdinary> ordinary_queue_;
     std::deque<HeartbeatRecord> heartbeat_history_;

@@ -192,10 +192,8 @@ static void protocol_feed_byte(
                     ++heartbeat_count;
                 }
 
-                const bool ack_sent = protocol_send_ack(
-                    frame.sequence,
-                    frame.type,
-                    outcome.result);
+                const bool ack_sent = (frame.type != RBP2_MSG_PROPORTIONAL_INPUT) &&
+                                      protocol_send_ack(frame.sequence, frame.type, outcome.result);
 
                 if (ack_sent && outcome.cpg_snapshot)
                 {
@@ -414,7 +412,10 @@ static void motion_state_capture(uint32_t now_ms)
     rb_motion_state_sample_t sample = {0};
     const double cycle = 6.28318530717958647692;
     double phase;
-    sample.control_mode = MOTION_CONTROL_DISCRETE;
+    sample.control_mode = motion_manager.control_mode;
+    sample.throttle = (uint8_t)motion_state_fixed(motion_manager.effective_throttle, 100.0F);
+    sample.turn = (int8_t)motion_state_fixed(motion_manager.effective_turn, 100.0F);
+    sample.pitch = (int8_t)motion_state_fixed(motion_manager.effective_pitch, 100.0F);
     sample.stop_reason = motion_manager.stop_reason;
     sample.parameter_version = motion_manager.cpg_parameter_version;
     sample.mcu_ms = now_ms;

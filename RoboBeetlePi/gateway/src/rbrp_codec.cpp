@@ -63,6 +63,7 @@ bool is_client_kind(RbrpMessageKind kind) noexcept
     case RbrpMessageKind::AcquireControl:
     case RbrpMessageKind::ControlHeartbeat:
     case RbrpMessageKind::ReleaseControl:
+    case RbrpMessageKind::ProportionalInput:
     case RbrpMessageKind::CommandRequest:
         return true;
     default:
@@ -102,6 +103,7 @@ bool is_known_message_kind(RbrpMessageKind kind) noexcept
     case RbrpMessageKind::AcquireControl:
     case RbrpMessageKind::ControlHeartbeat:
     case RbrpMessageKind::ReleaseControl:
+    case RbrpMessageKind::ProportionalInput:
     case RbrpMessageKind::CommandRequest:
     case RbrpMessageKind::HelloReply:
     case RbrpMessageKind::AcquireReply:
@@ -132,6 +134,8 @@ expected_payload_size(RbrpMessageKind kind) noexcept
     case RbrpMessageKind::ControlHeartbeat:
     case RbrpMessageKind::ReleaseControl:
         return 0U;
+    case RbrpMessageKind::ProportionalInput:
+        return 9U;
     case RbrpMessageKind::CommandRequest:
         return std::nullopt;
     case RbrpMessageKind::HelloReply:
@@ -163,7 +167,7 @@ bool payload_size_is_valid(RbrpMessageKind kind, std::size_t size) noexcept
         return size == 32U || size == 54U || size == 76U || size == 67U;
     }
     if (kind == RbrpMessageKind::CommandRequest) {
-        return (size >= 1U && size <= 4U) || size == 59U;
+        return (size >= 1U && size <= 4U) || size == 59U || size == 10U;
     }
     const auto expected = expected_payload_size(kind);
     return expected.has_value() && *expected == size;
@@ -219,10 +223,24 @@ RbrpMessageDecodeResult decode_remote_message(const RbrpFrame &frame)
     case RbrpMessageKind::ReleaseControl:
         message.payload = ReleaseControlRequest{};
         break;
+    case RbrpMessageKind::ProportionalInput: {
+        const auto input = protocol::decode_proportional_setpoint(frame.payload);
+        if (!input || frame.request_id != 0)
+            return {RbrpMessageDecodeStatus::InvalidPayload, std::nullopt};
+        message.payload = *input;
+        break;
+    }
     case RbrpMessageKind::CommandRequest: {
         CommandRequest request;
         request.command_kind = frame.payload[0];
         switch (static_cast<RobotCommandKind>(request.command_kind)) {
+        case RobotCommandKind::StartProportional: {
+            const auto start = protocol::decode_proportional_start(
+                Bytes(frame.payload.begin() + 1, frame.payload.end()));
+            if (start)
+                request.command = StartProportional{*start};
+            break;
+        }
         case RobotCommandKind::SetCpgParameters: {
             const auto p = protocol::decode_cpg_parameters(
                 Bytes(frame.payload.begin() + 1, frame.payload.end()));

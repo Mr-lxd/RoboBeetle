@@ -137,9 +137,8 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
     const rbp2_frame_t *frame,
     uint32_t now_ms)
 {
-    if ((frame->type != RBP2_MSG_HEARTBEAT) &&
-        dispatcher->last_request_valid &&
-        (frame->sequence == dispatcher->last_request_sequence) &&
+    if ((frame->type != RBP2_MSG_HEARTBEAT) && (frame->type != RBP2_MSG_PROPORTIONAL_INPUT) &&
+        dispatcher->last_request_valid && (frame->sequence == dispatcher->last_request_sequence) &&
         (frame->type == dispatcher->last_request_type))
     {
         protocol_dispatcher_outcome_t outcome = make_outcome(dispatcher->last_request_result);
@@ -151,6 +150,30 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
 
     switch (frame->type)
     {
+    case RBP2_MSG_START_PROPORTIONAL: {
+        if (frame->payload_length != 9U)
+        {
+            return complete_command(dispatcher, frame, RBP2_RESULT_INVALID_PAYLOAD);
+        }
+        const proportional_config_t config = {
+            read_le16(frame->payload), read_le16(frame->payload + 2), read_le16(frame->payload + 4),
+            read_le16(frame->payload + 6)};
+        return complete_command(
+            dispatcher, frame,
+            map_motion_manager_result(motion_manager_start_proportional(
+                dispatcher->motion_manager, &config, frame->payload[8], now_ms)));
+    }
+    case RBP2_MSG_PROPORTIONAL_INPUT: {
+        if (frame->payload_length != 9U)
+        {
+            return make_outcome(RBP2_RESULT_INVALID_PAYLOAD);
+        }
+        const bool accepted = motion_manager_update_proportional(
+            dispatcher->motion_manager, frame->payload[0], read_le16(frame->payload + 1),
+            read_le16(frame->payload + 3), (int16_t)read_le16(frame->payload + 5),
+            (int16_t)read_le16(frame->payload + 7), now_ms);
+        return make_outcome(accepted ? RBP2_RESULT_OK : RBP2_RESULT_INVALID_STATE);
+    }
         case RBP2_MSG_HEARTBEAT:
         {
             protocol_dispatcher_outcome_t outcome;
@@ -520,7 +543,7 @@ size_t protocol_dispatcher_cpg_snapshot(const protocol_dispatcher_t *d, uint16_t
     p[1] = (uint8_t)(sequence >> 8);
     p[2] = (uint8_t)version;
     p[3] = (uint8_t)(version >> 8);
-    p[4] = 1;
+    p[4] = 2;
     cpg_parameters_t params;
     cpg_gait_generator_get_parameters(d->motion_manager->cpg_generator, &params);
     return cpg_parameters_encode(&params, p + 5, capacity - 5) == 58 ? 63 : 0;

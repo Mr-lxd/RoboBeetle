@@ -352,7 +352,10 @@ LinuxOnboardApplicationPort::submit(const RobotCommand &command)
 {
     const auto submit = [&application = application_](const auto &value) {
         using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, SetCpgParameters>)
+        if constexpr (std::is_same_v<T, StartProportional>)
+        {
+            return application.start_proportional(value.start);
+        } else if constexpr (std::is_same_v<T, SetCpgParameters>)
         {
             return application.set_cpg_parameters(value.parameters);
         } else if constexpr (std::is_same_v<T, QueryCpgParameters>)
@@ -396,6 +399,17 @@ LinuxOnboardApplicationPort::submit(const RobotCommand &command)
         }
     };
     return map_submit_result(std::visit(submit, command));
+}
+
+bool LinuxOnboardApplicationPort::submit_latest_setpoint(
+    const protocol::ProportionalSetpoint &input)
+{
+    return application_.submit_latest_setpoint(input);
+}
+
+void LinuxOnboardApplicationPort::clear_latest_setpoint()
+{
+    application_.clear_latest_setpoint();
 }
 
 GatewayApplicationSessionState

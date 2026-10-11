@@ -43,6 +43,11 @@ public:
     bool neutralServo(ServoId id) override;
     bool startMotion(MotionMode mode) override;
     bool stopMotion() override;
+    bool startProportional(const ProportionalConfig &, double, double) override;
+    bool proportionalActive() const override { return propActive_; }
+    bool proportionalPending() const override { return propPending_; }
+    bool setProportionalInput(quint16, qint16, qint16) override;
+    qint16 actualProportionalPitch() const override { return actualPitch_; }
     std::optional<quint32> submitVisualMotion(MotionMode mode) override;
     [[nodiscard]] quint16 inferredPoseKnownMask() const override { return poseKnownMask_; }
     [[nodiscard]] std::optional<DepthControlSample> controlDepthSample() const override;
@@ -141,6 +146,14 @@ signals:
     void motionTelemetryChanged();
     void motionRecordingFailed();
 private:
+  void clearProportional();
+  QTimer propTimer_;
+  std::optional<robobeetle::protocol::ProportionalSetpoint> propLatest_;
+  bool propActive_{false}, propPending_{false};
+  bool propTelemetrySeen_{false}, propStopAwaiting_{false};
+  quint8 propSession_{0};
+  quint16 propSequence_{0};
+  qint16 actualPitch_{0};
   std::optional<robobeetle::protocol::CpgParametersSnapshot> cpgSnapshot_;
   std::optional<CpgParameters> cpgRequested_;
   std::optional<quint16> cpgSetSequence_;

@@ -29,6 +29,9 @@ public:
     GatewayApplicationSubmitResult
     submit(const RobotCommand &command) override;
 
+    bool submit_latest_setpoint(const protocol::ProportionalSetpoint &) override;
+    void clear_latest_setpoint() override;
+
     [[nodiscard]] GatewayApplicationSessionState
     session_state() const noexcept override;
     [[nodiscard]] GatewayApplicationLinkState link_state() const override;

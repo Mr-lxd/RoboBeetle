@@ -46,6 +46,16 @@ int LinkRuntime::open(const char *device_path)
     return session_.retry_open(device_path, clock_fn_());
 }
 
+bool LinkRuntime::submit_latest_setpoint(const protocol::Bytes &payload)
+{
+    return session_.submit_latest_setpoint(payload);
+}
+
+void LinkRuntime::clear_latest_setpoint()
+{
+    session_.clear_latest_setpoint();
+}
+
 link_core::SubmitResult LinkRuntime::submit_request(protocol::Byte request_type,
                                                    const protocol::Bytes &payload)
 {

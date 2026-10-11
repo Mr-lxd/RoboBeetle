@@ -7,7 +7,16 @@
 namespace rb {
 namespace {
 const QByteArray header =
-    "schema_version,session_id,link_epoch,batch_seq,fragment_index,sample_index,mcu_ms,mcu_unwrapped_ms,mcu_tx_ms,pi_rx_ms,sample_pi_ms,clock_error_ms,gyro_x,gyro_y,gyro_z,roll,pitch,gait_phase_u16,gait_phase,backend,active_mode,target_mode,coordination,motion_state,in_transition,gyro_valid,angle_valid,phase_valid,angle_age_ms,phase_age_ms,sampler_drop_total,gateway_drop_total,batch_gap_total,fragment_gap_total,record_type,control_mode,stop_reason,cpg_param_version,effective_throttle,effective_turn,effective_pitch,cpg_phases_valid,phase_fr_u16,phase_rr_u16,phase_rl_u16,phase_fl_u16,phase_fr,phase_rr,phase_rl,phase_fl,cpg_front_amp_deg,cpg_rear_amp_deg,cpg_nominal_period_s,cpg_beta,cpg_front_rear_phase_deg,cpg_left_right_phase_deg,cpg_coupling_strength,cpg_coupling_mask\n";
+    "schema_version,session_id,link_epoch,batch_seq,fragment_index,sample_index,mcu_ms,mcu_"
+    "unwrapped_ms,mcu_tx_ms,pi_rx_ms,sample_pi_ms,clock_error_ms,gyro_x,gyro_y,gyro_z,roll,pitch,"
+    "gait_phase_u16,gait_phase,backend,active_mode,target_mode,coordination,motion_state,in_"
+    "transition,gyro_valid,angle_valid,phase_valid,angle_age_ms,phase_age_ms,sampler_drop_total,"
+    "gateway_drop_total,batch_gap_total,fragment_gap_total,record_type,control_mode,stop_reason,"
+    "cpg_param_version,effective_throttle,effective_turn,effective_pitch,cpg_phases_valid,phase_fr_"
+    "u16,phase_rr_u16,phase_rl_u16,phase_fl_u16,phase_fr,phase_rr,phase_rl,phase_fl,cpg_front_amp_"
+    "deg,cpg_rear_amp_deg,cpg_nominal_period_s,cpg_beta,cpg_front_rear_phase_deg,cpg_left_right_"
+    "phase_deg,cpg_coupling_strength,cpg_coupling_mask,prop_max_scale,prop_turn_gain,prop_pitch_"
+    "limit_cdeg,prop_slew_per_second,prop_deadzone,prop_gamma\n";
 QString num(double n) { return QString::number(n, 'g', 17); }
 }
 MotionStateCsvLogger::MotionStateCsvLogger(QObject *parent) : QObject(parent) {
@@ -71,7 +80,7 @@ void MotionStateCsvLogger::record(const MotionStateRecord &r) {
     for (const auto v : phases)
         f << (s.backend == 1 && s.phase_valid ? num(v * 2.0 * std::numbers::pi / 65536)
                                               : QString{});
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 14; ++i)
         f << QString{};
     append((f.join(',') + '\n').toUtf8());
 }
@@ -82,7 +91,7 @@ void MotionStateCsvLogger::recordParameters(quint32 epoch, quint64 piRxMs,
         return;
     recordedParameters_ = std::make_pair(epoch, s.version);
     QStringList f;
-    for (int i = 0; i < 58; ++i)
+    for (int i = 0; i < 64; ++i)
         f << QString{};
     f[0] = "motion-state-csv-v2";
     f[1] = session_;
@@ -106,7 +115,7 @@ void MotionStateCsvLogger::stop() {
 void MotionStateCsvLogger::recordTotals(const MotionStateMonitor &m) {
     if (!isRecording() || !m.linkEpoch()) return;
     QStringList f;
-    for (int i = 0; i < 58; ++i)
+    for (int i = 0; i < 64; ++i)
         f << QString{};
     f[0] = "motion-state-csv-v2";
     f[1] = session_;
@@ -117,3 +126,23 @@ void MotionStateCsvLogger::recordTotals(const MotionStateMonitor &m) {
     append((f.join(',') + '\n').toUtf8());
 }
 } // namespace rb
+
+void rb::MotionStateCsvLogger::recordProportionalConfiguration(
+    const robobeetle::protocol::ProportionalConfig &q, double d, double g)
+{
+    if (!isRecording())
+        return;
+    QStringList f;
+    for (int i = 0; i < 64; ++i)
+        f << QString{};
+    f[0] = "motion-state-csv-v2";
+    f[1] = session_;
+    f[34] = "proportional_configuration";
+    f[58] = QString::number(q.max_scale);
+    f[59] = QString::number(q.turn_gain);
+    f[60] = QString::number(q.pitch_limit_cdeg);
+    f[61] = QString::number(q.slew_per_second);
+    f[62] = QString::number(d, 'g', 17);
+    f[63] = QString::number(g, 'g', 17);
+    append((f.join(',') + '\n').toUtf8());
+}

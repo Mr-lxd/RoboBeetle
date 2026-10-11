@@ -98,7 +98,7 @@ int main(void)
     uint8_t snapshot[63];
     assert(protocol_dispatcher_cpg_snapshot(&d, 123, snapshot, 63) == 63);
     assert(snapshot[0] == 123 && snapshot[1] == 0 && snapshot[2] == 1 && snapshot[3] == 0 &&
-           snapshot[4] == 1);
+           snapshot[4] == 2);
     cpg_parameters_t back;
     assert(cpg_parameters_decode(snapshot + 5, 58, &back) == CPG_PARAMETERS_OK);
     assert(cpg_parameters_equal(&params, &back));

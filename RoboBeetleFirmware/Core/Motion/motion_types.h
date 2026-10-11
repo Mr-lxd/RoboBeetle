@@ -26,12 +26,14 @@ typedef enum
 
 typedef enum
 {
-    MOTION_CONTROL_DISCRETE = 0
+    MOTION_CONTROL_DISCRETE = 0,
+    MOTION_CONTROL_PROPORTIONAL = 1
 } motion_control_mode_t;
 typedef enum
 {
     MOTION_STOP_REASON_NONE = 0,
     MOTION_STOP_REASON_OPERATOR = 1,
+    MOTION_STOP_REASON_INPUT_TIMEOUT = 3,
     MOTION_STOP_REASON_LINK_LOST = 5
 } motion_stop_reason_t;
 

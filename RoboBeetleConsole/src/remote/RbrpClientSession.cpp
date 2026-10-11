@@ -567,3 +567,8 @@ RbrpClientSession::toQByteArray(const robobeetle::gateway::Bytes &bytes)
 }
 
 } // namespace rb
+
+bool rb::RbrpClientSession::sendProportionalInput(const QByteArray &payload)
+{
+    return isControlActive() && sendFrame(RbrpMessageKind::ProportionalInput, 0, payload);
+}

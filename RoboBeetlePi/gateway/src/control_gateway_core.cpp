@@ -40,9 +40,8 @@ bool is_valid_front_rear_coordination(
 
 bool is_authority_dependent(RbrpMessageKind kind) noexcept
 {
-    return kind == RbrpMessageKind::ControlHeartbeat ||
-           kind == RbrpMessageKind::ReleaseControl ||
-           kind == RbrpMessageKind::CommandRequest;
+    return kind == RbrpMessageKind::ControlHeartbeat || kind == RbrpMessageKind::ReleaseControl ||
+           kind == RbrpMessageKind::CommandRequest || kind == RbrpMessageKind::ProportionalInput;
 }
 
 } // namespace
@@ -236,6 +235,9 @@ bool ControlGatewayCore::valid_command(const RobotCommand &command) const
             } else if constexpr (std::is_same_v<T, SetCpgParameters>)
             {
                 return protocol::valid_cpg_parameters(value.parameters);
+            } else if constexpr (std::is_same_v<T, StartProportional>)
+            {
+                return protocol::valid_proportional_config(value.start.config);
             } else if constexpr (std::is_same_v<T, QueryCpgParameters>)
             {
                 return true;
@@ -291,7 +293,7 @@ void ControlGatewayCore::handle_command(const RemoteEnvelope &envelope,
     if (!request.command.has_value()) {
         const bool known_command =
             request.command_kind >= static_cast<Byte>(RobotCommandKind::EnableServos) &&
-            request.command_kind <= static_cast<Byte>(RobotCommandKind::QueryCpgParameters);
+            request.command_kind <= static_cast<Byte>(RobotCommandKind::StartProportional);
         if (known_command) {
             emit(GatewayOutbound{
                      envelope.source,
@@ -346,6 +348,11 @@ void ControlGatewayCore::handle_command(const RemoteEnvelope &envelope,
         return;
     }
 
+    if (std::holds_alternative<StopMotion>(*request.command) ||
+        std::holds_alternative<DisableServos>(*request.command))
+    {
+        application_.clear_latest_setpoint();
+    }
     const auto result = application_.submit(*request.command);
     const auto status = submitted_status(result.status);
     if (result.status == GatewayApplicationSubmitStatus::Submitted &&
@@ -618,6 +625,14 @@ void ControlGatewayCore::process(const RemoteEnvelope &envelope,
     }
 
     const auto request_id = envelope.message.request_id;
+    if (envelope.message.kind == RbrpMessageKind::ProportionalInput)
+    {
+        const auto *input = std::get_if<protocol::ProportionalSetpoint>(&envelope.message.payload);
+        if (request_id == 0 && hello_complete_ && authority_ == AuthorityState::Owned && input &&
+            protocol::valid_proportional_setpoint(*input))
+            application_.submit_latest_setpoint(*input);
+        return;
+    }
     if (request_id == 0U) {
         emit_error(envelope.source, request_id, envelope.message.kind,
                    ServiceErrorCode::InvalidRequestId, 0U, owner_now_ms);
@@ -791,6 +806,7 @@ void ControlGatewayCore::terminalize_outstanding(
 
 void ControlGatewayCore::abort_once(GatewayTimeMs owner_now_ms)
 {
+    application_.clear_latest_setpoint();
     if (abort_called_) {
         return;
     }
@@ -804,6 +820,7 @@ void ControlGatewayCore::revoke(ControlSourceId source,
                                 GatewayTimeMs owner_now_ms,
                                 bool close)
 {
+    application_.clear_latest_setpoint();
     const bool needs_abort =
         authority_ != AuthorityState::Unowned ||
         is_active_session(application_.session_state());

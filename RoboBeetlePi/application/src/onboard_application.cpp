@@ -151,6 +151,25 @@ CommandSubmitResult OnboardApplication::set_cpg_parameters(const protocol::CpgPa
         return {CommandSubmitStatus::InvalidArgument, std::nullopt};
     return submit(wire_type(protocol::MessageType::SetCpgParameters), {CodecStatus::Ok, *encoded});
 }
+CommandSubmitResult OnboardApplication::start_proportional(const protocol::ProportionalStart &start)
+{
+    const auto encoded = protocol::encode_proportional_start(start);
+    if (!encoded)
+        return {CommandSubmitStatus::InvalidArgument, std::nullopt};
+    return submit(wire_type(protocol::MessageType::StartProportional), {CodecStatus::Ok, *encoded});
+}
+
+bool OnboardApplication::submit_latest_setpoint(const protocol::ProportionalSetpoint &input)
+{
+    const auto encoded = protocol::encode_proportional_setpoint(input);
+    return encoded && runtime_.submit_latest_setpoint(*encoded);
+}
+
+void OnboardApplication::clear_latest_setpoint()
+{
+    runtime_.clear_latest_setpoint();
+}
+
 CommandSubmitResult OnboardApplication::query_cpg_parameters()
 {
     return submit(wire_type(protocol::MessageType::QueryCpgParameters), {CodecStatus::Ok, {}});

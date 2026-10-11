@@ -1,5 +1,7 @@
 #include "robobeetle/protocol/cpg_parameters.hpp"
 #include "robobeetle/protocol/motion_state.hpp"
+#include "robobeetle/protocol/proportional_control.hpp"
+#include "robobeetle/gateway/rbrp_codec.hpp"
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
@@ -8,6 +10,26 @@
 int main()
 {
     using namespace robobeetle::protocol;
+    const ProportionalStart start{{1000, 1500, 1234, 2000}, 0xab};
+    const Bytes start_golden{0xe8, 0x03, 0xdc, 0x05, 0xd2, 0x04, 0xd0, 0x07, 0xab};
+    assert(encode_proportional_start(start) == start_golden);
+    const auto start_read = decode_proportional_start(start_golden);
+    assert(start_read && start_read->session_id == 0xab && start_read->config.turn_gain == 1500);
+    const ProportionalSetpoint input{0xab, 0xfffe, 750, -500, 1000};
+    const Bytes stream_golden{0xab, 0xfe, 0xff, 0xee, 0x02, 0x0c, 0xfe, 0xe8, 0x03};
+    assert(encode_proportional_setpoint(input) == stream_golden);
+    const auto stream_read = decode_proportional_setpoint(stream_golden);
+    assert(stream_read && stream_read->sequence == 0xfffe && stream_read->turn == -500);
+    using namespace robobeetle::gateway;
+    Bytes start_command{static_cast<Byte>(RobotCommandKind::StartProportional)};
+    start_command.insert(start_command.end(), start_golden.begin(), start_golden.end());
+    RbrpFrame start_frame{RbrpMessageKind::CommandRequest, 42, start_command};
+    const auto request = decode_remote_message(start_frame);
+    assert(request.message && std::get<CommandRequest>(request.message->payload).command);
+    RbrpFrame stream_frame{RbrpMessageKind::ProportionalInput, 0, stream_golden};
+    assert(decode_remote_message(stream_frame).message);
+    stream_frame.request_id = 42;
+    assert(!decode_remote_message(stream_frame).message);
     const CpgParameters defaults{};
     const auto p = encode_cpg_parameters(defaults);
     assert(p && p->size() == 58 && (*p)[0] == 1 && (*p)[1] == 0x3c);

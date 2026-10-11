@@ -140,7 +140,7 @@ endif()
 
 if(BUILD_TESTING)
     add_executable(rbp2_cpg_parameters_codec_tests tests/cpg_parameters_codec_tests.cpp)
-    target_link_libraries(rbp2_cpg_parameters_codec_tests PRIVATE rbp2_protocol)
+    target_link_libraries(rbp2_cpg_parameters_codec_tests PRIVATE rbp2_protocol rbp2_rbrp_codec)
     add_test(NAME rbp2_cpg_parameters_codec_tests COMMAND rbp2_cpg_parameters_codec_tests)
     enable_language(C)
     add_executable(rbp2_motion_state_codec_tests
