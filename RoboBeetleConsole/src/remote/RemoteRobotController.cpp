@@ -46,8 +46,10 @@ QString commandKindText(robobeetle::gateway::RobotCommandKind kind)
     case Kind::NeutralServos: return QStringLiteral("NeutralServos");
     case Kind::StartMotion: return QStringLiteral("StartMotion");
     case Kind::StopMotion: return QStringLiteral("StopMotion");
-    case Kind::SetCpgParameters: return QStringLiteral("SetCpgParameters");
-    case Kind::QueryCpgParameters: return QStringLiteral("QueryCpgParameters");
+    case Kind::SetCpgParameters:
+        return QStringLiteral("SetCpgParameters");
+    case Kind::QueryCpgParameters:
+        return QStringLiteral("QueryCpgParameters");
     case Kind::SetGaitBackend: return QStringLiteral("SetGaitBackend");
     case Kind::SetFrontRearCoordination:
         return QStringLiteral("SetFrontRearCoordination");
@@ -113,8 +115,19 @@ RemoteRobotController::RemoteRobotController(QObject *parent, TerminalNowMs term
                        && !pending_.isEmpty())) {
             failClosedControlState(QStringLiteral("remote authority/link lost"));
         }
-        if (!wasControlActive_ && active) queryCpgParameters();
-        if (!active) { cpgSnapshot_.reset(); cpgRequested_.reset(); cpgSchema2_=false; cpgPending_=false; cpgSetSequence_.reset(); cpgSetAccepted_=false; cpgError_.clear(); emit cpgParametersChanged(); }
+        if (!wasControlActive_ && active)
+            queryCpgParameters();
+        if (!active)
+        {
+            cpgSnapshot_.reset();
+            cpgRequested_.reset();
+            cpgSchema2_ = false;
+            cpgPending_ = false;
+            cpgSetSequence_.reset();
+            cpgSetAccepted_ = false;
+            cpgError_.clear();
+            emit cpgParametersChanged();
+        }
         wasControlActive_ = active;
         emit controlAvailabilityChanged();
         emit authorityStateChanged(state, active);
@@ -357,27 +370,50 @@ bool RemoteRobotController::stopMotion()
     return true;
 }
 
-void RemoteRobotController::queryCpgParameters() {
-    PendingCommand pending; pending.kind=robobeetle::gateway::RobotCommandKind::QueryCpgParameters;
-    submitCommand(pending.kind,{},pending);
+void RemoteRobotController::queryCpgParameters()
+{
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::QueryCpgParameters;
+    submitCommand(pending.kind, {}, pending);
 }
-void RemoteRobotController::refreshCpgReadback() {
+void RemoteRobotController::refreshCpgReadback()
+{
     if (cpgRequested_ && cpgSnapshot_ && cpgSetAccepted_ && cpgSetSequence_ &&
-        cpgSnapshot_->request_sequence==*cpgSetSequence_ && cpgSnapshot_->parameters==*cpgRequested_) {
-        cpgPending_=false; cpgRequested_.reset();
-        emit logMessage(QStringLiteral("CPG parameters applied: version %1").arg(cpgSnapshot_->version));
+        cpgSnapshot_->request_sequence == *cpgSetSequence_ &&
+        cpgSnapshot_->parameters == *cpgRequested_)
+    {
+        cpgPending_ = false;
+        cpgRequested_.reset();
+        emit logMessage(
+            QStringLiteral("CPG parameters applied: version %1").arg(cpgSnapshot_->version));
     }
     emit cpgParametersChanged();
 }
-bool RemoteRobotController::setCpgParameters(const CpgParameters &p) {
+bool RemoteRobotController::setCpgParameters(const CpgParameters &p)
+{
     if (!isControlActive() || !cpgSchema2_ || !cpgSnapshot_ || cpgPending_ ||
-        motionState_!=MotionState::Stopped || confirmedGaitBackend_!=GaitBackend::CPG) return false;
-    const auto bytes=robobeetle::protocol::encode_cpg_parameters(p); if (!bytes) return false;
-    PendingCommand pending; pending.kind=robobeetle::gateway::RobotCommandKind::SetCpgParameters;
-    cpgRequested_=p; cpgPending_=true; cpgSetAccepted_=false; cpgSetSequence_.reset(); cpgError_.clear();
-    const auto id=submitCommand(pending.kind,QByteArray(reinterpret_cast<const char*>(bytes->data()),bytes->size()),pending);
-    if (!id) { cpgPending_=false; cpgRequested_.reset(); }
-    emit cpgParametersChanged(); return id.has_value();
+        motionState_ != MotionState::Stopped || confirmedGaitBackend_ != GaitBackend::CPG)
+        return false;
+    const auto bytes = robobeetle::protocol::encode_cpg_parameters(p);
+    if (!bytes)
+        return false;
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::SetCpgParameters;
+    cpgRequested_ = p;
+    cpgPending_ = true;
+    cpgSetAccepted_ = false;
+    cpgSetSequence_.reset();
+    cpgError_.clear();
+    const auto id = submitCommand(
+        pending.kind, QByteArray(reinterpret_cast<const char *>(bytes->data()), bytes->size()),
+        pending);
+    if (!id)
+    {
+        cpgPending_ = false;
+        cpgRequested_.reset();
+    }
+    emit cpgParametersChanged();
+    return id.has_value();
 }
 
 bool RemoteRobotController::setGaitBackend(GaitBackend backend)
@@ -531,19 +567,27 @@ void RemoteRobotController::handleFrame(quint8 rawKind, quint32 requestId,
         handleDepthTelemetry(payload);
         break;
     case Kind::CpgParametersTelemetry: {
-        if (payload.size()!=75) break;
-        const auto snapshot=robobeetle::protocol::decode_cpg_snapshot(motionStateBytes(payload.mid(12)));
-        if (!snapshot) break;
-        const auto epoch=readLe32(payload,0);
-        if (motionMonitor_.linkEpoch() && *motionMonitor_.linkEpoch()!=epoch) {
+        if (payload.size() != 75)
+            break;
+        const auto snapshot =
+            robobeetle::protocol::decode_cpg_snapshot(motionStateBytes(payload.mid(12)));
+        if (!snapshot)
+            break;
+        const auto epoch = readLe32(payload, 0);
+        if (motionMonitor_.linkEpoch() && *motionMonitor_.linkEpoch() != epoch)
+        {
             motionMonitor_.finishBatch();
             motionCsvLogger_.recordTotals(motionMonitor_);
             motionMonitor_.reset();
-            cpgSchema2_=false;
+            cpgSchema2_ = false;
         }
-        quint64 rx=0; for (unsigned i=0;i<8;++i) rx|=quint64(quint8(payload[4+i]))<<(8*i);
-        cpgSnapshot_=*snapshot; motionCsvLogger_.recordParameters(epoch,rx,*snapshot);
-        refreshCpgReadback(); break;
+        quint64 rx = 0;
+        for (unsigned i = 0; i < 8; ++i)
+            rx |= quint64(quint8(payload[4 + i])) << (8 * i);
+        cpgSnapshot_ = *snapshot;
+        motionCsvLogger_.recordParameters(epoch, rx, *snapshot);
+        refreshCpgReadback();
+        break;
     }
     case Kind::MotionStateTelemetry: {
         const auto telemetry = decodeMotionStateTelemetry(payload);
@@ -552,8 +596,10 @@ void RemoteRobotController::handleFrame(quint8 rawKind, quint32 requestId,
             motionMonitor_.finishBatch();
             motionCsvLogger_.recordTotals(motionMonitor_);
         }
-        const auto decoded=decodeMotionStateBatch(QByteArray(reinterpret_cast<const char*>(telemetry->batch_payload.data()),telemetry->batch_payload.size()));
-        cpgSchema2_=decoded && decoded->schema_version==2;
+        const auto decoded = decodeMotionStateBatch(
+            QByteArray(reinterpret_cast<const char *>(telemetry->batch_payload.data()),
+                       telemetry->batch_payload.size()));
+        cpgSchema2_ = decoded && decoded->schema_version == 2;
         for (const auto &record : motionMonitor_.accept(*telemetry)) motionCsvLogger_.record(record);
         emit cpgParametersChanged();
         emit motionTelemetryChanged();
@@ -697,9 +743,11 @@ void RemoteRobotController::handleCommandOutcome(
         setDisablePendingMask(static_cast<quint16>(
             disablePendingMask_ & ~pending.servoMask));
     }
-    if (pending.kind==robobeetle::gateway::RobotCommandKind::SetCpgParameters) {
-        cpgPending_=false; cpgRequested_.reset();
-        cpgError_=QStringLiteral("Firmware result %1").arg(rawResult);
+    if (pending.kind == robobeetle::gateway::RobotCommandKind::SetCpgParameters)
+    {
+        cpgPending_ = false;
+        cpgRequested_.reset();
+        cpgError_ = QStringLiteral("Firmware result %1").arg(rawResult);
         emit logMessage(QStringLiteral("CPG parameters rejected: %1").arg(cpgError_));
         emit cpgParametersChanged();
     }
@@ -966,7 +1014,10 @@ void RemoteRobotController::applyAcceptedCommand(
         motionStopTimer_.start(kMotionTransitionDurationMs);
         break;
     case Kind::SetCpgParameters:
-        cpgSetAccepted_=true; cpgSetSequence_=pending.submittedSequence; refreshCpgReadback(); break;
+        cpgSetAccepted_ = true;
+        cpgSetSequence_ = pending.submittedSequence;
+        refreshCpgReadback();
+        break;
     case Kind::QueryCpgParameters:
         break;
     case Kind::SetGaitBackend:
@@ -1004,9 +1055,11 @@ void RemoteRobotController::terminalizePending(
         setDisablePendingMask(static_cast<quint16>(
             disablePendingMask_ & ~pending.servoMask));
     }
-    if (pending.kind==robobeetle::gateway::RobotCommandKind::SetCpgParameters) {
-        cpgPending_=false; cpgRequested_.reset();
-        cpgError_=status;
+    if (pending.kind == robobeetle::gateway::RobotCommandKind::SetCpgParameters)
+    {
+        cpgPending_ = false;
+        cpgRequested_.reset();
+        cpgError_ = status;
         emit logMessage(QStringLiteral("CPG parameters rejected: %1").arg(cpgError_));
         emit cpgParametersChanged();
     }
@@ -1126,8 +1179,9 @@ void RemoteRobotController::resetTelemetry()
 }
 
 bool RemoteRobotController::startMotionRecording(const QString &directory, const QString &session) {
-    const auto started=motionCsvLogger_.start(directory,session);
-    if (started && cpgSnapshot_ && motionMonitor_.linkEpoch()) motionCsvLogger_.recordParameters(*motionMonitor_.linkEpoch(),0,*cpgSnapshot_);
+    const auto started = motionCsvLogger_.start(directory, session);
+    if (started && cpgSnapshot_ && motionMonitor_.linkEpoch())
+        motionCsvLogger_.recordParameters(*motionMonitor_.linkEpoch(), 0, *cpgSnapshot_);
     return started;
 }
 void RemoteRobotController::stopMotionRecording() {

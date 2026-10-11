@@ -905,10 +905,11 @@ QWidget *MainWindow::createConnectionBar()
     row->addWidget(releaseButton_);
     auto *gamepadGroup = new QWidget(bar);
     auto *gamepadLayout = new QGridLayout(gamepadGroup);
-    gamepadLayout->setContentsMargins(0,0,0,0);
+    gamepadLayout->setContentsMargins(0, 0, 0, 0);
     gamepadLayout->setSpacing(3);
-    auto *gamepadTitle = new QLabel(QStringLiteral("Gamepad"),gamepadGroup);
-    gamepadTitle->setStyleSheet(QStringLiteral("color: #566B79; font-size: 11px; font-weight: 600;"));
+    auto *gamepadTitle = new QLabel(QStringLiteral("Gamepad"), gamepadGroup);
+    gamepadTitle->setStyleSheet(
+        QStringLiteral("color: #566B79; font-size: 11px; font-weight: 600;"));
     gamepadTitle->setVisible(remote);
     gamepadToggleButton_ = new QPushButton(QStringLiteral("Connect"), bar);
     gamepadToggleButton_->setObjectName(QStringLiteral("gamepadToggleButton"));
@@ -917,19 +918,21 @@ QWidget *MainWindow::createConnectionBar()
     gamepadToggleButton_->setProperty("consoleActionRole", "primary");
     gamepadToggleButton_->setStyleSheet(connectButton_->styleSheet());
     gamepadToggleButton_->setVisible(remote);
-    gamepadLayout->addWidget(gamepadTitle,0,0);
-    gamepadLayout->addWidget(gamepadToggleButton_,0,1);
-    auto *modeLabel=new QLabel(QStringLiteral("Mode"),gamepadGroup);
+    gamepadLayout->addWidget(gamepadTitle, 0, 0);
+    gamepadLayout->addWidget(gamepadToggleButton_, 0, 1);
+    auto *modeLabel = new QLabel(QStringLiteral("Mode"), gamepadGroup);
     modeLabel->setStyleSheet(gamepadTitle->styleSheet());
-    gamepadLayout->addWidget(modeLabel,1,0);
-    auto *gamepadMode=new QComboBox(bar); gamepadMode->setObjectName(QStringLiteral("gamepadModeCombo"));
-    gamepadMode->addItems({QStringLiteral("Discrete"),QStringLiteral("Proportional")});
-    if (auto *model=qobject_cast<QStandardItemModel*>(gamepadMode->model())) {
+    gamepadLayout->addWidget(modeLabel, 1, 0);
+    auto *gamepadMode = new QComboBox(bar);
+    gamepadMode->setObjectName(QStringLiteral("gamepadModeCombo"));
+    gamepadMode->addItems({QStringLiteral("Discrete"), QStringLiteral("Proportional")});
+    if (auto *model = qobject_cast<QStandardItemModel *>(gamepadMode->model()))
+    {
         model->item(1)->setEnabled(false);
         model->item(1)->setToolTip(QStringLiteral("Proportional control is available in PR-2"));
     }
     gamepadMode->setToolTip(QStringLiteral("Proportional control is available in PR-2"));
-    gamepadLayout->addWidget(gamepadMode,1,1);
+    gamepadLayout->addWidget(gamepadMode, 1, 1);
     gamepadGroup->setVisible(remote);
     row->addWidget(gamepadGroup);
     connect(gamepadToggleButton_, &QPushButton::toggled, this, [this](bool enabled) {
@@ -2092,12 +2095,8 @@ QWidget *MainWindow::createMotionPanel()
     dpad->setSpacing(6);
 
     const MotionMode dpadModes[] = {
-        MotionMode::Forward,
-        MotionMode::TurnLeft,
-        MotionMode::TurnRight,
-        MotionMode::Backward,
-        MotionMode::Ascend,
-        MotionMode::Descend,
+        MotionMode::Forward,  MotionMode::TurnLeft, MotionMode::TurnRight,
+        MotionMode::Backward, MotionMode::Ascend,   MotionMode::Descend,
     };
     for (const MotionMode mode : dpadModes) {
         auto *button = new QPushButton(motionModeText(mode), motionGroup);
@@ -2110,8 +2109,7 @@ QWidget *MainWindow::createMotionPanel()
         if (mode == MotionMode::Backward) {
             button->setText(QStringLiteral("Backward"));
             button->setEnabled(false);
-            button->setToolTip(QStringLiteral(
-                "Backward is not supported"));
+            button->setToolTip(QStringLiteral("Backward is not supported"));
         }
         connect(button, &QPushButton::clicked, this, [this, mode] {
             if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
@@ -2144,16 +2142,17 @@ QWidget *MainWindow::createMotionPanel()
     dpad->addWidget(motionStopButton_, 1, 1);
     dpad->addWidget(
         motionButtons_[static_cast<std::size_t>(MotionMode::TurnRight)], 1, 2);
-    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)],2,0);
-    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Backward)],2,1);
-    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Descend)],2,2);
-    for (QPushButton *button : {motionButtons_[static_cast<std::size_t>(MotionMode::Forward)],
-                                motionButtons_[static_cast<std::size_t>(MotionMode::TurnLeft)],
-                                motionStopButton_,
-                                motionButtons_[static_cast<std::size_t>(MotionMode::TurnRight)],
-                                motionButtons_[static_cast<std::size_t>(MotionMode::Backward)],
-                                motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)],
-                                motionButtons_[static_cast<std::size_t>(MotionMode::Descend)]}) {
+    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)], 2, 0);
+    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Backward)], 2, 1);
+    dpad->addWidget(motionButtons_[static_cast<std::size_t>(MotionMode::Descend)], 2, 2);
+    for (QPushButton *button :
+         {motionButtons_[static_cast<std::size_t>(MotionMode::Forward)],
+          motionButtons_[static_cast<std::size_t>(MotionMode::TurnLeft)], motionStopButton_,
+          motionButtons_[static_cast<std::size_t>(MotionMode::TurnRight)],
+          motionButtons_[static_cast<std::size_t>(MotionMode::Backward)],
+          motionButtons_[static_cast<std::size_t>(MotionMode::Ascend)],
+          motionButtons_[static_cast<std::size_t>(MotionMode::Descend)]})
+    {
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         button->setStyleSheet(button->styleSheet() + QStringLiteral("QPushButton { font-size: 15px; }"));
     }
@@ -2199,25 +2198,35 @@ QWidget *MainWindow::createMotionPanel()
     frontRearCoordinationStatus_->setStyleSheet(
         QStringLiteral("font-weight: 700; color: #405A6B;"));
 
-    gaitLayout->addWidget(new QLabel(QStringLiteral("Backend"),gaitGroup),0,0);
-    gaitLayout->addWidget(gaitBackendCombo_,1,0);
-    auto *gaitCurrentLabel=new QLabel(QStringLiteral("Current"),gaitGroup);
+    gaitLayout->addWidget(new QLabel(QStringLiteral("Backend"), gaitGroup), 0, 0);
+    gaitLayout->addWidget(gaitBackendCombo_, 1, 0);
+    auto *gaitCurrentLabel = new QLabel(QStringLiteral("Current"), gaitGroup);
     gaitCurrentLabel->setObjectName(QStringLiteral("gaitBackendCurrentLabel"));
-    gaitLayout->addWidget(gaitCurrentLabel,0,1); gaitLayout->addWidget(gaitBackendStatus_,1,1);
-    gaitLayout->addWidget(new QLabel(QStringLiteral("Front / Rear"),gaitGroup),0,2);
-    gaitLayout->addWidget(frontRearCoordinationCombo_,1,2);
+    gaitLayout->addWidget(gaitCurrentLabel, 0, 1);
+    gaitLayout->addWidget(gaitBackendStatus_, 1, 1);
+    gaitLayout->addWidget(new QLabel(QStringLiteral("Front / Rear"), gaitGroup), 0, 2);
+    gaitLayout->addWidget(frontRearCoordinationCombo_, 1, 2);
     frontRearCoordinationCombo_->setToolTip(QStringLiteral("Flips rear stroke direction"));
     frontRearCoordinationStatus_->hide();
-    for (int col=0;col<3;++col) gaitLayout->setColumnStretch(col,1);
-    auto *gaitAndParameters=new QWidget(page); auto *gaitColumn=new QVBoxLayout(gaitAndParameters);
-    gaitColumn->setContentsMargins(0,0,0,0); gaitColumn->setSpacing(6);
+    for (int col = 0; col < 3; ++col)
+        gaitLayout->setColumnStretch(col, 1);
+    auto *gaitAndParameters = new QWidget(page);
+    auto *gaitColumn = new QVBoxLayout(gaitAndParameters);
+    gaitColumn->setContentsMargins(0, 0, 0, 0);
+    gaitColumn->setSpacing(6);
     gaitColumn->addWidget(gaitGroup);
-    cpgPanel_=new ui::CpgParametersPanel(gaitAndParameters); gaitColumn->addWidget(cpgPanel_);
-    connect(cpgPanel_,&ui::CpgParametersPanel::applyRequested,this,[this] {
-        if (visualDispatch_) visualDispatch_->manualInput(vision::ManualInputKind::Motion);
-        controller_->setCpgParameters(cpgPanel_->parameters()); cpgPanel_->refresh(*controller_);
+    cpgPanel_ = new ui::CpgParametersPanel(gaitAndParameters);
+    gaitColumn->addWidget(cpgPanel_);
+    connect(cpgPanel_, &ui::CpgParametersPanel::applyRequested, this, [this] {
+        if (visualDispatch_)
+            visualDispatch_->manualInput(vision::ManualInputKind::Motion);
+        controller_->setCpgParameters(cpgPanel_->parameters());
+        cpgPanel_->refresh(*controller_);
     });
-    connect(controller_,&IConsoleController::cpgParametersChanged,this,[this] { if (cpgPanel_) cpgPanel_->refresh(*controller_); });
+    connect(controller_, &IConsoleController::cpgParametersChanged, this, [this] {
+        if (cpgPanel_)
+            cpgPanel_->refresh(*controller_);
+    });
 
     // --- Runtime Log ---
     auto *logGroup = new QGroupBox(QStringLiteral("Log"), page);
@@ -4313,7 +4322,8 @@ void MainWindow::refreshMotionUi()
 
 void MainWindow::refreshGaitSelectorsUi()
 {
-    if (cpgPanel_) cpgPanel_->refresh(*controller_);
+    if (cpgPanel_)
+        cpgPanel_->refresh(*controller_);
     if (gaitBackendCombo_ == nullptr || gaitBackendStatus_ == nullptr
         || frontRearCoordinationCombo_ == nullptr
         || frontRearCoordinationStatus_ == nullptr) {

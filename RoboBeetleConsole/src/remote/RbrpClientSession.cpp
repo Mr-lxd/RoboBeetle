@@ -313,13 +313,14 @@ void RbrpClientSession::handleFrame(const RbrpFrame &frame)
                          .arg(static_cast<int>(frame.kind)));
         return;
     }
-    if ((frame.kind == RbrpMessageKind::ControlState
-         || frame.kind == RbrpMessageKind::LeakTelemetry
-         || frame.kind == RbrpMessageKind::ImuTelemetry
-         || frame.kind == RbrpMessageKind::DepthTelemetry
-         || frame.kind == RbrpMessageKind::CpgParametersTelemetry
-         || frame.kind == RbrpMessageKind::MotionStateTelemetry)
-        && frame.request_id != 0U) {
+    if ((frame.kind == RbrpMessageKind::ControlState ||
+         frame.kind == RbrpMessageKind::LeakTelemetry ||
+         frame.kind == RbrpMessageKind::ImuTelemetry ||
+         frame.kind == RbrpMessageKind::DepthTelemetry ||
+         frame.kind == RbrpMessageKind::CpgParametersTelemetry ||
+         frame.kind == RbrpMessageKind::MotionStateTelemetry) &&
+        frame.request_id != 0U)
+    {
         failProtocol(QStringLiteral(
             "Unsolicited gateway state/telemetry must use request_id 0"));
         return;

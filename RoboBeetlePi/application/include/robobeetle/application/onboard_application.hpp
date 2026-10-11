@@ -34,10 +34,14 @@ struct TelemetryMalformed {
 // Every LinkEvent is preserved. A telemetry FrameReceived is immediately
 // followed by its typed value or malformed notice, never a synthetic ACK.
 struct MotionStateTelemetry { protocol::Bytes batch_payload; };
-struct CpgParametersTelemetry { protocol::Bytes snapshot_payload; };
+struct CpgParametersTelemetry
+{
+    protocol::Bytes snapshot_payload;
+};
 
-using ApplicationEvent = std::variant<link_core::LinkEvent, LeakTelemetry,
-    ImuTelemetry, DepthTelemetry, MotionStateTelemetry, CpgParametersTelemetry, TelemetryMalformed>;
+using ApplicationEvent =
+    std::variant<link_core::LinkEvent, LeakTelemetry, ImuTelemetry, DepthTelemetry,
+                 MotionStateTelemetry, CpgParametersTelemetry, TelemetryMalformed>;
 
 struct ApplicationRunResult {
     runtime::RuntimeStatus status{runtime::RuntimeStatus::Progress};

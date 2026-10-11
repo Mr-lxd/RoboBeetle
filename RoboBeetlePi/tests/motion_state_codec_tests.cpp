@@ -107,20 +107,22 @@ int main() {
         assert(frames.size() == 1 &&
                frames[0].kind == gateway::RbrpMessageKind::MotionStateTelemetry);
     }
-    const protocol::Bytes golden2{2,1,0x34,0x12,0,1,0,0,0x78,0x56,0x34,0x12,9,0,0,0,
-        4,3,2,1,0xfe,0xff,3,0,0xfc,0xff,5,0,0xfa,0xff,0,0x80,0x4b,0xff,7,0,8,0,
-        0,1,0x67,0x45,0,0,0,0x11,0x11,0x22,0x22,0x33,0x33};
-    const auto v2=protocol::decode_motion_state_batch(golden2);
-    assert(v2 && v2->schema_version==2 && v2->samples[0].cpg_param_version==0x4567);
-    assert(*protocol::encode_motion_state_batch(*v2)==golden2);
+    const protocol::Bytes golden2{2,    1,    0x34, 0x12, 0,    1,    0,    0,    0x78, 0x56, 0x34,
+                                  0x12, 9,    0,    0,    0,    4,    3,    2,    1,    0xfe, 0xff,
+                                  3,    0,    0xfc, 0xff, 5,    0,    0xfa, 0xff, 0,    0x80, 0x4b,
+                                  0xff, 7,    0,    8,    0,    0,    1,    0x67, 0x45, 0,    0,
+                                  0,    0x11, 0x11, 0x22, 0x22, 0x33, 0x33};
+    const auto v2 = protocol::decode_motion_state_batch(golden2);
+    assert(v2 && v2->schema_version == 2 && v2->samples[0].cpg_param_version == 0x4567);
+    assert(*protocol::encode_motion_state_batch(*v2) == golden2);
     rb_motion_state_batch_t c_v2{};
-    assert(rb_motion_state_decode(golden2.data(),golden2.size(),&c_v2));
+    assert(rb_motion_state_decode(golden2.data(), golden2.size(), &c_v2));
     std::uint8_t c_payload[60]{};
-    assert(rb_motion_state_encode(&c_v2,c_payload,sizeof c_payload)==golden2.size());
-    assert(protocol::Bytes(c_payload,c_payload+golden2.size())==golden2);
-    const auto wrapped=gateway::encode_motion_state_telemetry({1,123456,0,golden2});
-    assert(wrapped && wrapped->size()==67);
-    assert(gateway::decode_motion_state_telemetry(*wrapped)->batch_payload==golden2);
+    assert(rb_motion_state_encode(&c_v2, c_payload, sizeof c_payload) == golden2.size());
+    assert(protocol::Bytes(c_payload, c_payload + golden2.size()) == golden2);
+    const auto wrapped = gateway::encode_motion_state_telemetry({1, 123456, 0, golden2});
+    assert(wrapped && wrapped->size() == 67);
+    assert(gateway::decode_motion_state_telemetry(*wrapped)->batch_payload == golden2);
     std::cout << "motion state codec: v1/v2 C/Pi goldens, bitfields and RBRP prefix "
                  "passed\n";
 }

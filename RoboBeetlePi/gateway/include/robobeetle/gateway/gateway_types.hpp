@@ -105,12 +105,16 @@ struct SetFrontRearCoordination {
     FrontRearCoordination coordination{FrontRearCoordination::SameDirection};
 };
 
-struct SetCpgParameters { protocol::CpgParameters parameters; };
-struct QueryCpgParameters {};
+struct SetCpgParameters
+{
+    protocol::CpgParameters parameters;
+};
+struct QueryCpgParameters
+{
+};
 
-using RobotCommand = std::variant<EnableServos, DisableServos, SetServoAngle,
-                                  SetServoPwm, NeutralServos, StartMotion,
-                                  StopMotion, SetGaitBackend,
+using RobotCommand = std::variant<EnableServos, DisableServos, SetServoAngle, SetServoPwm,
+                                  NeutralServos, StartMotion, StopMotion, SetGaitBackend,
                                   SetFrontRearCoordination, SetCpgParameters, QueryCpgParameters>;
 
 enum class GatewayApplicationSubmitStatus {
@@ -242,15 +246,16 @@ struct GatewayMotionStateTelemetry {
     Bytes batch_payload;
 };
 
-struct GatewayCpgParametersTelemetry {
+struct GatewayCpgParametersTelemetry
+{
     std::uint32_t link_epoch{};
     std::uint64_t pi_rx_ms{};
     Bytes snapshot_payload;
 };
 
 using GatewayTelemetryEvent =
-    std::variant<GatewayLeakTelemetry, GatewayImuTelemetry,
-                 GatewayDepthTelemetry, GatewayMotionStateTelemetry, GatewayCpgParametersTelemetry>;
+    std::variant<GatewayLeakTelemetry, GatewayImuTelemetry, GatewayDepthTelemetry,
+                 GatewayMotionStateTelemetry, GatewayCpgParametersTelemetry>;
 
 struct GatewayStateLinkEvent {
     GatewayApplicationSessionState session_state{
@@ -407,11 +412,10 @@ struct ServiceErrorMessage {
 };
 
 using GatewayMessagePayload =
-    std::variant<HelloReply, AcquireReply, ControlStateMessage,
-                 CommandSubmittedMessage, GatewayCommandOutcomeMessage,
-                 GatewayLeakTelemetry, GatewayImuTelemetry,
-                 GatewayDepthTelemetry, ServiceErrorMessage,
-                 GatewayMotionStateTelemetry, GatewayCpgParametersTelemetry>;
+    std::variant<HelloReply, AcquireReply, ControlStateMessage, CommandSubmittedMessage,
+                 GatewayCommandOutcomeMessage, GatewayLeakTelemetry, GatewayImuTelemetry,
+                 GatewayDepthTelemetry, ServiceErrorMessage, GatewayMotionStateTelemetry,
+                 GatewayCpgParametersTelemetry>;
 
 struct GatewayMessage {
     RequestId request_id{0};

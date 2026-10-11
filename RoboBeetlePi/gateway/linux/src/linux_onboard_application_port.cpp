@@ -298,12 +298,20 @@ std::vector<GatewayApplicationEvent> LinuxOnboardApplicationPort::map_events(
             telemetry_frame.reset();
             continue;
         }
-        if (const auto *cpg=std::get_if<application::CpgParametersTelemetry>(&event)) {
-            if (telemetry_frame && telemetry_frame->first==RbrpMessageKind::CpgParametersTelemetry) {
-                const auto now=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
-                mapped.emplace_back(GatewayTelemetryEvent{GatewayCpgParametersTelemetry{link_epoch_,now,cpg->snapshot_payload}});
+        if (const auto *cpg = std::get_if<application::CpgParametersTelemetry>(&event))
+        {
+            if (telemetry_frame &&
+                telemetry_frame->first == RbrpMessageKind::CpgParametersTelemetry)
+            {
+                const auto now = static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count());
+                mapped.emplace_back(GatewayTelemetryEvent{
+                    GatewayCpgParametersTelemetry{link_epoch_, now, cpg->snapshot_payload}});
             }
-            telemetry_frame.reset(); continue;
+            telemetry_frame.reset();
+            continue;
         }
         if (const auto *motion = std::get_if<application::MotionStateTelemetry>(&event)) {
             if (telemetry_frame && telemetry_frame->first == RbrpMessageKind::MotionStateTelemetry) {
@@ -344,34 +352,44 @@ LinuxOnboardApplicationPort::submit(const RobotCommand &command)
 {
     const auto submit = [&application = application_](const auto &value) {
         using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, SetCpgParameters>) {
+        if constexpr (std::is_same_v<T, SetCpgParameters>)
+        {
             return application.set_cpg_parameters(value.parameters);
-        } else if constexpr (std::is_same_v<T, QueryCpgParameters>) {
+        } else if constexpr (std::is_same_v<T, QueryCpgParameters>)
+        {
             return application.query_cpg_parameters();
-        } else if constexpr (std::is_same_v<T, EnableServos>) {
+        } else if constexpr (std::is_same_v<T, EnableServos>)
+        {
             return application.enable_servos(value.mask);
-        } else if constexpr (std::is_same_v<T, DisableServos>) {
+        } else if constexpr (std::is_same_v<T, DisableServos>)
+        {
             return application.disable_servos(value.mask);
-        } else if constexpr (std::is_same_v<T, SetServoAngle>) {
+        } else if constexpr (std::is_same_v<T, SetServoAngle>)
+        {
             return application.set_servo_angle(
                 static_cast<application::ServoId>(value.servo_id),
                 value.angle_cdeg);
-        } else if constexpr (std::is_same_v<T, SetServoPwm>) {
+        } else if constexpr (std::is_same_v<T, SetServoPwm>)
+        {
             return application.set_servo_pwm_maintenance(
                 static_cast<application::ServoId>(value.servo_id),
                 value.pulse_us);
-        } else if constexpr (std::is_same_v<T, NeutralServos>) {
+        } else if constexpr (std::is_same_v<T, NeutralServos>)
+        {
             return application.neutral_servos(value.mask);
-        } else if constexpr (std::is_same_v<T, StartMotion>) {
+        } else if constexpr (std::is_same_v<T, StartMotion>)
+        {
             return application.start_motion(
                 static_cast<application::MotionMode>(value.mode));
-        } else if constexpr (std::is_same_v<T, StopMotion>) {
+        } else if constexpr (std::is_same_v<T, StopMotion>)
+        {
             return application.stop_motion();
-        } else if constexpr (std::is_same_v<T, SetGaitBackend>) {
+        } else if constexpr (std::is_same_v<T, SetGaitBackend>)
+        {
             return application.set_gait_backend(
                 static_cast<application::GaitBackend>(value.backend));
-        } else if constexpr (
-            std::is_same_v<T, SetFrontRearCoordination>) {
+        } else if constexpr (std::is_same_v<T, SetFrontRearCoordination>)
+        {
             return application.set_front_rear_coordination(
                 static_cast<application::FrontRearCoordination>(
                     value.coordination));

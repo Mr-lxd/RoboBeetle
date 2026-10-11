@@ -197,7 +197,7 @@ static void protocol_feed_byte(
                     frame.type,
                     outcome.result);
 
-                if(ack_sent && outcome.cpg_snapshot)
+                if (ack_sent && outcome.cpg_snapshot)
                 {
                     (void)protocol_send_cpg_snapshot(frame.sequence);
                 }
@@ -381,12 +381,15 @@ static bool protocol_send_ack(
 static bool protocol_send_cpg_snapshot(uint16_t request_sequence)
 {
     uint8_t payload[CPG_PARAMETERS_SNAPSHOT_SIZE], wire[RBP2_MAX_WIRE_SIZE];
-    const size_t payload_size=protocol_dispatcher_cpg_snapshot(&protocol_dispatcher,request_sequence,payload,sizeof payload);
-    if(payload_size==0) return false;
-    const size_t wire_size=rbp2_encode_wire(RBP2_MSG_CPG_PARAMETERS_SNAPSHOT,
-        protocol_telemetry_sequence++,payload,(uint16_t)payload_size,wire,sizeof wire);
-    return wire_size!=0 && protocol_tx_result_accepted(uart_transport_stm32_enqueue(
-        wire,(uint16_t)wire_size,UART_TX_MESSAGE_CPG));
+    const size_t payload_size = protocol_dispatcher_cpg_snapshot(
+        &protocol_dispatcher, request_sequence, payload, sizeof payload);
+    if (payload_size == 0)
+        return false;
+    const size_t wire_size =
+        rbp2_encode_wire(RBP2_MSG_CPG_PARAMETERS_SNAPSHOT, protocol_telemetry_sequence++, payload,
+                         (uint16_t)payload_size, wire, sizeof wire);
+    return wire_size != 0 && protocol_tx_result_accepted(uart_transport_stm32_enqueue(
+                                 wire, (uint16_t)wire_size, UART_TX_MESSAGE_CPG));
 }
 
 #if !MOTION_TIMING_REDUCED_TELEMETRY_ACTIVE
@@ -444,15 +447,18 @@ static void motion_state_capture(uint32_t now_ms)
     {
         case MOTION_GAIT_BACKEND_CPG:
             phase = cpg_gait_generator.core.phase[3];
-            double wrapped=fmod(cpg_gait_generator.core.phase[0],cycle);
-            if(wrapped<0) wrapped+=cycle;
-            sample.fr_phase_u16=(uint16_t)(wrapped*65536.0/cycle);
-            wrapped=fmod(cpg_gait_generator.core.phase[1],cycle);
-            if(wrapped<0) wrapped+=cycle;
-            sample.rr_phase_u16=(uint16_t)(wrapped*65536.0/cycle);
-            wrapped=fmod(cpg_gait_generator.core.phase[2],cycle);
-            if(wrapped<0) wrapped+=cycle;
-            sample.rl_phase_u16=(uint16_t)(wrapped*65536.0/cycle);
+            double wrapped = fmod(cpg_gait_generator.core.phase[0], cycle);
+            if (wrapped < 0)
+                wrapped += cycle;
+            sample.fr_phase_u16 = (uint16_t)(wrapped * 65536.0 / cycle);
+            wrapped = fmod(cpg_gait_generator.core.phase[1], cycle);
+            if (wrapped < 0)
+                wrapped += cycle;
+            sample.rr_phase_u16 = (uint16_t)(wrapped * 65536.0 / cycle);
+            wrapped = fmod(cpg_gait_generator.core.phase[2], cycle);
+            if (wrapped < 0)
+                wrapped += cycle;
+            sample.rl_phase_u16 = (uint16_t)(wrapped * 65536.0 / cycle);
             break;
         case MOTION_GAIT_BACKEND_EXPERIMENTAL_FLEX:
             phase = cycle * experimental_flex_gait_generator.phase_ms / 2000.0;
@@ -464,11 +470,11 @@ static void motion_state_capture(uint32_t now_ms)
     phase = fmod(phase, cycle);
     if (phase < 0.0) phase += cycle;
     sample.phase_u16 = (uint16_t)(phase * 65536.0 / cycle);
-    if(motion_manager.gait_backend!=MOTION_GAIT_BACKEND_CPG)
+    if (motion_manager.gait_backend != MOTION_GAIT_BACKEND_CPG)
     {
-        sample.fr_phase_u16=sample.phase_u16;
-        sample.rr_phase_u16=sample.phase_u16;
-        sample.rl_phase_u16=sample.phase_u16;
+        sample.fr_phase_u16 = sample.phase_u16;
+        sample.rr_phase_u16 = sample.phase_u16;
+        sample.rl_phase_u16 = sample.phase_u16;
     }
     motion_state_sampler_push(&motion_state_sampler, &sample);
 }
@@ -905,7 +911,8 @@ void app_main_process(void)
         {
             app_main_apply_safety_stop();
             motion_manager.stop_reason = motion_result == MOTION_MANAGER_RESULT_HOST_NOT_ALIVE
-                ? MOTION_STOP_REASON_LINK_LOST : MOTION_STOP_REASON_NONE;
+                                             ? MOTION_STOP_REASON_LINK_LOST
+                                             : MOTION_STOP_REASON_NONE;
         }
     }
 #if !MOTION_TIMING_REDUCED_TELEMETRY_ACTIVE

@@ -78,13 +78,34 @@ public:
     }
     [[nodiscard]] virtual std::optional<qint64> depthZeroedAtMs() const { return std::nullopt; }
     using CpgParameters = robobeetle::protocol::CpgParameters;
-    virtual bool setCpgParameters(const CpgParameters &) { return false; }
-    virtual std::optional<CpgParameters> cpgParameters() const { return {}; }
-    virtual bool hasCpgSchema2() const { return false; }
-    virtual quint8 cpgFeatureLevel() const { return 0; }
-    virtual bool isCpgParametersPending() const { return false; }
-    virtual QString cpgParametersError() const { return {}; }
-    virtual std::optional<double> measuredCpgPeriod() const { return {}; }
+    virtual bool setCpgParameters(const CpgParameters &)
+    {
+        return false;
+    }
+    virtual std::optional<CpgParameters> cpgParameters() const
+    {
+        return {};
+    }
+    virtual bool hasCpgSchema2() const
+    {
+        return false;
+    }
+    virtual quint8 cpgFeatureLevel() const
+    {
+        return 0;
+    }
+    virtual bool isCpgParametersPending() const
+    {
+        return false;
+    }
+    virtual QString cpgParametersError() const
+    {
+        return {};
+    }
+    virtual std::optional<double> measuredCpgPeriod() const
+    {
+        return {};
+    }
     virtual bool setGaitBackend(GaitBackend backend) = 0;
     virtual bool setFrontRearCoordination(FrontRearCoordination coordination) = 0;
 

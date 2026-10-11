@@ -78,7 +78,8 @@ void motion_manager_init_with_backends(
     gait_generator_t experimental_flex,
     motion_gait_backend_t initial_backend);
 
-motion_manager_result_t motion_manager_set_cpg_parameters(motion_manager_t *manager, const cpg_parameters_t *parameters);
+motion_manager_result_t motion_manager_set_cpg_parameters(motion_manager_t *manager,
+                                                          const cpg_parameters_t *parameters);
 
 motion_manager_result_t motion_manager_set_gait_backend(
     motion_manager_t *manager,

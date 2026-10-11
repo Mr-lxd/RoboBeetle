@@ -89,7 +89,8 @@ public:
         peer_ = server_.nextPendingConnection();
         decoder_.reset();
         queued_.clear();
-        if (peer_ != nullptr) {
+        if (peer_ != nullptr)
+        {
             QObject::connect(peer_, &QTcpSocket::readyRead, peer_, [this] { receive(); });
             receive();
         }
@@ -142,43 +143,45 @@ public:
     }
 
 private:
-    void receive()
-    {
-        if (peer_ == nullptr || peer_->bytesAvailable() == 0) return;
-        const QByteArray bytes = peer_->readAll();
-        std::vector<RbrpFrame> decoded;
-        const auto status = decoder_.feed(
-            reinterpret_cast<const Byte *>(bytes.constData()),
-            static_cast<std::size_t>(bytes.size()), decoded);
-        check(status == RbrpFeedStatus::Ok,
-              "fake gateway must decode controller traffic");
-        for (const auto &frame : decoded) {
-            if (frame.kind != RbrpMessageKind::CommandRequest ||
-                frame.payload != Bytes{static_cast<Byte>(RobotCommandKind::QueryCpgParameters)}) {
-                queued_.push_back(frame);
-                continue;
-            }
-            // Acquire performs one read-only query. Complete it independently of
-            // the actuator traffic observed by all existing safety assertions.
-            constexpr quint16 querySequence = 0xff00;
-            CommandSubmittedMessage submitted;
-            submitted.status = CommandSubmittedStatus::Submitted;
-            submitted.sequence = querySequence;
-            send({frame.request_id, submitted});
-            GatewayCommandOutcomeMessage outcome;
-            outcome.command_kind = RobotCommandKind::QueryCpgParameters;
-            outcome.event.outcome = GatewayCommandOutcome::Accepted;
-            outcome.event.sequence = querySequence;
-            outcome.event.result = 0;
-            send({frame.request_id, outcome});
-            robobeetle::protocol::CpgParametersSnapshot snapshot;
-            snapshot.request_sequence = querySequence;
-            snapshot.feature_level = 1;
-            const auto payload = robobeetle::protocol::encode_cpg_snapshot(snapshot);
-            check(payload.has_value(), "fake parameter snapshot must encode");
-            if (payload) send({0, GatewayCpgParametersTelemetry{1, 1000, *payload}});
-        }
-    }
+  void receive()
+  {
+      if (peer_ == nullptr || peer_->bytesAvailable() == 0)
+          return;
+      const QByteArray bytes = peer_->readAll();
+      std::vector<RbrpFrame> decoded;
+      const auto status = decoder_.feed(reinterpret_cast<const Byte *>(bytes.constData()),
+                                        static_cast<std::size_t>(bytes.size()), decoded);
+      check(status == RbrpFeedStatus::Ok, "fake gateway must decode controller traffic");
+      for (const auto &frame : decoded)
+      {
+          if (frame.kind != RbrpMessageKind::CommandRequest ||
+              frame.payload != Bytes{static_cast<Byte>(RobotCommandKind::QueryCpgParameters)})
+          {
+              queued_.push_back(frame);
+              continue;
+          }
+          // Acquire performs one read-only query. Complete it independently of
+          // the actuator traffic observed by all existing safety assertions.
+          constexpr quint16 querySequence = 0xff00;
+          CommandSubmittedMessage submitted;
+          submitted.status = CommandSubmittedStatus::Submitted;
+          submitted.sequence = querySequence;
+          send({frame.request_id, submitted});
+          GatewayCommandOutcomeMessage outcome;
+          outcome.command_kind = RobotCommandKind::QueryCpgParameters;
+          outcome.event.outcome = GatewayCommandOutcome::Accepted;
+          outcome.event.sequence = querySequence;
+          outcome.event.result = 0;
+          send({frame.request_id, outcome});
+          robobeetle::protocol::CpgParametersSnapshot snapshot;
+          snapshot.request_sequence = querySequence;
+          snapshot.feature_level = 1;
+          const auto payload = robobeetle::protocol::encode_cpg_snapshot(snapshot);
+          check(payload.has_value(), "fake parameter snapshot must encode");
+          if (payload)
+              send({0, GatewayCpgParametersTelemetry{1, 1000, *payload}});
+      }
+  }
 
     QTcpServer server_;
     QTcpSocket *peer_{nullptr};

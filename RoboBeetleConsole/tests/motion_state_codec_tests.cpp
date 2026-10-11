@@ -9,7 +9,8 @@
 #include <cassert>
 #include <iostream>
 
-static void writeCompatibilityCsv(const QString &directory) {
+static void writeCompatibilityCsv(const QString &directory)
+{
     rb::MotionStateCsvLogger logger;
     assert(logger.start(directory, "task19_cpp_logger_v2"));
     robobeetle::protocol::CpgParametersSnapshot parameters;
@@ -17,7 +18,8 @@ static void writeCompatibilityCsv(const QString &directory) {
     parameters.version = 7;
     logger.recordParameters(1, 901000, parameters);
     logger.recordParameters(1, 901000, parameters); // one event for the same version
-    for (unsigned i = 0; i < 600; ++i) {
+    for (unsigned i = 0; i < 600; ++i)
+    {
         rb::MotionStateRecord record;
         record.linkEpoch = 1;
         record.batchSeq = i;
@@ -44,7 +46,8 @@ static void writeCompatibilityCsv(const QString &directory) {
     std::cout << "Actual MotionStateCsvLogger fixture: " << path.toStdString() << '\n';
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     QCoreApplication app(argc, argv);
     for (unsigned count = 0; count <= 2; ++count) {
         rb::MotionStateBatch batch{};
@@ -71,13 +74,11 @@ int main(int argc, char **argv) {
         assert(rb::decodeMotionStateTelemetry(qtelemetry)->pi_rx_ms == 123456789);
     }
     // Fixed C/Pi/Qt contract: legacy 22B sample preserved, v2 appends 13B.
-    const auto v1 = QByteArray::fromHex(
-        "01013412000100007856341209000000"
-        "04030201feff0300fcff0500faff00804bff07000800");
-    const auto v2 = QByteArray::fromHex(
-        "02013412000100007856341209000000"
-        "04030201feff0300fcff0500faff00804bff07000800"
-        "00016745000000111122223333");
+    const auto v1 = QByteArray::fromHex("01013412000100007856341209000000"
+                                        "04030201feff0300fcff0500faff00804bff07000800");
+    const auto v2 = QByteArray::fromHex("02013412000100007856341209000000"
+                                        "04030201feff0300fcff0500faff00804bff07000800"
+                                        "00016745000000111122223333");
     auto golden = rb::decodeMotionStateBatch(v1);
     assert(golden && *rb::encodeMotionStateBatch(*golden) == v1);
     golden->schema_version = 2;
@@ -89,17 +90,21 @@ int main(int argc, char **argv) {
     const auto encoded = rb::encodeMotionStateBatch(*golden);
     assert(encoded && *encoded == v2 && encoded->size() == 51);
     const auto decoded = rb::decodeMotionStateBatch(v2);
-    assert(decoded && decoded->schema_version == 2 && decoded->samples[0].cpg_param_version == 0x4567);
+    assert(decoded && decoded->schema_version == 2 &&
+           decoded->samples[0].cpg_param_version == 0x4567);
     const auto wire = rb::PacketCodec::encodeWire({rb::MessageType::MotionStateBatch, 8, v2});
     assert(rb::PacketCodec::decodeWire(wire.first(wire.size() - 1)).ok());
     const auto telemetry = robobeetle::gateway::encode_motion_state_telemetry(
         {1, 901000, 0, rb::motionStateBytes(v2)});
     assert(telemetry && telemetry->size() == 67);
-    const auto wrapper = QByteArray(reinterpret_cast<const char *>(telemetry->data()), telemetry->size());
+    const auto wrapper =
+        QByteArray(reinterpret_cast<const char *>(telemetry->data()), telemetry->size());
     assert(rb::decodeMotionStateTelemetry(wrapper)->batch_payload == rb::motionStateBytes(v2));
-    if (app.arguments().size() == 3 && app.arguments()[1] == "--csv-output") {
+    if (app.arguments().size() == 3 && app.arguments()[1] == "--csv-output")
+    {
         writeCompatibilityCsv(app.arguments()[2]);
-    } else {
+    } else
+    {
         assert(app.arguments().size() == 1);
     }
     std::cout << "Qt motion state codec: v1 wrappers, v1/v2 goldens and P2/RBRP framing passed\n";

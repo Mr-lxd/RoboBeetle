@@ -224,12 +224,15 @@ RbrpMessageDecodeResult decode_remote_message(const RbrpFrame &frame)
         request.command_kind = frame.payload[0];
         switch (static_cast<RobotCommandKind>(request.command_kind)) {
         case RobotCommandKind::SetCpgParameters: {
-            const auto p=protocol::decode_cpg_parameters(Bytes(frame.payload.begin()+1,frame.payload.end()));
-            if (p) request.command=SetCpgParameters{*p};
+            const auto p = protocol::decode_cpg_parameters(
+                Bytes(frame.payload.begin() + 1, frame.payload.end()));
+            if (p)
+                request.command = SetCpgParameters{*p};
             break;
         }
         case RobotCommandKind::QueryCpgParameters:
-            if (frame.payload.size()==1) request.command=QueryCpgParameters{};
+            if (frame.payload.size() == 1)
+                request.command = QueryCpgParameters{};
             break;
         case RobotCommandKind::EnableServos:
             if (frame.payload.size() == 3U) {
@@ -386,18 +389,25 @@ RbrpEncodeResult encode_gateway_message(const GatewayMessage &message)
                 put_le32(encoded, 28U, payload.diagnostics.rx_buffer_overflow_count);
                 put_le32(encoded, 32U, payload.diagnostics.hard_rearm_failure_count);
                 put_le32(encoded, 36U, payload.diagnostics.uart_error_count);
-            } else if constexpr (std::is_same_v<T, GatewayCpgParametersTelemetry>) {
-                kind=RbrpMessageKind::CpgParametersTelemetry;
-                if (!protocol::decode_cpg_snapshot(payload.snapshot_payload)) return encode_invalid(RbrpEncodeStatus::InvalidPayloadLength);
-                encoded.resize(12); put_le32(encoded,0,payload.link_epoch);
-                for (unsigned i=0;i<8;++i) encoded[4+i]=Byte(payload.pi_rx_ms>>(8*i));
-                encoded.insert(encoded.end(),payload.snapshot_payload.begin(),payload.snapshot_payload.end());
-            } else if constexpr (std::is_same_v<T, GatewayMotionStateTelemetry>) {
+            } else if constexpr (std::is_same_v<T, GatewayCpgParametersTelemetry>)
+            {
+                kind = RbrpMessageKind::CpgParametersTelemetry;
+                if (!protocol::decode_cpg_snapshot(payload.snapshot_payload))
+                    return encode_invalid(RbrpEncodeStatus::InvalidPayloadLength);
+                encoded.resize(12);
+                put_le32(encoded, 0, payload.link_epoch);
+                for (unsigned i = 0; i < 8; ++i)
+                    encoded[4 + i] = Byte(payload.pi_rx_ms >> (8 * i));
+                encoded.insert(encoded.end(), payload.snapshot_payload.begin(),
+                               payload.snapshot_payload.end());
+            } else if constexpr (std::is_same_v<T, GatewayMotionStateTelemetry>)
+            {
                 kind = RbrpMessageKind::MotionStateTelemetry;
                 const auto payload_bytes = encode_motion_state_telemetry(payload);
                 if (!payload_bytes) return encode_invalid(RbrpEncodeStatus::InvalidPayloadLength);
                 encoded = *payload_bytes;
-            } else if constexpr (std::is_same_v<T, ServiceErrorMessage>) {
+            } else if constexpr (std::is_same_v<T, ServiceErrorMessage>)
+            {
                 kind = RbrpMessageKind::ServiceError;
                 encoded.reserve(8U);
                 write_le16(encoded, static_cast<std::uint16_t>(payload.error_code));

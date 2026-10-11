@@ -30,8 +30,7 @@ void motion_state_sampler_begin_batch(motion_state_sampler_t *sampler)
     sampler->batch_remaining = sampler->count > MOTION_STATE_BATCH_CAPACITY
         ? MOTION_STATE_BATCH_CAPACITY : sampler->count;
     sampler->fragment_index = 0U;
-    sampler->fragment_count = sampler->batch_remaining == 0U
-        ? 1U : sampler->batch_remaining;
+    sampler->fragment_count = sampler->batch_remaining == 0U ? 1U : sampler->batch_remaining;
     sampler->batch_drop_total = sampler->drop_total;
 }
 
@@ -44,8 +43,7 @@ bool motion_state_sampler_fragment(const motion_state_sampler_t *sampler,
     }
     memset(batch, 0, sizeof *batch);
     batch->schema = 2;
-    batch->sample_count = sampler->batch_remaining > 1U
-        ? 1U : sampler->batch_remaining;
+    batch->sample_count = sampler->batch_remaining > 1U ? 1U : sampler->batch_remaining;
     batch->batch_seq = sampler->batch_seq;
     batch->fragment_index = sampler->fragment_index;
     batch->fragment_count = sampler->fragment_count;
@@ -61,8 +59,7 @@ bool motion_state_sampler_fragment(const motion_state_sampler_t *sampler,
 
 void motion_state_sampler_accept_fragment(motion_state_sampler_t *sampler)
 {
-    const uint8_t count = sampler->batch_remaining > 1U
-        ? 1U : sampler->batch_remaining;
+    const uint8_t count = sampler->batch_remaining > 1U ? 1U : sampler->batch_remaining;
     sampler->head = (sampler->head + count) % MOTION_STATE_RING_CAPACITY;
     sampler->count -= count;
     sampler->batch_remaining -= count;

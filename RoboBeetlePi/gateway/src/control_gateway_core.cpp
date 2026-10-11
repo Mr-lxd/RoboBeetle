@@ -233,18 +233,23 @@ bool ControlGatewayCore::valid_command(const RobotCommand &command) const
                 return value.servo_id <= 4U;
             } else if constexpr (std::is_same_v<T, StartMotion>) {
                 return is_valid_motion_mode(value.mode);
-            } else if constexpr (std::is_same_v<T, SetCpgParameters>) {
+            } else if constexpr (std::is_same_v<T, SetCpgParameters>)
+            {
                 return protocol::valid_cpg_parameters(value.parameters);
-            } else if constexpr (std::is_same_v<T, QueryCpgParameters>) {
+            } else if constexpr (std::is_same_v<T, QueryCpgParameters>)
+            {
                 return true;
-            } else if constexpr (std::is_same_v<T, StopMotion>) {
+            } else if constexpr (std::is_same_v<T, StopMotion>)
+            {
                 return true;
-            } else if constexpr (std::is_same_v<T, SetGaitBackend>) {
+            } else if constexpr (std::is_same_v<T, SetGaitBackend>)
+            {
                 return is_valid_gait_backend(value.backend);
-            } else if constexpr (
-                std::is_same_v<T, SetFrontRearCoordination>) {
+            } else if constexpr (std::is_same_v<T, SetFrontRearCoordination>)
+            {
                 return is_valid_front_rear_coordination(value.coordination);
-            } else {
+            } else
+            {
                 return false;
             }
         },
@@ -284,12 +289,9 @@ void ControlGatewayCore::handle_command(const RemoteEnvelope &envelope,
                                         GatewayTimeMs owner_now_ms)
 {
     if (!request.command.has_value()) {
-        const bool known_command = request.command_kind >=
-                                       static_cast<Byte>(
-                                           RobotCommandKind::EnableServos) &&
-                                   request.command_kind <=
-                                       static_cast<Byte>(
-                                           RobotCommandKind::QueryCpgParameters);
+        const bool known_command =
+            request.command_kind >= static_cast<Byte>(RobotCommandKind::EnableServos) &&
+            request.command_kind <= static_cast<Byte>(RobotCommandKind::QueryCpgParameters);
         if (known_command) {
             emit(GatewayOutbound{
                      envelope.source,

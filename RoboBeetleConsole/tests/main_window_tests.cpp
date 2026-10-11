@@ -539,10 +539,9 @@ void testMotionPanelLifecycleAndManualArbitration()
     QPushButton *ascendButton = buttonWithText(panel, QStringLiteral("Ascend"));
     QPushButton *descendButton = buttonWithText(panel, QStringLiteral("Descend"));
     QPushButton *stopButton = window.findChild<QPushButton *>(QStringLiteral("motionStopButton"));
-    expect(forwardButton != nullptr && backwardButton != nullptr
-               && turnLeftButton != nullptr && turnRightButton != nullptr
-               && ascendButton != nullptr && descendButton != nullptr
-               && stopButton != nullptr,
+    expect(forwardButton != nullptr && backwardButton != nullptr && turnLeftButton != nullptr &&
+               turnRightButton != nullptr && ascendButton != nullptr && descendButton != nullptr &&
+               stopButton != nullptr,
            "Motion panel must expose direct Forward/Backward/Turn/Axis/Stop buttons");
     if (forwardButton == nullptr || backwardButton == nullptr
         || turnLeftButton == nullptr || turnRightButton == nullptr
@@ -557,9 +556,9 @@ void testMotionPanelLifecycleAndManualArbitration()
                && !turnRightButton->isEnabled() && !ascendButton->isEnabled()
                && !descendButton->isEnabled() && !stopButton->isEnabled(),
            "Motion controls must be disabled while disconnected");
-    expect(!backwardButton->isEnabled()
-               && backwardButton->toolTip().contains(QStringLiteral("not supported"),
-                                                      Qt::CaseInsensitive),
+    expect(!backwardButton->isEnabled() &&
+               backwardButton->toolTip().contains(QStringLiteral("not supported"),
+                                                  Qt::CaseInsensitive),
            "Brake remains disabled until the existing motion backend is verified");
 
     enablePaddles(transport, controller);
@@ -775,21 +774,23 @@ void testGaitBackendPanelLifecycle()
     QLabel *gaitLabel = nullptr;
     QLabel *coordinationLabel = nullptr;
     for (QLabel *label : panel->findChildren<QLabel *>()) {
-        if (label->text() == QStringLiteral("Backend")) {
+        if (label->text() == QStringLiteral("Backend"))
+        {
             gaitLabel = label;
-        } else if (label->text() == QStringLiteral("Front / Rear")) {
+        } else if (label->text() == QStringLiteral("Front / Rear"))
+        {
             coordinationLabel = label;
         }
     }
-    expect(selectorLayout != nullptr && gaitLabel != nullptr && coordinationLabel != nullptr
-               && gridRowForWidget(selectorLayout, gaitLabel) == 0
-               && gridRowForWidget(selectorLayout, coordinationLabel) == 0,
+    expect(selectorLayout != nullptr && gaitLabel != nullptr && coordinationLabel != nullptr &&
+               gridRowForWidget(selectorLayout, gaitLabel) == 0 &&
+               gridRowForWidget(selectorLayout, coordinationLabel) == 0,
            "Backend and Front / Rear headings share the A prime header row");
-    expect(selectorLayout != nullptr && gaitConfirmed != nullptr && gaitCurrent != nullptr
-               && gridRowForWidget(selectorLayout, gaitCurrent) == 0
-               && gridRowForWidget(selectorLayout, combo) == 1
-               && gridRowForWidget(selectorLayout, gaitConfirmed) == 1
-               && gridRowForWidget(selectorLayout, coordinationCombo) == 1,
+    expect(selectorLayout != nullptr && gaitConfirmed != nullptr && gaitCurrent != nullptr &&
+               gridRowForWidget(selectorLayout, gaitCurrent) == 0 &&
+               gridRowForWidget(selectorLayout, combo) == 1 &&
+               gridRowForWidget(selectorLayout, gaitConfirmed) == 1 &&
+               gridRowForWidget(selectorLayout, coordinationCombo) == 1,
            "Backend, Current and Front / Rear values share the A prime value row");
     expect(coordinationConfirmed != nullptr && coordinationConfirmed->isHidden(),
            "coordination confirmation uses the existing selector without a duplicate status row");
