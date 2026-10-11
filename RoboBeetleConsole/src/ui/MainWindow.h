@@ -2,6 +2,7 @@
 
 #include "controller/IConsoleController.h"
 #include "input/GamepadMapper.h"
+#include "input/ProportionalGamepadMapper.h"
 #include "input/XInputGamepad.h"
 #include <QElapsedTimer>
 #include "vision/DetectionMetadata.h"
@@ -280,6 +281,10 @@ private:
     bool gamepadDetected_{false};
     int gamepadSlot_{0};
     std::optional<MotionMode> gamepadWaitingMode_;
+    QComboBox *gamepadMode_{nullptr};
+    QPushButton *gamepadConfigButton_{nullptr};
+    ProportionalGamepadMapper proportionalMapper_;
+    IConsoleController::ProportionalConfig proportionalConfig_;
     GamepadMapper gamepadMapper_;
     XInputGamepad gamepadReader_;
     DepthEnvelopeMemory gamepadDepthMemory_;

@@ -178,6 +178,18 @@ void SerialSession::finish_teardown(TimeMs now_ms) noexcept
     trace(TeardownStep::ReopenRequired);
 }
 
+bool SerialSession::submit_latest_setpoint(const protocol::Bytes &payload)
+{
+    if (state_ != SessionState::Online)
+        return false;
+    return link_.submit_latest_setpoint(payload);
+}
+
+void SerialSession::clear_latest_setpoint()
+{
+    link_.clear_latest_setpoint();
+}
+
 link_core::SubmitResult SerialSession::submit_request(protocol::Byte request_type,
                                                       const protocol::Bytes &payload,
                                                       TimeMs now_ms)

@@ -41,7 +41,9 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
     const rbp2_frame_t *frame,
     uint32_t now_ms);
 
-size_t protocol_dispatcher_cpg_snapshot(const protocol_dispatcher_t *dispatcher, uint16_t request_sequence, uint8_t *payload, size_t capacity);
+size_t protocol_dispatcher_cpg_snapshot(const protocol_dispatcher_t *dispatcher,
+                                        uint16_t request_sequence, uint8_t *payload,
+                                        size_t capacity);
 
 void protocol_dispatcher_invalidate_action_cache(
     protocol_dispatcher_t *dispatcher);

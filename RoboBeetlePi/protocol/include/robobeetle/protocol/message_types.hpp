@@ -18,6 +18,8 @@ enum class MessageType : std::uint8_t {
     SetFrontRearCoordination = 0x17,
     SetCpgParameters = 0x18,
     QueryCpgParameters = 0x1a,
+    StartProportional = 0x1b,
+    ProportionalInput = 0x1c,
     LeakStatus = 0x20,
     ImuSnapshot = 0x21,
     DepthSnapshot = 0x22,
@@ -50,6 +52,8 @@ constexpr bool is_known_message_type(std::uint8_t value)
     case MessageType::SetMotionMode:
     case MessageType::SetGaitBackend:
     case MessageType::SetCpgParameters:
+    case MessageType::StartProportional:
+    case MessageType::ProportionalInput:
     case MessageType::QueryCpgParameters:
     case MessageType::CpgParametersSnapshot:
     case MessageType::SetFrontRearCoordination:

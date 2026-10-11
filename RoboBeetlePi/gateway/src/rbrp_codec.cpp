@@ -63,6 +63,7 @@ bool is_client_kind(RbrpMessageKind kind) noexcept
     case RbrpMessageKind::AcquireControl:
     case RbrpMessageKind::ControlHeartbeat:
     case RbrpMessageKind::ReleaseControl:
+    case RbrpMessageKind::ProportionalInput:
     case RbrpMessageKind::CommandRequest:
         return true;
     default:
@@ -102,6 +103,7 @@ bool is_known_message_kind(RbrpMessageKind kind) noexcept
     case RbrpMessageKind::AcquireControl:
     case RbrpMessageKind::ControlHeartbeat:
     case RbrpMessageKind::ReleaseControl:
+    case RbrpMessageKind::ProportionalInput:
     case RbrpMessageKind::CommandRequest:
     case RbrpMessageKind::HelloReply:
     case RbrpMessageKind::AcquireReply:
@@ -132,6 +134,8 @@ expected_payload_size(RbrpMessageKind kind) noexcept
     case RbrpMessageKind::ControlHeartbeat:
     case RbrpMessageKind::ReleaseControl:
         return 0U;
+    case RbrpMessageKind::ProportionalInput:
+        return 9U;
     case RbrpMessageKind::CommandRequest:
         return std::nullopt;
     case RbrpMessageKind::HelloReply:
@@ -163,7 +167,7 @@ bool payload_size_is_valid(RbrpMessageKind kind, std::size_t size) noexcept
         return size == 32U || size == 54U || size == 76U || size == 67U;
     }
     if (kind == RbrpMessageKind::CommandRequest) {
-        return (size >= 1U && size <= 4U) || size == 59U;
+        return (size >= 1U && size <= 4U) || size == 59U || size == 10U;
     }
     const auto expected = expected_payload_size(kind);
     return expected.has_value() && *expected == size;
@@ -219,17 +223,34 @@ RbrpMessageDecodeResult decode_remote_message(const RbrpFrame &frame)
     case RbrpMessageKind::ReleaseControl:
         message.payload = ReleaseControlRequest{};
         break;
+    case RbrpMessageKind::ProportionalInput: {
+        const auto input = protocol::decode_proportional_setpoint(frame.payload);
+        if (!input || frame.request_id != 0)
+            return {RbrpMessageDecodeStatus::InvalidPayload, std::nullopt};
+        message.payload = *input;
+        break;
+    }
     case RbrpMessageKind::CommandRequest: {
         CommandRequest request;
         request.command_kind = frame.payload[0];
         switch (static_cast<RobotCommandKind>(request.command_kind)) {
+        case RobotCommandKind::StartProportional: {
+            const auto start = protocol::decode_proportional_start(
+                Bytes(frame.payload.begin() + 1, frame.payload.end()));
+            if (start)
+                request.command = StartProportional{*start};
+            break;
+        }
         case RobotCommandKind::SetCpgParameters: {
-            const auto p=protocol::decode_cpg_parameters(Bytes(frame.payload.begin()+1,frame.payload.end()));
-            if (p) request.command=SetCpgParameters{*p};
+            const auto p = protocol::decode_cpg_parameters(
+                Bytes(frame.payload.begin() + 1, frame.payload.end()));
+            if (p)
+                request.command = SetCpgParameters{*p};
             break;
         }
         case RobotCommandKind::QueryCpgParameters:
-            if (frame.payload.size()==1) request.command=QueryCpgParameters{};
+            if (frame.payload.size() == 1)
+                request.command = QueryCpgParameters{};
             break;
         case RobotCommandKind::EnableServos:
             if (frame.payload.size() == 3U) {
@@ -386,18 +407,25 @@ RbrpEncodeResult encode_gateway_message(const GatewayMessage &message)
                 put_le32(encoded, 28U, payload.diagnostics.rx_buffer_overflow_count);
                 put_le32(encoded, 32U, payload.diagnostics.hard_rearm_failure_count);
                 put_le32(encoded, 36U, payload.diagnostics.uart_error_count);
-            } else if constexpr (std::is_same_v<T, GatewayCpgParametersTelemetry>) {
-                kind=RbrpMessageKind::CpgParametersTelemetry;
-                if (!protocol::decode_cpg_snapshot(payload.snapshot_payload)) return encode_invalid(RbrpEncodeStatus::InvalidPayloadLength);
-                encoded.resize(12); put_le32(encoded,0,payload.link_epoch);
-                for (unsigned i=0;i<8;++i) encoded[4+i]=Byte(payload.pi_rx_ms>>(8*i));
-                encoded.insert(encoded.end(),payload.snapshot_payload.begin(),payload.snapshot_payload.end());
-            } else if constexpr (std::is_same_v<T, GatewayMotionStateTelemetry>) {
+            } else if constexpr (std::is_same_v<T, GatewayCpgParametersTelemetry>)
+            {
+                kind = RbrpMessageKind::CpgParametersTelemetry;
+                if (!protocol::decode_cpg_snapshot(payload.snapshot_payload))
+                    return encode_invalid(RbrpEncodeStatus::InvalidPayloadLength);
+                encoded.resize(12);
+                put_le32(encoded, 0, payload.link_epoch);
+                for (unsigned i = 0; i < 8; ++i)
+                    encoded[4 + i] = Byte(payload.pi_rx_ms >> (8 * i));
+                encoded.insert(encoded.end(), payload.snapshot_payload.begin(),
+                               payload.snapshot_payload.end());
+            } else if constexpr (std::is_same_v<T, GatewayMotionStateTelemetry>)
+            {
                 kind = RbrpMessageKind::MotionStateTelemetry;
                 const auto payload_bytes = encode_motion_state_telemetry(payload);
                 if (!payload_bytes) return encode_invalid(RbrpEncodeStatus::InvalidPayloadLength);
                 encoded = *payload_bytes;
-            } else if constexpr (std::is_same_v<T, ServiceErrorMessage>) {
+            } else if constexpr (std::is_same_v<T, ServiceErrorMessage>)
+            {
                 kind = RbrpMessageKind::ServiceError;
                 encoded.reserve(8U);
                 write_le16(encoded, static_cast<std::uint16_t>(payload.error_code));

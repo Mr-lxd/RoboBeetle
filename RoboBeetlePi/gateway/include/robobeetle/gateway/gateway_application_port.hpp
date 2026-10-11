@@ -14,6 +14,14 @@ public:
     virtual GatewayApplicationSubmitResult
     submit(const RobotCommand &command) = 0;
 
+    virtual bool submit_latest_setpoint(const protocol::ProportionalSetpoint &)
+    {
+        return false;
+    }
+    virtual void clear_latest_setpoint()
+    {
+    }
+
     [[nodiscard]] virtual GatewayApplicationSessionState
     session_state() const noexcept = 0;
     [[nodiscard]] virtual GatewayApplicationLinkState link_state() const = 0;

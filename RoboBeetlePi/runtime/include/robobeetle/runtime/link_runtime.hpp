@@ -30,6 +30,9 @@ public:
                          std::size_t max_tx_bytes = 65536U);
 
     int open(const char *device_path);
+    bool submit_latest_setpoint(const protocol::Bytes &payload);
+    void clear_latest_setpoint();
+
     link_core::SubmitResult submit_request(protocol::Byte request_type,
                                            const protocol::Bytes &payload);
     std::vector<link_core::LinkEvent> abort();

@@ -45,8 +45,12 @@ std::vector<ApplicationEvent> translate(std::vector<link_core::LinkEvent> raw)
             append_telemetry(events, event.frame, decode_depth);
             break;
         case protocol::MessageType::CpgParametersSnapshot:
-            if (protocol::decode_cpg_snapshot(event.frame.payload)) events.emplace_back(CpgParametersTelemetry{event.frame.payload});
-            else events.emplace_back(TelemetryMalformed{event.frame.message_type,event.frame.sequence,TelemetryMalformedReason::InvalidValue});
+            if (protocol::decode_cpg_snapshot(event.frame.payload))
+                events.emplace_back(CpgParametersTelemetry{event.frame.payload});
+            else
+                events.emplace_back(TelemetryMalformed{event.frame.message_type,
+                                                       event.frame.sequence,
+                                                       TelemetryMalformedReason::InvalidValue});
             break;
         case protocol::MessageType::MotionStateBatch:
             if (protocol::decode_motion_state_batch(event.frame.payload)) {
@@ -140,13 +144,35 @@ CommandSubmitResult OnboardApplication::stop_motion()
     return submit(wire_type(protocol::MessageType::SetMotionMode), encode_motion(MotionMode::Stop, MotionAction::Stop));
 }
 
-CommandSubmitResult OnboardApplication::set_cpg_parameters(const protocol::CpgParameters &p) {
-    const auto encoded=protocol::encode_cpg_parameters(p);
-    if (!encoded) return {CommandSubmitStatus::InvalidArgument,std::nullopt};
-    return submit(wire_type(protocol::MessageType::SetCpgParameters),{CodecStatus::Ok,*encoded});
+CommandSubmitResult OnboardApplication::set_cpg_parameters(const protocol::CpgParameters &p)
+{
+    const auto encoded = protocol::encode_cpg_parameters(p);
+    if (!encoded)
+        return {CommandSubmitStatus::InvalidArgument, std::nullopt};
+    return submit(wire_type(protocol::MessageType::SetCpgParameters), {CodecStatus::Ok, *encoded});
 }
-CommandSubmitResult OnboardApplication::query_cpg_parameters() {
-    return submit(wire_type(protocol::MessageType::QueryCpgParameters),{CodecStatus::Ok,{}});
+CommandSubmitResult OnboardApplication::start_proportional(const protocol::ProportionalStart &start)
+{
+    const auto encoded = protocol::encode_proportional_start(start);
+    if (!encoded)
+        return {CommandSubmitStatus::InvalidArgument, std::nullopt};
+    return submit(wire_type(protocol::MessageType::StartProportional), {CodecStatus::Ok, *encoded});
+}
+
+bool OnboardApplication::submit_latest_setpoint(const protocol::ProportionalSetpoint &input)
+{
+    const auto encoded = protocol::encode_proportional_setpoint(input);
+    return encoded && runtime_.submit_latest_setpoint(*encoded);
+}
+
+void OnboardApplication::clear_latest_setpoint()
+{
+    runtime_.clear_latest_setpoint();
+}
+
+CommandSubmitResult OnboardApplication::query_cpg_parameters()
+{
+    return submit(wire_type(protocol::MessageType::QueryCpgParameters), {CodecStatus::Ok, {}});
 }
 
 CommandSubmitResult OnboardApplication::set_gait_backend(GaitBackend backend)

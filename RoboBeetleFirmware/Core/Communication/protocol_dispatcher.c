@@ -104,9 +104,10 @@ static protocol_dispatcher_outcome_t complete_command(
         dispatcher->last_request_result = result;
     }
 
-    protocol_dispatcher_outcome_t outcome=make_outcome(result);
-    outcome.cpg_snapshot=result==RBP2_RESULT_OK &&
-        (frame->type==RBP2_MSG_SET_CPG_PARAMETERS || frame->type==RBP2_MSG_QUERY_CPG_PARAMETERS);
+    protocol_dispatcher_outcome_t outcome = make_outcome(result);
+    outcome.cpg_snapshot =
+        result == RBP2_RESULT_OK && (frame->type == RBP2_MSG_SET_CPG_PARAMETERS ||
+                                     frame->type == RBP2_MSG_QUERY_CPG_PARAMETERS);
     return outcome;
 }
 
@@ -136,19 +137,43 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
     const rbp2_frame_t *frame,
     uint32_t now_ms)
 {
-    if ((frame->type != RBP2_MSG_HEARTBEAT) &&
-        dispatcher->last_request_valid &&
-        (frame->sequence == dispatcher->last_request_sequence) &&
+    if ((frame->type != RBP2_MSG_HEARTBEAT) && (frame->type != RBP2_MSG_PROPORTIONAL_INPUT) &&
+        dispatcher->last_request_valid && (frame->sequence == dispatcher->last_request_sequence) &&
         (frame->type == dispatcher->last_request_type))
     {
-        protocol_dispatcher_outcome_t outcome=make_outcome(dispatcher->last_request_result);
-        outcome.cpg_snapshot=outcome.result==RBP2_RESULT_OK &&
-            (frame->type==RBP2_MSG_SET_CPG_PARAMETERS || frame->type==RBP2_MSG_QUERY_CPG_PARAMETERS);
+        protocol_dispatcher_outcome_t outcome = make_outcome(dispatcher->last_request_result);
+        outcome.cpg_snapshot =
+            outcome.result == RBP2_RESULT_OK && (frame->type == RBP2_MSG_SET_CPG_PARAMETERS ||
+                                                 frame->type == RBP2_MSG_QUERY_CPG_PARAMETERS);
         return outcome;
     }
 
     switch (frame->type)
     {
+    case RBP2_MSG_START_PROPORTIONAL: {
+        if (frame->payload_length != 9U)
+        {
+            return complete_command(dispatcher, frame, RBP2_RESULT_INVALID_PAYLOAD);
+        }
+        const proportional_config_t config = {
+            read_le16(frame->payload), read_le16(frame->payload + 2), read_le16(frame->payload + 4),
+            read_le16(frame->payload + 6)};
+        return complete_command(
+            dispatcher, frame,
+            map_motion_manager_result(motion_manager_start_proportional(
+                dispatcher->motion_manager, &config, frame->payload[8], now_ms)));
+    }
+    case RBP2_MSG_PROPORTIONAL_INPUT: {
+        if (frame->payload_length != 9U)
+        {
+            return make_outcome(RBP2_RESULT_INVALID_PAYLOAD);
+        }
+        const bool accepted = motion_manager_update_proportional(
+            dispatcher->motion_manager, frame->payload[0], read_le16(frame->payload + 1),
+            read_le16(frame->payload + 3), (int16_t)read_le16(frame->payload + 5),
+            (int16_t)read_le16(frame->payload + 7), now_ms);
+        return make_outcome(accepted ? RBP2_RESULT_OK : RBP2_RESULT_INVALID_STATE);
+    }
         case RBP2_MSG_HEARTBEAT:
         {
             protocol_dispatcher_outcome_t outcome;
@@ -434,20 +459,27 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
                 map_motion_manager_result(manager_result));
         }
 
-        case RBP2_MSG_SET_CPG_PARAMETERS:
-        {
+        case RBP2_MSG_SET_CPG_PARAMETERS: {
             cpg_parameters_t parameters;
-            const cpg_parameters_result_t decoded=cpg_parameters_decode(frame->payload,frame->payload_length,&parameters);
-            if(decoded!=CPG_PARAMETERS_OK) return complete_command(dispatcher,frame,
-                decoded==CPG_PARAMETERS_INVALID_PAYLOAD?RBP2_RESULT_INVALID_PAYLOAD:RBP2_RESULT_OUT_OF_RANGE);
-            return complete_command(dispatcher,frame,map_motion_manager_result(
-                motion_manager_set_cpg_parameters(dispatcher->motion_manager,&parameters)));
+            const cpg_parameters_result_t decoded =
+                cpg_parameters_decode(frame->payload, frame->payload_length, &parameters);
+            if (decoded != CPG_PARAMETERS_OK)
+                return complete_command(dispatcher, frame,
+                                        decoded == CPG_PARAMETERS_INVALID_PAYLOAD
+                                            ? RBP2_RESULT_INVALID_PAYLOAD
+                                            : RBP2_RESULT_OUT_OF_RANGE);
+            return complete_command(dispatcher, frame,
+                                    map_motion_manager_result(motion_manager_set_cpg_parameters(
+                                        dispatcher->motion_manager, &parameters)));
         }
         case RBP2_MSG_QUERY_CPG_PARAMETERS:
-            if(frame->payload_length!=0) return complete_command(dispatcher,frame,RBP2_RESULT_INVALID_PAYLOAD);
-            return complete_command(dispatcher,frame,
-                dispatcher->motion_manager && dispatcher->motion_manager->cpg_generator
-                    ?RBP2_RESULT_OK:RBP2_RESULT_HARDWARE_FAILURE);
+            if (frame->payload_length != 0)
+                return complete_command(dispatcher, frame, RBP2_RESULT_INVALID_PAYLOAD);
+            return complete_command(dispatcher, frame,
+                                    dispatcher->motion_manager &&
+                                            dispatcher->motion_manager->cpg_generator
+                                        ? RBP2_RESULT_OK
+                                        : RBP2_RESULT_HARDWARE_FAILURE);
 
         case RBP2_MSG_SET_GAIT_BACKEND:
         {
@@ -501,11 +533,18 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
     }
 }
 
-size_t protocol_dispatcher_cpg_snapshot(const protocol_dispatcher_t *d,uint16_t sequence,uint8_t *p,size_t capacity) {
-    if(!d || !d->motion_manager || !d->motion_manager->cpg_generator || !p || capacity<63) return 0;
-    const uint16_t version=d->motion_manager->cpg_parameter_version;
-    p[0]=(uint8_t)sequence; p[1]=(uint8_t)(sequence>>8);
-    p[2]=(uint8_t)version; p[3]=(uint8_t)(version>>8); p[4]=1;
-    cpg_parameters_t params; cpg_gait_generator_get_parameters(d->motion_manager->cpg_generator,&params);
-    return cpg_parameters_encode(&params,p+5,capacity-5)==58?63:0;
+size_t protocol_dispatcher_cpg_snapshot(const protocol_dispatcher_t *d, uint16_t sequence,
+                                        uint8_t *p, size_t capacity)
+{
+    if (!d || !d->motion_manager || !d->motion_manager->cpg_generator || !p || capacity < 63)
+        return 0;
+    const uint16_t version = d->motion_manager->cpg_parameter_version;
+    p[0] = (uint8_t)sequence;
+    p[1] = (uint8_t)(sequence >> 8);
+    p[2] = (uint8_t)version;
+    p[3] = (uint8_t)(version >> 8);
+    p[4] = 2;
+    cpg_parameters_t params;
+    cpg_gait_generator_get_parameters(d->motion_manager->cpg_generator, &params);
+    return cpg_parameters_encode(&params, p + 5, capacity - 5) == 58 ? 63 : 0;
 }

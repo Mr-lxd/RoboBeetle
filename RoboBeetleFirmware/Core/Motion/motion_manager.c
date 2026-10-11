@@ -399,6 +399,63 @@ static motion_manager_result_t motion_manager_sample(
     return MOTION_MANAGER_RESULT_OK;
 }
 
+static float proportional_slew(float current, float target, float step)
+{
+    if (target > current + step)
+    {
+        return current + step;
+    }
+    if (target < current - step)
+    {
+        return current - step;
+    }
+    return target;
+}
+
+static motion_manager_result_t proportional_sample(motion_manager_t *manager, uint32_t elapsed_ms,
+                                                   joint_targets_t *targets)
+{
+    const uint32_t slew_elapsed_ms =
+        elapsed_ms > MOTION_GAIT_TICK_MS ? MOTION_GAIT_TICK_MS : elapsed_ms;
+    const float step =
+        (float)manager->proportional_config.slew_per_second * (float)slew_elapsed_ms / 1000000.0F;
+    manager->slewed_throttle =
+        proportional_slew(manager->slewed_throttle, manager->proportional_throttle, step);
+    manager->slewed_turn =
+        proportional_slew(manager->slewed_turn, manager->proportional_turn, step);
+    manager->slewed_pitch =
+        proportional_slew(manager->slewed_pitch, manager->proportional_pitch, step);
+    manager->effective_throttle = manager->slewed_throttle;
+    manager->effective_turn = manager->slewed_turn;
+    manager->effective_pitch = manager->slewed_pitch;
+    motion_manager_result_t result =
+        motion_manager_sample(manager, MOTION_FORWARD, 1.0F, 0.0F, targets);
+    if (result != MOTION_MANAGER_RESULT_OK)
+    {
+        return result;
+    }
+    float turn = manager->effective_turn * manager->proportional_config.turn_gain / 1000.0F;
+    if (turn > 1.0F)
+    {
+        turn = 1.0F;
+    }
+    if (turn < -1.0F)
+    {
+        turn = -1.0F;
+    }
+    const float scale =
+        manager->effective_throttle * manager->proportional_config.max_scale / 1000.0F;
+    const float left = scale * (1.0F + (turn < 0.0F ? turn : 0.0F));
+    const float right = scale * (1.0F - (turn > 0.0F ? turn : 0.0F));
+    targets->front_left_cdeg = (int32_t)(targets->front_left_cdeg * left);
+    targets->rear_left_cdeg = (int32_t)(targets->rear_left_cdeg * left);
+    targets->front_right_cdeg = (int32_t)(targets->front_right_cdeg * right);
+    targets->rear_right_cdeg = (int32_t)(targets->rear_right_cdeg * right);
+    targets->front_axis_cdeg =
+        (int32_t)(-manager->proportional_config.pitch_limit_cdeg * manager->effective_pitch);
+    return result;
+}
+
 static motion_manager_result_t motion_manager_tick(
     motion_manager_t *manager,
     uint32_t elapsed_ms)
@@ -426,11 +483,22 @@ static motion_manager_result_t motion_manager_tick(
             return result;
         }
         manager->last_targets = targets;
+        if (manager->control_mode == MOTION_CONTROL_PROPORTIONAL)
+        {
+            const float envelope =
+                1.0F - (float)manager->stop_elapsed_ms / MOTION_TRANSITION_DURATION_MS;
+            manager->effective_throttle = manager->stop_throttle * envelope;
+            manager->effective_turn = manager->stop_elapsed_ms < MOTION_TRANSITION_DURATION_MS
+                                          ? manager->stop_turn
+                                          : 0.0F;
+            manager->effective_pitch = manager->stop_pitch * envelope;
+        }
 
         if (manager->stop_elapsed_ms >= MOTION_TRANSITION_DURATION_MS)
         {
             servo_service_motion_end(manager->servo_service);
             manager->state = MOTION_STATE_STOPPED;
+            manager->control_mode = MOTION_CONTROL_DISCRETE;
             manager->active_mode = MOTION_STOP;
             manager->transition_mode = MOTION_STOP;
             manager->transition_from_mode = MOTION_STOP;
@@ -458,7 +526,21 @@ static motion_manager_result_t motion_manager_tick(
     motion_timing_diagnostics_record_generator_advance(advance_start);
 #endif
 
-    if (manager->transition == MOTION_MANAGER_TRANSITION_START)
+    if (manager->control_mode == MOTION_CONTROL_PROPORTIONAL)
+    {
+        result = proportional_sample(manager, elapsed_ms, &targets);
+        if (manager->transition == MOTION_MANAGER_TRANSITION_START)
+        {
+            manager->transition_elapsed_ms =
+                saturating_transition_elapsed(manager->transition_elapsed_ms, elapsed_ms);
+            targets = interpolate_targets(&manager->start_from_targets, &targets,
+                                          manager->transition_elapsed_ms);
+            const float envelope =
+                (float)manager->transition_elapsed_ms / MOTION_TRANSITION_DURATION_MS;
+            manager->effective_throttle *= envelope;
+            manager->effective_pitch *= envelope;
+        }
+    } else if (manager->transition == MOTION_MANAGER_TRANSITION_START)
     {
         joint_targets_t gait_targets;
 
@@ -740,6 +822,10 @@ motion_manager_result_t motion_manager_start(
         return MOTION_MANAGER_RESULT_INVALID_MODE;
     }
 
+    if (manager->control_mode == MOTION_CONTROL_PROPORTIONAL)
+    {
+        return MOTION_MANAGER_RESULT_BUSY;
+    }
     required_mask = motion_manager_required_mask(mode);
 
     if (manager->safety_supervisor != NULL &&
@@ -866,6 +952,7 @@ motion_manager_result_t motion_manager_request_stop_at(
         return MOTION_MANAGER_RESULT_INVALID_MODE;
     }
 
+    manager->proportional_session_valid = false;
     if ((manager->state == MOTION_STATE_STOPPED) ||
         (manager->state == MOTION_STATE_FAULTED))
     {
@@ -877,6 +964,9 @@ motion_manager_result_t motion_manager_request_stop_at(
         return MOTION_MANAGER_RESULT_OK;
     }
 
+    manager->stop_throttle = manager->effective_throttle;
+    manager->stop_turn = manager->effective_turn;
+    manager->stop_pitch = manager->effective_pitch;
     manager->stop_reason = MOTION_STOP_REASON_OPERATOR;
     manager->stop_start_targets = manager->last_targets;
     manager->stop_elapsed_ms = 0U;
@@ -917,6 +1007,13 @@ motion_manager_result_t motion_manager_process(
         motion_manager_stop_immediate(manager);
         manager->stop_reason = MOTION_STOP_REASON_LINK_LOST;
         return MOTION_MANAGER_RESULT_HOST_NOT_ALIVE;
+    }
+
+    if (manager->proportional_session_valid &&
+        (uint32_t)(now_ms - manager->proportional_last_input_ms) > 600U)
+    {
+        (void)motion_manager_request_stop_at(manager, now_ms);
+        manager->stop_reason = MOTION_STOP_REASON_INPUT_TIMEOUT;
     }
 
     if (manager->scheduler_started == 0U)
@@ -979,6 +1076,11 @@ void motion_manager_stop_immediate(
     {
         servo_service_motion_abort(manager->servo_service);
     }
+    manager->proportional_session_valid = false;
+    manager->control_mode = MOTION_CONTROL_DISCRETE;
+    manager->effective_throttle = 0.0F;
+    manager->effective_turn = 0.0F;
+    manager->effective_pitch = 0.0F;
     manager->last_targets = zero_targets;
     manager->start_from_targets = zero_targets;
     manager->stop_start_targets = zero_targets;
@@ -1031,20 +1133,118 @@ bool motion_manager_is_active(
     return (manager != NULL) && motion_manager_is_running_state(manager);
 }
 
-motion_manager_result_t motion_manager_set_cpg_parameters(motion_manager_t *m,const cpg_parameters_t *p) {
-    if (!m || !m->cpg_generator) return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
+motion_manager_result_t motion_manager_set_cpg_parameters(motion_manager_t *m,
+                                                          const cpg_parameters_t *p)
+{
+    if (!m || !m->cpg_generator)
+        return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
     if (m->safety_supervisor && !safety_supervisor_is_host_alive(m->safety_supervisor))
         return MOTION_MANAGER_RESULT_HOST_NOT_ALIVE;
-    if(m->state==MOTION_STATE_FAULTED) return MOTION_MANAGER_RESULT_INVALID_STATE;
-    if(m->state!=MOTION_STATE_STOPPED) return MOTION_MANAGER_RESULT_BUSY;
-    cpg_parameters_result_t result=cpg_parameters_validate(p);
-    if(result==CPG_PARAMETERS_INVALID_PAYLOAD) return MOTION_MANAGER_RESULT_INVALID_PAYLOAD;
-    if(result!=CPG_PARAMETERS_OK) return MOTION_MANAGER_RESULT_OUT_OF_RANGE;
-    cpg_parameters_t current; cpg_gait_generator_get_parameters(m->cpg_generator,&current);
-    if(!cpg_parameters_equal(&current,p)) {
+    if (m->state == MOTION_STATE_FAULTED)
+        return MOTION_MANAGER_RESULT_INVALID_STATE;
+    if (m->state != MOTION_STATE_STOPPED)
+        return MOTION_MANAGER_RESULT_BUSY;
+    cpg_parameters_result_t result = cpg_parameters_validate(p);
+    if (result == CPG_PARAMETERS_INVALID_PAYLOAD)
+        return MOTION_MANAGER_RESULT_INVALID_PAYLOAD;
+    if (result != CPG_PARAMETERS_OK)
+        return MOTION_MANAGER_RESULT_OUT_OF_RANGE;
+    cpg_parameters_t current;
+    cpg_gait_generator_get_parameters(m->cpg_generator, &current);
+    if (!cpg_parameters_equal(&current, p))
+    {
         /* Validation is complete. Main-loop-only update cannot interleave with sampling. */
-        cpg_gait_generator_apply_parameters(m->cpg_generator,p);
+        cpg_gait_generator_apply_parameters(m->cpg_generator, p);
         ++m->cpg_parameter_version;
     }
     return MOTION_MANAGER_RESULT_OK;
+}
+
+motion_manager_result_t motion_manager_start_proportional(motion_manager_t *manager,
+                                                          const proportional_config_t *config,
+                                                          uint8_t session_id, uint32_t now_ms)
+{
+    joint_targets_t pose;
+    if (manager == NULL || config == NULL)
+    {
+        return MOTION_MANAGER_RESULT_INVALID_PAYLOAD;
+    }
+    if (config->max_scale < 100U || config->max_scale > 1000U || config->turn_gain > 2000U ||
+        config->pitch_limit_cdeg > 2000U || config->slew_per_second < 100U ||
+        config->slew_per_second > 10000U)
+    {
+        return MOTION_MANAGER_RESULT_OUT_OF_RANGE;
+    }
+    if (manager->state != MOTION_STATE_STOPPED)
+    {
+        return MOTION_MANAGER_RESULT_BUSY;
+    }
+    if (manager->safety_supervisor != NULL &&
+        !safety_supervisor_is_host_alive(manager->safety_supervisor))
+    {
+        return MOTION_MANAGER_RESULT_HOST_NOT_ALIVE;
+    }
+    if ((servo_service_enabled_mask(manager->servo_service) & 0x1FU) != 0x1FU)
+    {
+        return MOTION_MANAGER_RESULT_SERVO_NOT_ENABLED;
+    }
+    if (!motion_manager_read_logical_pose(manager, 0x1FU, &pose) ||
+        !motion_manager_pose_within_operational_envelope(&pose, 0x1FU))
+    {
+        return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
+    }
+    if (!motion_manager_generator_is_usable(&manager->generator))
+    {
+        return MOTION_MANAGER_RESULT_HARDWARE_FAILURE;
+    }
+    motion_manager_result_t result = motion_manager_start(manager, MOTION_FORWARD);
+    if (result != MOTION_MANAGER_RESULT_OK)
+    {
+        return result;
+    }
+    manager->generator.ops->reset(manager->generator.context);
+    manager->control_mode = MOTION_CONTROL_PROPORTIONAL;
+    manager->proportional_config = *config;
+    manager->proportional_session_valid = true;
+    manager->proportional_sequence_valid = false;
+    manager->proportional_session_id = session_id;
+    manager->proportional_last_input_ms = now_ms;
+    manager->proportional_throttle = manager->proportional_turn = manager->proportional_pitch =
+        0.0F;
+    manager->slewed_throttle = manager->slewed_turn = manager->slewed_pitch = 0.0F;
+    manager->effective_throttle = manager->effective_turn = manager->effective_pitch = 0.0F;
+    manager->start_from_targets = manager->last_targets = pose;
+    manager->write_mask = 0x1FU;
+    servo_service_motion_set_mask(manager->servo_service, manager->write_mask);
+    return MOTION_MANAGER_RESULT_OK;
+}
+
+bool motion_manager_update_proportional(motion_manager_t *manager, uint8_t session_id,
+                                        uint16_t sequence, uint16_t throttle, int16_t turn,
+                                        int16_t pitch, uint32_t now_ms)
+{
+    if (manager == NULL || !manager->proportional_session_valid ||
+        manager->state != MOTION_STATE_RUNNING || manager->proportional_session_id != session_id ||
+        throttle > 1000U || turn < -1000 || turn > 1000 || pitch < -1000 || pitch > 1000)
+    {
+        return false;
+    }
+    if ((uint32_t)(now_ms - manager->proportional_last_input_ms) > 600U)
+    {
+        (void)motion_manager_request_stop_at(manager, now_ms);
+        manager->stop_reason = MOTION_STOP_REASON_INPUT_TIMEOUT;
+        return false;
+    }
+    const uint16_t delta = (uint16_t)(sequence - manager->proportional_sequence);
+    if (manager->proportional_sequence_valid && (delta == 0U || delta >= 0x8000U))
+    {
+        return false;
+    }
+    manager->proportional_sequence_valid = true;
+    manager->proportional_sequence = sequence;
+    manager->proportional_last_input_ms = now_ms;
+    manager->proportional_throttle = throttle / 1000.0F;
+    manager->proportional_turn = turn / 1000.0F;
+    manager->proportional_pitch = pitch / 1000.0F;
+    return true;
 }

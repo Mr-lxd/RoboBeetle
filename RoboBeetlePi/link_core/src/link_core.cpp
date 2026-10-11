@@ -72,6 +72,7 @@ bool LinkCore::start(TimeMs now_ms)
         started_ = true;
     }
 
+    latest_setpoint_.reset();
     decoder_.reset();
     state_ = LinkState::Unconfirmed;
     pending_ordinary_.reset();
@@ -97,7 +98,24 @@ std::vector<LinkEvent> LinkCore::poll(TimeMs now_ms)
     if (state_ != LinkState::Lost) {
         dispatch_due_heartbeat(now_ms, events);
     }
+    if (state_ == LinkState::Active && latest_setpoint_)
+    {
+        Frame frame;
+        frame.message_type = static_cast<Byte>(MessageType::ProportionalInput);
+        frame.sequence = allocate_sequence();
+        frame.payload = *latest_setpoint_;
+        if (transport_.write(Codec::encodeWire(frame)))
+            latest_setpoint_.reset();
+    }
     return events;
+}
+
+bool LinkCore::submit_latest_setpoint(const Bytes &payload)
+{
+    if (state_ != LinkState::Active || payload.size() != 9)
+        return false;
+    latest_setpoint_ = payload;
+    return true;
 }
 
 std::vector<LinkEvent> LinkCore::receive(const Bytes &bytes, TimeMs now_ms)
@@ -143,6 +161,8 @@ std::optional<TimeMs> LinkCore::next_wakeup_ms() const
         }
     };
 
+    if (latest_setpoint_ && state_ == LinkState::Active)
+        consider(0);
     consider(next_heartbeat_due_ms_);
     if (pending_ordinary_.has_value()) {
         consider(pending_ordinary_->deadline);
@@ -180,6 +200,11 @@ SubmitResult LinkCore::submit_request(Byte request_type,
     if (state_ != LinkState::Active) {
         return {SubmitStatus::NotActive, std::nullopt};
     }
+
+    if (request_type == static_cast<Byte>(MessageType::ServoDisable) ||
+        (request_type == static_cast<Byte>(MessageType::SetMotionMode) && payload.size() == 3 &&
+         payload[2] == 0))
+        clear_latest_setpoint();
 
     QueuedOrdinary request;
     request.frame.message_type = request_type;
@@ -583,6 +608,8 @@ void LinkCore::enter_lost(TimeMs now_ms, std::vector<LinkEvent> &events)
 
 void LinkCore::set_state(LinkState state, std::vector<LinkEvent> &events)
 {
+    if (state != LinkState::Active)
+        clear_latest_setpoint();
     if (state_ == state) {
         return;
     }

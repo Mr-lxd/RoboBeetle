@@ -44,10 +44,14 @@ QString commandKindText(robobeetle::gateway::RobotCommandKind kind)
     case Kind::SetServoAngle: return QStringLiteral("SetServoAngle");
     case Kind::SetServoPwm: return QStringLiteral("SetServoPwm");
     case Kind::NeutralServos: return QStringLiteral("NeutralServos");
+    case Kind::StartProportional:
+        return QStringLiteral("StartProportional");
     case Kind::StartMotion: return QStringLiteral("StartMotion");
     case Kind::StopMotion: return QStringLiteral("StopMotion");
-    case Kind::SetCpgParameters: return QStringLiteral("SetCpgParameters");
-    case Kind::QueryCpgParameters: return QStringLiteral("QueryCpgParameters");
+    case Kind::SetCpgParameters:
+        return QStringLiteral("SetCpgParameters");
+    case Kind::QueryCpgParameters:
+        return QStringLiteral("QueryCpgParameters");
     case Kind::SetGaitBackend: return QStringLiteral("SetGaitBackend");
     case Kind::SetFrontRearCoordination:
         return QStringLiteral("SetFrontRearCoordination");
@@ -62,6 +66,21 @@ RemoteRobotController::RemoteRobotController(QObject *parent, TerminalNowMs term
       session_(this), terminalNow_(std::move(terminalNow))
 {
     terminalClock_.start();
+    propTimer_.setInterval(100);
+    connect(&propTimer_, &QTimer::timeout, this,
+            [this]
+            {
+                if (!propActive_ || !propLatest_ || !isControlActive())
+                    return;
+                auto value = *propLatest_;
+                propLatest_.reset();
+                value.sequence = ++propSequence_;
+                const auto bytes = robobeetle::protocol::encode_proportional_setpoint(value);
+                if (bytes)
+                    session_.sendProportionalInput(
+                        QByteArray(reinterpret_cast<const char *>(bytes->data()), bytes->size()));
+            });
+    propTimer_.start();
     connect(&motionCsvLogger_, &MotionStateCsvLogger::failed,
             this, &RemoteRobotController::motionRecordingFailed);
     if (!terminalNow_) terminalNow_ = [this] { return terminalClock_.elapsed(); };
@@ -113,8 +132,19 @@ RemoteRobotController::RemoteRobotController(QObject *parent, TerminalNowMs term
                        && !pending_.isEmpty())) {
             failClosedControlState(QStringLiteral("remote authority/link lost"));
         }
-        if (!wasControlActive_ && active) queryCpgParameters();
-        if (!active) { cpgSnapshot_.reset(); cpgRequested_.reset(); cpgSchema2_=false; cpgPending_=false; cpgSetSequence_.reset(); cpgSetAccepted_=false; cpgError_.clear(); emit cpgParametersChanged(); }
+        if (!wasControlActive_ && active)
+            queryCpgParameters();
+        if (!active)
+        {
+            cpgSnapshot_.reset();
+            cpgRequested_.reset();
+            cpgSchema2_ = false;
+            cpgPending_ = false;
+            cpgSetSequence_.reset();
+            cpgSetAccepted_ = false;
+            cpgError_.clear();
+            emit cpgParametersChanged();
+        }
         wasControlActive_ = active;
         emit controlAvailabilityChanged();
         emit authorityStateChanged(state, active);
@@ -179,6 +209,7 @@ bool RemoteRobotController::acquireControl()
 
 bool RemoteRobotController::releaseControl()
 {
+    clearProportional();
     userReleasePending_ = true;
     const bool released = session_.releaseControl();
     if (!released) {
@@ -189,6 +220,11 @@ bool RemoteRobotController::releaseControl()
 
 bool RemoteRobotController::enableServo(ServoId id)
 {
+    if (propActive_ || propPending_)
+    {
+        stopMotion();
+        return false;
+    }
     if (!isControlActive() || !isServoSupported(id) || isMotionActive()) {
         return false;
     }
@@ -205,6 +241,11 @@ bool RemoteRobotController::enableServo(ServoId id)
 
 bool RemoteRobotController::disableServo(ServoId id)
 {
+    if (propActive_ || propPending_)
+    {
+        stopMotion();
+        return false;
+    }
     if (!isControlActive() || !isServoSupported(id)) {
         return false;
     }
@@ -241,6 +282,11 @@ bool RemoteRobotController::disableAll()
 
 bool RemoteRobotController::setServoPwm(ServoId id, quint16 pulseUs)
 {
+    if (propActive_ || propPending_)
+    {
+        stopMotion();
+        return false;
+    }
     if (!isControlActive() || !isServoSupported(id) || !isServoEnabled(id)
         || isServoDisablePending(id) || isMotionActive()) {
         return false;
@@ -266,6 +312,11 @@ bool RemoteRobotController::setServoPwm(ServoId id, quint16 pulseUs)
 
 bool RemoteRobotController::setServoAngle(ServoId id, qint16 angleCentidegrees)
 {
+    if (propActive_ || propPending_)
+    {
+        stopMotion();
+        return false;
+    }
     if (!isControlActive() || !isServoSupported(id) || !isServoEnabled(id)
         || isServoDisablePending(id) || isMotionActive()) {
         return false;
@@ -282,6 +333,11 @@ bool RemoteRobotController::setServoAngle(ServoId id, qint16 angleCentidegrees)
 
 bool RemoteRobotController::neutralServo(ServoId id)
 {
+    if (propActive_ || propPending_)
+    {
+        stopMotion();
+        return false;
+    }
     if (!isControlActive() || !isServoSupported(id) || !isServoEnabled(id)
         || isServoDisablePending(id) || isMotionActive()) {
         return false;
@@ -295,6 +351,11 @@ bool RemoteRobotController::neutralServo(ServoId id)
 
 bool RemoteRobotController::startMotion(MotionMode mode)
 {
+    if (propActive_ || propPending_)
+    {
+        stopMotion();
+        return false;
+    }
     if (!isMotionReady(mode) || mode == MotionMode::Backward
         || mode == MotionMode::Stop || mode == MotionMode::Count) {
         return false;
@@ -333,6 +394,10 @@ std::optional<quint32> RemoteRobotController::submitVisualMotion(MotionMode mode
 
 bool RemoteRobotController::stopMotion()
 {
+    const bool hadProportional = propActive_ || propPending_;
+    if (hadProportional)
+        propStopAwaiting_ = true;
+    clearProportional();
     if (!isControlActive()) {
         return false;
     }
@@ -342,7 +407,8 @@ bool RemoteRobotController::stopMotion()
             return true;
         }
     }
-    if (!isMotionActive()) {
+    if (!isMotionActive() && !hadProportional)
+    {
         return false;
     }
 
@@ -357,27 +423,50 @@ bool RemoteRobotController::stopMotion()
     return true;
 }
 
-void RemoteRobotController::queryCpgParameters() {
-    PendingCommand pending; pending.kind=robobeetle::gateway::RobotCommandKind::QueryCpgParameters;
-    submitCommand(pending.kind,{},pending);
+void RemoteRobotController::queryCpgParameters()
+{
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::QueryCpgParameters;
+    submitCommand(pending.kind, {}, pending);
 }
-void RemoteRobotController::refreshCpgReadback() {
+void RemoteRobotController::refreshCpgReadback()
+{
     if (cpgRequested_ && cpgSnapshot_ && cpgSetAccepted_ && cpgSetSequence_ &&
-        cpgSnapshot_->request_sequence==*cpgSetSequence_ && cpgSnapshot_->parameters==*cpgRequested_) {
-        cpgPending_=false; cpgRequested_.reset();
-        emit logMessage(QStringLiteral("CPG parameters applied: version %1").arg(cpgSnapshot_->version));
+        cpgSnapshot_->request_sequence == *cpgSetSequence_ &&
+        cpgSnapshot_->parameters == *cpgRequested_)
+    {
+        cpgPending_ = false;
+        cpgRequested_.reset();
+        emit logMessage(
+            QStringLiteral("CPG parameters applied: version %1").arg(cpgSnapshot_->version));
     }
     emit cpgParametersChanged();
 }
-bool RemoteRobotController::setCpgParameters(const CpgParameters &p) {
+bool RemoteRobotController::setCpgParameters(const CpgParameters &p)
+{
     if (!isControlActive() || !cpgSchema2_ || !cpgSnapshot_ || cpgPending_ ||
-        motionState_!=MotionState::Stopped || confirmedGaitBackend_!=GaitBackend::CPG) return false;
-    const auto bytes=robobeetle::protocol::encode_cpg_parameters(p); if (!bytes) return false;
-    PendingCommand pending; pending.kind=robobeetle::gateway::RobotCommandKind::SetCpgParameters;
-    cpgRequested_=p; cpgPending_=true; cpgSetAccepted_=false; cpgSetSequence_.reset(); cpgError_.clear();
-    const auto id=submitCommand(pending.kind,QByteArray(reinterpret_cast<const char*>(bytes->data()),bytes->size()),pending);
-    if (!id) { cpgPending_=false; cpgRequested_.reset(); }
-    emit cpgParametersChanged(); return id.has_value();
+        motionState_ != MotionState::Stopped || confirmedGaitBackend_ != GaitBackend::CPG)
+        return false;
+    const auto bytes = robobeetle::protocol::encode_cpg_parameters(p);
+    if (!bytes)
+        return false;
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::SetCpgParameters;
+    cpgRequested_ = p;
+    cpgPending_ = true;
+    cpgSetAccepted_ = false;
+    cpgSetSequence_.reset();
+    cpgError_.clear();
+    const auto id = submitCommand(
+        pending.kind, QByteArray(reinterpret_cast<const char *>(bytes->data()), bytes->size()),
+        pending);
+    if (!id)
+    {
+        cpgPending_ = false;
+        cpgRequested_.reset();
+    }
+    emit cpgParametersChanged();
+    return id.has_value();
 }
 
 bool RemoteRobotController::setGaitBackend(GaitBackend backend)
@@ -441,14 +530,18 @@ bool RemoteRobotController::isServoDisablePending(ServoId id) const
 
 bool RemoteRobotController::isMotionActive() const
 {
+    if (propStopAwaiting_)
+        return true;
     if (motionState_ == MotionState::Running
         || motionState_ == MotionState::Stopping) {
         return true;
     }
     for (auto it = pending_.cbegin(); it != pending_.cend(); ++it) {
-        if (!it->superseded
-            && (it->kind == robobeetle::gateway::RobotCommandKind::StartMotion
-                || it->kind == robobeetle::gateway::RobotCommandKind::StopMotion)) {
+        if (!it->superseded &&
+            (it->kind == robobeetle::gateway::RobotCommandKind::StartProportional ||
+             it->kind == robobeetle::gateway::RobotCommandKind::StartMotion ||
+             it->kind == robobeetle::gateway::RobotCommandKind::StopMotion))
+        {
             return true;
         }
     }
@@ -457,6 +550,8 @@ bool RemoteRobotController::isMotionActive() const
 
 bool RemoteRobotController::isMotionReady(MotionMode mode) const
 {
+    if (propStopAwaiting_)
+        return false;
     if (!isControlActive() || mode == MotionMode::Stop
         || mode == MotionMode::Backward || mode == MotionMode::Count
         || motionState_ == MotionState::Stopping
@@ -465,9 +560,11 @@ bool RemoteRobotController::isMotionReady(MotionMode mode) const
         return false;
     }
     for (auto it = pending_.cbegin(); it != pending_.cend(); ++it) {
-        if (!it->superseded
-            && (it->kind == robobeetle::gateway::RobotCommandKind::StartMotion
-                || it->kind == robobeetle::gateway::RobotCommandKind::StopMotion)) {
+        if (!it->superseded &&
+            (it->kind == robobeetle::gateway::RobotCommandKind::StartProportional ||
+             it->kind == robobeetle::gateway::RobotCommandKind::StartMotion ||
+             it->kind == robobeetle::gateway::RobotCommandKind::StopMotion))
+        {
             return false;
         }
     }
@@ -480,6 +577,19 @@ std::optional<quint32> RemoteRobotController::submitCommand(
     robobeetle::gateway::RobotCommandKind kind,
     const QByteArray &payload, PendingCommand pending)
 {
+    using Kind = robobeetle::gateway::RobotCommandKind;
+    if ((propActive_ || propPending_) &&
+        (kind == Kind::StartMotion || kind == Kind::SetServoAngle || kind == Kind::SetServoPwm ||
+         kind == Kind::NeutralServos || kind == Kind::EnableServos))
+    {
+        stopMotion();
+        return {};
+    }
+    if (kind == Kind::DisableServos)
+    {
+        clearProportional();
+        supersedePendingMotionStarts();
+    }
     const auto requestId =
         session_.sendCommand(static_cast<quint8>(kind), payload);
     if (!requestId.has_value()) {
@@ -531,19 +641,27 @@ void RemoteRobotController::handleFrame(quint8 rawKind, quint32 requestId,
         handleDepthTelemetry(payload);
         break;
     case Kind::CpgParametersTelemetry: {
-        if (payload.size()!=75) break;
-        const auto snapshot=robobeetle::protocol::decode_cpg_snapshot(motionStateBytes(payload.mid(12)));
-        if (!snapshot) break;
-        const auto epoch=readLe32(payload,0);
-        if (motionMonitor_.linkEpoch() && *motionMonitor_.linkEpoch()!=epoch) {
+        if (payload.size() != 75)
+            break;
+        const auto snapshot =
+            robobeetle::protocol::decode_cpg_snapshot(motionStateBytes(payload.mid(12)));
+        if (!snapshot)
+            break;
+        const auto epoch = readLe32(payload, 0);
+        if (motionMonitor_.linkEpoch() && *motionMonitor_.linkEpoch() != epoch)
+        {
             motionMonitor_.finishBatch();
             motionCsvLogger_.recordTotals(motionMonitor_);
             motionMonitor_.reset();
-            cpgSchema2_=false;
+            cpgSchema2_ = false;
         }
-        quint64 rx=0; for (unsigned i=0;i<8;++i) rx|=quint64(quint8(payload[4+i]))<<(8*i);
-        cpgSnapshot_=*snapshot; motionCsvLogger_.recordParameters(epoch,rx,*snapshot);
-        refreshCpgReadback(); break;
+        quint64 rx = 0;
+        for (unsigned i = 0; i < 8; ++i)
+            rx |= quint64(quint8(payload[4 + i])) << (8 * i);
+        cpgSnapshot_ = *snapshot;
+        motionCsvLogger_.recordParameters(epoch, rx, *snapshot);
+        refreshCpgReadback();
+        break;
     }
     case Kind::MotionStateTelemetry: {
         const auto telemetry = decodeMotionStateTelemetry(payload);
@@ -552,8 +670,39 @@ void RemoteRobotController::handleFrame(quint8 rawKind, quint32 requestId,
             motionMonitor_.finishBatch();
             motionCsvLogger_.recordTotals(motionMonitor_);
         }
-        const auto decoded=decodeMotionStateBatch(QByteArray(reinterpret_cast<const char*>(telemetry->batch_payload.data()),telemetry->batch_payload.size()));
-        cpgSchema2_=decoded && decoded->schema_version==2;
+        const auto decoded = decodeMotionStateBatch(
+            QByteArray(reinterpret_cast<const char *>(telemetry->batch_payload.data()),
+                       telemetry->batch_payload.size()));
+        cpgSchema2_ = decoded && decoded->schema_version == 2;
+        if (decoded && !decoded->samples.empty())
+        {
+            const auto &sample = decoded->samples.back();
+            actualPitch_ = sample.effective_pitch;
+            if (sample.control_mode == 1 && propActive_)
+                propTelemetrySeen_ = true;
+            if (propStopAwaiting_ && sample.state == 0 &&
+                (motionState_ == MotionState::Stopping || motionState_ == MotionState::Stopped))
+            {
+                propStopAwaiting_ = false;
+                motionStopTimer_.stop();
+                setMotionState(MotionState::Stopped, MotionMode::Stop);
+            }
+            if (propActive_ && propTelemetrySeen_ &&
+                (sample.control_mode == 0 || sample.state == 2 || sample.state == 3))
+            {
+                if (sample.stop_reason == 3)
+                    emit logMessage(QStringLiteral("Proportional STOP: setpoint timeout (600 ms)"));
+                if (sample.stop_reason == 5)
+                    emit logMessage(
+                        QStringLiteral("Safety stop: heartbeat lost (servo power disabled)"));
+                propStopAwaiting_ = sample.state != 0;
+                clearProportional();
+                setMotionState(sample.state == 0   ? MotionState::Stopped
+                               : sample.state == 3 ? MotionState::Faulted
+                                                   : MotionState::Stopping,
+                               MotionMode::Stop);
+            }
+        }
         for (const auto &record : motionMonitor_.accept(*telemetry)) motionCsvLogger_.record(record);
         emit cpgParametersChanged();
         emit motionTelemetryChanged();
@@ -692,14 +841,18 @@ void RemoteRobotController::handleCommandOutcome(
         return;
     }
 
+    if (pending.kind == robobeetle::gateway::RobotCommandKind::StartProportional)
+        clearProportional();
     if (pending.servoMask != 0U
         && pending.kind == robobeetle::gateway::RobotCommandKind::DisableServos) {
         setDisablePendingMask(static_cast<quint16>(
             disablePendingMask_ & ~pending.servoMask));
     }
-    if (pending.kind==robobeetle::gateway::RobotCommandKind::SetCpgParameters) {
-        cpgPending_=false; cpgRequested_.reset();
-        cpgError_=QStringLiteral("Firmware result %1").arg(rawResult);
+    if (pending.kind == robobeetle::gateway::RobotCommandKind::SetCpgParameters)
+    {
+        cpgPending_ = false;
+        cpgRequested_.reset();
+        cpgError_ = QStringLiteral("Firmware result %1").arg(rawResult);
         emit logMessage(QStringLiteral("CPG parameters rejected: %1").arg(cpgError_));
         emit cpgParametersChanged();
     }
@@ -948,6 +1101,13 @@ void RemoteRobotController::applyAcceptedCommand(
     case Kind::SetServoPwm:
         poseKnownMask_ &= ~pending.servoMask;
         break;
+    case Kind::StartProportional:
+        propPending_ = false;
+        propActive_ = true;
+        propTelemetrySeen_ = false;
+        setMotionState(MotionState::Running, MotionMode::Forward);
+        emit logMessage(QStringLiteral("Proportional control started"));
+        break;
     case Kind::StartMotion:
         if (pending.motionMode.has_value()) {
             const bool isModeTransition =
@@ -966,7 +1126,10 @@ void RemoteRobotController::applyAcceptedCommand(
         motionStopTimer_.start(kMotionTransitionDurationMs);
         break;
     case Kind::SetCpgParameters:
-        cpgSetAccepted_=true; cpgSetSequence_=pending.submittedSequence; refreshCpgReadback(); break;
+        cpgSetAccepted_ = true;
+        cpgSetSequence_ = pending.submittedSequence;
+        refreshCpgReadback();
+        break;
     case Kind::QueryCpgParameters:
         break;
     case Kind::SetGaitBackend:
@@ -1000,13 +1163,17 @@ void RemoteRobotController::terminalizePending(
         emit logMessage(QStringLiteral("%1 (superseded)").arg(status));
         return;
     }
+    if (pending.kind == robobeetle::gateway::RobotCommandKind::StartProportional)
+        clearProportional();
     if (pending.kind == robobeetle::gateway::RobotCommandKind::DisableServos) {
         setDisablePendingMask(static_cast<quint16>(
             disablePendingMask_ & ~pending.servoMask));
     }
-    if (pending.kind==robobeetle::gateway::RobotCommandKind::SetCpgParameters) {
-        cpgPending_=false; cpgRequested_.reset();
-        cpgError_=status;
+    if (pending.kind == robobeetle::gateway::RobotCommandKind::SetCpgParameters)
+    {
+        cpgPending_ = false;
+        cpgRequested_.reset();
+        cpgError_ = status;
         emit logMessage(QStringLiteral("CPG parameters rejected: %1").arg(cpgError_));
         emit cpgParametersChanged();
     }
@@ -1028,7 +1195,9 @@ void RemoteRobotController::terminalizePending(
 void RemoteRobotController::supersedePendingMotionStarts()
 {
     for (auto it = pending_.begin(); it != pending_.end(); ++it) {
-        if (it->kind == robobeetle::gateway::RobotCommandKind::StartMotion) {
+        if (it->kind == robobeetle::gateway::RobotCommandKind::StartMotion ||
+            it->kind == robobeetle::gateway::RobotCommandKind::StartProportional)
+        {
             it->superseded = true;
         }
     }
@@ -1063,6 +1232,8 @@ void RemoteRobotController::supersedePendingForDisable(quint16 affectedMask)
 
 void RemoteRobotController::failClosedControlState(const QString &reason)
 {
+    propStopAwaiting_ = false;
+    clearProportional();
     const bool hadMotion = isMotionActive();
     motionStopTimer_.stop();
     motionModeTransitionTimer_.stop();
@@ -1126,8 +1297,9 @@ void RemoteRobotController::resetTelemetry()
 }
 
 bool RemoteRobotController::startMotionRecording(const QString &directory, const QString &session) {
-    const auto started=motionCsvLogger_.start(directory,session);
-    if (started && cpgSnapshot_ && motionMonitor_.linkEpoch()) motionCsvLogger_.recordParameters(*motionMonitor_.linkEpoch(),0,*cpgSnapshot_);
+    const auto started = motionCsvLogger_.start(directory, session);
+    if (started && cpgSnapshot_ && motionMonitor_.linkEpoch())
+        motionCsvLogger_.recordParameters(*motionMonitor_.linkEpoch(), 0, *cpgSnapshot_);
     return started;
 }
 void RemoteRobotController::stopMotionRecording() {
@@ -1293,3 +1465,42 @@ QString RemoteRobotController::authorityText(
 }
 
 } // namespace rb
+
+void rb::RemoteRobotController::clearProportional()
+{
+    propLatest_.reset();
+    propActive_ = propPending_ = false;
+    emit proportionalStopped();
+}
+bool rb::RemoteRobotController::startProportional(const ProportionalConfig &q, double deadzone,
+                                                  double gamma)
+{
+    if (!hasCpgSchema2() || cpgFeatureLevel() < 2 || propActive_ || propPending_ ||
+        motionState() != MotionState::Stopped || !isMotionReady(MotionMode::Forward) ||
+        !isServoEnabled(ServoId::FrontAxis) ||
+        (poseKnownMask_ & SupportedServoMask) != SupportedServoMask)
+        return false;
+    const auto bytes =
+        robobeetle::protocol::encode_proportional_start({q, static_cast<quint8>(propSession_ + 1)});
+    if (!bytes)
+        return false;
+    PendingCommand pending;
+    pending.kind = robobeetle::gateway::RobotCommandKind::StartProportional;
+    if (!submitCommand(pending.kind,
+                       QByteArray(reinterpret_cast<const char *>(bytes->data()), bytes->size()),
+                       pending))
+        return false;
+    ++propSession_;
+    propSequence_ = 0;
+    propLatest_.reset();
+    propPending_ = true;
+    motionCsvLogger_.recordProportionalConfiguration(q, deadzone, gamma);
+    return true;
+}
+bool rb::RemoteRobotController::setProportionalInput(quint16 t, qint16 u, qint16 p)
+{
+    if (!propActive_ || !isControlActive())
+        return false;
+    propLatest_ = robobeetle::protocol::ProportionalSetpoint{propSession_, 0, t, u, p};
+    return true;
+}

@@ -37,6 +37,8 @@ typedef enum
     RBP2_MSG_SET_FRONT_REAR_COORDINATION = 0x17,
     RBP2_MSG_SET_CPG_PARAMETERS = 0x18,
     RBP2_MSG_QUERY_CPG_PARAMETERS = 0x1A,
+    RBP2_MSG_START_PROPORTIONAL = 0x1B,
+    RBP2_MSG_PROPORTIONAL_INPUT = 0x1C,
 
     /* Unacknowledged robot-status telemetry (not a command). */
     RBP2_MSG_LEAK_STATUS = 0x20,

@@ -43,6 +43,11 @@ public:
     bool neutralServo(ServoId id) override;
     bool startMotion(MotionMode mode) override;
     bool stopMotion() override;
+    bool startProportional(const ProportionalConfig &, double, double) override;
+    bool proportionalActive() const override { return propActive_; }
+    bool proportionalPending() const override { return propPending_; }
+    bool setProportionalInput(quint16, qint16, qint16) override;
+    qint16 actualProportionalPitch() const override { return actualPitch_; }
     std::optional<quint32> submitVisualMotion(MotionMode mode) override;
     [[nodiscard]] quint16 inferredPoseKnownMask() const override { return poseKnownMask_; }
     [[nodiscard]] std::optional<DepthControlSample> controlDepthSample() const override;
@@ -55,12 +60,30 @@ public:
     [[nodiscard]] const DepthControlConfig &depthControlConfig() const { return depthControlConfig_; }
     void setDepthClockForTesting(std::function<qint64()> clock) { depthClock_ = std::move(clock); }
     bool setCpgParameters(const CpgParameters &) override;
-    std::optional<CpgParameters> cpgParameters() const override { return cpgSnapshot_?std::optional<CpgParameters>{cpgSnapshot_->parameters}:std::nullopt; }
-    bool hasCpgSchema2() const override { return cpgSchema2_; }
-    quint8 cpgFeatureLevel() const override { return cpgSnapshot_?cpgSnapshot_->feature_level:0; }
-    bool isCpgParametersPending() const override { return cpgPending_; }
-    QString cpgParametersError() const override { return cpgError_; }
-    std::optional<double> measuredCpgPeriod() const override { return motionMonitor_.measuredCpgPeriod(); }
+    std::optional<CpgParameters> cpgParameters() const override
+    {
+        return cpgSnapshot_ ? std::optional<CpgParameters>{cpgSnapshot_->parameters} : std::nullopt;
+    }
+    bool hasCpgSchema2() const override
+    {
+        return cpgSchema2_;
+    }
+    quint8 cpgFeatureLevel() const override
+    {
+        return cpgSnapshot_ ? cpgSnapshot_->feature_level : 0;
+    }
+    bool isCpgParametersPending() const override
+    {
+        return cpgPending_;
+    }
+    QString cpgParametersError() const override
+    {
+        return cpgError_;
+    }
+    std::optional<double> measuredCpgPeriod() const override
+    {
+        return motionMonitor_.measuredCpgPeriod();
+    }
     bool setGaitBackend(GaitBackend backend) override;
     bool setFrontRearCoordination(FrontRearCoordination coordination) override;
 
@@ -123,26 +146,34 @@ signals:
     void motionTelemetryChanged();
     void motionRecordingFailed();
 private:
-    std::optional<robobeetle::protocol::CpgParametersSnapshot> cpgSnapshot_;
-    std::optional<CpgParameters> cpgRequested_;
-    std::optional<quint16> cpgSetSequence_;
-    bool cpgSchema2_{false}, cpgPending_{false}, cpgSetAccepted_{false};
-    QString cpgError_;
-    void queryCpgParameters();
-    void refreshCpgReadback();
-    MotionStateMonitor motionMonitor_;
-    MotionStateCsvLogger motionCsvLogger_;
-    struct PendingCommand {
-        robobeetle::gateway::RobotCommandKind kind{
-            robobeetle::gateway::RobotCommandKind::StopMotion};
-        quint16 servoMask{0};
-        std::optional<MotionMode> motionMode;
-        std::optional<GaitBackend> gaitBackend;
-        std::optional<FrontRearCoordination> frontRearCoordination;
-        std::optional<quint16> submittedSequence;
-        bool superseded{false};
-        qint64 sentAtMs{0};
-        qint64 terminalSentMs{0};
+  void clearProportional();
+  QTimer propTimer_;
+  std::optional<robobeetle::protocol::ProportionalSetpoint> propLatest_;
+  bool propActive_{false}, propPending_{false};
+  bool propTelemetrySeen_{false}, propStopAwaiting_{false};
+  quint8 propSession_{0};
+  quint16 propSequence_{0};
+  qint16 actualPitch_{0};
+  std::optional<robobeetle::protocol::CpgParametersSnapshot> cpgSnapshot_;
+  std::optional<CpgParameters> cpgRequested_;
+  std::optional<quint16> cpgSetSequence_;
+  bool cpgSchema2_{false}, cpgPending_{false}, cpgSetAccepted_{false};
+  QString cpgError_;
+  void queryCpgParameters();
+  void refreshCpgReadback();
+  MotionStateMonitor motionMonitor_;
+  MotionStateCsvLogger motionCsvLogger_;
+  struct PendingCommand
+  {
+      robobeetle::gateway::RobotCommandKind kind{robobeetle::gateway::RobotCommandKind::StopMotion};
+      quint16 servoMask{0};
+      std::optional<MotionMode> motionMode;
+      std::optional<GaitBackend> gaitBackend;
+      std::optional<FrontRearCoordination> frontRearCoordination;
+      std::optional<quint16> submittedSequence;
+      bool superseded{false};
+      qint64 sentAtMs{0};
+      qint64 terminalSentMs{0};
     };
 
     std::optional<quint32>

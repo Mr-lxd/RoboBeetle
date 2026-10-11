@@ -1,4 +1,5 @@
 #pragma once
+#include "robobeetle/protocol/proportional_control.hpp"
 
 #include "robobeetle/application/robot_codec.hpp"
 #include "robobeetle/protocol/cpg_parameters.hpp"
@@ -34,10 +35,14 @@ struct TelemetryMalformed {
 // Every LinkEvent is preserved. A telemetry FrameReceived is immediately
 // followed by its typed value or malformed notice, never a synthetic ACK.
 struct MotionStateTelemetry { protocol::Bytes batch_payload; };
-struct CpgParametersTelemetry { protocol::Bytes snapshot_payload; };
+struct CpgParametersTelemetry
+{
+    protocol::Bytes snapshot_payload;
+};
 
-using ApplicationEvent = std::variant<link_core::LinkEvent, LeakTelemetry,
-    ImuTelemetry, DepthTelemetry, MotionStateTelemetry, CpgParametersTelemetry, TelemetryMalformed>;
+using ApplicationEvent =
+    std::variant<link_core::LinkEvent, LeakTelemetry, ImuTelemetry, DepthTelemetry,
+                 MotionStateTelemetry, CpgParametersTelemetry, TelemetryMalformed>;
 
 struct ApplicationRunResult {
     runtime::RuntimeStatus status{runtime::RuntimeStatus::Progress};
@@ -70,6 +75,9 @@ public:
     CommandSubmitResult stop_motion();
     CommandSubmitResult set_cpg_parameters(const protocol::CpgParameters &);
     CommandSubmitResult query_cpg_parameters();
+    CommandSubmitResult start_proportional(const protocol::ProportionalStart &);
+    bool submit_latest_setpoint(const protocol::ProportionalSetpoint &);
+    void clear_latest_setpoint();
     CommandSubmitResult set_gait_backend(GaitBackend backend);
     CommandSubmitResult set_front_rear_coordination(
         FrontRearCoordination coordination);

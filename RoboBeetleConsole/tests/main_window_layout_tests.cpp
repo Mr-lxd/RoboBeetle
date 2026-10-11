@@ -780,7 +780,9 @@ void testReviewerClosureContracts()
             if (critical.at(i) == nullptr || critical.at(j) == nullptr) continue;
             const QRect a(critical.at(i)->mapTo(&window, QPoint(0, 0)), critical.at(i)->size());
             const QRect b(critical.at(j)->mapTo(&window, QPoint(0, 0)), critical.at(j)->size());
-            if (a.intersects(b)) std::fprintf(stderr,"overlap: %s / %s\n",qPrintable(critical.at(i)->objectName()),qPrintable(critical.at(j)->objectName()));
+            if (a.intersects(b))
+                std::fprintf(stderr, "overlap: %s / %s\n", qPrintable(critical.at(i)->objectName()),
+                             qPrintable(critical.at(j)->objectName()));
             expect(!a.intersects(b), "U10: critical controls do not overlap at minimum size");
         }
     }
@@ -1073,12 +1075,15 @@ void testPresentationDetailsReflowAndNoSideEffects()
     expect(window.size() == QSize(1420, baseHeight + 120), "U09: taller window settles exactly");
     window.resize(1600, baseHeight + 120);
     QApplication::processEvents();
-    std::fprintf(stdout,"wider size requested=1600x%d actual=%dx%d minimum=%dx%d\n",baseHeight+120,window.width(),window.height(),window.minimumWidth(),window.minimumHeight());
-    const bool nativeHeightClamped = QGuiApplication::platformName() == QStringLiteral("windows")
-        && window.screen() && baseHeight + 120 > window.screen()->availableGeometry().height();
-    expect(window.width() == 1600 && (nativeHeightClamped
-               ? window.height() >= window.minimumHeight()
-               : window.height() == baseHeight + 120),
+    std::fprintf(stdout, "wider size requested=1600x%d actual=%dx%d minimum=%dx%d\n",
+                 baseHeight + 120, window.width(), window.height(), window.minimumWidth(),
+                 window.minimumHeight());
+    const bool nativeHeightClamped =
+        QGuiApplication::platformName() == QStringLiteral("windows") && window.screen() &&
+        baseHeight + 120 > window.screen()->availableGeometry().height();
+    expect(window.width() == 1600 &&
+               (nativeHeightClamped ? window.height() >= window.minimumHeight()
+                                    : window.height() == baseHeight + 120),
            "U09: wider window preserves content height within native screen constraints");
     if (tabs != nullptr) {
         tabs->setCurrentIndex(0);

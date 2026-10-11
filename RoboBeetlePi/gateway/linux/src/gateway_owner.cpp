@@ -76,6 +76,8 @@ std::size_t GatewayOwner::remote_payload_size(
         return 0U;
     }
     switch (static_cast<RobotCommandKind>(command->command_kind)) {
+    case RobotCommandKind::StartProportional:
+        return 10U;
     case RobotCommandKind::SetCpgParameters:
         return 59U;
     case RobotCommandKind::EnableServos:
@@ -112,6 +114,7 @@ void GatewayOwner::on_source_connected(ControlSourceId source) noexcept
             on_diagnostic("zero source registration ignored");
             return;
         }
+        pending_setpoint_.reset();
         pending_connections_.clear();
         pending_connections_.push_back(source);
     } catch (...) {
@@ -128,6 +131,17 @@ bool GatewayOwner::enqueue_inbound(const RemoteEnvelope &envelope) noexcept
         if (stop_requested_) {
             return false;
         }
+        if (envelope.message.kind == RbrpMessageKind::ProportionalInput)
+        {
+            pending_setpoint_ = envelope;
+            notify_owner();
+            return true;
+        }
+        const auto *command = std::get_if<CommandRequest>(&envelope.message.payload);
+        if (envelope.message.kind == RbrpMessageKind::ReleaseControl ||
+            (command && (command->command_kind == static_cast<Byte>(RobotCommandKind::StopMotion) ||
+                         command->command_kind == static_cast<Byte>(RobotCommandKind::DisableServos))))
+            pending_setpoint_.reset();
         if (pending_inbound_.size() >= kMaxInboundMessages ||
             pending_inbound_bytes_ + payload_size >
                 kMaxInboundPayloadBytes) {
@@ -151,6 +165,8 @@ void GatewayOwner::on_source_lost(const SourceLostSignal &signal) noexcept
 {
     try {
         std::lock_guard<std::mutex> lock(bridge_mutex_);
+        if (pending_setpoint_ && pending_setpoint_->source == signal.source)
+            pending_setpoint_.reset();
         if (pending_source_losses_.size() >= kMaxSourceLossSignals) {
             // A source can only be current once. Coalescing an identical
             // lifecycle signal preserves the safety edge without dropping it.
@@ -192,11 +208,13 @@ void GatewayOwner::process_bridge_snapshot_and_check_time(
     std::deque<ControlSourceId> connections;
     std::deque<SourceLostSignal> losses;
     std::deque<RemoteEnvelope> messages;
+    std::optional<RemoteEnvelope> setpoint;
     {
         std::lock_guard<std::mutex> lock(bridge_mutex_);
         connections.swap(pending_connections_);
         losses.swap(pending_source_losses_);
         messages.swap(pending_inbound_);
+        setpoint.swap(pending_setpoint_);
         pending_inbound_bytes_ = 0U;
     }
 
@@ -216,8 +234,18 @@ void GatewayOwner::process_bridge_snapshot_and_check_time(
         core_.source_connected(source);
     }
     for (const auto &envelope : messages) {
+        // Retain FIFO heartbeat/lease order. Captured stops also clear the
+        // coalesced stream, which is outside the ordinary queue.
+        const auto *command = std::get_if<CommandRequest>(&envelope.message.payload);
+        if (envelope.message.kind == RbrpMessageKind::ReleaseControl ||
+            (command &&
+             (command->command_kind == static_cast<Byte>(RobotCommandKind::StopMotion) ||
+              command->command_kind == static_cast<Byte>(RobotCommandKind::DisableServos))))
+            setpoint.reset();
         core_.process(envelope, owner_now_ms);
     }
+    if (setpoint)
+        core_.process(*setpoint, owner_now_ms);
 
     // The bridge lock defines the lease boundary. A worker that starts
     // decoding after this observation timestamps its envelope at or after
@@ -266,13 +294,11 @@ void GatewayOwner::owner_loop()
     for (;;) {
         {
             std::unique_lock<std::mutex> lock(bridge_mutex_);
-            const auto work_available =
-                [this] {
-                    return stop_requested_ ||
-                           !pending_connections_.empty() ||
-                           !pending_source_losses_.empty() ||
-                           !pending_inbound_.empty();
-                };
+            const auto work_available = [this] {
+                return stop_requested_ || !pending_connections_.empty() ||
+                       !pending_source_losses_.empty() || !pending_inbound_.empty() ||
+                       pending_setpoint_.has_value();
+            };
             if (stop_requested_) {
                 break;
             }
@@ -347,6 +373,7 @@ void GatewayOwner::stop() noexcept
             return;
         }
         stop_requested_ = true;
+        pending_setpoint_.reset();
     }
     notify_owner();
     if (owner_thread_.joinable()) {
