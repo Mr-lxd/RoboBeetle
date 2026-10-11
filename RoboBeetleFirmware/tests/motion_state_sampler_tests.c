@@ -18,20 +18,27 @@ int main(void)
     assert(sampler.count == 64 && sampler.drop_total == 1);
     motion_state_sampler_begin_batch(&sampler);
     motion_state_sampler_begin_batch(&sampler);
-    for (unsigned i = 0; i < 16; ++i)
+    for (unsigned i = 0; i < 32; ++i)
     {
         assert(motion_state_sampler_fragment(&sampler, 123, &batch));
         assert(batch.batch_seq == 0 && batch.fragment_index == i);
-        assert(batch.fragment_count == 16 && batch.sample_count == 2);
-        assert(batch.samples[0].mcu_ms == i * 2);
+        assert(batch.schema == 2 && batch.fragment_count == 32 && batch.sample_count == 1);
+        assert(batch.samples[0].mcu_ms == i);
         assert(batch.sampler_drop_total == 1 && batch.mcu_tx_ms == 123);
-        assert(sampler.count == 64 - i * 2);
+        assert(sampler.count == 64 - i);
         motion_state_sampler_accept_fragment(&sampler);
     }
     assert(sampler.count == 32 && !sampler.batch_active);
     motion_state_sampler_begin_batch(&sampler);
     assert(motion_state_sampler_fragment(&sampler, 124, &batch));
     assert(batch.batch_seq == 1 && batch.samples[0].mcu_ms == 32);
+
+    motion_state_sampler_init(&sampler);
+    motion_state_sampler_begin_batch(&sampler);
+    assert(motion_state_sampler_fragment(&sampler,125,&batch));
+    assert(batch.schema==2 && batch.sample_count==0 && batch.fragment_count==1);
+    motion_state_sampler_accept_fragment(&sampler);
+    assert(!sampler.batch_active);
 
     uart_tx_queue_t queue;
     uart_tx_active_view_t view;
@@ -49,6 +56,15 @@ int main(void)
     assert(uart_tx_queue_begin_next(&queue, &view) && view.kind == UART_TX_MESSAGE_IMU);
     assert(uart_tx_queue_complete_active(&queue, view.token));
     assert(uart_tx_queue_begin_next(&queue, &view) && view.data[0] == 2);
+    uart_tx_queue_init(&queue);
+    assert(uart_tx_queue_offer(&queue,old,1,UART_TX_MESSAGE_IMU)==UART_TX_ENQUEUED);
+    assert(uart_tx_queue_offer(&queue,first,1,UART_TX_MESSAGE_CPG)==UART_TX_ENQUEUED);
+    assert(uart_tx_queue_offer(&queue,ack,1,UART_TX_MESSAGE_ACK)==UART_TX_ENQUEUED);
+    assert(uart_tx_queue_begin_next(&queue,&view) && view.kind==UART_TX_MESSAGE_ACK);
+    assert(uart_tx_queue_complete_active(&queue,view.token));
+    assert(uart_tx_queue_begin_next(&queue,&view) && view.kind==UART_TX_MESSAGE_CPG);
+    assert(uart_tx_queue_complete_active(&queue,view.token));
+    assert(uart_tx_queue_begin_next(&queue,&view) && view.kind==UART_TX_MESSAGE_IMU);
     puts("motion_state_sampler_tests passed");
     return 0;
 }

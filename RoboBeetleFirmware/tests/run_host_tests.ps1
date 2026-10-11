@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$BuildRoot = ''
+    [string]$BuildRoot = '',
+    [string[]]$OnlyCases = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -236,6 +237,34 @@ $cases += @{
     Extra = @($halWarningArgs + '-DROBOBEETLE_UART_TRANSPORT_HOST_TEST=1' + '-DMOTION_DEFAULT_GAIT_BACKEND_CPG=1')
 }
 
+# CPG configuration is linked whenever a generator/manager is under test.
+foreach ($case in $cases) {
+    if ($case.Sources -contains 'Core/Motion/cpg_gait_generator.c') {
+        $case.Sources += 'Core/Motion/cpg_parameters.c'
+    }
+}
+$task19Sources = @('Core/Motion/cpg_parameters.c', 'Core/Motion/cpg_gait_generator.c',
+    'Core/Motion/cpg_core.c', 'Core/Motion/motion_manager.c', 'Core/Servo/servo_service.c',
+    'Core/Servo/servo_calibration.c', 'Core/Servo/servo_descriptor.c', 'Core/Safety/safety_supervisor.c')
+$cases += @{ Name = 'cpg_parameters_tests'; Sources = @('tests/cpg_parameters_tests.c') + $task19Sources; Link = @('-lm') }
+$cases += @{ Name = 'cpg_protocol_tests'; Sources = @('tests/cpg_protocol_tests.c','Core/Communication/protocol_dispatcher.c') + $task19Sources; Link = @('-lm') }
+$cases += @{ Name = 'motion_state_codec_tests'; Sources = @('tests/motion_state_codec_tests.c','Core/Communication/motion_state_codec.c'); Link = @() }
+foreach ($coord in @('same','opposite')) {
+    foreach ($apply in @(0,1)) {
+        $name = 'task19_trace_' + $coord + '_apply_' + $apply
+        $traceFile = Join-Path $buildRootPath ($name + '.bin')
+        $coordArg = if ($coord -eq 'same') { '0' } else { '1' }
+        $extra = if ($apply -eq 1) { @('-DTASK19_APPLY_DEFAULT=1') } else { @() }
+        $cases += @{ Name = $name; Sources = @('tests/task19_default_trace.c') + $task19Sources;
+            Link = @('-lm'); Extra = $extra; Arguments = @($traceFile, $coordArg);
+            TraceFile = $traceFile; ReferenceFile = Join-Path $PSScriptRoot ('fixtures/task19_default_' + $coord + '.bin') }
+    }
+}
+if ($OnlyCases.Count -gt 0) {
+    $cases = @($cases | Where-Object { $OnlyCases -contains $_.Name })
+    if ($cases.Count -ne $OnlyCases.Count) { throw 'Unknown or duplicate OnlyCases name' }
+}
+
 function Invoke-HostCase {
     param(
         [hashtable]$Case
@@ -264,12 +293,22 @@ function Invoke-HostCase {
         throw "Host test failed: $($Case.Name)"
     }
 
+    if ($null -ne $Case.ReferenceFile) {
+        $actual = [IO.File]::ReadAllBytes($Case.TraceFile)
+        $reference = [IO.File]::ReadAllBytes($Case.ReferenceFile)
+        if ($actual.Length -ne $reference.Length) { throw "Trace length differs: $($Case.Name)" }
+        for ($i = 0; $i -lt $actual.Length; ++$i) {
+            if ($actual[$i] -ne $reference[$i]) { throw "Trace differs at byte ${i}: $($Case.Name)" }
+        }
+    }
     Write-Host ("PASS " + $Case.Name)
 }
 
 foreach ($case in $cases) {
     Invoke-HostCase -Case $case
 }
+
+if ($OnlyCases.Count -gt 0) { Write-Host ('Focused Firmware cases passed: ' + $cases.Count); exit 0 }
 
 $diagnosticsCompileContract = Join-Path $buildRootPath 'motion_timing_diagnostics_compile_contract.o'
 foreach ($contract in @(

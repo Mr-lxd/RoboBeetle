@@ -2,6 +2,7 @@
 #define ROBOBEETLE_CPG_GAIT_GENERATOR_H
 
 #include "cpg_core.h"
+#include "cpg_parameters.h"
 #include "gait_generator.h"
 
 #include <stdbool.h>
@@ -12,6 +13,8 @@ typedef struct
     double front_amplitude_deg;
     double rear_amplitude_deg;
     double nominal_period_s;
+    double beta, front_rear_phase_deg, left_right_phase_deg, coupling_strength;
+    uint8_t coupling_mask;
     double front_axis_bias_cdeg[MOTION_COUNT];
 } cpg_gait_profile_t;
 
@@ -30,6 +33,9 @@ void cpg_gait_generator_init(
 void cpg_gait_generator_init_with_profile(
     cpg_gait_generator_t *generator,
     const cpg_gait_profile_t *profile);
+
+void cpg_gait_generator_get_parameters(const cpg_gait_generator_t *generator, cpg_parameters_t *parameters);
+void cpg_gait_generator_apply_parameters(cpg_gait_generator_t *generator, const cpg_parameters_t *parameters);
 
 void cpg_gait_generator_reset(
     cpg_gait_generator_t *generator);

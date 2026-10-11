@@ -55,6 +55,11 @@ static rbp2_result_t map_motion_manager_result(
         case MOTION_MANAGER_RESULT_OK:
             return RBP2_RESULT_OK;
 
+        case MOTION_MANAGER_RESULT_INVALID_STATE:
+            return RBP2_RESULT_INVALID_STATE;
+        case MOTION_MANAGER_RESULT_OUT_OF_RANGE:
+            return RBP2_RESULT_OUT_OF_RANGE;
+        case MOTION_MANAGER_RESULT_INVALID_PAYLOAD:
         case MOTION_MANAGER_RESULT_INVALID_MODE:
             return RBP2_RESULT_INVALID_PAYLOAD;
 
@@ -99,7 +104,10 @@ static protocol_dispatcher_outcome_t complete_command(
         dispatcher->last_request_result = result;
     }
 
-    return make_outcome(result);
+    protocol_dispatcher_outcome_t outcome=make_outcome(result);
+    outcome.cpg_snapshot=result==RBP2_RESULT_OK &&
+        (frame->type==RBP2_MSG_SET_CPG_PARAMETERS || frame->type==RBP2_MSG_QUERY_CPG_PARAMETERS);
+    return outcome;
 }
 
 void protocol_dispatcher_init(
@@ -133,7 +141,10 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
         (frame->sequence == dispatcher->last_request_sequence) &&
         (frame->type == dispatcher->last_request_type))
     {
-        return make_outcome(dispatcher->last_request_result);
+        protocol_dispatcher_outcome_t outcome=make_outcome(dispatcher->last_request_result);
+        outcome.cpg_snapshot=outcome.result==RBP2_RESULT_OK &&
+            (frame->type==RBP2_MSG_SET_CPG_PARAMETERS || frame->type==RBP2_MSG_QUERY_CPG_PARAMETERS);
+        return outcome;
     }
 
     switch (frame->type)
@@ -423,6 +434,21 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
                 map_motion_manager_result(manager_result));
         }
 
+        case RBP2_MSG_SET_CPG_PARAMETERS:
+        {
+            cpg_parameters_t parameters;
+            const cpg_parameters_result_t decoded=cpg_parameters_decode(frame->payload,frame->payload_length,&parameters);
+            if(decoded!=CPG_PARAMETERS_OK) return complete_command(dispatcher,frame,
+                decoded==CPG_PARAMETERS_INVALID_PAYLOAD?RBP2_RESULT_INVALID_PAYLOAD:RBP2_RESULT_OUT_OF_RANGE);
+            return complete_command(dispatcher,frame,map_motion_manager_result(
+                motion_manager_set_cpg_parameters(dispatcher->motion_manager,&parameters)));
+        }
+        case RBP2_MSG_QUERY_CPG_PARAMETERS:
+            if(frame->payload_length!=0) return complete_command(dispatcher,frame,RBP2_RESULT_INVALID_PAYLOAD);
+            return complete_command(dispatcher,frame,
+                dispatcher->motion_manager && dispatcher->motion_manager->cpg_generator
+                    ?RBP2_RESULT_OK:RBP2_RESULT_HARDWARE_FAILURE);
+
         case RBP2_MSG_SET_GAIT_BACKEND:
         {
             motion_manager_result_t manager_result;
@@ -473,4 +499,13 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
                 RBP2_RESULT_INVALID_PAYLOAD);
         }
     }
+}
+
+size_t protocol_dispatcher_cpg_snapshot(const protocol_dispatcher_t *d,uint16_t sequence,uint8_t *p,size_t capacity) {
+    if(!d || !d->motion_manager || !d->motion_manager->cpg_generator || !p || capacity<63) return 0;
+    const uint16_t version=d->motion_manager->cpg_parameter_version;
+    p[0]=(uint8_t)sequence; p[1]=(uint8_t)(sequence>>8);
+    p[2]=(uint8_t)version; p[3]=(uint8_t)(version>>8); p[4]=1;
+    cpg_parameters_t params; cpg_gait_generator_get_parameters(d->motion_manager->cpg_generator,&params);
+    return cpg_parameters_encode(&params,p+5,capacity-5)==58?63:0;
 }

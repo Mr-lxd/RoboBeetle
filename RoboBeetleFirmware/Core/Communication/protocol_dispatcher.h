@@ -24,6 +24,7 @@ typedef struct
 typedef struct
 {
     rbp2_result_t result;
+    bool cpg_snapshot;
     bool heartbeat_accepted;
     uint32_t heartbeat_uptime_ms;
     bool count_bad_frame;
@@ -39,6 +40,8 @@ protocol_dispatcher_outcome_t protocol_dispatcher_handle(
     protocol_dispatcher_t *dispatcher,
     const rbp2_frame_t *frame,
     uint32_t now_ms);
+
+size_t protocol_dispatcher_cpg_snapshot(const protocol_dispatcher_t *dispatcher, uint16_t request_sequence, uint8_t *payload, size_t capacity);
 
 void protocol_dispatcher_invalidate_action_cache(
     protocol_dispatcher_t *dispatcher);

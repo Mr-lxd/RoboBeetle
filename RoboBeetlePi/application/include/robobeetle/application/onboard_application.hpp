@@ -1,6 +1,7 @@
 #pragma once
 
 #include "robobeetle/application/robot_codec.hpp"
+#include "robobeetle/protocol/cpg_parameters.hpp"
 #include "robobeetle/runtime/link_runtime.hpp"
 
 #include <cstddef>
@@ -33,9 +34,10 @@ struct TelemetryMalformed {
 // Every LinkEvent is preserved. A telemetry FrameReceived is immediately
 // followed by its typed value or malformed notice, never a synthetic ACK.
 struct MotionStateTelemetry { protocol::Bytes batch_payload; };
+struct CpgParametersTelemetry { protocol::Bytes snapshot_payload; };
 
 using ApplicationEvent = std::variant<link_core::LinkEvent, LeakTelemetry,
-    ImuTelemetry, DepthTelemetry, MotionStateTelemetry, TelemetryMalformed>;
+    ImuTelemetry, DepthTelemetry, MotionStateTelemetry, CpgParametersTelemetry, TelemetryMalformed>;
 
 struct ApplicationRunResult {
     runtime::RuntimeStatus status{runtime::RuntimeStatus::Progress};
@@ -66,6 +68,8 @@ public:
     // Backward is PendingQualification; Stop is invalid here (use stop_motion).
     CommandSubmitResult start_motion(MotionMode mode);
     CommandSubmitResult stop_motion();
+    CommandSubmitResult set_cpg_parameters(const protocol::CpgParameters &);
+    CommandSubmitResult query_cpg_parameters();
     CommandSubmitResult set_gait_backend(GaitBackend backend);
     CommandSubmitResult set_front_rear_coordination(
         FrontRearCoordination coordination);

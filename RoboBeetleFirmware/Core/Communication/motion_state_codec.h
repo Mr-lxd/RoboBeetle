@@ -6,14 +6,18 @@
 #include <stdint.h>
 
 #define RB_MOTION_STATE_HEADER_SIZE 16U
-#define RB_MOTION_STATE_SAMPLE_SIZE 22U
+#define RB_MOTION_STATE_SAMPLE_SIZE 35U
+#define RB_MOTION_STATE_V1_SAMPLE_SIZE 22U
 #define RB_MOTION_STATE_MAX_SAMPLES 2U
 #define RB_MOTION_STATE_MAX_PAYLOAD 60U
-#define RB_MOTION_STATE_SCHEMA 1U
+#define RB_MOTION_STATE_SCHEMA 2U
 
 /* Fixed-point wire units: gyro 0.1 deg/s, roll/pitch 0.01 deg.
  * phase_u16 represents radians * 65536 / (2*pi). Ages: 65535 unknown. */
 typedef struct {
+    uint8_t control_mode, stop_reason, throttle;
+    int8_t turn, pitch;
+    uint16_t parameter_version, fr_phase_u16, rr_phase_u16, rl_phase_u16;
     uint32_t mcu_ms;
     int16_t gyro_tenth_dps[3];
     int16_t roll_centidegrees, pitch_centidegrees;
@@ -25,6 +29,7 @@ typedef struct {
 } rb_motion_state_sample_t;
 
 typedef struct {
+    uint8_t schema; /* Zero selects legacy v1 for existing callers; sampler emits v2. */
     uint8_t sample_count;
     uint16_t batch_seq;
     uint8_t fragment_index, fragment_count;

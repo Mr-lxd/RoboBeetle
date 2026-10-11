@@ -9,6 +9,7 @@
 #include <QCommandLineParser>
 #include <QGroupBox>
 #include <QDir>
+#include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
@@ -29,6 +30,19 @@
 #include <cstdlib>
 
 namespace {
+
+class CpgPreviewController : public rb::test::VisualControllerFixture {
+public:
+    rb::GaitBackend gait{rb::GaitBackend::CPG};
+    QString error;
+    std::optional<rb::GaitBackend> confirmedGaitBackend() const override { return gait; }
+    std::optional<rb::FrontRearCoordination> confirmedFrontRearCoordination() const override { return rb::FrontRearCoordination::SameDirection; }
+    std::optional<CpgParameters> cpgParameters() const override { return CpgParameters{}; }
+    bool hasCpgSchema2() const override { return true; }
+    quint8 cpgFeatureLevel() const override { return 1; }
+    QString cpgParametersError() const override { return error; }
+    std::optional<double> measuredCpgPeriod() const override { return motionActive ? std::optional<double>{2.0} : std::nullopt; }
+};
 
 // Task 06 green-region geometry. Reported for the PR so the reviewer can see
 // the real vertical budget at both required window sizes instead of a claim.
@@ -565,6 +579,8 @@ int main(int argc, char **argv)
     parser.addOption(suiteOption);
     parser.addOption(caseOption);
     parser.addOption(greenOption);
+    QCommandLineOption cpgOption(QStringLiteral("cpg-parameters"), QStringLiteral("Capture Task 19 CPG panel with a fake controller"));
+    parser.addOption(cpgOption);
     QCommandLineOption fixesOption(
         QStringLiteral("fixes"),
         QStringLiteral("Run the desktop-fix suite with diagnostic screen style label (S1)"),
@@ -580,6 +596,29 @@ int main(int argc, char **argv)
     const QString fixesStyle = parser.value(fixesOption);
     const bool greenSuite = parser.isSet(greenOption) || !fixesStyle.isEmpty();
     const QString scaleLabel = parser.value(scaleLabelOption);
+    if (parser.isSet(cpgOption)) {
+        CpgPreviewController controller;
+        rb::MainWindow window(&controller);
+        QJsonArray entries;
+        for (const auto &state : {QStringLiteral("ready"), QStringLiteral("running"), QStringLiteral("other-backend"), QStringLiteral("rejected"), QStringLiteral("pending")}) {
+            controller.motionActive = state == QStringLiteral("running");
+            controller.gait = state == QStringLiteral("other-backend") ? rb::GaitBackend::SimpleGait : rb::GaitBackend::CPG;
+            controller.error = state == QStringLiteral("rejected") ? QStringLiteral("Firmware Busy") : QString{};
+            emit controller.gaitBackendStateChanged();
+            emit controller.cpgParametersChanged();
+            if (state == QStringLiteral("pending")) {
+                if (auto *amplitude=window.findChild<QDoubleSpinBox *>(QStringLiteral("cpgParameter0"))) amplitude->setValue(12);
+            }
+            PreviewCase item{QStringLiteral("CPG-")+state, QSize(1280,800), 0, state};
+            entries.append(captureCase(window,item,directory,QString::fromLocal8Bit(qgetenv("QT_QPA_PLATFORM"))));
+            if (auto *panel=window.findChild<QWidget *>(QStringLiteral("cpgParametersPanel")))
+                panel->grab().save(QDir(directory).filePath(item.id+QStringLiteral("-panel.png")),"PNG");
+        }
+        QFile manifest(QDir(directory).filePath(QStringLiteral("manifest.json")));
+        if (!manifest.open(QIODevice::WriteOnly)) return 4;
+        manifest.write(QJsonDocument(QJsonObject{{QStringLiteral("fake_controller"),true},{QStringLiteral("robot_control_writes"),int(controller.manualRecords.size()+controller.sends.size())},{QStringLiteral("entries"),entries}}).toJson(QJsonDocument::Indented));
+        return controller.manualRecords.empty() && controller.sends.empty() ? 0 : 6;
+    }
     auto cases = selectedCases(parser.value(caseOption), greenSuite, fixesStyle);
     if (cases.isEmpty()) {
         return 3;

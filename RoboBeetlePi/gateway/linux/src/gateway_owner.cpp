@@ -76,6 +76,8 @@ std::size_t GatewayOwner::remote_payload_size(
         return 0U;
     }
     switch (static_cast<RobotCommandKind>(command->command_kind)) {
+    case RobotCommandKind::SetCpgParameters:
+        return 59U;
     case RobotCommandKind::EnableServos:
     case RobotCommandKind::DisableServos:
     case RobotCommandKind::NeutralServos:

@@ -19,6 +19,8 @@ RbrpMessageKind telemetry_kind(std::uint8_t type) noexcept
         return RbrpMessageKind::ImuTelemetry;
     case protocol::MessageType::DepthSnapshot:
         return RbrpMessageKind::DepthTelemetry;
+    case protocol::MessageType::CpgParametersSnapshot:
+        return RbrpMessageKind::CpgParametersTelemetry;
     case protocol::MessageType::MotionStateBatch:
         return RbrpMessageKind::MotionStateTelemetry;
     default:
@@ -32,6 +34,7 @@ bool is_telemetry_type(std::uint8_t type) noexcept
     case protocol::MessageType::LeakStatus:
     case protocol::MessageType::ImuSnapshot:
     case protocol::MessageType::DepthSnapshot:
+    case protocol::MessageType::CpgParametersSnapshot:
     case protocol::MessageType::MotionStateBatch:
         return true;
     default:
@@ -295,6 +298,13 @@ std::vector<GatewayApplicationEvent> LinuxOnboardApplicationPort::map_events(
             telemetry_frame.reset();
             continue;
         }
+        if (const auto *cpg=std::get_if<application::CpgParametersTelemetry>(&event)) {
+            if (telemetry_frame && telemetry_frame->first==RbrpMessageKind::CpgParametersTelemetry) {
+                const auto now=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+                mapped.emplace_back(GatewayTelemetryEvent{GatewayCpgParametersTelemetry{link_epoch_,now,cpg->snapshot_payload}});
+            }
+            telemetry_frame.reset(); continue;
+        }
         if (const auto *motion = std::get_if<application::MotionStateTelemetry>(&event)) {
             if (telemetry_frame && telemetry_frame->first == RbrpMessageKind::MotionStateTelemetry) {
                 mapped.emplace_back(GatewayTelemetryEvent{GatewayMotionStateTelemetry{
@@ -334,7 +344,11 @@ LinuxOnboardApplicationPort::submit(const RobotCommand &command)
 {
     const auto submit = [&application = application_](const auto &value) {
         using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, EnableServos>) {
+        if constexpr (std::is_same_v<T, SetCpgParameters>) {
+            return application.set_cpg_parameters(value.parameters);
+        } else if constexpr (std::is_same_v<T, QueryCpgParameters>) {
+            return application.query_cpg_parameters();
+        } else if constexpr (std::is_same_v<T, EnableServos>) {
             return application.enable_servos(value.mask);
         } else if constexpr (std::is_same_v<T, DisableServos>) {
             return application.disable_servos(value.mask);

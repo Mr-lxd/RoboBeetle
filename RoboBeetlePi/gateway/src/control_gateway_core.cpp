@@ -233,6 +233,10 @@ bool ControlGatewayCore::valid_command(const RobotCommand &command) const
                 return value.servo_id <= 4U;
             } else if constexpr (std::is_same_v<T, StartMotion>) {
                 return is_valid_motion_mode(value.mode);
+            } else if constexpr (std::is_same_v<T, SetCpgParameters>) {
+                return protocol::valid_cpg_parameters(value.parameters);
+            } else if constexpr (std::is_same_v<T, QueryCpgParameters>) {
+                return true;
             } else if constexpr (std::is_same_v<T, StopMotion>) {
                 return true;
             } else if constexpr (std::is_same_v<T, SetGaitBackend>) {
@@ -285,7 +289,7 @@ void ControlGatewayCore::handle_command(const RemoteEnvelope &envelope,
                                            RobotCommandKind::EnableServos) &&
                                    request.command_kind <=
                                        static_cast<Byte>(
-                                           RobotCommandKind::SetFrontRearCoordination);
+                                           RobotCommandKind::QueryCpgParameters);
         if (known_command) {
             emit(GatewayOutbound{
                      envelope.source,

@@ -113,6 +113,11 @@ uart_tx_enqueue_result_t uart_tx_queue_offer(
         return UART_TX_ENQUEUED;
     }
 
+    if(kind==UART_TX_MESSAGE_CPG) {
+        const bool replacing=queue->cpg.occupied;
+        uart_tx_copy_frame(&queue->cpg,data,length,kind);
+        return replacing?UART_TX_COALESCED:UART_TX_ENQUEUED;
+    }
     if (kind == UART_TX_MESSAGE_MOTION)
     {
         if (queue->motion.occupied)
@@ -184,6 +189,11 @@ bool uart_tx_queue_begin_next(
             (queue->control_head + 1U) %
             UART_TX_CONTROL_QUEUE_CAPACITY);
         --queue->control_count;
+    }
+    else if(queue->cpg.occupied)
+    {
+        queue->active=queue->cpg;
+        uart_tx_clear_frame(&queue->cpg);
     }
     else
     {
@@ -354,6 +364,10 @@ void uart_tx_queue_drop_pending(
         }
     }
 
+    if(queue->cpg.occupied) {
+        if(dropped_count!=NULL) ++dropped_count[UART_TX_MESSAGE_CPG];
+        uart_tx_clear_frame(&queue->cpg);
+    }
     queue->control_head = 0U;
     if (queue->motion.occupied)
     {
@@ -377,7 +391,7 @@ uint32_t uart_tx_queue_pending_count(
 
     return (uint32_t)queue->control_count +
            (uint32_t)queue->telemetry_count +
-           (queue->motion.occupied ? 1U : 0U);
+           (queue->motion.occupied ? 1U : 0U) + (queue->cpg.occupied ? 1U : 0U);
 }
 
 void uart_tx_queue_get_stats(

@@ -41,6 +41,7 @@ namespace rb {
 
 namespace ui {
 class ElidedLabel;
+class CpgParametersPanel;
 }
 
 namespace vision {
@@ -295,6 +296,7 @@ private:
     QLabel *leakDot_{nullptr};
 
     // Motion card.
+    ui::CpgParametersPanel *cpgPanel_{nullptr};
     std::array<QPushButton *, static_cast<std::size_t>(MotionMode::Count)> motionButtons_{};
     QPushButton *motionStopButton_{nullptr};
     QLabel *motionStatus_{nullptr};

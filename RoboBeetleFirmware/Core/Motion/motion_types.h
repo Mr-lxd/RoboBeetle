@@ -24,6 +24,10 @@ typedef enum
     MOTION_STATE_FAULTED
 } motion_state_t;
 
+typedef enum { MOTION_CONTROL_DISCRETE=0 } motion_control_mode_t;
+typedef enum { MOTION_STOP_REASON_NONE=0, MOTION_STOP_REASON_OPERATOR=1,
+               MOTION_STOP_REASON_LINK_LOST=5 } motion_stop_reason_t;
+
 typedef enum
 {
     MOTION_ACTION_STOP = 0,

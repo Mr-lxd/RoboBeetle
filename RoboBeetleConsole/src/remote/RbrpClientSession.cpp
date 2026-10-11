@@ -44,6 +44,7 @@ bool gatewayKindIsServerToClient(robobeetle::gateway::RbrpMessageKind kind)
     case Kind::LeakTelemetry:
     case Kind::ImuTelemetry:
     case Kind::DepthTelemetry:
+    case Kind::CpgParametersTelemetry:
     case Kind::MotionStateTelemetry:
     case Kind::ServiceError:
         return true;
@@ -316,6 +317,7 @@ void RbrpClientSession::handleFrame(const RbrpFrame &frame)
          || frame.kind == RbrpMessageKind::LeakTelemetry
          || frame.kind == RbrpMessageKind::ImuTelemetry
          || frame.kind == RbrpMessageKind::DepthTelemetry
+         || frame.kind == RbrpMessageKind::CpgParametersTelemetry
          || frame.kind == RbrpMessageKind::MotionStateTelemetry)
         && frame.request_id != 0U) {
         failProtocol(QStringLiteral(

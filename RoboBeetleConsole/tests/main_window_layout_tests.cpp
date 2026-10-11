@@ -594,7 +594,7 @@ void testMotionButtonsFillTheirGroup()
         group = parentGroup;
         buttons.append(button);
     }
-    expect(buttons.size() == 5 && group != nullptr, "Motion Control holds five visible buttons");
+    expect(buttons.size() == 7 && group != nullptr, "Motion Control holds seven visible buttons");
     for (int i = 0; i < buttons.size(); ++i) {
         expect(buttons[i]->height() >= 40, "each Motion Control button is at least 40 px tall");
         const QRect rect(buttons[i]->mapTo(group, QPoint(0, 0)), buttons[i]->size());
@@ -780,6 +780,7 @@ void testReviewerClosureContracts()
             if (critical.at(i) == nullptr || critical.at(j) == nullptr) continue;
             const QRect a(critical.at(i)->mapTo(&window, QPoint(0, 0)), critical.at(i)->size());
             const QRect b(critical.at(j)->mapTo(&window, QPoint(0, 0)), critical.at(j)->size());
+            if (a.intersects(b)) std::fprintf(stderr,"overlap: %s / %s\n",qPrintable(critical.at(i)->objectName()),qPrintable(critical.at(j)->objectName()));
             expect(!a.intersects(b), "U10: critical controls do not overlap at minimum size");
         }
     }
@@ -1072,8 +1073,13 @@ void testPresentationDetailsReflowAndNoSideEffects()
     expect(window.size() == QSize(1420, baseHeight + 120), "U09: taller window settles exactly");
     window.resize(1600, baseHeight + 120);
     QApplication::processEvents();
-    expect(window.size() == QSize(1600, baseHeight + 120),
-           "U09: wider window settles exactly");
+    std::fprintf(stdout,"wider size requested=1600x%d actual=%dx%d minimum=%dx%d\n",baseHeight+120,window.width(),window.height(),window.minimumWidth(),window.minimumHeight());
+    const bool nativeHeightClamped = QGuiApplication::platformName() == QStringLiteral("windows")
+        && window.screen() && baseHeight + 120 > window.screen()->availableGeometry().height();
+    expect(window.width() == 1600 && (nativeHeightClamped
+               ? window.height() >= window.minimumHeight()
+               : window.height() == baseHeight + 120),
+           "U09: wider window preserves content height within native screen constraints");
     if (tabs != nullptr) {
         tabs->setCurrentIndex(0);
         QApplication::processEvents();
