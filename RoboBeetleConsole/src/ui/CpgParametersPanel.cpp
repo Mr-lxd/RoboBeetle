@@ -90,8 +90,8 @@ CpgParametersPanel::CpgParametersPanel(QWidget *parent)
 {
     setObjectName(QStringLiteral("cpgParametersPanel"));
     auto *grid = new QGridLayout(this);
-    grid->setContentsMargins(8, 12, 8, 8);
-    grid->setSpacing(6);
+    grid->setContentsMargins(8, 8, 8, 6);
+    grid->setSpacing(4);
     const QString labels[]{
         QStringLiteral("Front amp (deg)"),        QStringLiteral("Rear amp (deg)"),
         QStringLiteral("Nominal period (s)"),     QStringLiteral("β"),
@@ -154,6 +154,9 @@ CpgParametersPanel::CpgParametersPanel(QWidget *parent)
     apply_->setObjectName(QStringLiteral("cpgApplyButton"));
     reset_ = new QPushButton(QStringLiteral("Reset defaults"), this);
     reset_->setObjectName(QStringLiteral("cpgResetDefaultsButton"));
+    for (auto *button : {apply_, reset_})
+        button->setStyleSheet(
+            QStringLiteral("QPushButton { min-height: 22px; max-height: 22px; padding: 2px 8px; }"));
     grid->addWidget(apply_, 4, 1, 1, 2);
     grid->addWidget(reset_, 4, 3, 1, 2);
     connect(apply_, &QPushButton::clicked, this, &CpgParametersPanel::applyRequested);

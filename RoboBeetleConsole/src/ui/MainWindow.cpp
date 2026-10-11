@@ -926,7 +926,7 @@ QWidget *MainWindow::createConnectionBar()
     gamepadMode->setObjectName(QStringLiteral("gamepadModeCombo"));
     gamepadMode->addItems({QStringLiteral("Discrete"), QStringLiteral("Proportional")});
     gamepadMode->setFixedSize(104, 32);
-    gamepadConfigButton_ = new QPushButton(QStringLiteral("Settings"), gamepadGroup);
+    gamepadConfigButton_ = new QPushButton(QStringLiteral("Tuning"), gamepadGroup);
     gamepadConfigButton_->setObjectName(QStringLiteral("gamepadConfigButton"));
     gamepadConfigButton_->setProperty("consoleActionRole", "secondary");
     gamepadConfigButton_->setFixedSize(64, 32);
@@ -961,7 +961,7 @@ QWidget *MainWindow::createConnectionBar()
             [this]
             {
                 QDialog dialog(this);
-                dialog.setWindowTitle(QStringLiteral("Proportional Gamepad"));
+                dialog.setWindowTitle(QStringLiteral("Proportional Tuning"));
                 auto *form = new QFormLayout(&dialog);
                 const QString labels[]{"Maximum scale", "Turn gain", "Pitch limit (deg)",
                                        "Slew (/s)",     "Deadzone",  "Gamma"};
@@ -2244,8 +2244,18 @@ QWidget *MainWindow::createMotionPanel()
         button->setStyleSheet(button->styleSheet() + QStringLiteral("QPushButton { font-size: 15px; }"));
     }
     for (int index = 0; index < 3; ++index) {
-        dpad->setRowStretch(index, 1);
+        dpad->setRowStretch(index, index < 2 ? 1 : 0);
         dpad->setColumnStretch(index, 1);
+    }
+    // The vertical row is secondary; keep it short so the tools area stays low.
+    for (const MotionMode mode : {MotionMode::Ascend, MotionMode::Backward, MotionMode::Descend})
+    {
+        auto *button = motionButtons_[static_cast<std::size_t>(mode)];
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        // Style-sheet min-height wins over setFixedHeight at polish time; 34 px
+        // content + 2x2 px padding + 2x1 px border = 40 px.
+        button->setStyleSheet(button->styleSheet() +
+                              QStringLiteral("QPushButton { min-height: 34px; max-height: 34px; }"));
     }
 
     // --- Gait / Vertical ---
@@ -4492,11 +4502,19 @@ void MainWindow::refreshGamepadUi()
             ? QStringLiteral(
                   "Proportional control requires compatible Console, gateway and firmware")
             : QString{});
-    gamepadConfigButton_->setEnabled(editable && gamepadMode_->currentIndex() == 1);
+    // Tuning only feeds the next StartProportional and the stick shaping, so it
+    // may change while the Gamepad is connected as long as nothing is moving.
+    const bool tunable = controller_->motionState() == MotionState::Stopped &&
+                         !controller_->isMotionActive() && !controller_->proportionalActive() &&
+                         !controller_->proportionalPending();
+    gamepadConfigButton_->setEnabled(tunable && gamepadMode_->currentIndex() == 1);
     gamepadConfigButton_->setToolTip(
-        !editable ? QStringLiteral("Stop motion and disconnect Gamepad before configuring")
-        : gamepadMode_->currentIndex() != 1 ? QStringLiteral("Select Proportional mode to configure")
-                                          : QString{});
+        gamepadMode_->currentIndex() != 1
+            ? QStringLiteral("Select Proportional mode to tune it")
+        : !tunable ? QStringLiteral("Stop motion before tuning")
+                   : QStringLiteral("Proportional tuning: maximum scale, turn gain, pitch "
+                                    "limit, slew, deadzone and gamma. Applies from the next "
+                                    "proportional start."));
     gamepadToggleButton_->setText(gamepadToggleButton_->isChecked()
         ? QStringLiteral("Disconnect") : QStringLiteral("Connect"));
     gamepadToggleButton_->setEnabled(active && gamepadDetected_);
