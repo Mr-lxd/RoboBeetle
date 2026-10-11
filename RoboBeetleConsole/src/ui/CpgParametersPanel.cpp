@@ -1,6 +1,7 @@
 #include "ui/CpgParametersPanel.h"
 #include <QDoubleSpinBox>
 #include <QGridLayout>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
 #include <QMouseEvent>
@@ -14,7 +15,7 @@ class CouplingDiagram final : public QWidget
   public:
     explicit CouplingDiagram(QWidget *parent) : QWidget(parent)
     {
-        setMinimumSize(200, 130);
+        setFixedSize(150, 120);
         setMouseTracking(true);
         setToolTip(QStringLiteral(
             "Solid: coupled / Dashed: uncoupled. Click a line to toggle both directions."));
@@ -89,8 +90,8 @@ CpgParametersPanel::CpgParametersPanel(QWidget *parent)
 {
     setObjectName(QStringLiteral("cpgParametersPanel"));
     auto *grid = new QGridLayout(this);
-    grid->setContentsMargins(8, 12, 8, 8);
-    grid->setSpacing(6);
+    grid->setContentsMargins(8, 8, 8, 6);
+    grid->setSpacing(4);
     const QString labels[]{
         QStringLiteral("Front amp (deg)"),        QStringLiteral("Rear amp (deg)"),
         QStringLiteral("Nominal period (s)"),     QStringLiteral("β"),
@@ -101,13 +102,8 @@ CpgParametersPanel::CpgParametersPanel(QWidget *parent)
     const double steps[]{.1, .1, .0001, .01, 1, 1, .1};
     for (int i = 0; i < 7; ++i)
     {
-        auto *cell = new QWidget(this);
-        auto *layout = new QVBoxLayout(cell);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(2);
-        auto *label = new QLabel(labels[i], cell);
-        layout->addWidget(label);
-        fields_[i] = new QDoubleSpinBox(cell);
+        auto *label = new QLabel(labels[i], this);
+        fields_[i] = new QDoubleSpinBox(this);
         fields_[i]->setObjectName(QStringLiteral("cpgParameter%1").arg(i));
         fields_[i]->setRange(mins[i], maxs[i]);
         fields_[i]->setDecimals(decimals[i]);
@@ -116,11 +112,12 @@ CpgParametersPanel::CpgParametersPanel(QWidget *parent)
         if (i == 4 || i == 5)
             fields_[i]->setToolTip(
                 QStringLiteral("Oscillator phase; independent of stroke direction"));
-        layout->addWidget(fields_[i]);
-        if (i < 6)
-            grid->addWidget(cell, i / 3, i % 3);
-        else
-            grid->addWidget(cell, 2, 2);
+        // Labels sit beside their inputs. Left pair of columns: amplitudes and
+        // period; right pair: beta, phases, coupling.
+        const int row = i < 3 ? i : i - 3;
+        const int column = i < 3 ? 1 : 3;
+        grid->addWidget(label, row, column);
+        grid->addWidget(fields_[i], row, column + 1);
         connect(fields_[i], qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] {
             if (!loading_)
             {
@@ -131,34 +128,37 @@ CpgParametersPanel::CpgParametersPanel(QWidget *parent)
     }
     diagram_ = new CouplingDiagram(this);
     diagram_->setObjectName(QStringLiteral("cpgCouplingDiagram"));
-    grid->addWidget(diagram_, 2, 0, 3, 2);
+    grid->addWidget(diagram_, 0, 0, 4, 1, Qt::AlignLeft | Qt::AlignVCenter);
+    grid->setColumnStretch(2, 1);
+    grid->setColumnStretch(4, 1);
     diagram_->changed = [this] {
         editing_ = true;
         applied_->setText(QStringLiteral("Pending"));
     };
-    auto *periodCell = new QWidget(this);
-    auto *periodLayout = new QVBoxLayout(periodCell);
-    periodLayout->setContentsMargins(0, 0, 0, 0);
-    periodLayout->setSpacing(2);
-    auto *periodLabel = new QLabel(QStringLiteral("Measured period (FL)"), periodCell);
-    periodLayout->addWidget(periodLabel);
-    period_ = new QLabel(QStringLiteral("--"), periodCell);
+    grid->addWidget(new QLabel(QStringLiteral("Measured period (FL)"), this), 3, 1);
+    period_ = new QLabel(QStringLiteral("--"), this);
     period_->setObjectName(QStringLiteral("cpgMeasuredPeriod"));
-    period_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-    periodLayout->addWidget(period_);
-    periodLayout->addStretch();
-    grid->addWidget(periodCell, 3, 2, 2, 1);
-    applied_ = new QLabel(QStringLiteral("Pending"), this);
-    applied_->setObjectName(QStringLiteral("cpgAppliedStatus"));
+    period_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    grid->addWidget(period_, 3, 2);
+    auto *appliedCell = new QWidget(this);
+    auto *appliedLayout = new QHBoxLayout(appliedCell);
+    appliedLayout->setContentsMargins(0, 0, 0, 0);
+    appliedLayout->setSpacing(6);
+    appliedLayout->addWidget(new QLabel(QStringLiteral("Applied:"), appliedCell));
+    applied_ = new QLabel(QStringLiteral("Pending"), appliedCell);
     applied_->setWordWrap(true);
-    grid->addWidget(new QLabel(QStringLiteral("Applied"), this), 5, 0);
-    grid->addWidget(applied_, 5, 1, 1, 2);
+    applied_->setObjectName(QStringLiteral("cpgAppliedStatus"));
+    appliedLayout->addWidget(applied_, 1);
+    grid->addWidget(appliedCell, 4, 0);
     apply_ = new QPushButton(QStringLiteral("Apply"), this);
     apply_->setObjectName(QStringLiteral("cpgApplyButton"));
     reset_ = new QPushButton(QStringLiteral("Reset defaults"), this);
     reset_->setObjectName(QStringLiteral("cpgResetDefaultsButton"));
-    grid->addWidget(apply_, 6, 0);
-    grid->addWidget(reset_, 6, 1, 1, 2);
+    for (auto *button : {apply_, reset_})
+        button->setStyleSheet(
+            QStringLiteral("QPushButton { min-height: 22px; max-height: 22px; padding: 2px 8px; }"));
+    grid->addWidget(apply_, 4, 1, 1, 2);
+    grid->addWidget(reset_, 4, 3, 1, 2);
     connect(apply_, &QPushButton::clicked, this, &CpgParametersPanel::applyRequested);
     connect(reset_, &QPushButton::clicked, this, [this] {
         setParameters({});
