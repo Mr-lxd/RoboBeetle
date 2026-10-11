@@ -150,6 +150,11 @@ void print_event(const app::MotionStateTelemetry &event)
     std::cout << "MotionStateBatch payload_bytes=" << event.batch_payload.size() << '\n';
 }
 
+void print_event(const app::CpgParametersTelemetry &event)
+{
+    std::cout << "CpgParametersSnapshot payload_bytes=" << event.snapshot_payload.size() << '\n';
+}
+
 void print_event(const app::TelemetryMalformed &event)
 {
     std::cout << "TelemetryMalformed type=" << unsigned(event.message_type)
