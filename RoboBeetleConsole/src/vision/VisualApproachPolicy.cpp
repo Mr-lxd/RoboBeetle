@@ -79,6 +79,32 @@ VisualSetpoint mapVisualSetpoint(ProposedCommand command, double area_f,
     return result;
 }
 
+bool validContinuousVisualConfig(const VisualApproachConfig &c) noexcept
+{
+    return validVisualApproachConfig(c) && std::isfinite(c.eDead) && std::isfinite(c.eFull)
+        && c.eDead >= 0 && c.eDead < c.eFull && c.eFull <= 1;
+}
+
+VisualSetpoint mapContinuousVisualSetpoint(double area_f, double ex_f, double ey_f,
+    VisualAxisMode axis, int turnSign, int pitchSign, DepthEnvelopeState depth,
+    const VisualApproachConfig &c, bool arrived) noexcept
+{
+    if (arrived || !validContinuousVisualConfig(c) || !std::isfinite(ex_f) || !std::isfinite(ey_f)) return {};
+    const auto response = [&c](double error) {
+        return std::copysign(std::clamp((std::abs(error) - c.eDead) / (c.eFull - c.eDead), 0.0, 1.0), error);
+    };
+    const double turn = axis == VisualAxisMode::Pitch ? 0 : turnSign * response(ex_f);
+    double pitch = axis == VisualAxisMode::Yaw ? 0 : -pitchSign * response(ey_f) * c.kPitch;
+    if ((depth == DepthEnvelopeState::Surface && pitch > 0)
+        || (depth == DepthEnvelopeState::SoftFloor && pitch < 0)) pitch = 0;
+    auto result = mapVisualSetpoint(ProposedCommand::Forward, area_f, c);
+    result.throttle = std::max(result.throttle,
+        static_cast<unsigned short>(std::lround(1000 * c.tTurnMin * std::abs(turn))));
+    result.turn = static_cast<short>(std::lround(1000 * turn));
+    result.pitch = static_cast<short>(std::lround(1000 * pitch));
+    return result;
+}
+
 VisualApproachResult evaluateVisualApproach(const VisualApproachMemory &previous,
                                           const VisualApproachInput &input,
                                           const VisualApproachConfig &config)

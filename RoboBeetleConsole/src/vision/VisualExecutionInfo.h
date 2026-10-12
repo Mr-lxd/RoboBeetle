@@ -5,7 +5,7 @@
 
 namespace rb::vision
 {
-enum class VisualExecutionMode { Discrete, Proportional };
+enum class VisualExecutionMode { Discrete, Proportional, Continuous };
 struct VisualApproachCsvInfo {
     bool proportional{false}, dryRun{false};
     std::optional<double> area;
@@ -16,6 +16,7 @@ struct VisualApproachCsvInfo {
     qint64 nowMs{0};
     std::optional<quint64> frameId;
     quint64 sessionId{0};
+    bool continuous{false};
 };
 struct VisualDispatchRecord {
     qint64 nowMs{0};

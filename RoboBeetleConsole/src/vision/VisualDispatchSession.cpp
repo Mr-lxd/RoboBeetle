@@ -406,16 +406,17 @@ void VisualDispatchSession::recordApproachConfiguration()
     if (!proportional()) return;
     auto info=approachInfo();info.proportional=true;info.dryRun=dryRun();info.nowMs=now_();info.event=QStringLiteral("CONFIG");
     const auto &c=approachConfig();const auto &q=proportionalConfig();
-    info.detail=QStringLiteral("alpha_area=%1;A_slow=%2;A_resume=%3;A_stop=%4;arrive_dwell_ms=%5;resume_dwell_ms=%6;t_max=%7;t_min=%8;t_turn_min=%9;k_turn=%10;k_pitch=%11;max_scale=%12;turn_gain=%13;pitch_limit_cdeg=%14;slew_per_second=%15")
+    info.detail=QStringLiteral("alpha_area=%1;A_slow=%2;A_resume=%3;A_stop=%4;arrive_dwell_ms=%5;resume_dwell_ms=%6;t_max=%7;t_min=%8;t_turn_min=%9;k_turn=%10;k_pitch=%11;max_scale=%12;turn_gain=%13;pitch_limit_cdeg=%14;slew_per_second=%15;e_dead=%16;e_full=%17")
         .arg(c.alphaArea).arg(c.slowArea).arg(c.resumeArea).arg(c.stopArea).arg(c.arriveDwellMs).arg(c.resumeDwellMs)
         .arg(c.tMax).arg(c.tMin).arg(c.tTurnMin).arg(c.kTurn).arg(c.kPitch)
-        .arg(q.max_scale).arg(q.turn_gain).arg(q.pitch_limit_cdeg).arg(q.slew_per_second);
+        .arg(q.max_scale).arg(q.turn_gain).arg(q.pitch_limit_cdeg).arg(q.slew_per_second).arg(c.eDead).arg(c.eFull);
     emit approachEvent(info);
 }
 bool VisualDispatchSession::setExecutionMode(VisualExecutionMode mode)
 {
     if (armed() || stopAwaiting()) return false;
     execution_=mode;
+    proportionalMachine_.continuous = mode == VisualExecutionMode::Continuous;
     recordApproachConfiguration();
     emit statusChanged();
     return true;
@@ -430,7 +431,8 @@ bool VisualDispatchSession::setDryRun(bool enabled)
 }
 bool VisualDispatchSession::setApproachConfig(const VisualApproachConfig &config)
 {
-    if (armed() || stopAwaiting() || !validVisualApproachConfig(config)) return false;
+    if (armed() || stopAwaiting() || !validVisualApproachConfig(config)
+        || (execution_ == VisualExecutionMode::Continuous && !validContinuousVisualConfig(config))) return false;
     proportionalMachine_.config=config;
     recordApproachConfiguration();
     emit statusChanged();

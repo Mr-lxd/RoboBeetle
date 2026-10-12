@@ -1,0 +1,135 @@
+{
+    "entries": [
+        {
+            "actual_frame_size": "1280x992",
+            "actual_window_size": "1280x992",
+            "auto_follow_requested_state": "Continuous",
+            "available_screen_geometry": "0,0 2560x1392",
+            "case_id": "Task21-Continuous",
+            "device_pixel_ratio": 1,
+            "fully_expanded_height": 992,
+            "green_region": {
+                "alert_text": "",
+                "alert_text_visible": false,
+                "arm_button_enabled": true,
+                "arm_button_text": "Disarm",
+                "arm_button_text_visible": true,
+                "auto_follow_geometry": "9,259 378x134",
+                "auto_follow_rows": {
+                    "autoFollowAlert": {
+                        "fully_contained": true,
+                        "h": 30,
+                        "visible": false
+                    },
+                    "autoFollowAxisSelector": {
+                        "fully_contained": true,
+                        "h": 30,
+                        "visible": true
+                    },
+                    "autoFollowChecklist": {
+                        "fully_contained": true,
+                        "h": 15,
+                        "visible": false
+                    },
+                    "autoFollowDetail": {
+                        "fully_contained": true,
+                        "h": 30,
+                        "visible": false
+                    },
+                    "autoFollowFooter": {
+                        "fully_contained": true,
+                        "h": 30,
+                        "visible": false
+                    },
+                    "autoFollowStatePill": {
+                        "fully_contained": true,
+                        "h": 22,
+                        "visible": true
+                    },
+                    "visualArmButton": {
+                        "fully_contained": true,
+                        "h": 36,
+                        "visible": true
+                    },
+                    "visualDispatchEnabled": {
+                        "fully_contained": true,
+                        "h": 24,
+                        "visible": true
+                    }
+                },
+                "auto_follow_width_px": 378,
+                "checklist_text": "",
+                "checklist_text_visible": false,
+                "green_region_available_px": 256,
+                "green_region_free_px": 9,
+                "notice_bottom_px": 61,
+                "panel_geometry": "624,0 396x524",
+                "readiness": {
+                    "link_and_control": true,
+                    "missing": 0,
+                    "servos_ready": true,
+                    "tracking": true
+                },
+                "session_armed": true,
+                "side_by_side": false,
+                "state_pill_text": "Approach 0.30",
+                "state_pill_text_visible": true,
+                "status_text_height_px": 259,
+                "variant": "V1-stacked",
+                "vision_button_width_px": 180,
+                "vision_controls_geometry": "9,399 378x116",
+                "vision_controls_width_px": 378
+            },
+            "minimum_height_le_992": true,
+            "output": "Task21-Continuous.png",
+            "panel_width_px": 396,
+            "png_size": "1280x992",
+            "qpa_platform": "windows",
+            "qt_version": "6.11.2",
+            "requested_logical_size": "1280x0",
+            "scale_environment": "",
+            "scenario": "Continuous",
+            "screen_height_px": 216,
+            "screen_width_px": 211,
+            "scroll_positions": {
+                "dataPlotsScroll": {
+                    "maximum": 109,
+                    "value": 0
+                },
+                "motionScrollArea": {
+                    "maximum": 0,
+                    "value": 0
+                },
+                "protocolDetailsScroll": {
+                    "maximum": 190,
+                    "value": 0
+                },
+                "servoFineControlScrollArea": {
+                    "maximum": 231,
+                    "value": 0
+                },
+                "telemetryDetailsScroll": {
+                    "maximum": 24,
+                    "value": 0
+                },
+                "visionDetailsScroll": {
+                    "maximum": 726,
+                    "value": 0
+                }
+            },
+            "selected_tab": 0,
+            "sidebar_geometry": "1046,0 218x560",
+            "splitter_sizes": [
+                560,
+                358
+            ],
+            "status_block_width_px": 159,
+            "variant": "Task21",
+            "video_geometry": "0,31 616x462"
+        }
+    ],
+    "fake_controller": true,
+    "fake_controller_calls": 6,
+    "minimum_height_le_992": true,
+    "robot_control_writes": 0
+}

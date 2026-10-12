@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vision/VisualPolicyConfig.h"
+#include "robot/DepthControl.h"
 
 #include <optional>
 
@@ -19,9 +20,12 @@ struct VisualApproachConfig {
     double tTurnMin{0.30};
     double kTurn{1.0};
     double kPitch{0.50};
+    double eDead{0.05};
+    double eFull{0.40};
 };
 
 [[nodiscard]] bool validVisualApproachConfig(const VisualApproachConfig &config) noexcept;
+[[nodiscard]] bool validContinuousVisualConfig(const VisualApproachConfig &config) noexcept;
 
 enum class ApproachState { Approach, Arrived };
 [[nodiscard]] const char *approachStateName(ApproachState state) noexcept;
@@ -37,6 +41,9 @@ struct VisualSetpoint {
 [[nodiscard]] VisualSetpoint mapVisualSetpoint(ProposedCommand command, double area_f,
                                              const VisualApproachConfig &config,
                                              bool arrived = false) noexcept;
+[[nodiscard]] VisualSetpoint mapContinuousVisualSetpoint(double area_f, double ex_f, double ey_f,
+    VisualAxisMode axis, int turnSign, int pitchSign, DepthEnvelopeState depth,
+    const VisualApproachConfig &config, bool arrived = false) noexcept;
 
 struct VisualApproachMemory {
     ApproachState state{ApproachState::Approach};

@@ -980,18 +980,18 @@ QWidget *MainWindow::createConnectionBar()
                 auto *visualForm = new QFormLayout(visualPage);
                 tabs->addTab(visualPage, QStringLiteral("Visual approach"));
                 const bool visualTunable = visualDispatch_
-                    && visualDispatch_->executionMode() == vision::VisualExecutionMode::Proportional
+                    && visualDispatch_->executionMode() != vision::VisualExecutionMode::Discrete
                     && !visualDispatch_->armed() && !visualDispatch_->stopAwaiting();
                 visualPage->setEnabled(visualTunable);
                 if (visualTunable) tabs->setCurrentWidget(visualPage);
                 const auto a = visualDispatch_->approachConfig();
                 const auto q = visualDispatch_->proportionalConfig();
-                const QString visualLabels[]{"Area EMA alpha [Provisional]", "Slow area (cells)", "Resume area (cells)", "Stop area (cells)", "Arrive dwell (ms)", "Resume dwell (ms)", "Maximum throttle", "Minimum throttle", "Minimum turning throttle", "Turn factor", "Pitch factor", "Maximum scale", "Turn gain", "Pitch limit (deg)", "Slew (/s)"};
-                const double visualValues[]{a.alphaArea,a.slowArea,a.resumeArea,a.stopArea,double(a.arriveDwellMs),double(a.resumeDwellMs),a.tMax,a.tMin,a.tTurnMin,a.kTurn,a.kPitch,q.max_scale/1000.,q.turn_gain/1000.,q.pitch_limit_cdeg/100.,q.slew_per_second/1000.};
-                const double visualLo[]{.01,.01,.01,5,0,0,.01,.01,.01,.01,.01,.1,0,0,.1};
-                const double visualHi[]{1,576,576,200,60000,60000,1,1,1,1,1,1,2,20,10};
-                QDoubleSpinBox *visualFields[15];
-                for (int i=0;i<15;++i) {
+                const QString visualLabels[]{"Area EMA alpha [Provisional]", "Slow area (cells)", "Resume area (cells)", "Stop area (cells)", "Arrive dwell (ms)", "Resume dwell (ms)", "Maximum throttle", "Minimum throttle", "Minimum turning throttle", "Turn factor", "Pitch factor", "Maximum scale", "Turn gain", "Pitch limit (deg)", "Slew (/s)", "Continuous e_dead [Provisional]", "Continuous e_full [Provisional]"};
+                const double visualValues[]{a.alphaArea,a.slowArea,a.resumeArea,a.stopArea,double(a.arriveDwellMs),double(a.resumeDwellMs),a.tMax,a.tMin,a.tTurnMin,a.kTurn,a.kPitch,q.max_scale/1000.,q.turn_gain/1000.,q.pitch_limit_cdeg/100.,q.slew_per_second/1000.,a.eDead,a.eFull};
+                const double visualLo[]{.01,.01,.01,5,0,0,.01,.01,.01,.01,.01,.1,0,0,.1,0,.01};
+                const double visualHi[]{1,576,576,200,60000,60000,1,1,1,1,1,1,2,20,10,.99,1};
+                QDoubleSpinBox *visualFields[17];
+                for (int i=0;i<17;++i) {
                     visualFields[i]=new QDoubleSpinBox(visualPage);
                     visualFields[i]->setObjectName(QStringLiteral("visualApproachParameter%1").arg(i));
                     visualFields[i]->setDecimals(i==3 || i==4 || i==5 ? 0 : 2);
@@ -1029,8 +1029,8 @@ QWidget *MainWindow::createConnectionBar()
                             if (tabs->currentWidget() == gamepadPage) {
                                 for (int i = 0; i < 6; ++i) fields[i]->setValue(defaults[i]);
                             } else {
-                                const double defaultsVisual[]{.3,8,14,20,1000,1000,.6,.15,.3,1,.5,1,1,10,2};
-                                for (int i=0;i<15;++i) visualFields[i]->setValue(defaultsVisual[i]);
+                                const double defaultsVisual[]{.3,8,14,20,1000,1000,.6,.15,.3,1,.5,1,1,10,2,.05,.4};
+                                for (int i=0;i<17;++i) visualFields[i]->setValue(defaultsVisual[i]);
                             }
                         });
                 layout->addWidget(buttons);
@@ -1042,9 +1042,10 @@ QWidget *MainWindow::createConnectionBar()
                         next.arriveDwellMs=qint64(visualFields[4]->value()); next.resumeDwellMs=qint64(visualFields[5]->value());
                         next.tMax=visualFields[6]->value(); next.tMin=visualFields[7]->value();
                         next.tTurnMin=visualFields[8]->value(); next.kTurn=visualFields[9]->value(); next.kPitch=visualFields[10]->value();
+                        next.eDead=visualFields[15]->value(); next.eFull=visualFields[16]->value();
                         if (!visualDispatch_->setApproachConfig(next)) {
                             QMessageBox::warning(&dialog, QStringLiteral("Invalid visual approach"),
-                                QStringLiteral("Require 0 < slow < resume < stop, minimum throttle <= turning minimum <= maximum throttle."));
+                                QStringLiteral("Require 0 < slow < resume < stop, minimum throttle <= turning minimum <= maximum throttle. Continuous requires 0 <= e_dead < e_full <= 1."));
                             return;
                         }
                         IConsoleController::ProportionalConfig nextQ{
@@ -1052,8 +1053,8 @@ QWidget *MainWindow::createConnectionBar()
                             quint16(std::lround(visualFields[13]->value()*100)),quint16(std::lround(visualFields[14]->value()*1000))};
                         visualDispatch_->setProportionalConfig(nextQ);
                         QSettings cfg;
-                        const QString names[]{"alphaArea","slowArea","resumeArea","stopArea","arriveDwellMs","resumeDwellMs","tMax","tMin","tTurnMin","kTurn","kPitch","maxScale","turnGain","pitchLimit","slew"};
-                        for (int i=0;i<15;++i) cfg.setValue(QStringLiteral("Visual/Approach/v1/")+names[i],visualFields[i]->value());
+                        const QString names[]{"alphaArea","slowArea","resumeArea","stopArea","arriveDwellMs","resumeDwellMs","tMax","tMin","tTurnMin","kTurn","kPitch","maxScale","turnGain","pitchLimit","slew","eDead","eFull"};
+                        for (int i=0;i<17;++i) cfg.setValue(QStringLiteral("Visual/Approach/v1/")+names[i],visualFields[i]->value());
                     }
                     dialog.accept();
                 });
@@ -1503,7 +1504,7 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     execLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     visualExecutionMode_ = new QComboBox(autoFollowAxisSelector_);
     visualExecutionMode_->setObjectName(QStringLiteral("visualExecutionMode"));
-    visualExecutionMode_->addItems({QStringLiteral("Discrete"), QStringLiteral("Proportional")});
+    visualExecutionMode_->addItems({QStringLiteral("Discrete"), QStringLiteral("Proportional"), QStringLiteral("Continuous")});
     visualExecutionMode_->setFixedSize(82, 20);
     visualExecutionMode_->setStyleSheet(QStringLiteral(
         "QComboBox { font-size: 10px; min-height: 0px; padding: 0px; }"
@@ -1547,7 +1548,7 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     axisLayout->addWidget(visualFollowSet_);
     axisLayout->addSpacing(4);
     const auto applyFollow = [this] {
-        if (!visualDispatch_ || visualDispatch_->executionMode() != vision::VisualExecutionMode::Proportional
+        if (!visualDispatch_ || visualDispatch_->executionMode() == vision::VisualExecutionMode::Discrete
             || visualDispatch_->armed() || visualDispatch_->stopAwaiting()) return;
         visualFollowArea_->interpretText();
         const int cells = visualFollowArea_->value();
@@ -1570,7 +1571,7 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     }
     connect(visualExecutionMode_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (!visualDispatch_) return;
-        if (index == 0 && visualDispatch_->executionMode() == vision::VisualExecutionMode::Proportional
+        if (index == 0 && visualDispatch_->executionMode() != vision::VisualExecutionMode::Discrete
             && !visualDispatch_->armed() && !visualDispatch_->stopAwaiting())
             visualDispatch_->setDryRun(false);
         visualDispatch_->setExecutionMode(static_cast<vision::VisualExecutionMode>(index));
@@ -3142,7 +3143,7 @@ void MainWindow::refreshAutoFollowUi()
                     ? QStringLiteral("background: #FBE3B8; color: #7A4A06;")
                     : QStringLiteral("background: #E3E9EF; color: #4A5C6B;");
     const auto approach = visualDispatch_->approachInfo();
-    const bool visualProportional = visualDispatch_->executionMode() == vision::VisualExecutionMode::Proportional;
+    const bool visualProportional = visualDispatch_->executionMode() != vision::VisualExecutionMode::Discrete;
     QString shownState = state;
     if (approach.proportional && armed && !stopping) {
         shownState = approach.state == QStringLiteral("ARRIVED") ? QStringLiteral("Arrived")
@@ -3434,6 +3435,8 @@ void MainWindow::bindVisionUi()
         a.tTurnMin=settings.value(prefix+"tTurnMin",a.tTurnMin).toDouble();
         a.kTurn=settings.value(prefix+"kTurn",a.kTurn).toDouble();
         a.kPitch=settings.value(prefix+"kPitch",a.kPitch).toDouble();
+        a.eDead=settings.value(prefix+"eDead",a.eDead).toDouble();
+        a.eFull=settings.value(prefix+"eFull",a.eFull).toDouble();
         visualDispatch_->setApproachConfig(a);
         IConsoleController::ProportionalConfig q{
             quint16(std::lround(settings.value(prefix+"maxScale",1.).toDouble()*1000)),
@@ -4734,7 +4737,7 @@ void MainWindow::refreshGamepadUi()
                          !controller_->isMotionActive() && !controller_->proportionalActive() &&
                          !controller_->proportionalPending();
     const bool visualTunable = visualDispatch_
-        && visualDispatch_->executionMode() == vision::VisualExecutionMode::Proportional
+        && visualDispatch_->executionMode() != vision::VisualExecutionMode::Discrete
         && !visualDispatch_->armed() && !visualDispatch_->stopAwaiting();
     gamepadConfigButton_->setEnabled((tunable && gamepadMode_->currentIndex() == 1) || visualTunable);
     gamepadConfigButton_->setToolTip(

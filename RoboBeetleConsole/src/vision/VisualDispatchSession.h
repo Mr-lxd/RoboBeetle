@@ -56,6 +56,10 @@ public:
         auto info = proportionalMachine_.info();
         info.proportional = true;
         info.dryRun = dryRun();
+        info.continuous = execution_ == VisualExecutionMode::Continuous;
+        if (!armed() && !stopAwaiting()) {
+            info.area.reset(); info.state.clear(); info.setpoint.reset(); info.submitted = false;
+        }
         return info;
     }
     void recordApproachConfiguration();
@@ -103,7 +107,7 @@ private:
     void depthSampleChanged();
     void deliverDepth(const std::optional<DepthControlSample> &depth);
     void drainDepthQueue();
-    bool proportional() const { return execution_==VisualExecutionMode::Proportional; }
+    bool proportional() const { return execution_ != VisualExecutionMode::Discrete; }
     void evaluateInput(const VisualDispatchInput &input, const VisualDiagnosticSnapshot *snapshot=nullptr);
     VisualDispatchInput input(const VisualDiagnosticSnapshot *snapshot = nullptr) const;
     IConsoleController *controller_;

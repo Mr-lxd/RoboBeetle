@@ -34,7 +34,8 @@ ArmReason
 VisualProportionalDispatchStateMachine::eligibility(const VisualDispatchInput &in,
                                                     const std::optional<VisualDiagnosticSnapshot> &s) const
 {
-    if (!validVisualApproachConfig(config) || !robobeetle::protocol::valid_proportional_config(q))
+    if (!validVisualApproachConfig(config) || (continuous && !validContinuousVisualConfig(config))
+        || !robobeetle::protocol::valid_proportional_config(q))
         return ArmReason::InvalidConfig;
     if (in.nowMs < 0 || (lastTime_ && in.nowMs < *lastTime_))
         return ArmReason::InvalidTime;
@@ -86,6 +87,7 @@ ArmReason VisualProportionalDispatchStateMachine::arm(const VisualDispatchInput 
     stopTimeoutCount_ = 0;
     info_ = {};
     info_.proportional = true;
+    info_.continuous = continuous;
     info_.dryRun = dryRun;
     evaluate(in, s);
     return ArmReason::Ready;
@@ -235,6 +237,7 @@ void VisualProportionalDispatchStateMachine::evaluate(const VisualDispatchInput 
                                                       const std::optional<VisualDiagnosticSnapshot> &snapshot)
 {
     info_.proportional = true;
+    info_.continuous = continuous;
     info_.dryRun = dryRun;
     info_.submitted = false;
     info_.nowMs = in.nowMs;
@@ -352,11 +355,16 @@ void VisualProportionalDispatchStateMachine::evaluate(const VisualDispatchInput 
         note(QStringLiteral("ARRIVED_EXIT"), in.nowMs);
     if (area_.state == ApproachState::Arrived || stopAwaiting_)
         return;
-    if (in.state == VisualState::Tracking && in.suggestion == ProposedCommand::Stop) {
+    if (!continuous && in.state == VisualState::Tracking && in.suggestion == ProposedCommand::Stop) {
         beginStop(in.nowMs, false);
         return;
     }
-    if (observation && info_.area) {
+    if (continuous && observation && info_.area) {
+        mode_ = ProposedCommand::Forward; // Start labels the proportional channel, not steering selection.
+        setpoint_ = mapContinuousVisualSetpoint(*info_.area, snapshot->command.ex_f.value_or(0),
+            snapshot->command.ey_f.value_or(0), in.axis, snapshot->turnSign, snapshot->pitchSign, envelope_, config);
+        info_.setpoint = setpoint_;
+    } else if (!continuous && observation && info_.area) {
         auto desired = in.suggestion;
         if (desired != ProposedCommand::Hold && desired != ProposedCommand::Stop) {
             if ((desired == ProposedCommand::Ascend && envelope_ == DepthEnvelopeState::Surface) ||

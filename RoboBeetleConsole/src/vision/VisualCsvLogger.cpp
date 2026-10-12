@@ -22,7 +22,7 @@ QString escaped(QString field)
 void approachColumns(QStringList &fields, const VisualApproachCsvInfo &info)
 {
     if (!info.proportional) { for (int i=0;i<9;++i) fields << QString{}; return; }
-    fields << QStringLiteral("PROPORTIONAL") << (info.dryRun ? "1" : "0")
+    fields << (info.continuous ? QStringLiteral("CONTINUOUS") : QStringLiteral("PROPORTIONAL")) << (info.dryRun ? "1" : "0")
            << (info.area ? QString::number(*info.area,'g',17) : QString{}) << info.state;
     if (info.setpoint) fields << QString::number(info.setpoint->throttle)
         << QString::number(info.setpoint->turn) << QString::number(info.setpoint->pitch);
