@@ -987,13 +987,13 @@ QWidget *MainWindow::createConnectionBar()
                 const auto q = visualDispatch_->proportionalConfig();
                 const QString visualLabels[]{"Area EMA alpha [Provisional]", "Slow area (cells)", "Resume area (cells)", "Stop area (cells)", "Arrive dwell (ms)", "Resume dwell (ms)", "Maximum throttle", "Minimum throttle", "Minimum turning throttle", "Turn factor", "Pitch factor", "Maximum scale", "Turn gain", "Pitch limit (deg)", "Slew (/s)"};
                 const double visualValues[]{a.alphaArea,a.slowArea,a.resumeArea,a.stopArea,double(a.arriveDwellMs),double(a.resumeDwellMs),a.tMax,a.tMin,a.tTurnMin,a.kTurn,a.kPitch,q.max_scale/1000.,q.turn_gain/1000.,q.pitch_limit_cdeg/100.,q.slew_per_second/1000.};
-                const double visualLo[]{.01,.01,.01,.01,0,0,.01,.01,.01,.01,.01,.1,0,0,.1};
-                const double visualHi[]{1,576,576,576,60000,60000,1,1,1,1,1,1,2,20,10};
+                const double visualLo[]{.01,.01,.01,5,0,0,.01,.01,.01,.01,.01,.1,0,0,.1};
+                const double visualHi[]{1,576,576,200,60000,60000,1,1,1,1,1,1,2,20,10};
                 QDoubleSpinBox *visualFields[15];
                 for (int i=0;i<15;++i) {
                     visualFields[i]=new QDoubleSpinBox(visualPage);
                     visualFields[i]->setObjectName(QStringLiteral("visualApproachParameter%1").arg(i));
-                    visualFields[i]->setDecimals(i==4 || i==5 ? 0 : 2);
+                    visualFields[i]->setDecimals(i==3 || i==4 || i==5 ? 0 : 2);
                     visualFields[i]->setRange(visualLo[i],visualHi[i]);
                     visualFields[i]->setValue(visualValues[i]);
                     visualForm->addRow(visualLabels[i],visualFields[i]);
@@ -1499,23 +1499,57 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     axisLayout->setContentsMargins(0, 0, 0, 0);
     axisLayout->setSpacing(0);
     auto *execLabel = new QLabel(QStringLiteral("Exec"), autoFollowAxisSelector_);
+    execLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     visualExecutionMode_ = new QComboBox(autoFollowAxisSelector_);
     visualExecutionMode_->setObjectName(QStringLiteral("visualExecutionMode"));
     visualExecutionMode_->addItems({QStringLiteral("Discrete"), QStringLiteral("Proportional")});
-    visualExecutionMode_->setFixedHeight(28);
-    visualExecutionMode_->setFixedWidth(98);
-    visualExecutionMode_->setStyleSheet(QStringLiteral("font-size: 10px; padding: 0px 2px;"));
+    visualExecutionMode_->setFixedSize(82, 20);
+    visualExecutionMode_->setStyleSheet(QStringLiteral(
+        "QComboBox { font-size: 10px; min-height: 0px; padding: 0px; }"
+        "QComboBox::drop-down { width: 14px; }"));
     execLabel->setStyleSheet(QStringLiteral("font-size: 10px;"));
     visualDryRun_ = new QCheckBox(QStringLiteral("Dry run"), autoFollowAxisSelector_);
     visualDryRun_->setObjectName(QStringLiteral("visualDryRun"));
     visualDryRun_->setEnabled(false);
-    visualDryRun_->setStyleSheet(QStringLiteral("font-size: 10px; spacing: 2px;"));
+    visualDryRun_->setFixedHeight(20);
+    visualDryRun_->setStyleSheet(QStringLiteral(
+        "QCheckBox { font-size: 10px; spacing: 2px; }"
+        "QCheckBox::indicator { width: 12px; height: 12px; }"));
     visualDryRun_->setToolTip(QStringLiteral("Simulate visual approach without robot control writes"));
     axisLayout->addWidget(execLabel);
+    axisLayout->addSpacing(4);
     axisLayout->addWidget(visualExecutionMode_);
     axisLayout->addSpacing(4);
     axisLayout->addWidget(visualDryRun_);
     axisLayout->addSpacing(4);
+    auto *followLabel = new QLabel(QStringLiteral("Follow"), autoFollowAxisSelector_);
+    followLabel->setStyleSheet(QStringLiteral("font-size: 10px;"));
+    followLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    visualFollowArea_ = new QSpinBox(autoFollowAxisSelector_);
+    visualFollowArea_->setObjectName(QStringLiteral("visualFollowArea"));
+    visualFollowArea_->setRange(5, 200);
+    visualFollowArea_->setValue(20);
+    visualFollowArea_->setEnabled(false);
+    visualFollowArea_->setFixedSize(44, 20);
+    visualFollowArea_->setStyleSheet(QStringLiteral("font-size: 10px; min-height: 0px; padding: 0px;"));
+    axisLayout->addWidget(followLabel);
+    axisLayout->addSpacing(4);
+    axisLayout->addWidget(visualFollowArea_);
+    axisLayout->addSpacing(4);
+    connect(visualFollowArea_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int cells) {
+        if (!visualDispatch_ || visualDispatch_->executionMode() != vision::VisualExecutionMode::Proportional
+            || visualDispatch_->armed() || visualDispatch_->stopAwaiting()) return;
+        auto config = visualDispatch_->approachConfig();
+        config.stopArea = cells;
+        config.slowArea = 0.4 * cells;
+        config.resumeArea = 0.7 * cells;
+        if (visualDispatch_->setApproachConfig(config)) {
+            QSettings settings;
+            settings.setValue("Visual/Approach/v1/stopArea", config.stopArea);
+            settings.setValue("Visual/Approach/v1/slowArea", config.slowArea);
+            settings.setValue("Visual/Approach/v1/resumeArea", config.resumeArea);
+        }
+    });
     connect(visualExecutionMode_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (!visualDispatch_) return;
         if (index == 0 && visualDispatch_->executionMode() == vision::VisualExecutionMode::Proportional
@@ -1540,11 +1574,11 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
         axisButton->setObjectName(QStringLiteral("autoFollowAxis%1").arg(axisNames.at(i)));
         axisButton->setCheckable(true);
         axisButton->setChecked(i == 0);
-        axisButton->setMinimumHeight(24);
+        axisButton->setFixedHeight(20);
         axisButton->setFixedWidth(i == 0 ? 31 : 34);
         axisButton->setProperty("consoleActionRole", "secondary");
         axisButton->setStyleSheet(QStringLiteral(
-            "QPushButton { min-height: 24px; padding: 2px 1px; border-radius: 0px; font-size: 10px; }"
+            "QPushButton { min-height: 0px; padding: 0px 1px; border-radius: 0px; font-size: 10px; }"
             "QPushButton:checked { background: #344B5B; color: #FFFFFF; font-weight: 700; "
             "  border-color: #344B5B; }"));
         axisGroup_->addButton(axisButton, i);
@@ -3110,11 +3144,16 @@ void MainWindow::refreshAutoFollowUi()
                 .arg(approach.setpoint->pitch / 1000., 0, 'f', 2));
     }
     if (visualExecutionMode_) {
-        const QSignalBlocker blockExec(visualExecutionMode_), blockDry(visualDryRun_);
+        const QSignalBlocker blockExec(visualExecutionMode_), blockDry(visualDryRun_), blockFollow(visualFollowArea_);
         visualExecutionMode_->setCurrentIndex(static_cast<int>(visualDispatch_->executionMode()));
         visualDryRun_->setChecked(visualDispatch_->dryRun());
         visualExecutionMode_->setEnabled(!armed && !stopping);
         visualDryRun_->setEnabled(!armed && !stopping && visualProportional);
+        visualFollowArea_->setValue(qRound(visualDispatch_->approachConfig().stopArea));
+        visualFollowArea_->setEnabled(!armed && !stopping && visualProportional);
+        visualFollowArea_->setToolTip(QStringLiteral(
+            "Stop when target area >= %1 cells (larger = closer). Area proxy, not meters.")
+            .arg(visualFollowArea_->value()));
     }
     autoFollowStatePill_->setStyleSheet(pillStyle + QStringLiteral(
         "border-radius: 4px; padding: 3px 8px; font-size: 12px; font-weight: 800;"
@@ -4107,7 +4146,8 @@ void MainWindow::updateVideoSurfaceGeometry()
     // height independently can make a nominal 4:3 surface a few pixels off,
     // which VideoView::KeepAspectRatio exposes as a black edge.
     const int reservedSummaryWidth =
-        qBound(210, qRound(hostWidth * 0.28), 360);
+        qMax(qBound(210, qRound(hostWidth * 0.28), 360),
+             autoFollowAxisSelector_->sizeHint().width() + 36);
     const int availableVideoWidth =
         qMax(240, hostWidth - reservedSummaryWidth - 8);
     const int ratioUnits = qMax(

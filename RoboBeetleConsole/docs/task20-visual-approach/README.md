@@ -8,6 +8,10 @@ Only the selected target's area is filtered, once per new frame. Video catch-up 
 
 Visual proportional configuration is independent of gamepad settings and saved under `Visual/Approach/v1`. All defaults are provisional:
 
+Task20b adds `Follow` to the compact Exec row: an integer stop-area shortcut (5–200 cells, default 20). Larger values stop closer; this is an area proxy, not meters. Changing Follow sets A_slow=0.4×A_stop and A_resume=0.7×A_stop, preserving decimals, saves the same visual settings, and emits the existing CONFIG event. Tuning shares the stop-area value/range and synchronizes the displayed Follow value when saved; independent Slow/Resume edits remain valid until Follow is changed again. Follow is editable only in Proportional while disarmed with no unconfirmed STOP. Exec/Dry run/Follow/axis controls stay on one row, with 20 px control heights and 4 px Exec-label spacing.
+
+Task20b adds one small threshold/persistence test (RED missing Follow control, then GREEN). A fresh Qt 6.11.2 / MinGW 13.1 Release build and the full existing regression passed 40/40 once, in 75.13 s. No approach policy, executor, transport, or safety logic changes are included. The updated portable artifact is `D:\RoboBeetleConsole-portable-task20b-follow-distance-2026-10-12\`; EXE SHA-256 is `2DB99408E428F93D826A526EA9881692F32945AF76FCA4A4A23D953F8CFF0457`. Full evidence is in `D:\RoboBeetle-results\task20b-follow-distance-2026-10-12\`.
+
 | Parameter | Default |
 |---|---:|
 | alpha_area | 0.30 |
@@ -39,6 +43,12 @@ Fake-controller native previews below expand Operator tools at 1280×992; the ma
 Area is a coarse proximity cue, not distance. A large/truncated target may have area near 1 cell, causing continued t_max propulsion. Keep operator STOP ready and observe that case explicitly. No additional approach timeout is included. Default t_max=0.60 also limits same-side turn amplitude to 0.6 of discrete full-throttle turning, so response is intentionally weaker.
 
 ## Previews
+
+Latest Task20b Approach preview (1280×992, fake controller, zero real writes; [manifest](task20b-manifest.json)):
+
+![Task20b Approach](Task20b-Approach.png)
+
+The original Task20 previews below are retained as historical review evidence.
 
 ![Discrete](Task20-Discrete.png)
 ![Approach](Task20-Approach.png)

@@ -8,6 +8,7 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QSettings>
+#include <QSpinBox>
 #include <QTemporaryDir>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -113,6 +114,24 @@ void testIndependentTuningAndReload() {
     check(session->executionMode()==rb::vision::VisualExecutionMode::Discrete && !session->dryRun(),"Exec and Dry run never persist");
 }
 
+void testFollowThresholdsAndPersistence() {
+    rb::test::VisualControllerFixture controller;
+    rb::MainWindow window(&controller);
+    window.findChild<QComboBox *>("visualExecutionMode")->setCurrentIndex(1);
+    auto *follow = window.findChild<QSpinBox *>("visualFollowArea");
+    check(follow != nullptr, "Follow area shortcut exists");
+    if (!follow) return;
+    follow->setValue(21);
+    const auto &config = window.findChild<rb::vision::VisualDispatchSession *>()->approachConfig();
+    QSettings settings;
+    check(config.stopArea == 21 && qAbs(config.slowArea - 8.4) < 1e-9
+              && qAbs(config.resumeArea - 14.7) < 1e-9,
+          "Follow changes all three shared thresholds proportionally");
+    check(settings.value("Visual/Approach/v1/stopArea").toDouble() == 21
+              && qAbs(settings.value("Visual/Approach/v1/slowArea").toDouble() - 8.4) < 1e-9
+              && qAbs(settings.value("Visual/Approach/v1/resumeArea").toDouble() - 14.7) < 1e-9,
+          "Follow persists thresholds using existing visual configuration keys");
+}
 }
 int main(int argc,char **argv) {
     QApplication app(argc,argv);
@@ -124,5 +143,6 @@ int main(int argc,char **argv) {
     testDryRunAndSelectors();
     testIndependentTuningAndReload();
     testVisualOwnershipAndSingleManualStop();
+    testFollowThresholdsAndPersistence();
     return failures ? 1 : 0;
 }
