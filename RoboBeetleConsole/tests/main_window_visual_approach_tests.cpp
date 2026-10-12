@@ -78,6 +78,7 @@ void testVisualOwnershipAndSingleManualStop() {
     QApplication::processEvents(); session->timerTick();
     check(session->armed() && controller.starts==1 && controller.prop,"real visual session owns its proportional start");
     QObject::disconnect(window.findChild<rb::vision::VisualDiagnosticSession *>(),nullptr,session,nullptr);
+    QApplication::processEvents(); // Drain ACK evaluation before the gamepad-only baseline.
     const int before=controller.streams;
     QElapsedTimer wait; wait.start();
     while(wait.elapsed()<60) QApplication::processEvents();

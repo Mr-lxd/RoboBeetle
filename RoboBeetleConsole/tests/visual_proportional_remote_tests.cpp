@@ -1,4 +1,5 @@
 #include "remote/RemoteRobotController.h"
+#include "vision/VisualDispatchSession.h"
 
 
 #include "robobeetle/gateway/gateway_types.hpp"
@@ -332,5 +333,42 @@ void testFirmwareStopReasons() {
         gateway.disconnectPeer();
     }
 }
+void testVisualStartAckOrder() {
+    FakeGatewayPeer gateway;
+    rb::RemoteRobotController controller;
+    ready(gateway, controller);
+    sample(gateway, 0);
+    expect(pumpUntil([&] { return controller.hasCpgSchema2(); }), "visual Start schema2 ready");
+    rb::vision::VisualDiagnosticSnapshot snapshot;
+    snapshot.sessionId = 1;
+    snapshot.frameId = 1;
+    snapshot.state = rb::vision::VisualState::Tracking;
+    snapshot.target = rb::vision::TargetState{1, 1, {640, 480}, {1, "fish", .99, {320, 240}, 6}, 0, 0};
+    snapshot.command.proposed = snapshot.command.effective = rb::vision::ProposedCommand::Forward;
+    rb::vision::VisualDispatchSession session(&controller, [&] { return std::optional{snapshot}; },
+                                              [] { return qint64(0); });
+    session.setTimerEnabled(false); // Isolate the ACK-triggered evaluation.
+    session.setExecutionMode(rb::vision::VisualExecutionMode::Proportional);
+    session.setFeatureEnabled(true);
+    bool streamRejected = false;
+    QObject::connect(&session, &rb::vision::VisualDispatchSession::approachEvent,
+                     [&](const rb::vision::VisualApproachCsvInfo &info) {
+        if (info.event == "STREAM_REJECTED") streamRejected = true;
+    });
+    expect(session.arm() == rb::vision::ArmReason::Ready, "real Remote visual session arms");
+    const auto start = gateway.nextFrame(RbrpMessageKind::CommandRequest);
+    expect(start && start->payload[0] == static_cast<Byte>(RobotCommandKind::StartProportional),
+           "visual Arm sends ordinary StartProportional");
+    if (!start) return;
+    sendSubmitted(gateway, start->request_id, 400);
+    sendOutcome(gateway, start->request_id, RobotCommandKind::StartProportional, 400,
+                GatewayCommandOutcome::Accepted);
+    const auto input = gateway.nextFrame(RbrpMessageKind::ProportionalInput, 400);
+    expect(session.armed(), "visual session remains armed after real Remote Start ACK");
+    expect(!streamRejected, "Start ACK evaluation does not reject an inactive proportional stream");
+    expect(input.has_value(), "queued ACK evaluation reaches gateway as a proportional input frame");
+    expect(!gateway.nextFrame(RbrpMessageKind::CommandRequest, 100), "successful visual Start emits no STOP");
+    gateway.disconnectPeer();
+}
 } // namespace
-int main(int argc,char **argv){QApplication app(argc,argv);testPorts();testFirmwareStopReasons();if (!failures) std::puts("visual_proportional_remote_tests passed");return failures?1:0;}
+int main(int argc,char **argv){QApplication app(argc,argv);testPorts();testFirmwareStopReasons();testVisualStartAckOrder();if (!failures) std::puts("visual_proportional_remote_tests passed");return failures?1:0;}

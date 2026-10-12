@@ -358,7 +358,8 @@ void VisualDispatchSession::terminal(quint32 id, CommandTerminalResult result,
 {
     if (proportional()) {
         proportionalMachine_.terminal(id,result,raw,rtt,now_());
-        timerTick();
+        // Remote applies the accepted Start after emitting commandTerminal.
+        QTimer::singleShot(0, this, &VisualDispatchSession::timerTick);
         emit statusChanged();
         return;
     }
