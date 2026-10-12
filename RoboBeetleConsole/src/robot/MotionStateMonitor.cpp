@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <bit>
 #include <limits>
+#include <numeric>
 
 namespace rb {
 void MotionStateMonitor::reset() { *this = {}; }
@@ -67,16 +68,20 @@ std::vector<MotionStateRecord> MotionStateMonitor::accept(const MotionStateTelem
             t.gateway_drop_total, b->batch_seq, b->fragment_index, quint8(i),
             quint64(sampleMcu), t.pi_rx_ms, double(sampleMcu + anchor->offsetMs),
             anchor->wireMs, batchGaps_, fragmentGaps_};
-        if (s.backend != 1 || s.state != 1 || !s.phase_valid ||
-            (periodVersion_ && *periodVersion_ != s.cpg_param_version))
+        const bool versionChanged = periodVersion_ && *periodVersion_ != s.cpg_param_version;
+        const bool backendChanged = periodBackend_ && *periodBackend_ != s.backend;
+        if (versionChanged || backendChanged) periods_.clear();
+        if (s.backend != 1 || s.state != 1 || !s.phase_valid || versionChanged || backendChanged ||
+            (periodState_ && *periodState_ != s.state))
         {
             previousPhase_.reset();
             previousPhaseMs_.reset();
             lastWrapMs_.reset();
-            periods_.clear();
             discardFirstPeriod_ = true;
         }
         periodVersion_ = s.cpg_param_version;
+        periodBackend_ = s.backend;
+        periodState_ = s.state;
         if (s.backend == 1 && s.state == 1 && s.phase_valid)
         {
             if (previousPhase_ && s.phase_u16 < *previousPhase_)
@@ -116,9 +121,9 @@ std::optional<MotionStateRecord> MotionStateMonitor::atCapture(quint64 captureNs
 }
 std::optional<double> MotionStateMonitor::measuredCpgPeriod() const
 {
-    if (periods_.size() < 3)
+    if (periods_.empty())
         return {};
-    return (periods_[0] + periods_[1] + periods_[2]) / 3;
+    return std::accumulate(periods_.begin(), periods_.end(), 0.0) / periods_.size();
 }
 double MotionStateMonitor::gyroRateHz() const {
     double first = 0, last = 0;

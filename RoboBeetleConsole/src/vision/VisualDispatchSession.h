@@ -2,6 +2,7 @@
 #include "controller/IConsoleController.h"
 #include "vision/VisualDiagnosticSession.h"
 #include "vision/VisualDispatchStateMachine.h"
+#include "vision/VisualProportionalDispatchStateMachine.h"
 #include <QHash>
 #include <deque>
 
@@ -33,15 +34,6 @@ struct VisualDepthCsvInfo {
     std::optional<qint64> ageMs;
     QString envelope{QStringLiteral("UNAVAILABLE")};
 };
-struct VisualDispatchRecord {
-    qint64 nowMs{0};
-    quint64 policyId{0};
-    std::optional<quint32> wireId;
-    ProposedCommand command{ProposedCommand::Stop};
-    QString result;
-    quint8 rawResult{0xff};
-    qint64 ackRttMs{-1};
-};
 class VisualDispatchSession final : public QObject, private VisualCommandSendPort {
     Q_OBJECT
 public:
@@ -49,6 +41,24 @@ public:
     using NowMs = std::function<qint64()>;
     VisualDispatchSession(IConsoleController *controller, SnapshotProvider snapshot, NowMs now = {}, VisualDispatchConfig config = {}, QObject *parent = nullptr);
     VisualDispatchSession(IConsoleController *controller, VisualDiagnosticSession *diagnostic, VisualDispatchConfig config = {}, QObject *parent = nullptr);
+    bool setExecutionMode(VisualExecutionMode mode);
+    VisualExecutionMode executionMode() const { return execution_; }
+    bool setDryRun(bool enabled);
+    bool dryRun() const { return proportional() && proportionalMachine_.dryRun; }
+    bool setApproachConfig(const VisualApproachConfig &config);
+    const VisualApproachConfig &approachConfig() const { return proportionalMachine_.config; }
+    void setProportionalConfig(const IConsoleController::ProportionalConfig &config);
+    const IConsoleController::ProportionalConfig &proportionalConfig() const { return proportionalMachine_.q; }
+    void setChannelBusy(bool busy) { proportionalMachine_.channelBusy=busy; }
+    bool ownsProportionalChannel() const { return proportional() && (armed() || stopAwaiting()); }
+    VisualApproachCsvInfo approachInfo() const {
+        if (!proportional()) return {};
+        auto info = proportionalMachine_.info();
+        info.proportional = true;
+        info.dryRun = dryRun();
+        return info;
+    }
+    void recordApproachConfiguration();
     void setFeatureEnabled(bool enabled);
     ArmReason arm();
     void disarm();
@@ -62,18 +72,18 @@ public:
     // sends one operator STOP and disarms, exactly like disarm().
     void setAxisMode(VisualAxisMode axis);
     [[nodiscard]] VisualAxisMode axisMode() const noexcept { return axis_; }
-    [[nodiscard]] DepthEnvelopeState depthEnvelope() const noexcept { return machine_.depthEnvelope(); }
+    [[nodiscard]] DepthEnvelopeState depthEnvelope() const noexcept { return proportional() ? proportionalMachine_.envelope() : machine_.depthEnvelope(); }
     [[nodiscard]] VisualDepthCsvInfo depthCsvInfo() const;
     bool featureEnabled() const { return enabled_; }
-    bool armed() const { return machine_.armed(); }
+    bool armed() const { return proportional() ? proportionalMachine_.armed() : machine_.armed(); }
     // Disarmed, but an automatic or operator STOP is still unconfirmed.
-    [[nodiscard]] bool stopAwaiting() const { return machine_.stopAwaiting(); }
+    [[nodiscard]] bool stopAwaiting() const { return proportional() ? proportionalMachine_.stopAwaiting() : machine_.stopAwaiting(); }
     // What arm() would answer right now, without arming or mutating state.
-    [[nodiscard]] ArmReason eligibility() const { return machine_.eligibility(input()); }
+    [[nodiscard]] ArmReason eligibility() const;
     ArmReason armReason() const { return reason_; }
     std::optional<ProposedCommand> currentMode() const;
-    bool stopTimeoutAlert() const { return machine_.stopTimeoutAlert(); }
-    std::optional<CommandTerminalResult> operatorStopResult() const { return operatorStopResult_; }
+    bool stopTimeoutAlert() const { return proportional() ? proportionalMachine_.stopTimeoutAlert() : machine_.stopTimeoutAlert(); }
+    std::optional<CommandTerminalResult> operatorStopResult() const { return proportional() ? proportionalMachine_.operatorStopResult() : operatorStopResult_; }
     QString poseMismatch() const { return poseMismatch_; }
     std::optional<int> confirmedTurnSign() const { return confirmedSign_; }
     // Read-only checklist for the operator surface. Unlike eligibility(), every
@@ -81,6 +91,7 @@ public:
     [[nodiscard]] AutoFollowReadiness readiness() const;
 signals:
     void statusChanged();
+    void approachEvent(const rb::vision::VisualApproachCsvInfo &info);
     void dispatchRecorded(const rb::vision::VisualDispatchRecord &record);
 private:
     struct Association { quint64 policyId; ProposedCommand command; bool operatorStop; };
@@ -92,6 +103,8 @@ private:
     void depthSampleChanged();
     void deliverDepth(const std::optional<DepthControlSample> &depth);
     void drainDepthQueue();
+    bool proportional() const { return execution_==VisualExecutionMode::Proportional; }
+    void evaluateInput(const VisualDispatchInput &input, const VisualDiagnosticSnapshot *snapshot=nullptr);
     VisualDispatchInput input(const VisualDiagnosticSnapshot *snapshot = nullptr) const;
     IConsoleController *controller_;
     VisualDiagnosticSession *diagnostic_{nullptr};
@@ -103,6 +116,8 @@ private:
     QElapsedTimer clock_;
     QTimer timer_;
     VisualDispatchStateMachine machine_;
+    VisualExecutionMode execution_{VisualExecutionMode::Discrete};
+    VisualProportionalDispatchStateMachine proportionalMachine_;
     quint16 requiredServoMask_;
     bool enabled_{false};
     bool submitting_{false};

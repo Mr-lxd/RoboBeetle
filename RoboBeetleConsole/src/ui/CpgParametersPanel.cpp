@@ -223,7 +223,9 @@ void CpgParametersPanel::refresh(const IConsoleController &c)
     } else
         applied_->setText(QStringLiteral("Pending"));
     const auto period = c.measuredCpgPeriod();
-    period_->setText(period ? QStringLiteral("%1 s").arg(*period, 0, 'f', 3)
+    period_->setText(period ? QStringLiteral("%1 s%2").arg(*period, 0, 'f', 3)
+                                .arg(c.motionState() == MotionState::Running
+                                    ? QString{} : QStringLiteral(" (last)"))
                             : QStringLiteral("--"));
 }
 } // namespace rb::ui

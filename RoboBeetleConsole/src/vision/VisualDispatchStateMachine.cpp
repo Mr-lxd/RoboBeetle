@@ -258,6 +258,10 @@ const char *armReasonName(ArmReason reason) noexcept
     case ArmReason::DepthUnavailable: return "DEPTH_UNAVAILABLE";
     case ArmReason::DepthNotZeroed: return "DEPTH_NOT_ZEROED";
     case ArmReason::DepthHardLimit: return "DEPTH_HARD_LIMIT";
+    case ArmReason::AreaUnavailable: return "AREA_UNAVAILABLE";
+    case ArmReason::ProportionalUnavailable: return "PROPORTIONAL_UNAVAILABLE";
+    case ArmReason::ProportionalChannelBusy: return "PROPORTIONAL_CHANNEL_BUSY";
+    case ArmReason::MotionNotStopped: return "MOTION_NOT_STOPPED";
     }
     return "UNKNOWN";
 }

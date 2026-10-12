@@ -71,6 +71,9 @@ public:
     virtual bool stopMotion() = 0;
     using ProportionalConfig = robobeetle::protocol::ProportionalConfig;
     virtual bool startProportional(const ProportionalConfig &, double, double) { return false; }
+    virtual std::optional<quint32> submitVisualProportionalStart(const ProportionalConfig &) { return std::nullopt; }
+    virtual std::optional<quint32> submitVisualProportionalStop() { return std::nullopt; }
+    virtual quint8 proportionalStopReason() const { return 0; }
     virtual bool proportionalActive() const { return false; }
     virtual bool proportionalPending() const { return false; }
     virtual bool setProportionalInput(quint16, qint16, qint16) { return false; }
@@ -143,6 +146,7 @@ public:
 
 signals:
   void proportionalStopped();
+  void proportionalTelemetryChanged();
   void commandTerminal(quint32 requestId, rb::CommandTerminalResult result, quint8 rawResult,
                        qint64 rttMs);
   void serialPortsChanged(const QStringList &ports);

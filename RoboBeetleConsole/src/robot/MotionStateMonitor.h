@@ -30,6 +30,7 @@ public:
     std::optional<quint32> linkEpoch() const { return epoch_; }
 private:
   std::optional<quint16> periodVersion_;
+  std::optional<quint8> periodBackend_, periodState_;
   std::optional<quint16> previousPhase_;
   std::optional<double> previousPhaseMs_, lastWrapMs_;
   bool discardFirstPeriod_{true};

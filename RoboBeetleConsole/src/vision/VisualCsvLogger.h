@@ -20,7 +20,8 @@ public:
     ~VisualCsvLogger() override;
     [[nodiscard]] static QString defaultDirectory();
     bool start(const QString &directory);
-    void record(const VisualDiagnosticSnapshot &snapshot);
+    void record(const VisualDiagnosticSnapshot &snapshot, const VisualApproachCsvInfo &approach = {});
+    void recordApproachEvent(const VisualApproachCsvInfo &info);
     void recordDispatch(const VisualDispatchRecord &record);
     void stop();
     void flush();
@@ -36,7 +37,7 @@ private:
     bool append(const QByteArray &bytes);
     void fail(const QString &reason);
     QByteArray row(const VisualDiagnosticSnapshot &snapshot, bool transition,
-                   std::optional<qint64> arrivalMs = std::nullopt) const;
+                   std::optional<qint64> arrivalMs = std::nullopt, const VisualApproachCsvInfo &approach = {}) const;
     bool finishPending(qint64 evaluationMs);
     VisualCsvConfig config_;
     std::function<VisualDepthCsvInfo()> depthInfo_;
@@ -50,6 +51,7 @@ private:
     std::optional<quint64> highestFrameId_;
     // One unresolved frame. Its ID is already in highestFrameId_.
     std::optional<VisualDiagnosticSnapshot> pendingFrame_;
+    VisualApproachCsvInfo pendingApproach_;
     qint64 pendingArrivalMs_{0};
     qint64 lastEvaluationMs_{0};
     // Observe arrival even while recording is off; enabling CSV must not retime a cached ID.

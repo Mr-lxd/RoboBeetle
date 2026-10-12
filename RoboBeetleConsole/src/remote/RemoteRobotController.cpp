@@ -394,33 +394,44 @@ std::optional<quint32> RemoteRobotController::submitVisualMotion(MotionMode mode
 
 bool RemoteRobotController::stopMotion()
 {
+    return submitProportionalStop(false).has_value();
+}
+
+std::optional<quint32> RemoteRobotController::submitVisualProportionalStop()
+{
+    // Initial ARRIVED still needs a correlated STOP ACK before recovery.
+    return submitProportionalStop(true);
+}
+
+std::optional<quint32> RemoteRobotController::submitProportionalStop(bool force)
+{
     const bool hadProportional = propActive_ || propPending_;
+    const bool hadMotion = isMotionActive();
     if (hadProportional)
         propStopAwaiting_ = true;
+    // Invalidate START even when STOP cannot be submitted locally. A late ACK
+    // must never re-enable a stream that the operator/session has cancelled.
+    supersedePendingMotionStarts();
     clearProportional();
     if (!isControlActive()) {
-        return false;
+        return std::nullopt;
     }
     for (auto it = pending_.cbegin(); it != pending_.cend(); ++it) {
         if (!it->superseded
             && it->kind == robobeetle::gateway::RobotCommandKind::StopMotion) {
-            return true;
+            return it.key();
         }
     }
-    if (!isMotionActive() && !hadProportional)
-    {
-        return false;
+    if (!force && !hadMotion && !hadProportional) {
+        return std::nullopt;
     }
-
     PendingCommand pending;
     pending.kind = robobeetle::gateway::RobotCommandKind::StopMotion;
     const auto requestId = submitCommand(pending.kind, {}, pending);
-    if (!requestId.has_value()) {
-        return false;
+    if (requestId) {
+        motionModeTransitionTimer_.stop();
     }
-    supersedePendingMotionStarts();
-    motionModeTransitionTimer_.stop();
-    return true;
+    return requestId;
 }
 
 void RemoteRobotController::queryCpgParameters()
@@ -674,10 +685,11 @@ void RemoteRobotController::handleFrame(quint8 rawKind, quint32 requestId,
             QByteArray(reinterpret_cast<const char *>(telemetry->batch_payload.data()),
                        telemetry->batch_payload.size()));
         cpgSchema2_ = decoded && decoded->schema_version == 2;
-        if (decoded && !decoded->samples.empty())
+        if (decoded && decoded->sample_count > 0)
         {
-            const auto &sample = decoded->samples.back();
+            const auto &sample = decoded->samples[decoded->sample_count - 1];
             actualPitch_ = sample.effective_pitch;
+            if (cpgSchema2_) propStopReason_ = sample.stop_reason;
             if (sample.control_mode == 1 && propActive_)
                 propTelemetrySeen_ = true;
             if (propStopAwaiting_ && sample.state == 0 &&
@@ -706,6 +718,8 @@ void RemoteRobotController::handleFrame(quint8 rawKind, quint32 requestId,
         for (const auto &record : motionMonitor_.accept(*telemetry)) motionCsvLogger_.record(record);
         emit cpgParametersChanged();
         emit motionTelemetryChanged();
+        if (cpgSchema2_ && decoded && decoded->sample_count > 0)
+            emit proportionalTelemetryChanged();
         break;
     }
     case Kind::ServiceError:
@@ -1473,29 +1487,39 @@ void rb::RemoteRobotController::clearProportional()
     emit proportionalStopped();
 }
 bool rb::RemoteRobotController::startProportional(const ProportionalConfig &q, double deadzone,
+                                                double gamma)
+{
+    return submitProportionalStart(q, deadzone, gamma).has_value();
+}
+std::optional<quint32> rb::RemoteRobotController::submitVisualProportionalStart(const ProportionalConfig &q)
+{
+    return submitProportionalStart(q, 0.0, 1.0);
+}
+std::optional<quint32> rb::RemoteRobotController::submitProportionalStart(const ProportionalConfig &q, double deadzone,
                                                   double gamma)
 {
     if (!hasCpgSchema2() || cpgFeatureLevel() < 2 || propActive_ || propPending_ ||
         motionState() != MotionState::Stopped || !isMotionReady(MotionMode::Forward) ||
         !isServoEnabled(ServoId::FrontAxis) ||
         (poseKnownMask_ & SupportedServoMask) != SupportedServoMask)
-        return false;
+        return std::nullopt;
     const auto bytes =
         robobeetle::protocol::encode_proportional_start({q, static_cast<quint8>(propSession_ + 1)});
     if (!bytes)
-        return false;
+        return std::nullopt;
     PendingCommand pending;
     pending.kind = robobeetle::gateway::RobotCommandKind::StartProportional;
-    if (!submitCommand(pending.kind,
+    const auto requestId = submitCommand(pending.kind,
                        QByteArray(reinterpret_cast<const char *>(bytes->data()), bytes->size()),
-                       pending))
-        return false;
+                       pending);
+    if (!requestId)
+        return std::nullopt;
     ++propSession_;
     propSequence_ = 0;
     propLatest_.reset();
     propPending_ = true;
     motionCsvLogger_.recordProportionalConfiguration(q, deadzone, gamma);
-    return true;
+    return requestId;
 }
 bool rb::RemoteRobotController::setProportionalInput(quint16 t, qint16 u, qint16 p)
 {

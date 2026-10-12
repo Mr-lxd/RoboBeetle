@@ -44,6 +44,9 @@ public:
     bool startMotion(MotionMode mode) override;
     bool stopMotion() override;
     bool startProportional(const ProportionalConfig &, double, double) override;
+    std::optional<quint32> submitVisualProportionalStart(const ProportionalConfig &) override;
+    std::optional<quint32> submitVisualProportionalStop() override;
+    quint8 proportionalStopReason() const override { return propStopReason_; }
     bool proportionalActive() const override { return propActive_; }
     bool proportionalPending() const override { return propPending_; }
     bool setProportionalInput(quint16, qint16, qint16) override;
@@ -147,10 +150,13 @@ signals:
     void motionRecordingFailed();
 private:
   void clearProportional();
+  std::optional<quint32> submitProportionalStop(bool force);
+  std::optional<quint32> submitProportionalStart(const ProportionalConfig &, double, double);
   QTimer propTimer_;
   std::optional<robobeetle::protocol::ProportionalSetpoint> propLatest_;
   bool propActive_{false}, propPending_{false};
   bool propTelemetrySeen_{false}, propStopAwaiting_{false};
+  quint8 propStopReason_{0};
   quint8 propSession_{0};
   quint16 propSequence_{0};
   qint16 actualPitch_{0};
