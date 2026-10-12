@@ -48,6 +48,7 @@
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QSpinBox>
+#include <QShortcut>
 #include <QSplitter>
 #include <QStyle>
 
@@ -1530,15 +1531,26 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
     visualFollowArea_->setRange(5, 200);
     visualFollowArea_->setValue(20);
     visualFollowArea_->setEnabled(false);
-    visualFollowArea_->setFixedSize(44, 20);
+    visualFollowArea_->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    visualFollowArea_->setFixedSize(32, 20);
     visualFollowArea_->setStyleSheet(QStringLiteral("font-size: 10px; min-height: 0px; padding: 0px;"));
     axisLayout->addWidget(followLabel);
     axisLayout->addSpacing(4);
     axisLayout->addWidget(visualFollowArea_);
+    axisLayout->addSpacing(2);
+    visualFollowSet_ = new QPushButton(QStringLiteral("Set"), autoFollowAxisSelector_);
+    visualFollowSet_->setObjectName(QStringLiteral("visualFollowSet"));
+    visualFollowSet_->setFixedSize(26, 20);
+    visualFollowSet_->setEnabled(false);
+    visualFollowSet_->setFocusPolicy(Qt::NoFocus);
+    visualFollowSet_->setStyleSheet(QStringLiteral("font-size: 10px; min-height: 0px; padding: 0px;"));
+    axisLayout->addWidget(visualFollowSet_);
     axisLayout->addSpacing(4);
-    connect(visualFollowArea_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int cells) {
+    const auto applyFollow = [this] {
         if (!visualDispatch_ || visualDispatch_->executionMode() != vision::VisualExecutionMode::Proportional
             || visualDispatch_->armed() || visualDispatch_->stopAwaiting()) return;
+        visualFollowArea_->interpretText();
+        const int cells = visualFollowArea_->value();
         auto config = visualDispatch_->approachConfig();
         config.stopArea = cells;
         config.slowArea = 0.4 * cells;
@@ -1549,7 +1561,13 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
             settings.setValue("Visual/Approach/v1/slowArea", config.slowArea);
             settings.setValue("Visual/Approach/v1/resumeArea", config.resumeArea);
         }
-    });
+    };
+    connect(visualFollowSet_, &QPushButton::clicked, this, applyFollow);
+    for (const auto key : {Qt::Key_Return, Qt::Key_Enter}) {
+        auto *submit = new QShortcut(QKeySequence(key), visualFollowArea_);
+        submit->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(submit, &QShortcut::activated, visualFollowSet_, &QPushButton::click);
+    }
     connect(visualExecutionMode_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (!visualDispatch_) return;
         if (index == 0 && visualDispatch_->executionMode() == vision::VisualExecutionMode::Proportional
@@ -3149,8 +3167,10 @@ void MainWindow::refreshAutoFollowUi()
         visualDryRun_->setChecked(visualDispatch_->dryRun());
         visualExecutionMode_->setEnabled(!armed && !stopping);
         visualDryRun_->setEnabled(!armed && !stopping && visualProportional);
-        visualFollowArea_->setValue(qRound(visualDispatch_->approachConfig().stopArea));
+        if (!visualFollowArea_->hasFocus())
+            visualFollowArea_->setValue(qRound(visualDispatch_->approachConfig().stopArea));
         visualFollowArea_->setEnabled(!armed && !stopping && visualProportional);
+        visualFollowSet_->setEnabled(!armed && !stopping && visualProportional);
         visualFollowArea_->setToolTip(QStringLiteral(
             "Stop when target area >= %1 cells (larger = closer). Area proxy, not meters.")
             .arg(visualFollowArea_->value()));

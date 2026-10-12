@@ -9,6 +9,7 @@
 #include <QLabel>
 #include <QSettings>
 #include <QSpinBox>
+#include <QKeyEvent>
 #include <QTemporaryDir>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -122,7 +123,13 @@ void testFollowThresholdsAndPersistence() {
     check(follow != nullptr, "Follow area shortcut exists");
     if (!follow) return;
     follow->setValue(21);
-    const auto &config = window.findChild<rb::vision::VisualDispatchSession *>()->approachConfig();
+    auto *session = window.findChild<rb::vision::VisualDispatchSession *>();
+    check(session->approachConfig().stopArea != 21, "typing Follow does not apply thresholds");
+    auto *set = window.findChild<QPushButton *>("visualFollowSet");
+    check(set != nullptr, "Follow has explicit Set button");
+    if (!set) return;
+    set->click();
+    const auto &config = session->approachConfig();
     QSettings settings;
     check(config.stopArea == 21 && qAbs(config.slowArea - 8.4) < 1e-9
               && qAbs(config.resumeArea - 14.7) < 1e-9,
@@ -131,6 +138,16 @@ void testFollowThresholdsAndPersistence() {
               && qAbs(settings.value("Visual/Approach/v1/slowArea").toDouble() - 8.4) < 1e-9
               && qAbs(settings.value("Visual/Approach/v1/resumeArea").toDouble() - 14.7) < 1e-9,
           "Follow persists thresholds using existing visual configuration keys");
+    window.show();
+    follow->setFocus();
+    QApplication::processEvents();
+    follow->setValue(23);
+    session->setApproachConfig(session->approachConfig());
+    check(follow->value() == 23 && session->approachConfig().stopArea == 21,
+          "refresh preserves focused draft without applying it");
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(follow, &enter);
+    check(session->approachConfig().stopArea == 23, "Enter commits focused Follow input");
 }
 }
 int main(int argc,char **argv) {

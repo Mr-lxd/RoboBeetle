@@ -10,6 +10,12 @@ Visual proportional configuration is independent of gamepad settings and saved u
 
 Task20b adds `Follow` to the compact Exec row: an integer stop-area shortcut (5–200 cells, default 20). Larger values stop closer; this is an area proxy, not meters. Changing Follow sets A_slow=0.4×A_stop and A_resume=0.7×A_stop, preserving decimals, saves the same visual settings, and emits the existing CONFIG event. Tuning shares the stop-area value/range and synchronizes the displayed Follow value when saved; independent Slow/Resume edits remain valid until Follow is changed again. Follow is editable only in Proportional while disarmed with no unconfirmed STOP. Exec/Dry run/Follow/axis controls stay on one row, with 20 px control heights and 4 px Exec-label spacing.
 
+Task20c replaces immediate Follow submission with an input and `Set` button. The integer input has no step buttons; only Set or Enter applies the existing threshold/settings/CONFIG update. UI refresh preserves a focused draft, and Set keeps input focus during the click. Both controls use the same Proportional/disarmed/no-pending-STOP edit gate and stay on the existing row.
+
+Measured period (FL) now displays the mean of the most recent one to three valid cycles. STOP/state changes reset phase tracking and the startup-cycle discard without clearing measured cycles; a parameter-version or backend change clears them. The initial startup cycle remains discarded. A running value displays as `2.004 s`, a retained non-running value as `2.004 s (last)`, and no measurement as `--`. Existing complete monitor resets still reset its recording context. This changes monitoring/presentation only.
+
+Task20c focused Follow and synthetic schema2 period tests pass; a fresh Release build and the full regression passed 40/40 once in 74.97 s. New portable: `D:\RoboBeetleConsole-portable-task20c-follow-set-period-2026-10-12\`; EXE SHA-256 `C630713CBB422210019A4C8911102DFFFF452B04A6CE068AB481AEC28497D5C6`. Evidence: `D:\RoboBeetle-results\task20c-follow-set-period-2026-10-12\`.
+
 Task20b adds one small threshold/persistence test (RED missing Follow control, then GREEN). A fresh Qt 6.11.2 / MinGW 13.1 Release build and the full existing regression passed 40/40 once, in 75.13 s. No approach policy, executor, transport, or safety logic changes are included. The updated portable artifact is `D:\RoboBeetleConsole-portable-task20b-follow-distance-2026-10-12\`; EXE SHA-256 is `2DB99408E428F93D826A526EA9881692F32945AF76FCA4A4A23D953F8CFF0457`. Full evidence is in `D:\RoboBeetle-results\task20b-follow-distance-2026-10-12\`.
 
 | Parameter | Default |
@@ -44,7 +50,11 @@ Area is a coarse proximity cue, not distance. A large/truncated target may have 
 
 ## Previews
 
-Latest Task20b Approach preview (1280×992, fake controller, zero real writes; [manifest](task20b-manifest.json)):
+Latest Task20c Exec-row preview (1280×992, fake controller, zero real writes; [manifest](task20c-manifest.json)):
+
+![Task20c Approach](Task20c-Approach.png)
+
+Task20b preview retained for review history ([manifest](task20b-manifest.json)):
 
 ![Task20b Approach](Task20b-Approach.png)
 

@@ -175,6 +175,7 @@ private:
     QComboBox *visualExecutionMode_{nullptr};
     QCheckBox *visualDryRun_{nullptr};
     QSpinBox *visualFollowArea_{nullptr};
+    QPushButton *visualFollowSet_{nullptr};
     QLabel *visualDispatchStatus_{nullptr};
     // Task 06 green region. Sub-region A keeps the frozen vision actions;
     // sub-region B is the new Auto Follow block.
