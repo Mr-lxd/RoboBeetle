@@ -321,12 +321,12 @@ QList<PreviewCase> selectedCases(const QString &caseId, bool greenOnly, const QS
 // The diagnostic session ages a snapshot out after 500 ms and the application
 // keeps ticking, so a scripted TRACKING state must be refreshed immediately
 // before the grab rather than once during setup.
-void freshenTracking(rb::MainWindow &window, quint64 frameId, std::optional<int> area = std::nullopt)
+void freshenTracking(rb::MainWindow &window, quint64 frameId, std::optional<int> area = std::nullopt, double v = 240)
 {
     auto *diagnostic = window.findChild<rb::vision::VisualDiagnosticSession *>();
     if (diagnostic == nullptr) return;
     rb::vision::DetectionFrame frame{
-        frameId, 1000 + frameId, {640, 480}, {{1, "fish", 0.91, {352.0, 240.0}}}};
+        frameId, 1000 + frameId, {640, 480}, {{1, "fish", 0.91, {352.0, v}}}};
     frame.detections.front().areaCells = area;
     diagnostic->onDetectionArrival(
         frame, {rb::vision::DetectionDisplayState::Target, frame});
@@ -516,6 +516,11 @@ QJsonObject captureCase(rb::MainWindow &window,
         if (auto *session=window.findChild<rb::vision::VisualDispatchSession *>()) session->timerTick();
         QApplication::processEvents();
     }
+    if (item.variant == QStringLiteral("Task21")) {
+        freshenTracking(window, 3, 6, 288);
+        window.findChild<rb::vision::VisualDispatchSession *>()->timerTick();
+        QApplication::processEvents();
+    }
     const auto image = window.grab();
     const QString fileName = item.id + QStringLiteral(".png");
     image.save(QDir(directory).filePath(fileName), "PNG");
@@ -640,6 +645,8 @@ int main(int argc, char **argv)
     parser.addOption(cpgOption);
     QCommandLineOption approachOption(QStringLiteral("visual-approach"), QStringLiteral("Capture Task 20 execution modes with local fake transport"));
     parser.addOption(approachOption);
+    QCommandLineOption continuousOption(QStringLiteral("visual-continuous"), QStringLiteral("Capture Continuous Both with local fake transport"));
+    parser.addOption(continuousOption);
     QCommandLineOption fixesOption(
         QStringLiteral("fixes"),
         QStringLiteral("Run the desktop-fix suite with diagnostic screen style label (S1)"),
@@ -655,28 +662,32 @@ int main(int argc, char **argv)
     const QString fixesStyle = parser.value(fixesOption);
     const bool greenSuite = parser.isSet(greenOption) || !fixesStyle.isEmpty();
     const QString scaleLabel = parser.value(scaleLabelOption);
-    if (parser.isSet(approachOption)) {
+    if (parser.isSet(approachOption) || parser.isSet(continuousOption)) {
         QJsonArray entries;
         int fakeCalls=0;
         bool withinBudget=true;
-        for (const QString &state : {QStringLiteral("Discrete"),QStringLiteral("Approach"),QStringLiteral("Arrived"),QStringLiteral("Dry run")}) {
+        const QStringList states = parser.isSet(continuousOption) ? QStringList{QStringLiteral("Continuous")}
+            : QStringList{QStringLiteral("Discrete"),QStringLiteral("Approach"),QStringLiteral("Arrived"),QStringLiteral("Dry run")};
+        for (const QString &state : states) {
             ApproachPreviewController controller;
+            if (state == QStringLiteral("Continuous")) controller.depthSample = rb::DepthControlSample{.2,.1,0,true};
             if (state == QStringLiteral("Dry run")) controller.active=controller.connected=false;
             rb::MainWindow window(&controller);
             auto *session=window.findChild<rb::vision::VisualDispatchSession *>();
             session->setTimerEnabled(false);
             if (auto *video=window.findChild<rb::vision::VideoView *>("videoView")) video->setFrame(rb::test::OperatorConsoleFixture::syntheticVideo(),1);
-            if (state != QStringLiteral("Discrete")) window.findChild<QComboBox *>("visualExecutionMode")->setCurrentIndex(1);
+            if (state != QStringLiteral("Discrete")) window.findChild<QComboBox *>("visualExecutionMode")->setCurrentIndex(state == QStringLiteral("Continuous") ? 2 : 1);
+            if (state == QStringLiteral("Continuous")) window.findChild<QPushButton *>("autoFollowAxisBoth")->click();
             if (state == QStringLiteral("Dry run")) {
                 controller.active=controller.connected=false;
                 window.findChild<QCheckBox *>("visualDryRun")->setChecked(true);
             }
             window.findChild<QCheckBox *>("visualDispatchEnabled")->setChecked(true);
-            freshenTracking(window,1,state == QStringLiteral("Arrived") ? 24 : 6);
+            freshenTracking(window,1,state == QStringLiteral("Arrived") ? 24 : 6,state == QStringLiteral("Continuous") ? 288 : 240);
             session->timerTick();
             if (state != QStringLiteral("Discrete")) window.findChild<QPushButton *>("visualArmButton")->click();
             QApplication::processEvents(); session->timerTick(); QApplication::processEvents();
-            PreviewCase item{QStringLiteral("Task20-")+QString(state).replace(' ','-'),QSize(1280,0),0,state,QStringLiteral("Task20"),state,true};
+            PreviewCase item{(state == QStringLiteral("Continuous") ? QStringLiteral("Task21-") : QStringLiteral("Task20-"))+QString(state).replace(' ','-'),QSize(1280,0),0,state,state == QStringLiteral("Continuous") ? QStringLiteral("Task21") : QStringLiteral("Task20"),state,true};
             entries.append(captureCase(window,item,directory,QString::fromLocal8Bit(qgetenv("QT_QPA_PLATFORM"))));
             withinBudget &= window.fullyExpandedWindowHeight()<=992;
             fakeCalls += controller.simulatedCalls;

@@ -19,6 +19,7 @@ class VisualProportionalDispatchStateMachine
     VisualApproachConfig config{};
     IConsoleController::ProportionalConfig q{};
     bool dryRun{false}, channelBusy{false};
+    bool continuous{false};
     ArmReason eligibility(const VisualDispatchInput &, const std::optional<VisualDiagnosticSnapshot> &) const;
     ArmReason arm(const VisualDispatchInput &, const std::optional<VisualDiagnosticSnapshot> &);
     void evaluate(const VisualDispatchInput &, const std::optional<VisualDiagnosticSnapshot> &);
