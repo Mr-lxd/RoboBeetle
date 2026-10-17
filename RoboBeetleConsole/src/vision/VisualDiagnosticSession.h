@@ -35,6 +35,10 @@ struct VisualDiagnosticSnapshot {
     std::optional<qint64> associationMissMs;
     std::optional<qsizetype> selectedDetectionIndex;
     std::optional<TargetState> highestConfidenceTarget;
+    // Gyro yaw at the newest capture: sway is instantaneous minus mean heading;
+    // the shift is the gyro-predicted move of the lock point in pixels.
+    std::optional<double> yawSwayDeg;
+    std::optional<double> associationPredictedShiftPx;
     std::optional<DetectionFrame> detectionFrame;
 };
 
@@ -42,6 +46,8 @@ class VisualDiagnosticSession final : public QObject {
     Q_OBJECT
 public:
     using NowMs = std::function<qint64()>;
+    // Body yaw at a Pi capture timestamp (ns); empty when gyro is unavailable.
+    using YawProvider = std::function<std::optional<YawReference>(quint64 captureNs)>;
     explicit VisualDiagnosticSession(VisualPolicyConfig config = {}, NowMs nowMs = {},
                                      QObject *parent = nullptr);
     [[nodiscard]] qint64 monotonicNowMs() const { return nowMs_(); }
@@ -49,6 +55,7 @@ public:
     void onDetectionArrival(const DetectionFrame &frame, const VisualViewContext &context);
     void refresh(const VisualViewContext &context);
     void setAxisMode(VisualAxisMode axis);
+    void setYawProvider(YawProvider provider) { yawProvider_ = std::move(provider); }
     [[nodiscard]] VisualAxisMode axisMode() const noexcept { return axis_; }
     [[nodiscard]] const VisualDiagnosticSnapshot &snapshot() const noexcept { return snapshot_; }
 signals:
@@ -65,6 +72,8 @@ private:
     TargetAssociationMemory associationMemory_;
     VisualViewContext context_;
     VisualDiagnosticSnapshot snapshot_;
+    YawProvider yawProvider_;
+    std::optional<YawReference> latestYaw_; // At the newest arrived capture.
 };
 
 } // namespace rb::vision

@@ -359,7 +359,10 @@ void VisualProportionalDispatchStateMachine::evaluate(const VisualDispatchInput 
         beginStop(in.nowMs, false);
         return;
     }
-    if (continuous && observation && info_.area) {
+    // Short loss: NO_TARGET keeps the policy's held ex_f, which follows the gyro
+    // heading when yaw is available, so the turn eases as the body comes round.
+    const bool holding = snapshot && in.state == VisualState::NoTarget && !snapshot->awaitingVideo;
+    if (continuous && (observation || (holding && snapshot->command.ex_f)) && info_.area) {
         mode_ = ProposedCommand::Forward; // Start labels the proportional channel, not steering selection.
         setpoint_ = mapContinuousVisualSetpoint(*info_.area, snapshot->command.ex_f.value_or(0),
             snapshot->command.ey_f.value_or(0), in.axis, snapshot->turnSign, snapshot->pitchSign, envelope_, config);

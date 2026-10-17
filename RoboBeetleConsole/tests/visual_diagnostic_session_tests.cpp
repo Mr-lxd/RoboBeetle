@@ -72,7 +72,7 @@ void configProvenance() {
     qint64 now=0;
     VisualDiagnosticSession a({},[&]{return now;}), b({},[&]{return now;});
     const auto hash=a.snapshot().policyHash;
-    check(a.snapshot().policyVersion==QStringLiteral("visual-command-proposal-v3"),
+    check(a.snapshot().policyVersion==QStringLiteral("visual-command-proposal-v4"),
           "snapshot identifies the policy version");
     check(hash.size()==64 && hash==b.snapshot().policyHash,
           "same actual configuration has a deterministic SHA-256");
@@ -168,4 +168,47 @@ void initialAwaitingVideo() {
           "never-associated startup frame can become usable before watchdog expires");
 }
 }
-int main(int argc,char **argv){QCoreApplication app(argc,argv);raceAndTimeout();automaticWakeup();configProvenance();associationAndMisses();overdueCatchupAndLost();initialAwaitingVideo();return failures?1:0;}
+void gyroStabilisedTrackingAndHold() {
+    // A still fish at bearing ex 0.2 seen through a camera swaying +-4 deg, then
+    // eight empty frames while the body turns to a -2 deg mean heading.
+    const double k = VisualPolicyConfig{}.yaw_ex_per_deg;
+    auto sway = [](quint64 id) { return 4.0 * std::sin(double(id) * 1.3); };
+    auto inst = [&](quint64 id) { return id <= 10 ? sway(id) : -2.0; };
+    auto mean = [](quint64 id) { return id <= 10 ? 0.0 : -2.0; };
+    auto seen = [&](quint64 id) { return 320.0 + 320.0 * (0.2 + k * inst(id)); };
+    auto run = [&](bool gyro, int &misses, bool &heldThroughGap, double &worstEx, double &gapEx) {
+        qint64 now = 0;
+        VisualDiagnosticSession s({}, [&] { return now; });
+        if (gyro) s.setYawProvider([&](quint64 captureNs) -> std::optional<YawReference> {
+            const quint64 id = captureNs - 1000;
+            return YawReference{1, inst(id), mean(id)};
+        });
+        s.beginSession(1);
+        misses = 0; worstEx = 0.0; gapEx = 0.0; heldThroughGap = false;
+        for (quint64 id = 1; id <= 19; ++id) {
+            now = qint64(id) * 80;
+            auto f = frame(id, seen(id));
+            if (id > 10 && id < 19) f.detections.clear();
+            s.onDetectionArrival(f, accepted(f));
+            const auto &snap = s.snapshot();
+            if (id <= 10 && snap.associationStatus == AssociationStatus::Miss) ++misses;
+            if (id >= 4 && id <= 10 && snap.command.ex_f)
+                worstEx = std::max(worstEx, std::abs(*snap.command.ex_f - 0.2));
+            if (id == 18 && snap.command.ex_f) gapEx = *snap.command.ex_f;
+            if (id == 19) heldThroughGap = snap.associationStatus == AssociationStatus::Associated;
+            if (gyro && id == 7)
+                check(snap.yawSwayDeg && std::abs(*snap.yawSwayDeg - sway(7)) < 1e-9,
+                      "snapshot reports the sway at the newest capture");
+        }
+    };
+    int misses = 0; bool held = false; double worst = 0, gap = 0;
+    run(true, misses, held, worst, gap);
+    check(misses == 0, "gyro-predicted gate keeps the swaying target associated");
+    check(worst < 1e-9, "stabilised ex_f stays on the target bearing despite sway");
+    check(std::abs(gap - (0.2 - 2.0 * k)) < 1e-9, "NO_TARGET hold dead-reckons ex_f with the body turn");
+    check(held, "a 640 ms gap keeps the yaw-referenced lock and reassociates");
+    run(false, misses, held, worst, gap);
+    check(misses > 0 && worst > 0.02 && !held,
+          "without gyro the same sway breaks association and leaks into ex_f");
+}
+int main(int argc,char **argv){QCoreApplication app(argc,argv);raceAndTimeout();automaticWakeup();configProvenance();associationAndMisses();overdueCatchupAndLost();initialAwaitingVideo();gyroStabilisedTrackingAndHold();return failures?1:0;}

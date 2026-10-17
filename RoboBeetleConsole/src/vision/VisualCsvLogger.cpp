@@ -8,7 +8,7 @@
 
 namespace rb::vision {
 namespace {
-const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets,policy_request_id,request_id,dispatch_command,dispatch_result,ack_rtt_ms,axis_mode,ey_f,pitch_sign,depth_raw_m,depth_cal_m,depth_age_ms,envelope_state,sel_area_cells,gyro_z,roll,pitch,gait_phase,motion_age_ms,exec_mode,dry_run,area_f,approach_state,throttle,turn,pitch_setpoint,actually_submitted,approach_event\n";
+const QByteArray header = "row_kind,local_mono_ms,arrival_mono_ms,frame_id,capture_ts_ns,n_detections,sel_class,sel_conf,u,v,ex,ey,ex_f,yaw_cmd,state,proposed_command,effective_command,policy_version,policy_hash,session_id,awaiting_video,schema_version,assoc_status,assoc_dist_px,hc_u,hc_v,hc_conf,src_w,src_h,dets,policy_request_id,request_id,dispatch_command,dispatch_result,ack_rtt_ms,axis_mode,ey_f,pitch_sign,depth_raw_m,depth_cal_m,depth_age_ms,envelope_state,sel_area_cells,gyro_z,roll,pitch,gait_phase,motion_age_ms,exec_mode,dry_run,area_f,approach_state,throttle,turn,pitch_setpoint,actually_submitted,approach_event,yaw_sway_deg,assoc_shift_px\n";
 
 QString escaped(QString field)
 {
@@ -117,7 +117,7 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
                                std::optional<qint64> arrivalMs, const VisualApproachCsvInfo &approach) const
 {
     QStringList fields;
-    fields.reserve(57);
+    fields.reserve(59);
     fields << (transition ? QStringLiteral("transition") : QStringLiteral("frame"))
            << QString::number(s.localMonoMs)
            << (!transition && arrivalMs ? QString::number(*arrivalMs) : QString{});
@@ -196,6 +196,10 @@ QByteArray VisualCsvLogger::row(const VisualDiagnosticSnapshot &s, bool transiti
     auto paired=approach;
     if (transition) paired.submitted=false;
     approachColumns(fields,paired);
+    // v8 additions: gyro yaw sway at the newest capture and the lock's predicted shift.
+    fields << (!transition && s.yawSwayDeg ? number(*s.yawSwayDeg) : QString{})
+           << (evaluated && s.associationPredictedShiftPx ? number(*s.associationPredictedShiftPx)
+                                                          : QString{});
     for (QString &field : fields) field = escaped(std::move(field));
     return (fields.join(QLatin1Char(',')) + QLatin1Char('\n')).toUtf8();
 }
@@ -213,6 +217,7 @@ void VisualCsvLogger::recordApproachEvent(const VisualApproachCsvInfo &info)
     auto eventInfo = info;
     eventInfo.submitted = false;
     approachColumns(fields,eventInfo);
+    fields << QString{} << QString{};
     for(auto &f:fields)f=escaped(std::move(f));
     append((fields.join(',')+'\n').toUtf8());
 }
@@ -238,6 +243,7 @@ void VisualCsvLogger::recordDispatch(const VisualDispatchRecord &record)
     auto info=record.approach.value_or(VisualApproachCsvInfo{});
     info.submitted = info.submitted && record.result==QStringLiteral("SENT");
     approachColumns(fields,info);
+    fields << QString{} << QString{};
     for (QString &field : fields) field = escaped(std::move(field));
     append((fields.join(QLatin1Char(',')) + QLatin1Char('\n')).toUtf8());
 }

@@ -151,8 +151,8 @@ void sessionAndCsv()
         if (rows.size() != 2)
             continue;
         const auto fields = rows[1].split(',');
-        check(fields.size() == 57, "v7 column count unchanged");
-        if (fields.size() != 57)
+        check(fields.size() == 59, "v8 column count");
+        if (fields.size() != 59)
             continue;
         check(fields[48] == (mode == VisualExecutionMode::Continuous ? "CONTINUOUS" : "PROPORTIONAL") &&
                   fields[49] == "1",
@@ -162,11 +162,45 @@ void sessionAndCsv()
         check(dry.starts + dry.stops + dry.streams == 0, "Continuous Dry run has zero controller calls");
     }
 }
+void continuousHoldTracksHeldError()
+{
+    Controller c;
+    auto snapshot = sample();
+    qint64 now = 0;
+    VisualDispatchSession s(&c, [&] { return std::optional{snapshot}; }, [&] { return now; });
+    s.setTimerEnabled(false);
+    s.setExecutionMode(VisualExecutionMode::Continuous);
+    s.setAxisMode(VisualAxisMode::Yaw);
+    s.setFeatureEnabled(true);
+    check(s.arm() == ArmReason::Ready, "continuous arms");
+    c.prop = c.motionActive = true;
+    c.ack(1, CommandTerminalResult::Ok);
+    now = 50;
+    s.timerTick();
+    check(c.latest.turn == 500, "tracked error streams its turn");
+    // Detector misses: the policy's held ex_f follows the gyro heading.
+    snapshot.state = VisualState::NoTarget;
+    snapshot.target.reset();
+    snapshot.command.proposed = ProposedCommand::Hold;
+    snapshot.command.ex_f = .1;
+    now = 100;
+    s.timerTick();
+    check(c.latest.turn == 143 && c.latest.throttle >= 150 && s.armed() && c.stops == 0,
+          "NO_TARGET hold eases the turn to the dead-reckoned error without stopping");
+    snapshot.command.ex_f.reset();
+    now = 150;
+    s.timerTick();
+    check(c.latest.turn == 143 && c.stops == 0, "a hold without ex_f keeps the last setpoint");
+    now = 1700;
+    s.timerTick();
+    check(c.stops == 1, "NO_TARGET beyond the lost time still stops");
+}
 } // namespace
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
     mapping();
     sessionAndCsv();
+    continuousHoldTracksHeldError();
     return failures ? 1 : 0;
 }
