@@ -16,6 +16,10 @@ struct VisualCommandMemory {
     // switching Yaw -> Both starts from fresh state.
     std::optional<double> filteredEy;
     ProposedCommand verticalCandidate{ProposedCommand::Forward}; // Forward / Ascend / Descend.
+    // Set while filteredEx holds the yaw-stabilised bearing (ex minus the gyro
+    // yaw at capture) of that epoch; unset while it holds plain image ex.
+    std::optional<std::uint32_t> filterYawEpoch;
+    std::optional<double> lastYawMeanEx; // Latest mean-heading term of that epoch.
 };
 
 struct VisualCommandInput {
@@ -25,6 +29,11 @@ struct VisualCommandInput {
     std::optional<double> ex;
     std::optional<double> ey;
     VisualAxisMode axis{VisualAxisMode::Yaw};
+    // Gyro yaw in ex units (yaw_ex_per_deg * degrees). sampleYawEx belongs to
+    // the usable frame's capture; meanYawEx to the newest capture evaluated.
+    std::optional<std::uint32_t> yawEpoch;
+    std::optional<double> sampleYawEx;
+    std::optional<double> meanYawEx;
 };
 
 struct VisualCommandResult {

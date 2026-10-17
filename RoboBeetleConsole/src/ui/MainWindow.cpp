@@ -3419,6 +3419,15 @@ void MainWindow::bindVisionUi()
         if (!directory.isEmpty()) { visualCsvDirectory_->setText(directory); }
     });
     visualSession_ = new vision::VisualDiagnosticSession({}, {}, this);
+    if (auto *remote = dynamic_cast<RemoteRobotController *>(controller_)) {
+        // Same Pi clock as the CSV gyro columns: capture time selects the body yaw.
+        visualSession_->setYawProvider([remote](quint64 captureNs)
+                                           -> std::optional<vision::YawReference> {
+            const auto yaw = remote->motionMonitor().yawAtCapture(captureNs);
+            if (!yaw) return std::nullopt;
+            return vision::YawReference{yaw->epoch, yaw->instDeg, yaw->meanDeg};
+        });
+    }
     visualDispatch_ = new vision::VisualDispatchSession(controller_, visualSession_, {}, this);
     {
         QSettings settings;

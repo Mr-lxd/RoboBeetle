@@ -46,8 +46,36 @@ void testPeriodRetention() {
     sample(14500, 0, 2, 0);
     assert(!monitor.measuredCpgPeriod());
 }
+void testYawAtCapture() {
+    rb::MotionStateMonitor monitor;
+    unsigned seq = 0;
+    auto gyro = [&](unsigned ms, qint16 tenthDps, quint32 epoch = 7) {
+        rb::MotionStateBatch batch;
+        batch.batch_seq = seq++;
+        batch.fragment_count = batch.sample_count = 1;
+        batch.mcu_tx_ms = ms;
+        batch.samples[0].mcu_ms = ms;
+        batch.samples[0].gyro_valid = true;
+        batch.samples[0].gyro_tenth_dps[2] = tenthDps;
+        monitor.accept({epoch, ms + 10000, 0, rb::motionStateBytes(*rb::encodeMotionStateBatch(batch))});
+    };
+    for (unsigned ms = 0; ms <= 3000; ms += 50) gyro(ms, 100); // 10 deg/s
+    const auto yaw = monitor.yawAtCapture(13000ULL * 1000000ULL);
+    assert(yaw && std::abs(yaw->instDeg - 30.0) < 1e-9);
+    // Default 2.5 s period without a measured CPG period; a steady turn is kept.
+    assert(yaw->meanDeg && std::abs(*yaw->meanDeg - 30.0) < 1e-9);
+    assert(!monitor.yawAtCapture(9000ULL * 1000000ULL));
+    const auto epoch = yaw->epoch;
+    gyro(3050, 100, 8); // gateway link epoch change resets the monitor
+    const auto after = monitor.yawAtCapture(13050ULL * 1000000ULL);
+    assert(after && after->epoch != epoch && std::abs(after->instDeg) < 1e-9);
+    monitor.reset();
+    gyro(3100, 100, 8);
+    assert(monitor.yawAtCapture(13100ULL * 1000000ULL)->epoch > after->epoch);
+}
 int main() {
     testPeriodRetention();
+    testYawAtCapture();
     rb::MotionStateMonitor m;
     auto first = fragment(10, 0, 3, 1000, 11008, 2);
     assert(m.accept(first).size() == 2); // usable samples do not await missing fragments

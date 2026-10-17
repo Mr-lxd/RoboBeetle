@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace rb::vision {
@@ -36,12 +37,26 @@ struct VisualPolicyConfig {
     double gate_px{48.0}; // [Provisional] Original image pixels.
     std::int64_t max_miss_ms{500}; // [Provisional] Local monotonic milliseconds.
     bool require_same_class{false}; // [Provisional] Labels can change on one object.
-    static constexpr std::string_view policy_version{"visual-command-proposal-v3"};
+    // Gyro yaw compensation, in ex units per degree of body yaw (pixels per
+    // degree / half the frame width). [Provisional] 12 px/deg at 640 px, fitted
+    // from the 2026-10-17 pool log at zero gyro/capture lag. 0 disables it.
+    double yaw_ex_per_deg{0.0375};
+    // Association lock hold while gyro yaw predicts the locked target's shift.
+    std::int64_t yaw_hold_miss_ms{1200}; // [Provisional]
+    static constexpr std::string_view policy_version{"visual-command-proposal-v4"};
+};
+
+// Gyro yaw of the body at one frame's capture time. Values are comparable
+// only within the same epoch.
+struct YawReference {
+    std::uint32_t epoch{0};
+    double instDeg{0.0};
+    std::optional<double> meanDeg;
 };
 
 // File recording limits are independent of command-policy provenance.
 struct VisualCsvConfig {
-    static constexpr std::string_view schema_version{"visual-csv-v7"};
+    static constexpr std::string_view schema_version{"visual-csv-v8"};
     std::int64_t max_file_bytes{32 * 1024 * 1024};
     int flush_ms{250};
 };
@@ -58,7 +73,9 @@ struct VisualCsvConfig {
         && std::isfinite(c.ey_on) && std::isfinite(c.ey_off)
         && c.ey_off >= 0.0 && c.ey_off < c.ey_on && c.ey_on <= 1.0
         && (c.pitch_sign == 1 || c.pitch_sign == -1)
-        && std::isfinite(c.gate_px) && c.gate_px > 0.0 && c.max_miss_ms > 0;
+        && std::isfinite(c.gate_px) && c.gate_px > 0.0 && c.max_miss_ms > 0
+        && std::isfinite(c.yaw_ex_per_deg) && c.yaw_ex_per_deg >= 0.0 && c.yaw_ex_per_deg <= 0.2
+        && c.yaw_hold_miss_ms >= c.max_miss_ms;
 }
 
 } // namespace rb::vision

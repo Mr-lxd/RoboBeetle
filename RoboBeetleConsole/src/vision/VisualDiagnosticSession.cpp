@@ -24,7 +24,9 @@ QString configHash(const VisualPolicyConfig &c)
         + QString::number(c.ui_tick_ms) + '\n'
         + QString::number(c.gate_px, 'g', 17) + '\n'
         + QString::number(c.max_miss_ms) + '\n'
-        + QString::number(c.require_same_class ? 1 : 0) + '\n').toUtf8();
+        + QString::number(c.require_same_class ? 1 : 0) + '\n'
+        + QString::number(c.yaw_ex_per_deg, 'g', 17) + '\n'
+        + QString::number(c.yaw_hold_miss_ms) + '\n').toUtf8();
     return QString::fromLatin1(QCryptographicHash::hash(canonical,
         QCryptographicHash::Sha256).toHex());
 }
@@ -47,6 +49,7 @@ void VisualDiagnosticSession::beginSession(quint64 sessionId)
     associationMemory_ = {};
     context_ = {};
     snapshot_ = {};
+    latestYaw_.reset();
     snapshot_.sessionId = sessionId;
     snapshot_.policyVersion = QString::fromLatin1(config_.policy_version.data(),
         static_cast<qsizetype>(config_.policy_version.size()));
@@ -65,6 +68,8 @@ void VisualDiagnosticSession::onDetectionArrival(const DetectionFrame &frame,
     snapshot_.captureTimestampNs = frame.captureTimestampNs;
     snapshot_.nDetections = frame.detections.size();
     snapshot_.detectionFrame = frame;
+    latestYaw_ = yawProvider_ && frame.captureTimestampNs != 0U
+        ? yawProvider_(frame.captureTimestampNs) : std::nullopt;
     context_ = context;
     context_.frame = frame;
     evaluate(frame.frameId);
@@ -96,7 +101,8 @@ void VisualDiagnosticSession::evaluate(std::optional<quint64> arrivedId)
             const auto &frame = *snapshot_.detectionFrame;
             if (!associationMemory_.lastProcessedFrameId
                 || frame.frameId > *associationMemory_.lastProcessedFrameId) {
-                const auto associated = associateTarget(associationMemory_, frame, now, config_);
+                const auto associated = associateTarget(associationMemory_, frame, now, config_,
+                    frame.frameId == snapshot_.frameId ? latestYaw_ : std::nullopt);
                 associationMemory_ = associated.next;
                 if (!associated.valid) gate = DetectionDisplayState::Stale;
             }
@@ -118,6 +124,9 @@ void VisualDiagnosticSession::evaluate(std::optional<quint64> arrivedId)
     }
     snapshot_.associationStatus = associationMemory_.cached.status;
     snapshot_.associationDistancePx = associationMemory_.cached.distancePx;
+    snapshot_.associationPredictedShiftPx = associationMemory_.cached.predictedShiftPx;
+    snapshot_.yawSwayDeg = latestYaw_ && latestYaw_->meanDeg
+        ? std::optional<double>(latestYaw_->instDeg - *latestYaw_->meanDeg) : std::nullopt;
     snapshot_.selectedDetectionIndex = associationMemory_.cached.selectedDetectionIndex;
     snapshot_.associationMissMs = associationMemory_.missSinceMs && now >= *associationMemory_.missSinceMs
         ? std::optional<qint64>(now - *associationMemory_.missSinceMs) : std::nullopt;
@@ -129,12 +138,19 @@ void VisualDiagnosticSession::evaluate(std::optional<quint64> arrivedId)
     snapshot_.pitchSign = config_.pitch_sign;
     snapshot_.axis = axis_;
     if (!state.awaitingVideo) {
-        snapshot_.command = evaluateVisualCommand(commandMemory_,
-            {now, state.state,
+        VisualCommandInput input{now, state.state,
              state.usableTarget ? std::optional<std::uint64_t>(state.usableTarget->frameId) : std::nullopt,
              state.usableTarget ? std::optional<double>(state.usableTarget->ex) : std::nullopt,
              state.usableTarget ? std::optional<double>(state.usableTarget->ey) : std::nullopt,
-             axis_}, config_);
+             axis_};
+        // The usable target is always the newest arrival, so latestYaw_ is its capture yaw.
+        if (latestYaw_ && latestYaw_->meanDeg && config_.yaw_ex_per_deg > 0.0) {
+            input.yawEpoch = latestYaw_->epoch;
+            input.meanYawEx = config_.yaw_ex_per_deg * *latestYaw_->meanDeg;
+            if (state.usableTarget && state.usableTarget->frameId == snapshot_.frameId)
+                input.sampleYawEx = config_.yaw_ex_per_deg * latestYaw_->instDeg;
+        }
+        snapshot_.command = evaluateVisualCommand(commandMemory_, input, config_);
         commandMemory_ = snapshot_.command.next;
     }
     emit diagnosticChanged(snapshot_);
@@ -145,7 +161,8 @@ void VisualDiagnosticSession::evaluate(std::optional<quint64> arrivedId)
     }
     if (!state.awaitingVideo && associationMemory_.missSinceMs
         && now >= *associationMemory_.missSinceMs) {
-        const auto remaining = config_.max_miss_ms - (now - *associationMemory_.missSinceMs);
+        const auto remaining = associationMissLimitMs(associationMemory_, config_)
+            - (now - *associationMemory_.missSinceMs);
         if (remaining > 0) delay = std::min<qint64>(delay, remaining);
     }
     wakeup_.start(static_cast<int>(std::max<qint64>(1, delay)));
