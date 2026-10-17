@@ -33,7 +33,9 @@ XInputGamepadState XInputGamepad::poll()
             return {true, static_cast<int>(index + 1),
                 axis(state.Gamepad.sThumbLX), axis(state.Gamepad.sThumbLY),
                 axis(state.Gamepad.sThumbRX), axis(state.Gamepad.sThumbRY),
-                (state.Gamepad.wButtons & XINPUT_GAMEPAD_B) != 0};
+                (state.Gamepad.wButtons & XINPUT_GAMEPAD_B) != 0,
+                (state.Gamepad.wButtons & XINPUT_GAMEPAD_X) != 0,
+                (state.Gamepad.wButtons & XINPUT_GAMEPAD_Y) != 0};
         };
         if (connectedSlot_ >= 0) {
             const auto state = readSlot(static_cast<DWORD>(connectedSlot_));
