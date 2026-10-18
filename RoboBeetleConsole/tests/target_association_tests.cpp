@@ -38,6 +38,7 @@ void alternatingAndMoving() {
 }
 void missesAndBoundaries() {
     VisualPolicyConfig c;
+    c.gate_px = 48.0; // boundary arithmetic below is written for 48 px
     auto lock=associateTarget({},frame(1,450),0,c).next;
     auto miss=associateTarget(lock,frame(2,547),100,c);
     check(miss.status==AssociationStatus::Miss && !miss.selected && miss.distancePx==97
@@ -100,7 +101,9 @@ void tiesValidityAndRelease() {
     check(associateTarget(lock,f,40,c).status==AssociationStatus::Acquired, "new image size releases old coordinate lock");
 }
 void yawPredictedGateAndHold() {
-    VisualPolicyConfig c; // 0.0375 ex/deg = 12 px/deg at 640 px
+    VisualPolicyConfig c;
+    c.yaw_ex_per_deg = 0.0375; // 12 px/deg at 640 px
+    c.gate_px = 48.0;
     const YawReference at0{7, 0.0, std::nullopt};
     const YawReference at5{7, 5.0, std::nullopt};
     auto lock = associateTarget({}, frame(1, 300), 0, c, at0).next;

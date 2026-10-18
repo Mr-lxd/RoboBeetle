@@ -11,6 +11,8 @@ int main()
     };
     VisualPolicyConfig c;
     check(validVisualPolicyConfig(c), "provisional defaults are valid");
+    check(c.gate_px == 80.0 && c.yaw_ex_per_deg == 0.05 && c.yaw_hold_miss_ms == 1200,
+          "pool-fitted association gate and gyro gain defaults");
     c.turn_sign = -1;
     check(validVisualPolicyConfig(c), "inverted display direction is valid");
     c.turn_sign = 0;

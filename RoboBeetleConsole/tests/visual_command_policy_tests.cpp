@@ -594,7 +594,7 @@ void pitchConfigValidation()
     expect(std::strcmp(proposedCommandName(ProposedCommand::Ascend), "ASCEND") == 0
                && std::strcmp(proposedCommandName(ProposedCommand::Descend), "DESCEND") == 0,
            "ASCEND/DESCEND display names");
-    expect(std::string(VisualPolicyConfig::policy_version) == "visual-command-proposal-v4", "policy version bumped");
+    expect(std::string(VisualPolicyConfig::policy_version) == "visual-command-proposal-v5", "policy version bumped");
 }
 
 VisualCommandInput yawInput(std::int64_t time, VisualState state, std::optional<std::uint64_t> frame,

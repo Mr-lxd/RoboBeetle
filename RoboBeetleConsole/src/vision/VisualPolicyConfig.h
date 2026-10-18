@@ -34,16 +34,20 @@ struct VisualPolicyConfig {
     static constexpr int configuredPitchSign{+1}; // ey > 0 (target below centre) -> DESCEND.
     int pitch_sign{configuredPitchSign};
     int ui_tick_ms{50};
-    double gate_px{48.0}; // [Provisional] Original image pixels.
+    // [Provisional] Original image pixels. Raised from 48: replaying the 2026-10-18
+    // pool logs, 80 px cut gyro-predicted misses by ~80% with no lock moving onto
+    // the surface reflections in the upper third of the frame.
+    double gate_px{80.0};
     std::int64_t max_miss_ms{500}; // [Provisional] Local monotonic milliseconds.
     bool require_same_class{false}; // [Provisional] Labels can change on one object.
     // Gyro yaw compensation, in ex units per degree of body yaw (pixels per
-    // degree / half the frame width). [Provisional] 12 px/deg at 640 px, fitted
-    // from the 2026-10-17 pool log at zero gyro/capture lag. 0 disables it.
-    double yaw_ex_per_deg{0.0375};
+    // degree / half the frame width). [Provisional] 16 px/deg at 640 px: five
+    // 2026-10-18 pool logs (periods 2.5/2.0/1.6 s) fit 14.0-16.4 px/deg, all
+    // peaking at zero gyro/capture lag. 0 disables it.
+    double yaw_ex_per_deg{0.05};
     // Association lock hold while gyro yaw predicts the locked target's shift.
     std::int64_t yaw_hold_miss_ms{1200}; // [Provisional]
-    static constexpr std::string_view policy_version{"visual-command-proposal-v4"};
+    static constexpr std::string_view policy_version{"visual-command-proposal-v5"};
 };
 
 // Gyro yaw of the body at one frame's capture time. Values are comparable

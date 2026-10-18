@@ -72,7 +72,7 @@ void configProvenance() {
     qint64 now=0;
     VisualDiagnosticSession a({},[&]{return now;}), b({},[&]{return now;});
     const auto hash=a.snapshot().policyHash;
-    check(a.snapshot().policyVersion==QStringLiteral("visual-command-proposal-v4"),
+    check(a.snapshot().policyVersion==QStringLiteral("visual-command-proposal-v5"),
           "snapshot identifies the policy version");
     check(hash.size()==64 && hash==b.snapshot().policyHash,
           "same actual configuration has a deterministic SHA-256");
@@ -178,7 +178,9 @@ void gyroStabilisedTrackingAndHold() {
     auto seen = [&](quint64 id) { return 320.0 + 320.0 * (0.2 + k * inst(id)); };
     auto run = [&](bool gyro, int &misses, bool &heldThroughGap, double &worstEx, double &gapEx) {
         qint64 now = 0;
-        VisualDiagnosticSession s({}, [&] { return now; });
+        VisualPolicyConfig c;
+        c.gate_px = 48.0; // narrower than the sway so the no-gyro run must miss
+        VisualDiagnosticSession s(c, [&] { return now; });
         if (gyro) s.setYawProvider([&](quint64 captureNs) -> std::optional<YawReference> {
             const quint64 id = captureNs - 1000;
             return YawReference{1, inst(id), mean(id)};
