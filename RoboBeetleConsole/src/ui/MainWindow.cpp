@@ -1578,6 +1578,9 @@ void MainWindow::createGreenRegion(QVBoxLayout *summaryLayout, QGroupBox *summar
         if (visualDispatch_->executionMode() == vision::VisualExecutionMode::Discrete) {
             visualDispatch_->setDryRun(false); visualDryRun_->setChecked(false);
         }
+        // Remember the mode actually in effect (a change while armed is refused).
+        QSettings().setValue(QStringLiteral("Visual/ExecutionMode/v1"),
+                             static_cast<int>(visualDispatch_->executionMode()));
         refreshAutoFollowUi();
         refreshGamepadUi();
     });
@@ -3453,6 +3456,9 @@ void MainWindow::bindVisionUi()
             quint16(std::lround(settings.value(prefix+"pitchLimit",10.).toDouble()*100)),
             quint16(std::lround(settings.value(prefix+"slew",2.).toDouble()*1000))};
         if (robobeetle::protocol::valid_proportional_config(q)) visualDispatch_->setProportionalConfig(q);
+        // Restore the last execution mode; the selector handler applies it.
+        const int mode = settings.value(QStringLiteral("Visual/ExecutionMode/v1"), 0).toInt();
+        if (mode > 0 && mode < visualExecutionMode_->count()) visualExecutionMode_->setCurrentIndex(mode);
     }
 
     connect(visualDispatch_, &vision::VisualDispatchSession::dispatchRecorded,
