@@ -4781,12 +4781,37 @@ void MainWindow::disableGamepad(const QString &reason)
     }
 }
 
+void MainWindow::handleGamepadCapture(const XInputGamepadState &pad)
+{
+    const auto output = gamepadCaptureMapper_.update(pad.connected, pad.x, pad.y);
+    // Route through the on-screen buttons so the gamepad obeys exactly the same
+    // camera/busy/host gating; a disabled button ignores click().
+    const auto press = [this](QPushButton *button, const QString &action) {
+        if (button == nullptr || visionControlClient_ == nullptr) return;
+        if (!button->isEnabled()) {
+            appendLog(QStringLiteral("Gamepad %1 ignored: capture not available").arg(action));
+            return;
+        }
+        appendLog(QStringLiteral("Gamepad %1").arg(action));
+        button->click();
+    };
+    if (output.snapshot) press(snapshotButton_, QStringLiteral("X: Snapshot"));
+    if (output.toggleRecording) {
+        const bool recording = visionControlClient_ != nullptr
+            && visionControlClient_->status().haveCaptureStatus
+            && visionControlClient_->status().recording;
+        press(startRecordingButton_, recording ? QStringLiteral("Y: Stop Recording")
+                                               : QStringLiteral("Y: Start Recording"));
+    }
+}
+
 void MainWindow::pollGamepad()
 {
-    if (pollingGamepad_ || !gamepadClock_.isValid()
-        || controller_->backendKind() != ConsoleBackendKind::RemoteRbrp) return;
-    pollingGamepad_ = true;
+    if (pollingGamepad_ || !gamepadClock_.isValid()) return;
     const auto pad = gamepadReader_.poll();
+    handleGamepadCapture(pad); // camera capture does not need motion authority
+    if (controller_->backendKind() != ConsoleBackendKind::RemoteRbrp) return;
+    pollingGamepad_ = true;
     gamepadDetected_ = pad.connected;
     gamepadSlot_ = pad.slot;
     const auto depth = evaluateDepthEnvelope(controller_->controlDepthSample(), gamepadDepthMemory_, {});
