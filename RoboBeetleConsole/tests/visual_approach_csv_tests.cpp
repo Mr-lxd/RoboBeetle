@@ -53,13 +53,13 @@ int main(int argc, char **argv)
     check(lines.size() == 5, "same-frame timer evaluations do not add periodic rows");
     if (lines.size() == 5) {
         auto header = lines[0].split(',');
-        check(header.size() == 57, "unified v7 has57 columns");
+        check(header.size() == 59, "unified v8 has 59 columns");
         check(header[45] == "pitch" && header[54] == "pitch_setpoint", "IMU pitch and target pitch distinct");
         auto frame = lines[1].split(',');
         auto e = lines[2].split(',');
         auto sent = lines[3].split(',');
         auto outcome = lines[4].split(',');
-        check(frame.size() == 57 && frame[21] == "visual-csv-v7" && frame[48] == "PROPORTIONAL" &&
+        check(frame.size() == 59 && frame[21] == "visual-csv-v8" && frame[48] == "PROPORTIONAL" &&
                   frame[49] == "1" && frame[50] == "12" && frame[51] == "APPROACH" && frame[52] == "450" &&
                   frame[54] == "500" && frame[55] == "0",
               "paired Dry run frame values");

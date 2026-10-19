@@ -49,6 +49,8 @@ VisualCommandResult evaluateVisualCommand(
 
     const auto stop = [&]() {
         result.next.filteredEx.reset();
+        result.next.filterYawEpoch.reset();
+        result.next.lastYawMeanEx.reset();
         result.next.filteredEy.reset();
         result.next.verticalCandidate = ProposedCommand::Forward;
         result.next.effective = ProposedCommand::Stop;
@@ -59,12 +61,36 @@ VisualCommandResult evaluateVisualCommand(
         return result;
     };
 
+    // A yaw-stabilised bearing keeps growing with net turning; only its
+    // mean-heading output is bounded.
+    const bool previousExValid = !previous.filteredEx
+        || (previous.filterYawEpoch ? std::isfinite(*previous.filteredEx)
+                                    : validError(*previous.filteredEx));
     if (!validTime || !validVisualPolicyConfig(config)
         || !validEffective(previous.effective)
-        || (previous.filteredEx && !validError(*previous.filteredEx))
+        || !previousExValid
         || (previous.filteredEy && !validError(*previous.filteredEy))) {
         return stop();
     }
+
+    // Mean-heading term for the filter's epoch: this evaluation's when it is
+    // the same epoch, else the last one seen. Its absence means image ex.
+    const auto headingTerm = [&](const VisualCommandMemory &m) -> std::optional<double> {
+        if (!m.filterYawEpoch) return 0.0;
+        if (input.yawEpoch && *input.yawEpoch == *m.filterYawEpoch && input.meanYawEx)
+            return input.meanYawEx;
+        return m.lastYawMeanEx;
+    };
+    const auto output = [&](const VisualCommandMemory &m) -> std::optional<double> {
+        const auto heading = headingTerm(m);
+        if (!m.filteredEx || !heading) return std::nullopt;
+        return std::clamp(*m.filteredEx + *heading, -1.0, 1.0);
+    };
+    const auto rememberHeading = [&](VisualCommandMemory &m) {
+        if (m.filterYawEpoch && input.yawEpoch && *input.yawEpoch == *m.filterYawEpoch
+            && input.meanYawEx)
+            m.lastYawMeanEx = input.meanYawEx;
+    };
 
     switch (input.state) {
     case VisualState::Stale:
@@ -72,9 +98,11 @@ VisualCommandResult evaluateVisualCommand(
     case VisualState::Lost:
         return stop();
     case VisualState::NoTarget:
+        // Hold: the bearing estimate follows the body's gyro heading meanwhile.
+        rememberHeading(result.next);
         result.proposed = ProposedCommand::Hold;
         result.effective = previous.effective;
-        result.ex_f = previous.filteredEx;
+        result.ex_f = output(result.next);
         result.ey_f = previous.filteredEy;
         result.yaw_cmd = result.ex_f
             ? std::clamp(config.K_yaw * *result.ex_f, -1.0, 1.0) : 0.0;
@@ -96,9 +124,18 @@ VisualCommandResult evaluateVisualCommand(
         return stop();
     }
     if (!previous.lastFilteredFrameId || *input.usableFrameId > *previous.lastFilteredFrameId) {
-        result.next.filteredEx = previous.filteredEx
-            ? config.alpha * *input.ex + (1.0 - config.alpha) * *previous.filteredEx
-            : *input.ex;
+        const bool stabilised = config.yaw_ex_per_deg > 0.0 && input.yawEpoch
+            && input.sampleYawEx && input.meanYawEx;
+        const auto epoch = stabilised ? input.yawEpoch : std::nullopt;
+        // Never blend bearings from different yaw references.
+        const auto blendWith = previous.filterYawEpoch == epoch ? previous.filteredEx
+                                                                : std::nullopt;
+        const double sample = stabilised ? *input.ex - *input.sampleYawEx : *input.ex;
+        result.next.filteredEx = blendWith
+            ? config.alpha * sample + (1.0 - config.alpha) * *blendWith
+            : sample;
+        result.next.filterYawEpoch = epoch;
+        result.next.lastYawMeanEx = stabilised ? input.meanYawEx : std::nullopt;
         if (validEy) {
             result.next.filteredEy = previous.filteredEy
                 ? config.alpha_y * *input.ey + (1.0 - config.alpha_y) * *previous.filteredEy
@@ -106,12 +143,13 @@ VisualCommandResult evaluateVisualCommand(
         }
         result.next.lastFilteredFrameId = input.usableFrameId;
     }
-    if (!result.next.filteredEx) {
+    if (!result.next.filteredEx || !output(result.next)) {
         result.waitingForSample = true;
         return stop();
     }
 
-    result.ex_f = result.next.filteredEx;
+    rememberHeading(result.next);
+    result.ex_f = output(result.next);
     result.ey_f = result.next.filteredEy;
     if (pitchActive && !result.next.filteredEy) {
         result.waitingForSample = true;

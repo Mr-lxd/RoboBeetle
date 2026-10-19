@@ -113,7 +113,7 @@ void testIndependentTuningAndReload() {
     rb::MainWindow reopened(&controller);
     auto *session=reopened.findChild<rb::vision::VisualDispatchSession *>();
     check(session->approachConfig().stopArea==25 && session->proportionalConfig().max_scale==800,"visual approach settings reload independently");
-    check(session->executionMode()==rb::vision::VisualExecutionMode::Discrete && !session->dryRun(),"Exec and Dry run never persist");
+    check(session->executionMode()==rb::vision::VisualExecutionMode::Proportional && !session->dryRun(),"Exec persists; Dry run never persists");
 }
 
 void testFollowThresholdsAndPersistence() {
@@ -150,6 +150,30 @@ void testFollowThresholdsAndPersistence() {
     QApplication::sendEvent(follow, &enter);
     check(session->approachConfig().stopArea == 23, "Enter commits focused Follow input");
 }
+void testExecutionModeIsRemembered() {
+    QSettings().remove("Visual/ExecutionMode/v1");
+    rb::test::VisualControllerFixture controller;
+    controller.connected = controller.active = false;
+    {
+        rb::MainWindow window(&controller);
+        auto *exec = window.findChild<QComboBox *>("visualExecutionMode");
+        check(exec && exec->currentIndex() == 0, "without a saved mode execution starts Discrete");
+        if (exec) exec->setCurrentIndex(2);
+    }
+    {
+        rb::MainWindow window(&controller);
+        auto *exec = window.findChild<QComboBox *>("visualExecutionMode");
+        auto *session = window.findChild<rb::vision::VisualDispatchSession *>();
+        check(exec && exec->currentIndex() == 2 && session
+                  && session->executionMode() == rb::vision::VisualExecutionMode::Continuous,
+              "reopened Console restores the last execution mode into the session");
+        if (exec) exec->setCurrentIndex(0);
+    }
+    rb::MainWindow window(&controller);
+    check(window.findChild<QComboBox *>("visualExecutionMode")->currentIndex() == 0,
+          "switching back to Discrete is remembered too");
+    QSettings().remove("Visual/ExecutionMode/v1");
+}
 }
 int main(int argc,char **argv) {
     QApplication app(argc,argv);
@@ -158,9 +182,14 @@ int main(int argc,char **argv) {
     QCoreApplication::setApplicationName("Isolated");
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settings.path());
+    testExecutionModeIsRemembered();
     testDryRunAndSelectors();
+    QSettings().remove("Visual/ExecutionMode/v1");
     testIndependentTuningAndReload();
+    QSettings().remove("Visual/ExecutionMode/v1");
     testVisualOwnershipAndSingleManualStop();
+    QSettings().remove("Visual/ExecutionMode/v1");
     testFollowThresholdsAndPersistence();
+    QSettings().remove("Visual/ExecutionMode/v1");
     return failures ? 1 : 0;
 }

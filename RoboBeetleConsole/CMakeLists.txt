@@ -111,6 +111,8 @@ add_library(RoboBeetleCore
     src/robot/RobotController.cpp
     src/robot/MotionStateMonitor.h
     src/robot/MotionStateMonitor.cpp
+    src/robot/YawIntegrator.h
+    src/robot/YawIntegrator.cpp
     src/robot/MotionStateCsvLogger.h
     src/robot/MotionStateCsvLogger.cpp
 )
@@ -171,6 +173,9 @@ if(BUILD_TESTING)
     set_target_properties(gamepad_mapper_tests PROPERTIES AUTOMOC OFF)
     target_link_libraries(gamepad_mapper_tests PRIVATE GamepadMapper)
     add_test(NAME gamepad_mapper_tests COMMAND gamepad_mapper_tests)
+    add_executable(yaw_integrator_tests tests/yaw_integrator_tests.cpp)
+    target_link_libraries(yaw_integrator_tests PRIVATE RoboBeetleCore)
+    add_test(NAME yaw_integrator_tests COMMAND yaw_integrator_tests)
     add_executable(gamepad_capture_mapper_tests tests/gamepad_capture_mapper_tests.cpp)
     set_target_properties(gamepad_capture_mapper_tests PROPERTIES AUTOMOC OFF)
     target_link_libraries(gamepad_capture_mapper_tests PRIVATE GamepadMapper)

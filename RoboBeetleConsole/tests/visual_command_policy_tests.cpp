@@ -594,8 +594,106 @@ void pitchConfigValidation()
     expect(std::strcmp(proposedCommandName(ProposedCommand::Ascend), "ASCEND") == 0
                && std::strcmp(proposedCommandName(ProposedCommand::Descend), "DESCEND") == 0,
            "ASCEND/DESCEND display names");
-    expect(std::string(VisualPolicyConfig::policy_version) == "visual-command-proposal-v3", "policy version bumped");
+    expect(std::string(VisualPolicyConfig::policy_version) == "visual-command-proposal-v5", "policy version bumped");
 }
+
+VisualCommandInput yawInput(std::int64_t time, VisualState state, std::optional<std::uint64_t> frame,
+                            std::optional<double> ex, std::uint32_t epoch,
+                            std::optional<double> sampleYawEx, std::optional<double> meanYawEx)
+{
+    VisualCommandInput input{time, state, frame, ex, std::nullopt, VisualAxisMode::Yaw};
+    input.yawEpoch = epoch;
+    input.sampleYawEx = sampleYawEx;
+    input.meanYawEx = meanYawEx;
+    return input;
+}
+
+void yawSwayIsRemovedBeforeFiltering()
+{
+    VisualPolicyConfig config; // alpha 0.3: an unstabilised sway would leak into ex_f
+    VisualCommandMemory stabilised, plain;
+    double maxStabilisedError = 0.0, maxPlainError = 0.0;
+    for (int i = 0; i < 40; ++i) {
+        // A still target at bearing 0.2 seen through a camera swaying +-0.15 ex.
+        const double sway = 0.15 * std::sin(i * 0.9);
+        const auto frame = static_cast<std::uint64_t>(i + 1);
+        auto a = evaluateVisualCommand(stabilised,
+            yawInput(i * 80, VisualState::Tracking, frame, 0.2 + sway, 3, sway, 0.0), config);
+        auto b = evaluateVisualCommand(plain,
+            {i * 80, VisualState::Tracking, frame, 0.2 + sway, std::nullopt, VisualAxisMode::Yaw}, config);
+        stabilised = a.next;
+        plain = b.next;
+        if (i >= 5) {
+            maxStabilisedError = std::max(maxStabilisedError, std::abs(*a.ex_f - 0.2));
+            maxPlainError = std::max(maxPlainError, std::abs(*b.ex_f - 0.2));
+        }
+    }
+    expect(maxStabilisedError < 1e-12, "gyro-stabilised ex_f ignores camera sway");
+    expect(maxPlainError > 0.05, "plain image ex_f follows the sway");
+    expect(stabilised.filterYawEpoch == 3u && !plain.filterYawEpoch, "filter frame is recorded");
+}
+
+void stabilisedOutputUsesMeanHeading()
+{
+    const auto config = directConfig();
+    // Body has turned (mean heading term 0.5): bearing = ex - inst + mean.
+    auto r = evaluateVisualCommand({}, yawInput(0, VisualState::Tracking, 1, 0.1, 4, 0.7, 0.5), config);
+    expect(near(r.next.filteredEx, -0.6) && near(r.ex_f, -0.1), "ex_f is relative to the mean heading");
+    // A large net turn leaves an out-of-range stored bearing that stays valid.
+    r = evaluateVisualCommand({}, yawInput(0, VisualState::Tracking, 1, 0.1, 4, 3.0, 3.0), config);
+    expect(near(r.next.filteredEx, -2.9) && near(r.ex_f, 0.1), "stored bearing may exceed one");
+    auto next = evaluateVisualCommand(r.next, yawInput(80, VisualState::Tracking, 2, 0.1, 4, 3.0, 3.0), config);
+    expect(near(next.ex_f, 0.1) && next.effective != ProposedCommand::Stop, "out-of-range bearing is not a fault");
+}
+
+void noTargetHoldFollowsGyroHeading()
+{
+    VisualPolicyConfig config = directConfig();
+    auto r = evaluateVisualCommand({}, yawInput(0, VisualState::Tracking, 1, 0.4, 5, 0.0, 0.0), config);
+    expect(near(r.ex_f, 0.4) && r.effective == ProposedCommand::TurnRight, "tracked target to the right");
+    // The body turns toward it while the detector misses: the mean term drops.
+    auto hold = evaluateVisualCommand(r.next, yawInput(80, VisualState::NoTarget, std::nullopt,
+                                                       std::nullopt, 5, -0.1, -0.1), config);
+    expect(hold.proposed == ProposedCommand::Hold && near(hold.ex_f, 0.3),
+           "held ex_f dead-reckons with the gyro heading");
+    hold = evaluateVisualCommand(hold.next, yawInput(160, VisualState::NoTarget, std::nullopt,
+                                                     std::nullopt, 5, -0.35, -0.35), config);
+    expect(near(hold.ex_f, 0.05) && near(hold.yaw_cmd, 0.05), "turn demand eases as the body comes round");
+    // Gyro drops out: keep the last heading term rather than jumping back.
+    auto noYaw = evaluateVisualCommand(hold.next, {240, VisualState::NoTarget, std::nullopt, std::nullopt,
+                                                   std::nullopt, VisualAxisMode::Yaw}, config);
+    expect(near(noYaw.ex_f, 0.05), "missing yaw keeps the last heading term");
+    // Plain (no gyro) hold is unchanged: the last filtered ex.
+    auto plain = evaluateVisualCommand({}, {0, VisualState::Tracking, 1, 0.4, std::nullopt,
+                                            VisualAxisMode::Yaw}, config);
+    plain = evaluateVisualCommand(plain.next, {80, VisualState::NoTarget, std::nullopt, std::nullopt,
+                                               std::nullopt, VisualAxisMode::Yaw}, config);
+    expect(near(plain.ex_f, 0.4), "without gyro the hold keeps the last ex_f");
+}
+
+void yawReferenceChangesRestartTheFilter()
+{
+    VisualPolicyConfig config; // alpha 0.3
+    auto r = evaluateVisualCommand({}, yawInput(0, VisualState::Tracking, 1, 0.5, 1, 0.0, 0.0), config);
+    r = evaluateVisualCommand(r.next, yawInput(80, VisualState::Tracking, 2, -0.2, 2, 0.0, 0.0), config);
+    expect(near(r.ex_f, -0.2) && r.next.filterYawEpoch == 2u, "new yaw epoch is never blended with the old");
+    r = evaluateVisualCommand(r.next, {160, VisualState::Tracking, 3, 0.1, std::nullopt, VisualAxisMode::Yaw},
+                              config);
+    expect(near(r.ex_f, 0.1) && !r.next.filterYawEpoch, "losing gyro restarts in image ex");
+    r = evaluateVisualCommand(r.next, yawInput(240, VisualState::Tracking, 4, 0.3, 2, 0.0, std::nullopt),
+                              config);
+    expect(!r.next.filterYawEpoch && near(r.ex_f, 0.3 * 0.3 + 0.7 * 0.1),
+           "without a mean heading the sample stays in image ex");
+    config.yaw_ex_per_deg = 0.0;
+    r = evaluateVisualCommand({}, yawInput(0, VisualState::Tracking, 1, 0.5, 1, 0.4, 0.0), config);
+    expect(near(r.ex_f, 0.5) && !r.next.filterYawEpoch, "zero gain ignores yaw inputs");
+    auto lost = evaluateVisualCommand(
+        evaluateVisualCommand({}, yawInput(0, VisualState::Tracking, 1, 0.5, 1, 0.4, 0.0), VisualPolicyConfig{}).next,
+        yawInput(80, VisualState::Lost, std::nullopt, std::nullopt, 1, 0.0, 0.0), VisualPolicyConfig{});
+    expect(!lost.next.filteredEx && !lost.next.filterYawEpoch && !lost.next.lastYawMeanEx,
+           "LOST clears the stabilised filter");
+}
+
 } // namespace
 
 int main()
@@ -617,6 +715,10 @@ int main()
     verticalDwellAndHold();
     verticalEmaIsPerFrame();
     pitchConfigValidation();
+    yawSwayIsRemovedBeforeFiltering();
+    stabilisedOutputUsesMeanHeading();
+    noTargetHoldFollowsGyroHeading();
+    yawReferenceChangesRestartTheFilter();
     std::printf("visual_command_policy_tests: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

@@ -12,6 +12,7 @@ TargetAssociationMemory releaseTargetAssociationLock(const TargetAssociationMemo
 {
     auto m = previous;
     m.lockedTarget.reset();
+    m.lockYaw.reset();
     m.missSinceMs.reset();
     m.cached = {};
     // Preserve processed IDs: a released lock cannot replay its old sample.
@@ -24,14 +25,21 @@ TargetAssociationMemory expireTargetAssociation(const TargetAssociationMemory &p
         return releaseTargetAssociationLock(previous);
     }
     auto m = previous;
-    if (m.missSinceMs && now - *m.missSinceMs >= config.max_miss_ms) {
+    if (m.missSinceMs && now - *m.missSinceMs >= associationMissLimitMs(m, config)) {
         m = releaseTargetAssociationLock(m);
     }
     m.lastEvaluatedMs = now;
     return m;
 }
+qint64 associationMissLimitMs(const TargetAssociationMemory &memory,
+                              const VisualPolicyConfig &config) noexcept
+{
+    return memory.lockYaw && config.yaw_ex_per_deg > 0.0 ? config.yaw_hold_miss_ms
+                                                         : config.max_miss_ms;
+}
 TargetAssociationResult associateTarget(const TargetAssociationMemory &previous,
-    const DetectionFrame &frame, qint64 now, const VisualPolicyConfig &config)
+    const DetectionFrame &frame, qint64 now, const VisualPolicyConfig &config,
+    const std::optional<YawReference> &yaw)
 {
     TargetAssociationResult r;
     r.next = previous;
@@ -52,6 +60,17 @@ TargetAssociationResult associateTarget(const TargetAssociationMemory &previous,
     std::optional<TargetState> candidate;
     std::optional<double> distance;
     std::optional<qsizetype> index;
+    // A yawing camera moves a still target sideways: du = k * W/2 * dyaw.
+    QPointF lockPoint;
+    if (m.lockedTarget) {
+        lockPoint = m.lockedTarget->target.originalPoint;
+        if (m.lockYaw && yaw && m.lockYaw->epoch == yaw->epoch && config.yaw_ex_per_deg > 0.0) {
+            const double shift = config.yaw_ex_per_deg * frame.sourceSize.width() / 2.0
+                * (yaw->instDeg - m.lockYaw->instDeg);
+            lockPoint.rx() += shift;
+            r.predictedShiftPx = shift;
+        }
+    }
     for (qsizetype i = 0; i < frame.detections.size(); ++i) {
         auto t = targetStateAt(frame, i);
         if (!t) continue;
@@ -62,7 +81,7 @@ TargetAssociationResult associateTarget(const TargetAssociationMemory &previous,
         } else {
             const auto &lock = m.lockedTarget->target;
             if (config.require_same_class && t->target.classId != lock.classId) continue;
-            const auto delta = t->target.originalPoint - lock.originalPoint;
+            const auto delta = t->target.originalPoint - lockPoint;
             const double d = std::hypot(delta.x(), delta.y());
             if (!distance || d < *distance
                 || (d == *distance && t->target.confidence > candidate->target.confidence)) {
@@ -76,6 +95,8 @@ TargetAssociationResult associateTarget(const TargetAssociationMemory &previous,
         r.selected = candidate;
         r.selectedDetectionIndex = index;
         m.lockedTarget = std::move(candidate);
+        if (yaw) m.lockYaw = yaw;
+        else m.lockYaw.reset();
         m.missSinceMs.reset();
     } else {
         r.status = AssociationStatus::Miss;

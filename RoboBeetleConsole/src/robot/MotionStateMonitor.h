@@ -1,5 +1,6 @@
 #pragma once
 #include "protocol/MotionStateCodec.h"
+#include "robot/YawIntegrator.h"
 #include <deque>
 #include <vector>
 
@@ -21,6 +22,8 @@ public:
     void reset();
     std::optional<double> offsetMs() const;
     std::optional<MotionStateRecord> atCapture(quint64 captureNs) const;
+    // Gyro yaw at a Pi capture time; the mean uses the measured CPG period.
+    std::optional<YawEstimate> yawAtCapture(quint64 captureNs) const;
     double gyroRateHz() const;
     std::optional<double> measuredCpgPeriod() const;
     quint64 batchGapTotal() const { return batchGaps_; }
@@ -42,6 +45,7 @@ private:
       double wireMs; };
     std::deque<Anchor> anchors_;
     std::deque<MotionStateRecord> history_;
+    YawIntegrator yaw_;
     std::optional<quint32> epoch_, lastTx_;
     qint64 unwrappedTx_{};
     std::optional<quint16> batchSeq_;

@@ -5,7 +5,15 @@
 #include <numeric>
 
 namespace rb {
-void MotionStateMonitor::reset() { *this = {}; }
+void MotionStateMonitor::reset()
+{
+    // Keep the yaw epoch counter: a lock taken before the reset must never
+    // match yaw integrated afterwards.
+    auto yaw = std::move(yaw_);
+    *this = {};
+    yaw_ = std::move(yaw);
+    yaw_.reset();
+}
 void MotionStateMonitor::finishBatch() {
     if (batchSeq_ && !batchFinished_) {
         fragmentGaps_ += fragmentCount_ - std::popcount(seenFragments_);
@@ -44,7 +52,7 @@ std::vector<MotionStateRecord> MotionStateMonitor::accept(const MotionStateTelem
         const auto delta = qint32(b->mcu_tx_ms - *lastTx_);
         if (delta < 0) {
             // MCU restart without a gateway epoch update: retire old clock/history.
-            anchors_.clear(); history_.clear(); unwrappedTx_ = b->mcu_tx_ms;
+            anchors_.clear(); history_.clear(); yaw_.reset(); unwrappedTx_ = b->mcu_tx_ms;
         } else unwrappedTx_ += delta;
     }
     lastTx_ = b->mcu_tx_ms;
@@ -105,6 +113,7 @@ std::vector<MotionStateRecord> MotionStateMonitor::accept(const MotionStateTelem
             previousPhase_ = s.phase_u16;
             previousPhaseMs_ = double(sampleMcu);
         }
+        if (s.gyro_valid) yaw_.add(r.samplePiMs, sampleMcu, s.gyro_tenth_dps[2] / 10.0);
         records.push_back(r);
         history_.push_back(r);
     }
@@ -118,6 +127,11 @@ std::optional<MotionStateRecord> MotionStateMonitor::atCapture(quint64 captureNs
     for (const auto &r : history_)
         if (r.samplePiMs <= captureMs && (!nearest || r.samplePiMs >= nearest->samplePiMs)) nearest = r;
     return nearest;
+}
+std::optional<YawEstimate> MotionStateMonitor::yawAtCapture(quint64 captureNs) const
+{
+    constexpr double kDefaultPeriodS = 2.5; // nominal CPG period when none is measured
+    return yaw_.at(double(captureNs) / 1e6, measuredCpgPeriod().value_or(kDefaultPeriodS) * 1000.0);
 }
 std::optional<double> MotionStateMonitor::measuredCpgPeriod() const
 {

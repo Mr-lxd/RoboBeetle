@@ -38,6 +38,7 @@ void alternatingAndMoving() {
 }
 void missesAndBoundaries() {
     VisualPolicyConfig c;
+    c.gate_px = 48.0; // boundary arithmetic below is written for 48 px
     auto lock=associateTarget({},frame(1,450),0,c).next;
     auto miss=associateTarget(lock,frame(2,547),100,c);
     check(miss.status==AssociationStatus::Miss && !miss.selected && miss.distancePx==97
@@ -99,5 +100,50 @@ void tiesValidityAndRelease() {
     f=frame(2,640); f.sourceSize={1280,720};
     check(associateTarget(lock,f,40,c).status==AssociationStatus::Acquired, "new image size releases old coordinate lock");
 }
+void yawPredictedGateAndHold() {
+    VisualPolicyConfig c;
+    c.yaw_ex_per_deg = 0.0375; // 12 px/deg at 640 px
+    c.gate_px = 48.0;
+    const YawReference at0{7, 0.0, std::nullopt};
+    const YawReference at5{7, 5.0, std::nullopt};
+    auto lock = associateTarget({}, frame(1, 300), 0, c, at0).next;
+    check(lock.lockYaw && lock.lockYaw->instDeg == 0.0, "lock records its capture yaw");
+    // A still fish seen through a camera that yawed +5 deg appears 60 px away.
+    auto r = associateTarget(lock, frame(2, 360), 70, c, at5);
+    check(r.status == AssociationStatus::Associated && r.predictedShiftPx
+          && std::abs(*r.predictedShiftPx - 60.0) < 1e-9 && r.distancePx
+          && std::abs(*r.distancePx) < 1e-9, "gate centres on the gyro-predicted point");
+    check(r.next.lockYaw && r.next.lockYaw->instDeg == 5.0, "reassociation moves the lock yaw");
+    check(associateTarget(lock, frame(2, 360), 70, c).status == AssociationStatus::Miss,
+          "without yaw the same 60 px jump misses the 48 px gate");
+    check(associateTarget(lock, frame(2, 360), 70, c, YawReference{8, 5.0, std::nullopt}).status
+              == AssociationStatus::Miss && !associateTarget(lock, frame(2, 360), 70, c,
+              YawReference{8, 5.0, std::nullopt}).predictedShiftPx,
+          "a different yaw epoch never predicts a shift");
+    // The fish left the gate in the opposite direction: prediction does not widen it.
+    check(associateTarget(lock, frame(2, 300), 70, c, at5).status == AssociationStatus::Miss,
+          "an unmoved image point is 60 px from the predicted point");
+    c.yaw_ex_per_deg = 0.0;
+    check(associateTarget(lock, frame(2, 360), 70, c, at5).status == AssociationStatus::Miss,
+          "zero gain disables yaw prediction");
+
+    c = {};
+    auto miss = associateTarget(lock, frame(2, 600), 100, c, at0).next;
+    check(associationMissLimitMs(miss, c) == 1200, "a yaw-referenced lock holds for 1200 ms");
+    check(expireTargetAssociation(miss, 1299, c).lockedTarget.has_value(), "1199 ms still holds");
+    check(!expireTargetAssociation(miss, 1300, c).lockedTarget, "1200 ms releases");
+    auto plain = associateTarget(associateTarget({}, frame(1, 300), 0, c).next, frame(2, 600), 100, c).next;
+    check(associationMissLimitMs(plain, c) == 500 && !expireTargetAssociation(plain, 600, c).lockedTarget,
+          "a lock without yaw keeps the 500 ms miss limit");
+    auto relocked = associateTarget(lock, frame(2, 310), 70, c).next;
+    check(!relocked.lockYaw && associationMissLimitMs(relocked, c) == 500,
+          "reassociation without yaw drops the lock yaw and the longer hold");
+    check(!releaseTargetAssociationLock(lock).lockYaw, "release clears the lock yaw");
+    c.yaw_hold_miss_ms = c.max_miss_ms - 1;
+    check(!validVisualPolicyConfig(c), "hold shorter than the plain miss limit is invalid");
+    c = {}; c.yaw_ex_per_deg = -0.01;
+    check(!validVisualPolicyConfig(c), "negative yaw gain is invalid");
 }
-int main(){alternatingAndMoving();missesAndBoundaries();tiesValidityAndRelease();return failures?1:0;}
+}
+int main(){alternatingAndMoving();missesAndBoundaries();tiesValidityAndRelease();yawPredictedGateAndHold();
+    return failures?1:0;}
