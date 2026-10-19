@@ -1,6 +1,7 @@
 #pragma once
 
 #include "controller/IConsoleController.h"
+#include "input/GamepadCaptureMapper.h"
 #include "input/GamepadMapper.h"
 #include "input/ProportionalGamepadMapper.h"
 #include "input/XInputGamepad.h"
@@ -151,6 +152,7 @@ private:
     void refreshGaitSelectorsUi();
     void refreshAuthorityUi();
     void pollGamepad();
+    void handleGamepadCapture(const XInputGamepadState &pad);
     void disableGamepad(const QString &reason);
     void refreshGamepadUi();
     void refreshVisionUi();
@@ -292,6 +294,7 @@ private:
     ProportionalGamepadMapper proportionalMapper_;
     IConsoleController::ProportionalConfig proportionalConfig_;
     GamepadMapper gamepadMapper_;
+    GamepadCaptureMapper gamepadCaptureMapper_;
     XInputGamepad gamepadReader_;
     DepthEnvelopeMemory gamepadDepthMemory_;
     QElapsedTimer gamepadClock_;
